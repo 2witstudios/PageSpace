@@ -3,7 +3,7 @@
  * Isolates database operations from route handlers for testability.
  */
 
-import { db, conversations, messages, aiUsageLogs, eq, and, desc } from '@pagespace/db';
+import { db, conversations, messages, aiUsageLogs, eq, and, desc, lt, gt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
 // Types
@@ -132,9 +132,26 @@ export function calculateUsageSummary(
   };
 }
 
+export interface ListConversationsPaginatedInput {
+  limit?: number;
+  cursor?: string;
+  direction?: 'before' | 'after';
+}
+
+export interface PaginatedConversationsResult {
+  conversations: ConversationSummary[];
+  pagination: {
+    hasMore: boolean;
+    nextCursor: string | null;
+    prevCursor: string | null;
+    limit: number;
+  };
+}
+
 export const globalConversationRepository = {
   /**
    * List all active conversations for a user, ordered by lastMessageAt
+   * @deprecated Use listConversationsPaginated for better performance
    */
   async listConversations(userId: string): Promise<ConversationSummary[]> {
     return db
@@ -152,6 +169,80 @@ export const globalConversationRepository = {
         eq(conversations.isActive, true)
       ))
       .orderBy(desc(conversations.lastMessageAt));
+  },
+
+  /**
+   * List active conversations for a user with cursor-based pagination
+   */
+  async listConversationsPaginated(
+    userId: string,
+    options: ListConversationsPaginatedInput = {}
+  ): Promise<PaginatedConversationsResult> {
+    const { limit = 20, cursor, direction = 'before' } = options;
+    const maxLimit = Math.min(limit, 100);
+
+    // Build query conditions
+    const conditions = [
+      eq(conversations.userId, userId),
+      eq(conversations.isActive, true)
+    ];
+
+    // Add cursor condition if provided
+    if (cursor) {
+      // Get the cursor conversation's lastMessageAt
+      const [cursorConv] = await db
+        .select({ lastMessageAt: conversations.lastMessageAt })
+        .from(conversations)
+        .where(eq(conversations.id, cursor))
+        .limit(1);
+
+      if (cursorConv?.lastMessageAt) {
+        if (direction === 'before') {
+          // Get conversations older than cursor (earlier lastMessageAt)
+          conditions.push(lt(conversations.lastMessageAt, cursorConv.lastMessageAt));
+        } else {
+          // Get conversations newer than cursor (later lastMessageAt)
+          conditions.push(gt(conversations.lastMessageAt, cursorConv.lastMessageAt));
+        }
+      }
+    }
+
+    // Query with limit + 1 to check for more
+    const results = await db
+      .select({
+        id: conversations.id,
+        title: conversations.title,
+        type: conversations.type,
+        contextId: conversations.contextId,
+        lastMessageAt: conversations.lastMessageAt,
+        createdAt: conversations.createdAt,
+      })
+      .from(conversations)
+      .where(and(...conditions))
+      .orderBy(desc(conversations.lastMessageAt))
+      .limit(maxLimit + 1);
+
+    const hasMore = results.length > maxLimit;
+    const conversationsToReturn = hasMore ? results.slice(0, maxLimit) : results;
+
+    // Determine cursors
+    const nextCursor = hasMore && conversationsToReturn.length > 0
+      ? conversationsToReturn[conversationsToReturn.length - 1].id
+      : null;
+
+    const prevCursor = conversationsToReturn.length > 0 && cursor
+      ? conversationsToReturn[0].id
+      : null;
+
+    return {
+      conversations: conversationsToReturn,
+      pagination: {
+        hasMore,
+        nextCursor,
+        prevCursor,
+        limit: maxLimit,
+      },
+    };
   },
 
   /**

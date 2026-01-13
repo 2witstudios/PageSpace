@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { FileCode } from 'lucide-react';
 import { CodeBlock, CodeBlockCopyButton } from '@/components/ai/ui/code-block';
 import { cn } from '@/lib/utils';
@@ -12,13 +12,13 @@ interface DocumentRendererProps {
     className?: string;
 }
 
-export const DocumentRenderer: React.FC<DocumentRendererProps> = ({
+export const DocumentRenderer: React.FC<DocumentRendererProps> = memo(function DocumentRenderer({
     title,
     content,
     language = 'typescript',
     description,
     className
-}) => {
+}) {
     // Default to typescript if language is not provided or valid
     // In a real app we might want to validate against BundledLanguage or map extensions
     const safeLanguage = (language || 'typescript') as BundledLanguage;
@@ -46,4 +46,4 @@ export const DocumentRenderer: React.FC<DocumentRendererProps> = ({
             </div>
         </div>
     );
-};
+});

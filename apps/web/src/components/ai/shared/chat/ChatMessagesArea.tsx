@@ -1,16 +1,36 @@
 /**
  * ChatMessagesArea - Scrollable message display area for AI chats
  * Used by both Agent engine and Global Assistant engine
+ *
+ * Uses use-stick-to-bottom for pinned scrolling behavior:
+ * - Auto-scrolls only when user is at the bottom
+ * - Shows scroll-to-bottom button when user scrolls up
+ * - Smooth scroll behavior on resize and new messages
+ *
+ * Uses @tanstack/react-virtual for performance with large conversations:
+ * - Virtualized rendering when message count exceeds threshold
+ * - Dynamic height measurement for variable-height messages
+ * - Overscan for smooth scrolling
  */
 
-import React, { useRef, useEffect, forwardRef, useImperativeHandle, useState, useCallback } from 'react';
+import React, { forwardRef, useImperativeHandle, useState, useCallback, useMemo } from 'react';
 import { UIMessage } from 'ai';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
+import { VirtualizedMessageList } from './VirtualizedMessageList';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+  useConversationScrollRef
+} from '@/components/ai/ui/conversation';
+import { useStickToBottomContext } from 'use-stick-to-bottom';
+
+// Threshold for enabling virtualization - below this count, regular rendering is fine
+const VIRTUALIZATION_THRESHOLD = 50;
 
 interface ChatMessagesAreaProps {
   /** Messages to display */
@@ -35,6 +55,10 @@ interface ChatMessagesAreaProps {
   isReadOnly?: boolean;
   /** Callback when undo completes successfully (to refresh messages) */
   onUndoSuccess?: () => void;
+  /** Callback when scroll reaches top (for loading older messages) */
+  onScrollNearTop?: () => void;
+  /** Whether older messages are loading */
+  isLoadingOlder?: boolean;
 }
 
 export interface ChatMessagesAreaRef {
@@ -42,10 +66,8 @@ export interface ChatMessagesAreaRef {
   scrollToBottom: () => void;
 }
 
-/**
- * Scrollable message display area with loading skeleton and empty state
- */
-export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaProps>(
+// Inner component that has access to stick-to-bottom context
+const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaProps>(
   (
     {
       messages,
@@ -59,12 +81,17 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       lastUserMessageId,
       isReadOnly = false,
       onUndoSuccess,
+      onScrollNearTop,
+      isLoadingOlder = false,
     },
     ref
   ) => {
-    const scrollAreaRef = useRef<HTMLDivElement>(null);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
+    const { scrollToBottom } = useStickToBottomContext();
+    const scrollRef = useConversationScrollRef();
+
+    // Whether to use virtualization based on message count
+    const shouldVirtualize = messages.length >= VIRTUALIZATION_THRESHOLD;
 
     // Handler for undo from here button
     const handleUndoFromHere = useCallback((messageId: string) => {
@@ -80,25 +107,37 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       onUndoSuccess?.();
     }, [onUndoSuccess]);
 
-    // Scroll to bottom function
-    const scrollToBottom = () => {
-      if (scrollAreaRef.current) {
-        scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-      }
-    };
-
     // Expose scrollToBottom to parent
     useImperativeHandle(ref, () => ({
-      scrollToBottom,
-    }));
+      scrollToBottom: () => scrollToBottom(),
+    }), [scrollToBottom]);
 
-    // Auto-scroll on new messages or status change
-    useEffect(() => {
-      scrollToBottom();
-    }, [messages.length, isStreaming]);
+    // Memoized render function for virtualized list
+    const renderMessage = useCallback((message: UIMessage, _idx: number) => (
+      <MessageRenderer
+        key={message.id}
+        message={message}
+        onEdit={!isReadOnly ? onEdit : undefined}
+        onDelete={!isReadOnly ? onDelete : undefined}
+        onRetry={!isReadOnly ? onRetry : undefined}
+        onUndoFromHere={!isReadOnly ? handleUndoFromHere : undefined}
+        isLastAssistantMessage={message.id === lastAssistantMessageId}
+        isLastUserMessage={message.id === lastUserMessageId}
+        isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
+      />
+    ), [
+      isReadOnly,
+      onEdit,
+      onDelete,
+      onRetry,
+      handleUndoFromHere,
+      lastAssistantMessageId,
+      lastUserMessageId,
+      isStreaming
+    ]);
 
     // Loading skeleton
-    const LoadingSkeleton = () => (
+    const LoadingSkeleton = useMemo(() => (
       <div className="space-y-4">
         <div className="flex items-center justify-center h-32 text-muted-foreground">
           <div className="flex items-center space-x-2">
@@ -111,49 +150,56 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
           <SkeletonMessageBubble variant="user" lineWidths={["w-2/3", "w-1/3"]} />
         </div>
       </div>
-    );
+    ), []);
 
     // Empty state
-    const EmptyState = () => (
+    const EmptyState = useMemo(() => (
       <div className="flex items-center justify-center h-32 text-muted-foreground">
         <p>{emptyMessage}</p>
       </div>
-    );
+    ), [emptyMessage]);
+
+    // Loading older messages indicator
+    const LoadingOlderIndicator = useMemo(() => (
+      <div className="flex items-center justify-center py-2 text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+        <span className="text-sm">Loading older messages...</span>
+      </div>
+    ), []);
 
     return (
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <ScrollArea className="h-full" ref={scrollAreaRef}>
-          <div className="max-w-4xl mx-auto w-full px-4">
-            <div className="space-y-2 pt-3 pb-34">
-              {isLoading ? (
-                <LoadingSkeleton />
-              ) : messages.length === 0 ? (
-                <EmptyState />
-              ) : (
-                messages.map((message) => (
-                  <MessageRenderer
-                    key={message.id}
-                    message={message}
-                    onEdit={!isReadOnly ? onEdit : undefined}
-                    onDelete={!isReadOnly ? onDelete : undefined}
-                    onRetry={!isReadOnly ? onRetry : undefined}
-                    onUndoFromHere={!isReadOnly ? handleUndoFromHere : undefined}
-                    isLastAssistantMessage={message.id === lastAssistantMessageId}
-                    isLastUserMessage={message.id === lastUserMessageId}
-                    isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
-                  />
-                ))
-              )}
+      <>
+        <ConversationContent className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-34">
+          {isLoadingOlder && LoadingOlderIndicator}
 
-              {isStreaming && !isLoading && (
-                <StreamingIndicator />
-              )}
+          {isLoading ? (
+            LoadingSkeleton
+          ) : messages.length === 0 ? (
+            EmptyState
+          ) : shouldVirtualize ? (
+            // Virtualized rendering for large conversations
+            <VirtualizedMessageList
+              messages={messages}
+              renderMessage={renderMessage}
+              scrollRef={scrollRef}
+              onScrollNearTop={onScrollNearTop}
+              isLoadingOlder={isLoadingOlder}
+              estimatedRowHeight={100}
+              overscan={5}
+              gap={8}
+            />
+          ) : (
+            // Regular rendering for smaller conversations
+            messages.map((message, idx) => renderMessage(message, idx))
+          )}
 
-              {/* Invisible element to mark the bottom for scrolling */}
-              <div ref={messagesEndRef} />
-            </div>
-          </div>
-        </ScrollArea>
+          {isStreaming && !isLoading && (
+            <StreamingIndicator />
+          )}
+        </ConversationContent>
+
+        {/* Scroll-to-bottom button - only visible when user scrolls up */}
+        <ConversationScrollButton className="z-10" />
 
         <UndoAiChangesDialog
           open={!!undoDialogMessageId}
@@ -161,6 +207,23 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
           messageId={undoDialogMessageId}
           onSuccess={handleUndoDialogSuccess}
         />
+      </>
+    );
+  }
+);
+
+ChatMessagesAreaInner.displayName = 'ChatMessagesAreaInner';
+
+/**
+ * Scrollable message display area with pinned scrolling, loading skeleton and empty state
+ */
+export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaProps>(
+  (props, ref) => {
+    return (
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <Conversation className="h-full">
+          <ChatMessagesAreaInner ref={ref} {...props} />
+        </Conversation>
       </div>
     );
   }

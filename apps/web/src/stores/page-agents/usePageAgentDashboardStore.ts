@@ -182,10 +182,10 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
     set({ isConversationLoading: true });
 
     try {
-      const messages = await fetchAgentConversationMessages(agent.id, conversationId);
+      const result = await fetchAgentConversationMessages(agent.id, conversationId, { limit: 50 });
       set({
         conversationId,
-        conversationMessages: messages,
+        conversationMessages: result.messages,
         conversationAgentId: agent.id,
         isConversationLoading: false,
       });
@@ -269,10 +269,10 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
       // If URL has conversation for THIS agent, load it
       if (conversationIdFromUrl && agentIdFromUrl === agent.id) {
-        const messages = await fetchAgentConversationMessages(agent.id, conversationIdFromUrl);
+        const result = await fetchAgentConversationMessages(agent.id, conversationIdFromUrl, { limit: 50 });
         set({
           conversationId: conversationIdFromUrl,
-          conversationMessages: messages,
+          conversationMessages: result.messages,
           conversationAgentId: agent.id,
           isConversationLoading: false,
         });
@@ -282,10 +282,10 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       // Try to load most recent conversation
       const mostRecent = await fetchMostRecentAgentConversation(agent.id);
       if (mostRecent) {
-        const messages = await fetchAgentConversationMessages(agent.id, mostRecent.id);
+        const result = await fetchAgentConversationMessages(agent.id, mostRecent.id, { limit: 50 });
         set({
           conversationId: mostRecent.id,
-          conversationMessages: messages,
+          conversationMessages: result.messages,
           conversationAgentId: agent.id,
           isConversationLoading: false,
         });

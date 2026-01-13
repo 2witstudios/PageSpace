@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, memo, useMemo } from 'react';
 import {
   FolderOpen,
   Plus,
@@ -31,8 +31,6 @@ interface TreeItem {
   children: TreeItem[];
 }
 
-
-
 interface ToolPart {
   type: string;
   toolName?: string;
@@ -47,25 +45,60 @@ interface CompactToolCallRendererProps {
   part: ToolPart;
 }
 
-/**
- * Compact tool call renderer for sidebar - minimal and space-efficient
- */
-export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = ({ part }) => {
+// Helper function to count pages in tree structure (moved outside component)
+const countPages = (items: TreeItem[]): number => {
+  return items.reduce((count, item) => {
+    return count + 1 + (item.children ? countPages(item.children) : 0);
+  }, 0);
+};
+
+// Helper for safe JSON parsing
+const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === 'object' && value !== null) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+};
+
+// Tool name mapping (moved outside component to avoid recreation)
+const TOOL_NAME_MAP: Record<string, string> = {
+  'ask_agent': 'Ask Agent',
+  'list_drives': 'List Drives',
+  'list_pages': 'List Pages',
+  'read_page': 'Read',
+  'replace_lines': 'Replace',
+  'create_page': 'Create',
+  'rename_page': 'Rename',
+  'trash': 'Trash',
+  'restore': 'Restore',
+  'move_page': 'Move',
+  'list_trash': 'List Trash'
+};
+
+// Internal renderer component with hooks
+const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function CompactToolCallRendererInternal({ part, toolName }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const toolName = part.toolName || part.type?.replace('tool-', '');
   const state = part.state;
   const input = part.input;
   const output = part.output;
   const error = part.errorText;
 
-  // Task management tools - render with expandable summary
-  if (toolName === 'update_task') {
-    return <TaskRenderer part={part} />;
-  }
+  // Memoize parsed input
+  const parsedInput = useMemo(() => safeJsonParse(input), [input]);
 
-  // Tool-specific icons (smaller)
-  const getToolIcon = (toolName: string) => {
+  // Memoize parsed output
+  const parsedOutput = useMemo(() => safeJsonParse(output), [output]);
+
+  // Memoize tool icon
+  const toolIcon = useMemo(() => {
     const iconClass = "h-3 w-3";
     switch (toolName) {
       case 'ask_agent':
@@ -93,10 +126,10 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       default:
         return <Search className={iconClass} />;
     }
-  };
+  }, [toolName]);
 
-  // Get status icon
-  const getStatusIcon = () => {
+  // Memoize status icon
+  const statusIcon = useMemo(() => {
     const iconClass = "h-3 w-3";
     switch (state) {
       case 'output-available':
@@ -110,122 +143,102 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
       default:
         return <Clock className={`${iconClass} text-gray-400`} />;
     }
-  };
+  }, [state, error]);
 
-  // Format tool name for display (shorter)
-  const formatToolName = (toolName: string) => {
-    const nameMap: Record<string, string> = {
-      'ask_agent': 'Ask Agent',
-      'list_drives': 'List Drives',
-      'list_pages': 'List Pages',
-      'read_page': 'Read',
-      'replace_lines': 'Replace',
-      'create_page': 'Create',
-      'rename_page': 'Rename',
-      'trash': 'Trash',
-      'restore': 'Restore',
-      'move_page': 'Move',
-      'list_trash': 'List Trash'
-    };
-
-    return nameMap[toolName] || toolName
+  // Memoize formatted tool name
+  const formattedToolName = useMemo(() => {
+    return TOOL_NAME_MAP[toolName] || toolName
       .split('_')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
-  };
+  }, [toolName]);
 
-  // AMBIGUITY FIX: Parse input to get a descriptive header title
-  const getDescriptiveTitle = () => {
-    const base = formatToolName(toolName);
-    if (!input) return base;
+  // Memoize descriptive title
+  const descriptiveTitle = useMemo(() => {
+    if (!parsedInput) return formattedToolName;
 
-    try {
-      const params = typeof input === 'string' ? JSON.parse(input) : input;
+    const params = parsedInput;
 
-      // File-based tools
-      if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
-        if (params.title) return `${base}: "${params.title}"`;
-        if (params.dir) return `${base}: ${params.dir}`;
-      }
-
-      // Title-based tools
-      if (['create_page', 'move_page'].includes(toolName)) {
-        if (params.title) return `${base}: "${params.title}"`;
-        if (params.name) return `${base}: "${params.name}"`;
-      }
-
-      // Rename uses currentTitle for display (title is the new name)
-      if (toolName === 'rename_page') {
-        if (params.currentTitle) return `${base}: "${params.currentTitle}"`;
-      }
-
-      // Trash/Restore
-      if (['trash', 'restore'].includes(toolName)) {
-        if (params.title || params.name) return `${base}: "${params.title || params.name}"`;
-      }
-
-      // Drive-based tools - show which drive
-      if (['list_pages', 'list_trash'].includes(toolName)) {
-        if (params.driveSlug) return `${base}: "${params.driveSlug}"`;
-      }
-
-      // Drive creation
-      if (toolName === 'create_drive') {
-        if (params.name) return `${base}: "${params.name}"`;
-      }
-
-      // Drive rename - show current name
-      if (toolName === 'rename_drive') {
-        if (params.currentName) return `${base}: "${params.currentName}"`;
-      }
-
-      return base;
-    } catch {
-      return base;
+    // File-based tools
+    if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
+      if (params.title) return `${formattedToolName}: "${params.title}"`;
+      if (params.dir) return `${formattedToolName}: ${params.dir}`;
     }
-  };
 
-  // Get compact summary
-  const getCompactSummary = (): string => {
+    // Title-based tools
+    if (['create_page', 'move_page'].includes(toolName)) {
+      if (params.title) return `${formattedToolName}: "${params.title}"`;
+      if (params.name) return `${formattedToolName}: "${params.name}"`;
+    }
+
+    // Rename uses currentTitle for display (title is the new name)
+    if (toolName === 'rename_page') {
+      if (params.currentTitle) return `${formattedToolName}: "${params.currentTitle}"`;
+    }
+
+    // Trash/Restore
+    if (['trash', 'restore'].includes(toolName)) {
+      if (params.title || params.name) return `${formattedToolName}: "${params.title || params.name}"`;
+    }
+
+    // Drive-based tools - show which drive
+    if (['list_pages', 'list_trash'].includes(toolName)) {
+      if (params.driveSlug) return `${formattedToolName}: "${params.driveSlug}"`;
+    }
+
+    // Drive creation
+    if (toolName === 'create_drive') {
+      if (params.name) return `${formattedToolName}: "${params.name}"`;
+    }
+
+    // Drive rename - show current name
+    if (toolName === 'rename_drive') {
+      if (params.currentName) return `${formattedToolName}: "${params.currentName}"`;
+    }
+
+    return formattedToolName;
+  }, [parsedInput, formattedToolName, toolName]);
+
+  // Memoize compact summary
+  const compactSummary = useMemo((): string => {
     if (error) return 'Failed';
 
     if (state === 'output-available' || state === 'done') {
-      try {
-        const result = typeof output === 'string' ? JSON.parse(output) : output;
+      if (!parsedOutput) return 'Done';
 
-        if (toolName === 'ask_agent' && result.response) {
-          const text = String(result.response);
-          return text.length > 30 ? text.substring(0, 27) + '...' : text;
-        }
+      const result = parsedOutput as Record<string, unknown>;
 
-        // Very compact summaries
-        if (toolName === 'list_drives' && result.drives) {
-          return `${result.drives.length} drives`;
-        }
-
-        if (toolName === 'list_pages' && result.tree) {
-          const pageCount = countPages(result.tree || []);
-          return `${pageCount} pages`;
-        }
-
-        if (toolName === 'read_page') {
-          const title = result.title || 'page';
-          return title.length > 20 ? title.substring(0, 17) + '...' : title;
-        }
-
-        if (result.message) {
-          const msg = result.message;
-          return msg.length > 30 ? msg.substring(0, 27) + '...' : msg;
-        }
-
-        if (result.title) {
-          return result.title.length > 20 ? result.title.substring(0, 17) + '...' : result.title;
-        }
-
-        return 'Complete';
-      } catch {
-        return 'Done';
+      if (toolName === 'ask_agent' && result.response) {
+        const text = String(result.response);
+        return text.length > 30 ? text.substring(0, 27) + '...' : text;
       }
+
+      // Very compact summaries
+      if (toolName === 'list_drives' && result.drives) {
+        return `${(result.drives as unknown[]).length} drives`;
+      }
+
+      if (toolName === 'list_pages' && result.tree) {
+        const pageCount = countPages((result.tree as TreeItem[]) || []);
+        return `${pageCount} pages`;
+      }
+
+      if (toolName === 'read_page') {
+        const title = (result.title as string) || 'page';
+        return title.length > 20 ? title.substring(0, 17) + '...' : title;
+      }
+
+      if (result.message) {
+        const msg = result.message as string;
+        return msg.length > 30 ? msg.substring(0, 27) + '...' : msg;
+      }
+
+      if (result.title) {
+        const title = result.title as string;
+        return title.length > 20 ? title.substring(0, 17) + '...' : title;
+      }
+
+      return 'Complete';
     }
 
     if (state === 'input-available' || state === 'streaming') {
@@ -233,26 +246,31 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
     }
 
     return 'Pending';
-  };
+  }, [error, state, parsedOutput, toolName]);
 
-  // Helper function to count pages in tree structure
-  const countPages = (items: TreeItem[]): number => {
-    return items.reduce((count, item) => {
-      return count + 1 + (item.children ? countPages(item.children) : 0);
-    }, 0);
-  };
+  // Memoize stringified input for display
+  const inputDisplay = useMemo(() => {
+    if (!parsedInput) return null;
+    try {
+      return JSON.stringify(parsedInput, null, 2);
+    } catch {
+      return String(input);
+    }
+  }, [parsedInput, input]);
 
-  // Render compact details when expanded
-  const renderExpandedDetails = () => {
+  // Memoize expanded details content
+  const expandedDetails = useMemo(() => {
     if (!isExpanded) return null;
+
+    const result = parsedOutput as Record<string, unknown> | null;
 
     return (
       <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full break-words">
-        {input ? (
+        {inputDisplay ? (
           <div className="space-y-0.5 max-w-full break-words">
             <div className="font-medium text-gray-600 dark:text-gray-400">Input:</div>
             <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-w-full">
-              {JSON.stringify(typeof input === 'string' ? JSON.parse(input) : input, null, 2)}
+              {inputDisplay}
             </pre>
           </div>
         ) : null}
@@ -261,20 +279,18 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
           <div className="space-y-0.5 max-w-full break-words">
             <div className="font-medium text-gray-600 dark:text-gray-400">Result:</div>
             {(() => {
-              try {
-                const result = typeof output === 'string' ? JSON.parse(output) : output;
-
+              if (result) {
                 if (toolName === 'list_pages' && result.tree) {
-                  return <div className="border rounded-md overflow-hidden"><FileTreeRenderer tree={result.tree} /></div>;
+                  return <div className="border rounded-md overflow-hidden"><FileTreeRenderer tree={result.tree as TreeItem[]} /></div>;
                 }
 
                 if (toolName === 'read_page' && result.content) {
                   return (
                     <div className="border rounded-md overflow-hidden">
                       <DocumentRenderer
-                        title={result.title || result.path || 'Document'}
-                        content={result.content}
-                        language={getLanguageFromPath(result.path)}
+                        title={(result.title as string) || (result.path as string) || 'Document'}
+                        content={result.content as string}
+                        language={getLanguageFromPath(result.path as string)}
                         description={`${result.lineCount ?? '?'} lines`}
                       />
                     </div>
@@ -285,9 +301,9 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
                   return (
                     <div className="border rounded-md overflow-hidden">
                       <DocumentRenderer
-                        title={result.title || "Modified"}
-                        content={result.content}
-                        language={getLanguageFromPath(result.path)}
+                        title={(result.title as string) || "Modified"}
+                        content={result.content as string}
+                        language={getLanguageFromPath(result.path as string)}
                         description="Updated"
                       />
                     </div>
@@ -299,13 +315,13 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
                     {JSON.stringify(result, null, 2)}
                   </pre>
                 );
-              } catch {
-                return (
-                  <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto max-w-full">
-                    {typeof output === 'string' ? output : JSON.stringify(output, null, 2)}
-                  </pre>
-                );
               }
+
+              return (
+                <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto max-w-full">
+                  {typeof output === 'string' ? output : JSON.stringify(output, null, 2)}
+                </pre>
+              );
             })()}
           </div>
         ) : null}
@@ -317,7 +333,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         ) : null}
       </div>
     );
-  };
+  }, [isExpanded, inputDisplay, output, parsedOutput, toolName, error]);
 
   return (
     <div className="py-0.5 text-[11px] max-w-full">
@@ -326,15 +342,26 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = (
         className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
-        <div className="flex-shrink-0">{getToolIcon(toolName)}</div>
-        <span className="font-medium truncate flex-1 min-w-0" title={getDescriptiveTitle()}>{getDescriptiveTitle()}</span>
-        <div className="flex-shrink-0">{getStatusIcon()}</div>
+        <div className="flex-shrink-0">{toolIcon}</div>
+        <span className="font-medium truncate flex-1 min-w-0" title={descriptiveTitle}>{descriptiveTitle}</span>
+        <div className="flex-shrink-0">{statusIcon}</div>
         <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px] min-w-0">
-          {getCompactSummary()}
+          {compactSummary}
         </span>
       </button>
 
-      {renderExpandedDetails()}
+      {expandedDetails}
     </div>
   );
-};
+});
+
+export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part }) {
+  const toolName = part.toolName || part.type?.replace('tool-', '') || '';
+
+  // Task management tools - render with TaskRenderer
+  if (toolName === 'update_task') {
+    return <TaskRenderer part={part} />;
+  }
+
+  return <CompactToolCallRendererInternal part={part} toolName={toolName} />;
+});

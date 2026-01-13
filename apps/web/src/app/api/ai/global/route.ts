@@ -10,7 +10,16 @@ const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
 
 /**
- * GET - List all conversations for the authenticated user
+ * GET - List conversations for the authenticated user with optional pagination
+ *
+ * Query Parameters:
+ *   - limit (optional): Max conversations to return (default 20, max 100)
+ *   - cursor (optional): Conversation ID for cursor-based pagination
+ *   - direction (optional): 'before' (older) or 'after' (newer), default 'before'
+ *   - paginated (optional): If 'true', returns paginated response format
+ *
+ * Without pagination (legacy): Returns array of conversations
+ * With pagination: Returns { conversations: [], pagination: { hasMore, nextCursor, prevCursor, limit } }
  */
 export async function GET(request: Request) {
   try {
@@ -18,9 +27,26 @@ export async function GET(request: Request) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    const userConversations = await globalConversationRepository.listConversations(userId);
+    const { searchParams } = new URL(request.url);
+    const usePagination = searchParams.get('paginated') === 'true';
+    const limit = parseInt(searchParams.get('limit') || '20');
+    const cursor = searchParams.get('cursor') || undefined;
+    const direction = (searchParams.get('direction') as 'before' | 'after') || 'before';
 
-    return NextResponse.json(userConversations);
+    if (usePagination) {
+      // New paginated response format
+      const result = await globalConversationRepository.listConversationsPaginated(userId, {
+        limit,
+        cursor,
+        direction,
+      });
+      return NextResponse.json(result);
+    } else {
+      // Legacy response format (array of all conversations)
+      // Still supported for backward compatibility
+      const userConversations = await globalConversationRepository.listConversations(userId);
+      return NextResponse.json(userConversations);
+    }
   } catch (error) {
     loggers.api.error('Error fetching conversations:', error as Error);
     return NextResponse.json({

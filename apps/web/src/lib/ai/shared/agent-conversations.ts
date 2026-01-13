@@ -12,8 +12,17 @@ interface AgentConversationsResponse {
   conversations?: AgentConversationSummary[];
 }
 
+export interface PaginationInfo {
+  hasMore: boolean;
+  nextCursor: string | null;
+  prevCursor: string | null;
+  limit: number;
+  direction: string;
+}
+
 interface AgentMessagesResponse {
   messages?: UIMessage[];
+  pagination?: PaginationInfo;
 }
 
 interface AgentConversationCreateResponse {
@@ -21,21 +30,63 @@ interface AgentConversationCreateResponse {
   id?: string;
 }
 
+export interface FetchAgentMessagesOptions {
+  limit?: number;
+  cursor?: string;
+  direction?: 'before' | 'after';
+}
+
+export interface FetchAgentMessagesResult {
+  messages: UIMessage[];
+  pagination: PaginationInfo | null;
+}
+
+/**
+ * Fetch agent conversation messages with optional pagination.
+ * Default behavior (no options): fetches the most recent 50 messages.
+ */
 export async function fetchAgentConversationMessages(
   agentId: string,
-  conversationId: string
-): Promise<UIMessage[]> {
-  const response = await fetchWithAuth(
-    `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
-  );
+  conversationId: string,
+  options?: FetchAgentMessagesOptions
+): Promise<FetchAgentMessagesResult> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.cursor) params.set('cursor', options.cursor);
+  if (options?.direction) params.set('direction', options.direction);
+
+  const queryString = params.toString();
+  const url = `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages${queryString ? `?${queryString}` : ''}`;
+
+  const response = await fetchWithAuth(url);
   if (!response.ok) {
     throw new Error(`Failed to load messages for agent ${agentId}, conversation ${conversationId}`);
   }
   const data = (await response.json()) as AgentMessagesResponse | UIMessage[];
+
+  // Handle legacy response format (array of messages)
   if (Array.isArray(data)) {
-    return data;
+    return {
+      messages: data,
+      pagination: null
+    };
   }
-  return data.messages || [];
+
+  return {
+    messages: data.messages || [],
+    pagination: data.pagination || null
+  };
+}
+
+/**
+ * @deprecated Use fetchAgentConversationMessages with options instead
+ */
+export async function fetchAgentConversationMessagesLegacy(
+  agentId: string,
+  conversationId: string
+): Promise<UIMessage[]> {
+  const result = await fetchAgentConversationMessages(agentId, conversationId);
+  return result.messages;
 }
 
 export async function fetchMostRecentAgentConversation(

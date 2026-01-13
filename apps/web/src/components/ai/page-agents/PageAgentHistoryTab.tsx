@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, memo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -11,6 +11,10 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
+import { VirtualizedConversationList } from '@/components/ai/shared/chat';
+
+// Threshold for enabling virtualization
+const VIRTUALIZATION_THRESHOLD = 20;
 
 interface Conversation {
   id: string;
@@ -34,7 +38,7 @@ interface PageAgentHistoryTabProps {
   isLoading: boolean;
 }
 
-function ConversationCard({
+const ConversationCard = memo(function ConversationCard({
   conversation,
   isActive,
   onClick,
@@ -93,7 +97,7 @@ function ConversationCard({
       </div>
     </Card>
   );
-}
+});
 
 function ConversationListSkeleton() {
   return (
@@ -131,6 +135,24 @@ export default function PageAgentHistoryTab({
   onDeleteConversation,
   isLoading,
 }: PageAgentHistoryTabProps) {
+  // Determine if we should virtualize
+  const shouldVirtualize = conversations.length >= VIRTUALIZATION_THRESHOLD;
+
+  // Memoized render function for virtualization
+  const renderConversation = useCallback((conv: Conversation) => (
+    <div className="pb-3">
+      <ConversationCard
+        conversation={conv}
+        isActive={conv.id === currentConversationId}
+        onClick={() => onSelectConversation(conv.id)}
+        onDelete={() => onDeleteConversation(conv.id)}
+      />
+    </div>
+  ), [currentConversationId, onSelectConversation, onDeleteConversation]);
+
+  // Get key for virtualization
+  const getConversationKey = useCallback((conv: Conversation) => conv.id, []);
+
   return (
     <div className="flex flex-col h-full p-4">
       <div className="mb-4">
@@ -140,25 +162,38 @@ export default function PageAgentHistoryTab({
         </Button>
       </div>
 
-      <ScrollArea className="flex-1">
+      <div className="flex-1 min-h-0 overflow-hidden">
         {isLoading ? (
           <ConversationListSkeleton />
         ) : conversations.length === 0 ? (
           <EmptyState message="No conversations yet. Start a new conversation to get started." />
+        ) : shouldVirtualize ? (
+          // Virtualized rendering for large lists
+          <VirtualizedConversationList
+            conversations={conversations}
+            renderConversation={renderConversation}
+            getKey={getConversationKey}
+            estimatedRowHeight={120}
+            overscan={3}
+            gap={0}
+          />
         ) : (
-          <div className="space-y-3 pr-4">
-            {conversations.map((conv) => (
-              <ConversationCard
-                key={conv.id}
-                conversation={conv}
-                isActive={conv.id === currentConversationId}
-                onClick={() => onSelectConversation(conv.id)}
-                onDelete={() => onDeleteConversation(conv.id)}
-              />
-            ))}
-          </div>
+          // Regular rendering for smaller lists
+          <ScrollArea className="h-full">
+            <div className="space-y-3 pr-4">
+              {conversations.map((conv) => (
+                <ConversationCard
+                  key={conv.id}
+                  conversation={conv}
+                  isActive={conv.id === currentConversationId}
+                  onClick={() => onSelectConversation(conv.id)}
+                  onDelete={() => onDeleteConversation(conv.id)}
+                />
+              ))}
+            </div>
+          </ScrollArea>
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }
