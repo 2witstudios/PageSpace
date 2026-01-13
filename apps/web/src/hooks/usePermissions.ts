@@ -138,5 +138,8 @@ export function getPermissionErrorMessage(action: string, resource: string = 'pa
  */
 export function canManageDrive(drive: { isOwned?: boolean; role?: string } | null | undefined): boolean {
   if (!drive) return false;
-  return drive.isOwned === true || drive.role === 'ADMIN';
+  if (drive.isOwned === true) return true;
+  // Check for ADMIN or OWNER role (case-insensitive for robustness)
+  const role = drive.role?.toUpperCase();
+  return role === 'ADMIN' || role === 'OWNER';
 }
