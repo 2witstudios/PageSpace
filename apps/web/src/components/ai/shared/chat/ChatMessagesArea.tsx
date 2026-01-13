@@ -1,6 +1,11 @@
 /**
  * ChatMessagesArea - Scrollable message display area for AI chats
  * Used by both Agent engine and Global Assistant engine
+ *
+ * Implements "scroll-to-user-message" pattern:
+ * - When user sends a message, scrolls so user's message is at TOP of viewport
+ * - AI response streams below into the empty space
+ * - Doesn't auto-scroll during streaming (lets content fill viewport)
  */
 
 import React, { useRef, useEffect, forwardRef, useImperativeHandle, useState, useCallback } from 'react';
@@ -11,6 +16,7 @@ import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
+import { useMessageScroll } from './useMessageScroll';
 
 interface ChatMessagesAreaProps {
   /** Messages to display */
@@ -40,6 +46,12 @@ interface ChatMessagesAreaProps {
 export interface ChatMessagesAreaRef {
   /** Scroll to bottom of messages */
   scrollToBottom: () => void;
+  /**
+   * Scroll so a user's message is at the top of the viewport.
+   * Called when user sends a message to show their message at top
+   * with AI response streaming below.
+   */
+  scrollToUserMessage: (messageId: string) => void;
 }
 
 /**
@@ -65,6 +77,19 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
+    // Track the previous message count to detect new user messages
+    const prevMessageCountRef = useRef(messages.length);
+
+    // Use the message scroll hook for "scroll-to-user-message" pattern
+    const {
+      scrollToMessage,
+      scrollToBottom,
+      isAutoScrollActive,
+    } = useMessageScroll({
+      scrollContainerRef: scrollAreaRef,
+      isStreaming,
+      topPadding: 16,
+    });
 
     // Handler for undo from here button
     const handleUndoFromHere = useCallback((messageId: string) => {
@@ -80,22 +105,37 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
       onUndoSuccess?.();
     }, [onUndoSuccess]);
 
-    // Scroll to bottom function
-    const scrollToBottom = () => {
-      if (scrollAreaRef.current) {
-        scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-      }
-    };
-
-    // Expose scrollToBottom to parent
+    // Expose scroll methods to parent
     useImperativeHandle(ref, () => ({
       scrollToBottom,
+      scrollToUserMessage: scrollToMessage,
     }));
 
-    // Auto-scroll on new messages or status change
+    // Track the previous lastUserMessageId to detect new user messages
+    const prevLastUserMessageIdRef = useRef(lastUserMessageId);
+
+    // Auto-scroll to user message when a new user message is detected
+    // This implements the "scroll-to-user-message" pattern:
+    // When user sends a message, scroll so their message is at the top of the viewport
     useEffect(() => {
-      scrollToBottom();
-    }, [messages.length, isStreaming]);
+      // Detect new user message: lastUserMessageId changed and we have a valid ID
+      if (
+        lastUserMessageId &&
+        lastUserMessageId !== prevLastUserMessageIdRef.current &&
+        !isLoading
+      ) {
+        // Use requestAnimationFrame to ensure DOM has updated
+        requestAnimationFrame(() => {
+          scrollToMessage(lastUserMessageId);
+        });
+      }
+      prevLastUserMessageIdRef.current = lastUserMessageId;
+    }, [lastUserMessageId, isLoading, scrollToMessage]);
+
+    // Track message count changes
+    useEffect(() => {
+      prevMessageCountRef.current = messages.length;
+    }, [messages.length]);
 
     // Loading skeleton
     const LoadingSkeleton = () => (

@@ -103,6 +103,8 @@ export interface ChatLayoutProps {
 export interface ChatLayoutRef {
   /** Scroll messages to bottom */
   scrollToBottom: () => void;
+  /** Scroll so a user's message is at the top of the viewport */
+  scrollToUserMessage: (messageId: string) => void;
 }
 
 /**
@@ -156,6 +158,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
     // Expose methods to parent
     React.useImperativeHandle(ref, () => ({
       scrollToBottom: () => messagesRef.current?.scrollToBottom(),
+      scrollToUserMessage: (messageId: string) => messagesRef.current?.scrollToUserMessage(messageId),
     }));
 
     // Determine position based on message state
