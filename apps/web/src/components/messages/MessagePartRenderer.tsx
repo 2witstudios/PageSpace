@@ -28,16 +28,33 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
       let textMatch;
 
       while ((textMatch = textMentionRegex.exec(text)) !== null) {
-        const [fullMatch, label] = textMatch;
+        const [fullMatch, label, id, type] = textMatch;
         const precedingText = text.slice(textLastIndex, textMatch.index);
         if (precedingText) {
           textElements.push(<span key={`${index}-text-${textLastIndex}`}>{precedingText}</span>);
         }
-        textElements.push(
-          <span key={`${index}-mention-${textMatch.index}`} className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded">
-            @{label}
-          </span>
-        );
+        // Only page mentions should be clickable links
+        if (type === 'page') {
+          textElements.push(
+            <a
+              key={`${index}-mention-${textMatch.index}`}
+              href={`/p/${id}`}
+              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
+            >
+              @{label}
+            </a>
+          );
+        } else {
+          // Non-page mentions (user, agent, etc.) render as styled badges without links
+          textElements.push(
+            <span
+              key={`${index}-mention-${textMatch.index}`}
+              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded"
+            >
+              @{label}
+            </span>
+          );
+        }
         textLastIndex = textMatch.index + fullMatch.length;
       }
 
@@ -64,16 +81,33 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
       let match;
 
       while ((match = mentionRegex.exec(textContent)) !== null) {
-        const [fullMatch, label, id] = match;
+        const [fullMatch, label, id, mentionType] = match;
         const precedingText = textContent.slice(lastIndex, match.index);
         if (precedingText) {
           elements.push(<span key={`${index}-text-${lastIndex}`}>{precedingText}</span>);
         }
-        elements.push(
-          <span key={`${index}-mention-${id}`} className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded">
-            @{label}
-          </span>
-        );
+        // Only page mentions should be clickable links
+        if (mentionType === 'page') {
+          elements.push(
+            <a
+              key={`${index}-mention-${id}`}
+              href={`/p/${id}`}
+              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
+            >
+              @{label}
+            </a>
+          );
+        } else {
+          // Non-page mentions (user, agent, etc.) render as styled badges without links
+          elements.push(
+            <span
+              key={`${index}-mention-${id}`}
+              className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded"
+            >
+              @{label}
+            </span>
+          );
+        }
         lastIndex = match.index + fullMatch.length;
       }
 
