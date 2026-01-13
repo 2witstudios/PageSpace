@@ -48,7 +48,6 @@ function VirtualizedMessageListInner<T extends UIMessage = UIMessage>({
   className = '',
 }: VirtualizedMessageListProps<T>) {
   const wasNearTopRef = useRef(false);
-  const prevMessageCountRef = useRef(messages.length);
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -92,11 +91,6 @@ function VirtualizedMessageListInner<T extends UIMessage = UIMessage>({
     }, 50);
     return () => clearTimeout(timeoutId);
   }, [messages, virtualizer]);
-
-  // Track message count changes for scroll position preservation
-  useEffect(() => {
-    prevMessageCountRef.current = messages.length;
-  }, [messages.length]);
 
   // Empty state - just return null and let parent handle
   if (messages.length === 0) {

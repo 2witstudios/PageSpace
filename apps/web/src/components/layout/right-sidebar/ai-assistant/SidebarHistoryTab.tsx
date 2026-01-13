@@ -76,7 +76,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const initialLoadRef = useRef(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Determine active conversation ID based on context
   const activeConversationId = useMemo(() => {
@@ -102,7 +102,6 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   useEffect(() => {
     const loadConversations = async () => {
       // Reset state for new loads
-      initialLoadRef.current = true;
       setLoading(true);
       setConversations([]);
       setNextCursor(null);
@@ -341,7 +340,19 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
           />
         ) : (
           // Regular rendering for smaller lists
-          <div className="overflow-y-auto h-full">
+          <div
+            ref={scrollContainerRef}
+            className="overflow-y-auto h-full"
+            onScroll={() => {
+              // Check if scrolled near bottom to load more
+              const container = scrollContainerRef.current;
+              if (!container || !hasMore || loadingMore) return;
+              const { scrollTop, scrollHeight, clientHeight } = container;
+              if (scrollHeight - scrollTop - clientHeight < 100) {
+                handleLoadMore();
+              }
+            }}
+          >
             {filteredConversations.map(conversation => renderConversation(conversation))}
             {loadingMore && (
               <div className="flex items-center justify-center py-2">

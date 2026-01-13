@@ -3,7 +3,7 @@
  * Isolates database operations from route handlers for testability.
  */
 
-import { db, conversations, messages, aiUsageLogs, eq, and, desc, lt, gt } from '@pagespace/db';
+import { db, conversations, messages, aiUsageLogs, eq, and, desc, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
 // Types
@@ -187,11 +187,11 @@ export const globalConversationRepository = {
       eq(conversations.isActive, true)
     ];
 
-    // Add cursor condition if provided
+    // Add cursor condition if provided - use compound cursor (lastMessageAt + id) for stable ordering
     if (cursor) {
-      // Get the cursor conversation's lastMessageAt
+      // Get the cursor conversation's lastMessageAt and id
       const [cursorConv] = await db
-        .select({ lastMessageAt: conversations.lastMessageAt })
+        .select({ lastMessageAt: conversations.lastMessageAt, id: conversations.id })
         .from(conversations)
         .where(eq(conversations.id, cursor))
         .limit(1);
@@ -199,10 +199,16 @@ export const globalConversationRepository = {
       if (cursorConv?.lastMessageAt) {
         if (direction === 'before') {
           // Get conversations older than cursor (earlier lastMessageAt)
-          conditions.push(lt(conversations.lastMessageAt, cursorConv.lastMessageAt));
+          // Use compound condition: either earlier timestamp, or same timestamp but smaller id
+          conditions.push(
+            sql`(${conversations.lastMessageAt} < ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} < ${cursorConv.id}))`
+          );
         } else {
           // Get conversations newer than cursor (later lastMessageAt)
-          conditions.push(gt(conversations.lastMessageAt, cursorConv.lastMessageAt));
+          // Use compound condition: either later timestamp, or same timestamp but larger id
+          conditions.push(
+            sql`(${conversations.lastMessageAt} > ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} > ${cursorConv.id}))`
+          );
         }
       }
     }

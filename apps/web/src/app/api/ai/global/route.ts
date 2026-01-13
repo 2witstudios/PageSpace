@@ -29,9 +29,13 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const usePagination = searchParams.get('paginated') === 'true';
-    const limit = parseInt(searchParams.get('limit') || '20');
+    const limitParam = parseInt(searchParams.get('limit') || '20');
+    const limit = isNaN(limitParam) ? 20 : Math.max(1, Math.min(limitParam, 100));
     const cursor = searchParams.get('cursor') || undefined;
-    const direction = (searchParams.get('direction') as 'before' | 'after') || 'before';
+    const directionParam = searchParams.get('direction');
+    const direction = (directionParam === 'before' || directionParam === 'after')
+      ? directionParam
+      : 'before';
 
     if (usePagination) {
       // New paginated response format

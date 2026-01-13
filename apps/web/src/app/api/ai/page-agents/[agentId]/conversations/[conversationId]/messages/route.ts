@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, chatMessages, pages, eq, and, desc, gt, lt } from '@pagespace/db';
+import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
@@ -84,11 +84,15 @@ export async function GET(
       );
     }
 
-    // Parse pagination parameters
+    // Parse pagination parameters with validation
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200);
+    const limitParam = parseInt(searchParams.get('limit') || '50');
+    const limit = isNaN(limitParam) ? 50 : Math.max(1, Math.min(limitParam, 200));
     const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
-    const direction = searchParams.get('direction') || 'before'; // 'before' or 'after'
+    const directionParam = searchParams.get('direction');
+    const direction = (directionParam === 'before' || directionParam === 'after')
+      ? directionParam
+      : 'before';
 
     // Build query conditions
     const conditions = [
@@ -97,21 +101,27 @@ export async function GET(
       eq(chatMessages.isActive, true)
     ];
 
-    // Add cursor condition if provided
+    // Add cursor condition if provided - use compound cursor (createdAt + id) for stable ordering
     if (cursor) {
-      // First, get the timestamp of the cursor message
+      // First, get the timestamp and id of the cursor message
       const cursorMessage = await db.query.chatMessages.findFirst({
         where: eq(chatMessages.id, cursor),
-        columns: { createdAt: true }
+        columns: { createdAt: true, id: true }
       });
 
-      if (cursorMessage) {
+      if (cursorMessage && cursorMessage.createdAt) {
         if (direction === 'before') {
           // Get messages created before the cursor (older messages)
-          conditions.push(lt(chatMessages.createdAt, cursorMessage.createdAt));
+          // Use compound condition: either earlier timestamp, or same timestamp but smaller id
+          conditions.push(
+            sql`(${chatMessages.createdAt} < ${cursorMessage.createdAt} OR (${chatMessages.createdAt} = ${cursorMessage.createdAt} AND ${chatMessages.id} < ${cursorMessage.id}))`
+          );
         } else {
           // Get messages created after the cursor (newer messages)
-          conditions.push(gt(chatMessages.createdAt, cursorMessage.createdAt));
+          // Use compound condition: either later timestamp, or same timestamp but larger id
+          conditions.push(
+            sql`(${chatMessages.createdAt} > ${cursorMessage.createdAt} OR (${chatMessages.createdAt} = ${cursorMessage.createdAt} AND ${chatMessages.id} > ${cursorMessage.id}))`
+          );
         }
       }
     }
