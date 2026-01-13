@@ -143,8 +143,6 @@ export interface ValidatedTokenOptions {
   driveId?: string;
   /** Token expiration (jose duration string, default '5m') */
   expiresIn?: string;
-  /** Additional context for the token */
-  additionalClaims?: Record<string, unknown>;
 }
 
 /**
@@ -178,7 +176,6 @@ export async function createValidatedServiceToken(
     resourceId,
     requestedScopes,
     expiresIn = '5m',
-    additionalClaims,
   } = options;
 
   // Get user's actual permissions for this resource

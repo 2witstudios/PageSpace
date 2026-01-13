@@ -135,8 +135,7 @@ export async function authenticateService(req: Request, res: Response, next: Nex
 
     next();
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid token';
-    console.error('Authentication failed:', message);
+    console.error('Authentication failed:', error);
     respondUnauthorized(res, 'Invalid token');
   }
 }
@@ -177,7 +176,7 @@ export function hasAuthScope(auth: EnforcedAuthContext | undefined, scope: strin
   return auth.hasScope(scope);
 }
 
-export function requireUserContext(req: Request): string | null {
+export function getUserId(req: Request): string | null {
   const auth = req.auth;
   if (!auth) {
     return null;

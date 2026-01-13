@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db, sessions, users } from '../index';
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, inArray } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 describe('Sessions Schema', () => {
@@ -17,11 +17,9 @@ describe('Sessions Schema', () => {
     const uniqueId = createId();
 
     // Clean any orphaned test sessions (defensive cleanup)
-    await db.delete(sessions).where(eq(sessions.tokenHash, 'abc123hash'));
-    await db.delete(sessions).where(eq(sessions.tokenHash, 'unique-hash'));
-    await db.delete(sessions).where(eq(sessions.tokenHash, 'cascade-test'));
-    await db.delete(sessions).where(eq(sessions.tokenHash, 'hash-1'));
-    await db.delete(sessions).where(eq(sessions.tokenHash, 'hash-2'));
+    await db.delete(sessions).where(
+      inArray(sessions.tokenHash, ['abc123hash', 'unique-hash', 'cascade-test', 'hash-1', 'hash-2'])
+    );
 
     const [user] = await db.insert(users).values({
       id: uniqueId,
