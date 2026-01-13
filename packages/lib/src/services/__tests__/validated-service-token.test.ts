@@ -501,6 +501,121 @@ describe('createValidatedServiceToken', () => {
     });
   });
 
+  describe('durationToMs bounds validation', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      (getUserAccessLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+      });
+    });
+
+    it('uses default for zero duration', async () => {
+      await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        requestedScopes: ['files:read'],
+        expiresIn: '0m',
+      });
+
+      // 0m is invalid (zero value), should use default 5m = 300000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresInMs: 300000,
+        })
+      );
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Invalid duration value (must be positive), using default',
+        expect.any(Object)
+      );
+    });
+
+    it('uses default for invalid format', async () => {
+      await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        requestedScopes: ['files:read'],
+        expiresIn: 'invalid',
+      });
+
+      // Invalid format should use default 5m = 300000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresInMs: 300000,
+        })
+      );
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Invalid duration format, using default',
+        expect.any(Object)
+      );
+    });
+
+    it('caps excessive duration at 30 days', async () => {
+      await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        requestedScopes: ['files:read'],
+        expiresIn: '365d',
+      });
+
+      // 365d exceeds max, should cap at 30d = 2592000000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresInMs: 2592000000,
+        })
+      );
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Duration exceeds maximum, capping',
+        expect.any(Object)
+      );
+    });
+
+    it('enforces minimum of 10 seconds', async () => {
+      await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        requestedScopes: ['files:read'],
+        expiresIn: '1s',
+      });
+
+      // 1s is below minimum, should floor to 10s = 10000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresInMs: 10000,
+        })
+      );
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Duration below minimum, using minimum',
+        expect.any(Object)
+      );
+    });
+
+    it('accepts valid duration within bounds', async () => {
+      await createValidatedServiceToken({
+        userId: 'user-1',
+        resourceType: 'page',
+        resourceId: 'page-1',
+        requestedScopes: ['files:read'],
+        expiresIn: '5m',
+      });
+
+      // 5m is valid, should use exactly 300000ms
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresInMs: 300000,
+        })
+      );
+      // No warnings for valid duration
+      expect(loggers.api.warn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('createUploadServiceToken', () => {
     beforeEach(() => {
       vi.clearAllMocks();
