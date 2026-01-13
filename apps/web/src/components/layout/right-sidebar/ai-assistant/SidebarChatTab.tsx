@@ -7,7 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
-import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
+import { UndoAiChangesDialog, useMessageScroll } from '@/components/ai/shared/chat';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -145,14 +145,6 @@ const SidebarChatTab: React.FC = () => {
   const chatInputRef = useRef<ChatInputRef>(null);
   const prevGlobalStatusRef = useRef<string>('ready');
 
-  // ============================================
-  // Helper Functions
-  // ============================================
-  const scrollToBottom = useCallback(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
-    }
-  }, []);
 
   // ============================================
   // Effects: Drive Loading
@@ -323,10 +315,9 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: UI State
   // ============================================
-  // Scroll to bottom when messages change (using individual deps to satisfy exhaustive-deps)
-  useEffect(() => {
-    scrollToBottom();
-  }, [selectedAgent, messages.length, contextMessages.length, status, scrollToBottom]);
+  // Note: Auto-scroll to user messages is now handled by the useMessageScroll hook
+  // in the "Computed Values" section. This keeps the sidebar in sync with the
+  // scroll-to-user-message pattern used in the main chat interfaces.
 
   useEffect(() => {
     if (error) setShowError(true);
@@ -386,7 +377,8 @@ const SidebarChatTab: React.FC = () => {
 
     sendMessage({ text: input }, { body });
     setInput('');
-    setTimeout(scrollToBottom, 100);
+    // Note: Scrolling to the user's message is now handled automatically
+    // by the useMessageScroll hook when it detects a new lastUserMessageId
   }, [
     input,
     currentConversationId,
@@ -399,7 +391,6 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
-    scrollToBottom,
   ]);
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {
@@ -549,6 +540,34 @@ const SidebarChatTab: React.FC = () => {
   const lastUserMessageId = displayMessages
     .filter(m => m.role === 'user')
     .slice(-1)[0]?.id;
+
+  // ============================================
+  // Scroll Hook - implements "scroll-to-user-message" pattern
+  // ============================================
+  const {
+    scrollToMessage,
+    scrollToBottom,
+  } = useMessageScroll({
+    scrollContainerRef: scrollAreaRef,
+    isStreaming: displayIsStreaming,
+    topPadding: 12, // Smaller padding for compact sidebar
+  });
+
+  // Track previous lastUserMessageId to detect new user messages
+  const prevLastUserMessageIdRef = useRef(lastUserMessageId);
+
+  // Auto-scroll to user message when a new user message is detected
+  useEffect(() => {
+    if (
+      lastUserMessageId &&
+      lastUserMessageId !== prevLastUserMessageIdRef.current
+    ) {
+      requestAnimationFrame(() => {
+        scrollToMessage(lastUserMessageId);
+      });
+    }
+    prevLastUserMessageIdRef.current = lastUserMessageId;
+  }, [lastUserMessageId, scrollToMessage]);
 
   // ============================================
   // Render
