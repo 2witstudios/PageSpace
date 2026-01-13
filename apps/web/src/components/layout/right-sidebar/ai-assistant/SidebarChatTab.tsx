@@ -7,7 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
-import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
+import { UndoAiChangesDialog, ScrollToBottomButton } from '@/components/ai/shared/chat';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -600,7 +600,7 @@ const SidebarChatTab: React.FC = () => {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 min-w-0 overflow-hidden" style={{ contain: 'layout' }}>
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden relative" style={{ contain: 'layout' }}>
         <ScrollArea className="h-full" ref={scrollAreaRef}>
           <div className="p-3 min-w-0 overflow-x-hidden">
             <div className="space-y-1.5 min-w-0 max-w-full break-words">
@@ -644,6 +644,7 @@ const SidebarChatTab: React.FC = () => {
             </div>
           </div>
         </ScrollArea>
+        <ScrollToBottomButton scrollRef={scrollAreaRef} className="bottom-2" />
       </div>
 
       {/* Input */}
