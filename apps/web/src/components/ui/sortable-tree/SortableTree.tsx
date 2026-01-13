@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, ReactNode } from "react";
+import { useState, useMemo, useCallback, useRef, ReactNode } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -109,6 +109,14 @@ export function SortableTree<T extends TreeItem>({
     return getProjection(sortableItems, activeId, overId, offsetLeft, indentationWidth);
   }, [sortableItems, activeId, overId, offsetLeft, indentationWidth]);
 
+  // Store the last valid projection in a ref to avoid race conditions
+  // where projected becomes null right before handleDragEnd is called.
+  // Updated synchronously during render to avoid useEffect lag.
+  const projectedRef = useRef<Projection | null>(null);
+  if (projected) {
+    projectedRef.current = projected;
+  }
+
   const handleDragStart = useCallback(({ active }: DragStartEvent) => {
     setActiveId(active.id);
     setOverId(active.id);
@@ -136,15 +144,20 @@ export function SortableTree<T extends TreeItem>({
         requestAnimationFrame(() => movedElement.focus());
       }
 
+      // Capture the projection before resetting state
+      // Use ref to avoid race conditions where projected becomes null
+      const finalProjection = projectedRef.current;
+
       setActiveId(null);
       setOverId(null);
       setOffsetLeft(0);
+      projectedRef.current = null;
 
-      if (over && active.id !== over.id && projected && onMove) {
-        onMove(String(active.id), String(over.id), projected);
+      if (over && active.id !== over.id && finalProjection && onMove) {
+        onMove(String(active.id), String(over.id), finalProjection);
       }
     },
-    [projected, onMove]
+    [onMove]
   );
 
   const handleDragCancel = useCallback(() => {
@@ -152,6 +165,7 @@ export function SortableTree<T extends TreeItem>({
     setActiveId(null);
     setOverId(null);
     setOffsetLeft(0);
+    projectedRef.current = null;
   }, []);
 
   return (
