@@ -605,10 +605,10 @@ const SidebarChatTab: React.FC = () => {
           <div className="p-3 min-w-0 overflow-x-hidden">
             <div className="space-y-1.5 min-w-0 max-w-full break-words">
             {displayMessages.length === 0 ? (
-              <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center">
-                <div>
-                  <p className="font-medium">{assistantName}</p>
-                  <p className="text-xs">
+              <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center overflow-hidden">
+                <div className="max-w-full px-2">
+                  <p className="font-medium truncate">{assistantName}</p>
+                  <p className="text-xs truncate">
                     {locationContext
                       ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}`
                       : 'Ask me anything about your workspace'}
