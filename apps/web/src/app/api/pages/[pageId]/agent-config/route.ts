@@ -7,8 +7,8 @@ import { loggers } from '@pagespace/lib/server';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 /**
  * GET - Get Page AI agent configuration
@@ -263,3 +263,8 @@ export async function PATCH(
     );
   }
 }
+
+/**
+ * PUT - Update Page AI agent configuration (alias for PATCH)
+ */
+export { PATCH as PUT };

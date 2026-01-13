@@ -6,7 +6,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/[taskId]
