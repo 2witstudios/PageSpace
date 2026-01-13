@@ -546,7 +546,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   const {
     scrollToMessage,
-    scrollToBottom,
+    scrollToBottom: _scrollToBottom, // Available for future "scroll to bottom" button
   } = useMessageScroll({
     scrollContainerRef: scrollAreaRef,
     isStreaming: displayIsStreaming,

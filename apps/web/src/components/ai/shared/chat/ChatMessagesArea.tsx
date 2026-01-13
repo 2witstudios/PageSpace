@@ -84,7 +84,6 @@ export const ChatMessagesArea = forwardRef<ChatMessagesAreaRef, ChatMessagesArea
     const {
       scrollToMessage,
       scrollToBottom,
-      isAutoScrollActive,
     } = useMessageScroll({
       scrollContainerRef: scrollAreaRef,
       isStreaming,
