@@ -10,15 +10,10 @@ const DEFAULT_LIMIT = parseInt(process.env.PROCESSOR_UPLOAD_RATE_LIMIT ?? '100',
 const WINDOW_SECONDS = parseInt(process.env.PROCESSOR_UPLOAD_RATE_WINDOW ?? '3600', 10);
 
 function getBucketKey(req: Request): string {
-  const auth = req.serviceAuth;
-  // Use userId for rate limiting (not tenantId which may be per-resource)
-  // This ensures rate limits accumulate per-user across all their uploads
+  const auth = req.auth;
+  // Use userId for rate limiting - this ensures rate limits accumulate per-user
   if (auth?.userId) {
     return `user:${auth.userId}`;
-  }
-
-  if (auth?.service) {
-    return `service:${auth.service}`;
   }
 
   // Fallback to IP-based limiting for unauthenticated requests

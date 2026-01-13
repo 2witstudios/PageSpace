@@ -1,6 +1,7 @@
 import { db, notifications, users, pages, drives, eq, and, desc, count, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { sendNotificationEmail } from '../services/notification-email-service';
+import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 
 // Export types and guards
 export * from './types';
@@ -10,14 +11,16 @@ import type { NotificationType } from './types';
 async function broadcastNotification(userId: string, notification: unknown) {
   try {
     const realtimeUrl = process.env.INTERNAL_REALTIME_URL || 'http://localhost:3001';
+    const requestBody = JSON.stringify({
+      channelId: `notifications:${userId}`,
+      event: 'notification:new',
+      payload: notification,
+    });
+
     await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channelId: `notifications:${userId}`,
-        event: 'notification:new',
-        payload: notification,
-      }),
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
     });
   } catch (error) {
     console.error('Failed to broadcast notification:', error);

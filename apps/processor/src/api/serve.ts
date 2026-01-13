@@ -12,7 +12,7 @@ const router = Router();
 router.get('/:contentHash/original', async (req, res) => {
   try {
     const { contentHash } = req.params;
-    const auth = req.serviceAuth;
+    const auth = req.auth;
 
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
@@ -127,7 +127,7 @@ router.get('/:contentHash/original', async (req, res) => {
 router.get('/:contentHash/:preset', async (req, res) => {
   try {
     const { contentHash, preset } = req.params;
-    const auth = req.serviceAuth;
+    const auth = req.auth;
 
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
@@ -203,7 +203,7 @@ router.get('/:contentHash/:preset', async (req, res) => {
 router.get('/:contentHash/metadata', async (req, res) => {
   try {
     const { contentHash } = req.params;
-    const auth = req.serviceAuth;
+    const auth = req.auth;
 
     if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });

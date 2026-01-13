@@ -1,9 +1,9 @@
-import type { ProcessorServiceAuth } from '../middleware/auth';
+import type { EnforcedAuthContext } from '../middleware/auth';
 
 declare global {
   namespace Express {
     interface Request {
-      serviceAuth?: ProcessorServiceAuth;
+      auth?: EnforcedAuthContext;
     }
   }
 }

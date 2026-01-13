@@ -14,6 +14,7 @@ export interface SessionClaims {
   scopes: string[];
   resourceType?: string;
   resourceId?: string;
+  driveId?: string;
 }
 
 export interface CreateSessionOptions {
@@ -23,6 +24,7 @@ export interface CreateSessionOptions {
   expiresInMs: number;
   resourceType?: string;
   resourceId?: string;
+  driveId?: string;
   createdByService?: string;
   createdByIp?: string;
 }
@@ -56,6 +58,7 @@ export class SessionService {
       scopes: options.scopes,
       resourceType: options.resourceType,
       resourceId: options.resourceId,
+      driveId: options.driveId,
       tokenVersion: user.tokenVersion,
       createdByService: options.createdByService,
       createdByIp: options.createdByIp,
@@ -110,6 +113,7 @@ export class SessionService {
       scopes: session.scopes,
       resourceType: session.resourceType ?? undefined,
       resourceId: session.resourceId ?? undefined,
+      driveId: session.driveId ?? undefined,
     };
   }
 

@@ -12,8 +12,78 @@ import {
   getUserAccessLevel,
   getUserDrivePermissions,
 } from '../permissions/permissions-cached';
-import { createServiceToken, ServiceScope } from './service-auth';
+import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
+
+/**
+ * Service scope types - defines allowed permission scopes
+ */
+export type ServiceScope =
+  | '*'
+  | 'files:read'
+  | 'files:write'
+  | 'files:link'
+  | 'files:delete'
+  | 'files:optimize'
+  | 'files:ingest'
+  | 'files:write:any'
+  | 'avatars:write'
+  | 'avatars:write:any'
+  | 'queue:read';
+
+// Duration bounds for service tokens
+const DEFAULT_EXPIRY_MS = 5 * 60 * 1000;        // 5 minutes default
+const MIN_EXPIRY_MS = 10 * 1000;                 // 10 seconds minimum
+const MAX_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;  // 30 days maximum
+
+/**
+ * Convert duration string to milliseconds with bounds validation.
+ *
+ * Validation rules:
+ * - Invalid format returns default (5m)
+ * - Zero or negative values return default
+ * - Values below 10s are floored to 10s
+ * - Values exceeding 30 days are capped at 30 days
+ */
+function durationToMs(duration: string): number {
+  const match = duration.match(/^(\d+)([smhd])$/);
+  if (!match) {
+    loggers.api.warn('Invalid duration format, using default', { duration, default: DEFAULT_EXPIRY_MS });
+    return DEFAULT_EXPIRY_MS;
+  }
+
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+
+  // Reject zero/negative values
+  if (value <= 0) {
+    loggers.api.warn('Invalid duration value (must be positive), using default', { duration, value, default: DEFAULT_EXPIRY_MS });
+    return DEFAULT_EXPIRY_MS;
+  }
+
+  let ms: number;
+  switch (unit) {
+    case 's': ms = value * 1000; break;
+    case 'm': ms = value * 60 * 1000; break;
+    case 'h': ms = value * 60 * 60 * 1000; break;
+    case 'd': ms = value * 24 * 60 * 60 * 1000; break;
+    default: return DEFAULT_EXPIRY_MS;
+  }
+
+  // Enforce minimum (prevent near-instant expiry)
+  if (ms < MIN_EXPIRY_MS) {
+    loggers.api.warn('Duration below minimum, using minimum', { duration, ms, min: MIN_EXPIRY_MS });
+    return MIN_EXPIRY_MS;
+  }
+
+  // Cap at maximum (prevent near-permanent tokens)
+  if (ms > MAX_EXPIRY_MS) {
+    loggers.api.warn('Duration exceeds maximum, capping', { duration, ms, max: MAX_EXPIRY_MS });
+    return MAX_EXPIRY_MS;
+  }
+
+  return ms;
+}
 
 /**
  * Error thrown when permission is denied for token creation.
@@ -73,8 +143,6 @@ export interface ValidatedTokenOptions {
   driveId?: string;
   /** Token expiration (jose duration string, default '5m') */
   expiresIn?: string;
-  /** Additional context for the token */
-  additionalClaims?: Record<string, unknown>;
 }
 
 /**
@@ -108,7 +176,6 @@ export async function createValidatedServiceToken(
     resourceId,
     requestedScopes,
     expiresIn = '5m',
-    additionalClaims,
   } = options;
 
   // Get user's actual permissions for this resource
@@ -148,14 +215,15 @@ export async function createValidatedServiceToken(
     filtered: requestedScopes.length !== grantedScopes.length,
   });
 
-  const token = await createServiceToken({
-    service: 'web',
-    subject: userId,
-    resource: resourceId,
+  const token = await sessionService.createSession({
+    userId,
+    type: 'service',
+    scopes: grantedScopes as string[],
+    resourceType,
+    resourceId,
     driveId: options.driveId,
-    scopes: grantedScopes,
-    expiresIn,
-    additionalClaims,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
   });
 
   return {
@@ -409,14 +477,15 @@ export async function createUploadServiceToken(
     scopes: UPLOAD_SCOPES,
   });
 
-  // Note: createServiceToken errors (signing failures, etc.) bubble up as-is
-  const token = await createServiceToken({
-    service: 'web',
-    subject: userId,
-    resource: pageId,
-    driveId: driveId,
-    scopes: UPLOAD_SCOPES,
-    expiresIn,
+  const token = await sessionService.createSession({
+    userId,
+    type: 'service',
+    scopes: UPLOAD_SCOPES as string[],
+    resourceType: 'page',
+    resourceId: pageId,
+    driveId,
+    expiresInMs: durationToMs(expiresIn),
+    createdByService: 'web',
   });
 
   return {
