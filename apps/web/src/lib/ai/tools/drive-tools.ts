@@ -333,22 +333,23 @@ This context persists across conversations and helps provide better assistance. 
       }
 
       try {
-        // Find the drive
-        const drive = await db.query.drives.findFirst({
-          where: eq(drives.id, driveId),
-        });
-
-        if (!drive) {
+        // Check authorization first - getDriveAccess internally queries the drive
+        // Returns role: null if drive doesn't exist
+        const access = await getDriveAccess(driveId, userId);
+        if (access.role === null) {
           throw new Error('Drive not found');
         }
-
-        // Check authorization - only owners and admins can update drive context
-        const access = await getDriveAccess(driveId, userId);
         if (!access.isOwner && !access.isAdmin) {
           throw new Error('Only drive owners and admins can update drive context');
         }
 
-        const previousContext = drive.drivePrompt || '';
+        // Get the current context for logging (single query for just what we need)
+        const currentDrive = await db
+          .select({ drivePrompt: drives.drivePrompt })
+          .from(drives)
+          .where(eq(drives.id, driveId))
+          .limit(1);
+        const previousContext = currentDrive[0]?.drivePrompt || '';
 
         // Update the drive context
         const [updatedDrive] = await db
@@ -357,7 +358,7 @@ This context persists across conversations and helps provide better assistance. 
             drivePrompt: context,
             updatedAt: new Date(),
           })
-          .where(eq(drives.id, drive.id))
+          .where(eq(drives.id, driveId))
           .returning({
             id: drives.id,
             name: drives.name,
