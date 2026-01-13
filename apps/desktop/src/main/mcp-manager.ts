@@ -356,10 +356,12 @@ export class MCPManager {
         server.status = 'running';
         logger.info('Server started successfully', { serverName: name });
 
-        // Fetch tools from server (async, don't wait for completion)
-        this.getMCPTools(name).catch((error) => {
-          logger.error('Failed to fetch tools after startup', { serverName: name, error });
-        });
+        // Initialize server with MCP protocol handshake, then fetch tools
+        this.initializeServer(name)
+          .then(() => this.getMCPTools(name))
+          .catch((error) => {
+            logger.error('Failed to initialize or fetch tools after startup', { serverName: name, error });
+          });
       } else {
         throw new Error('Process exited immediately after start');
       }
@@ -804,6 +806,68 @@ export class MCPManager {
 
       pendingMap.set(requestId, { resolve, reject, timeout });
     });
+  }
+
+  /**
+   * Send a JSON-RPC notification (no response expected)
+   */
+  sendJSONRPCNotification(
+    serverName: string,
+    method: string,
+    params?: Record<string, unknown>
+  ): void {
+    const server = this.servers.get(serverName);
+    if (!server || !server.process || server.status !== 'running') {
+      throw new Error(`Server ${serverName} is not running`);
+    }
+
+    // Notifications don't have an id field
+    const notification = {
+      jsonrpc: '2.0',
+      method,
+      params,
+    };
+
+    const notificationStr = JSON.stringify(notification) + '\n';
+    server.process.stdin?.write(notificationStr);
+  }
+
+  /**
+   * Initialize MCP server with protocol handshake
+   * Per MCP spec: client sends initialize, server responds, client sends initialized notification
+   * This must be called before tools/list or other methods
+   */
+  async initializeServer(serverName: string): Promise<void> {
+    logger.debug('Initializing MCP server', { serverName });
+
+    try {
+      // Send initialize request with client capabilities
+      // sendJSONRPCRequest rejects on error via handleJSONRPCResponse,
+      // so initResponse is guaranteed to be a successful response
+      const initResponse = await this.sendJSONRPCRequest(serverName, 'initialize', {
+        protocolVersion: '2024-11-05',
+        capabilities: {
+          tools: {},
+        },
+        clientInfo: {
+          name: 'PageSpace',
+          version: '1.0.0',
+        },
+      });
+
+      logger.debug('Server initialized, sending initialized notification', {
+        serverName,
+        serverCapabilities: initResponse.result,
+      });
+
+      // Send initialized notification (no response expected)
+      this.sendJSONRPCNotification(serverName, 'notifications/initialized', {});
+
+      logger.info('MCP server initialization complete', { serverName });
+    } catch (error) {
+      logger.error('Failed to initialize MCP server', { serverName, error });
+      throw error;
+    }
   }
 
   /**
