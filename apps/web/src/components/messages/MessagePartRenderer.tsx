@@ -28,15 +28,19 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
       let textMatch;
 
       while ((textMatch = textMentionRegex.exec(text)) !== null) {
-        const [fullMatch, label] = textMatch;
+        const [fullMatch, label, pageId] = textMatch;
         const precedingText = text.slice(textLastIndex, textMatch.index);
         if (precedingText) {
           textElements.push(<span key={`${index}-text-${textLastIndex}`}>{precedingText}</span>);
         }
         textElements.push(
-          <span key={`${index}-mention-${textMatch.index}`} className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded">
+          <a
+            key={`${index}-mention-${textMatch.index}`}
+            href={`/p/${pageId}`}
+            className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
+          >
             @{label}
-          </span>
+          </a>
         );
         textLastIndex = textMatch.index + fullMatch.length;
       }
@@ -64,15 +68,19 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
       let match;
 
       while ((match = mentionRegex.exec(textContent)) !== null) {
-        const [fullMatch, label, id] = match;
+        const [fullMatch, label, pageId] = match;
         const precedingText = textContent.slice(lastIndex, match.index);
         if (precedingText) {
           elements.push(<span key={`${index}-text-${lastIndex}`}>{precedingText}</span>);
         }
         elements.push(
-          <span key={`${index}-mention-${id}`} className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded">
+          <a
+            key={`${index}-mention-${pageId}`}
+            href={`/p/${pageId}`}
+            className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
+          >
             @{label}
-          </span>
+          </a>
         );
         lastIndex = match.index + fullMatch.length;
       }

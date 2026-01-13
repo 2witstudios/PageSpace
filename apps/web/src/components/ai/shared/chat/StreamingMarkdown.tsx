@@ -43,10 +43,19 @@ function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnc
         ? children[0].replace(/^mention:/, '')
         : children;
 
+    // Parse the mention URL: mention://pageId/type
+    const mentionPath = href.replace('mention://', '');
+    const [pageId] = mentionPath.split('/');
+
+    // Render as a clickable link to the page redirect route
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1">
+      <a
+        href={`/p/${pageId}`}
+        className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1 hover:bg-primary/30 dark:hover:bg-primary/40 transition-colors cursor-pointer no-underline"
+        {...props}
+      >
         @{label}
-      </span>
+      </a>
     );
   }
 

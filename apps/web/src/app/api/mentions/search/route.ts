@@ -1,8 +1,72 @@
 import { NextResponse } from 'next/server';
 import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { pages, users, db, and, eq, ilike, drives, inArray } from '@pagespace/db';
+import { pages, users, db, and, eq, ilike, drives, inArray, SQL } from '@pagespace/db';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
+
+/**
+ * Build a multi-word search condition
+ * All words must be present in the title (in any order)
+ * e.g., "alpha budget" matches "Project Alpha Budget"
+ */
+function buildMultiWordSearchCondition(query: string): SQL | undefined {
+  if (!query.trim()) return undefined;
+
+  // Split by whitespace and filter empty strings
+  const words = query.trim().split(/\s+/).filter(Boolean);
+
+  if (words.length === 0) return undefined;
+
+  // Each word must be present in the title
+  const conditions = words.map(word => ilike(pages.title, `%${word}%`));
+
+  return conditions.length === 1 ? conditions[0] : and(...conditions);
+}
+
+/**
+ * Calculate relevance score for sorting
+ * Higher score = more relevant
+ */
+function calculateRelevanceScore(title: string, query: string): number {
+  const lowerTitle = title.toLowerCase();
+  const lowerQuery = query.toLowerCase().trim();
+  const queryWords = lowerQuery.split(/\s+/).filter(Boolean);
+
+  let score = 0;
+
+  // Exact match (highest priority)
+  if (lowerTitle === lowerQuery) {
+    score += 1000;
+  }
+
+  // Title starts with query
+  if (lowerTitle.startsWith(lowerQuery)) {
+    score += 500;
+  }
+
+  // Title contains exact query as substring
+  if (lowerTitle.includes(lowerQuery)) {
+    score += 200;
+  }
+
+  // Count how many query words appear at word boundaries in title
+  const titleWords = lowerTitle.split(/\s+/);
+  for (const queryWord of queryWords) {
+    // Word starts with query word (prefix match)
+    for (const titleWord of titleWords) {
+      if (titleWord.startsWith(queryWord)) {
+        score += 100;
+      } else if (titleWord.includes(queryWord)) {
+        score += 50;
+      }
+    }
+  }
+
+  // Prefer shorter titles (more specific matches)
+  score -= Math.min(title.length, 50);
+
+  return score;
+}
 
 // Helper function to get all drives a user has access to
 async function getUserAccessibleDrives(userId: string): Promise<Array<{id: string, name: string, slug: string}>> {
@@ -103,11 +167,11 @@ export async function GET(request: Request) {
       .where(
         and(
           inArray(pages.driveId, targetDriveIds), // Search across target drives
-          query ? ilike(pages.title, `%${query}%`) : undefined,
+          buildMultiWordSearchCondition(query), // Multi-word search: all words must be present
           eq(pages.isTrashed, false)
         )
       )
-      .limit(20); // Increased limit for cross-drive searches
+      .limit(30); // Increased limit to allow for better sorting
 
       // Filter by permissions and requested types
       for (const page of pageResults) {
@@ -121,11 +185,17 @@ export async function GET(request: Request) {
         
         const mentionType: MentionType = 'page';
 
-        // Include drive context for cross-drive searches
+        // Include drive context for cross-drive searches and short ID for differentiation
         const driveContext = crossDrive ? driveContextMap.get(page.driveId) : undefined;
-        const description = crossDrive && driveContext 
-          ? `${page.type.toLowerCase()} in ${driveContext}`
-          : `${page.type.toLowerCase()} in drive`;
+        const shortId = page.id.slice(0, 6); // Short ID for differentiation
+        const typeLabel = page.type.toLowerCase();
+
+        let description: string;
+        if (crossDrive && driveContext) {
+          description = `${typeLabel} in ${driveContext} · ${shortId}`;
+        } else {
+          description = `${typeLabel} · ${shortId}`;
+        }
 
         suggestions.push({
           id: page.id,
@@ -170,6 +240,15 @@ export async function GET(request: Request) {
 
       // Search for users only within the authorized set
       if (authorizedUserIds.size > 0) {
+        // Build multi-word search for users
+        const userSearchConditions: SQL[] = [];
+        if (query.trim()) {
+          const words = query.trim().split(/\s+/).filter(Boolean);
+          for (const word of words) {
+            userSearchConditions.push(ilike(users.name, `%${word}%`));
+          }
+        }
+
         const userResults = await db.select({
           id: users.id,
           name: users.name,
@@ -179,10 +258,10 @@ export async function GET(request: Request) {
         .where(
           and(
             inArray(users.id, Array.from(authorizedUserIds)),
-            query ? ilike(users.name, `%${query}%`) : undefined
+            userSearchConditions.length > 0 ? and(...userSearchConditions) : undefined
           )
         )
-        .limit(10); // Increased limit for cross-drive searches
+        .limit(10);
 
         // Create suggestions without exposing email addresses or avatars
         for (const user of userResults) {
@@ -198,14 +277,17 @@ export async function GET(request: Request) {
     }
 
 
-    // Sort suggestions by relevance (exact matches first, then alphabetical)
+    // Sort suggestions by relevance score (higher = better match)
     suggestions.sort((a, b) => {
-      const aExact = a.label.toLowerCase() === query.toLowerCase();
-      const bExact = b.label.toLowerCase() === query.toLowerCase();
-      
-      if (aExact && !bExact) return -1;
-      if (!aExact && bExact) return 1;
-      
+      const aScore = calculateRelevanceScore(a.label, query);
+      const bScore = calculateRelevanceScore(b.label, query);
+
+      // Higher score first
+      if (aScore !== bScore) {
+        return bScore - aScore;
+      }
+
+      // Fallback to alphabetical
       return a.label.localeCompare(b.label);
     });
 
