@@ -43,19 +43,29 @@ function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnc
         ? children[0].replace(/^mention:/, '')
         : children;
 
-    // Parse the mention URL: mention://pageId/type
+    // Parse the mention URL: mention://id/type
     const mentionPath = href.replace('mention://', '');
-    const [pageId] = mentionPath.split('/');
+    const [id, type] = mentionPath.split('/');
 
-    // Render as a clickable link to the page redirect route
+    // Only page mentions should be clickable links
+    // User and other mention types render as non-clickable badges
+    if (type === 'page') {
+      return (
+        <a
+          href={`/p/${id}`}
+          className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1 hover:bg-primary/30 dark:hover:bg-primary/40 transition-colors cursor-pointer no-underline"
+          {...props}
+        >
+          @{label}
+        </a>
+      );
+    }
+
+    // Non-page mentions (user, agent, etc.) render as styled badges without links
     return (
-      <a
-        href={`/p/${pageId}`}
-        className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1 hover:bg-primary/30 dark:hover:bg-primary/40 transition-colors cursor-pointer no-underline"
-        {...props}
-      >
+      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1">
         @{label}
-      </a>
+      </span>
     );
   }
 

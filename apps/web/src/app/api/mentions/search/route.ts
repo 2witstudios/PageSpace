@@ -5,6 +5,17 @@ import { pages, users, db, and, eq, ilike, drives, inArray, SQL } from '@pagespa
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 
 /**
+ * Escape LIKE pattern metacharacters (%, _) in user input
+ * Prevents user input from being interpreted as wildcards
+ */
+function escapeLikePattern(input: string): string {
+  return input
+    .replace(/\\/g, '\\\\')  // Escape backslashes first
+    .replace(/%/g, '\\%')    // Escape percent
+    .replace(/_/g, '\\_');   // Escape underscore
+}
+
+/**
  * Build a multi-word search condition
  * All words must be present in the title (in any order)
  * e.g., "alpha budget" matches "Project Alpha Budget"
@@ -17,8 +28,8 @@ function buildMultiWordSearchCondition(query: string): SQL | undefined {
 
   if (words.length === 0) return undefined;
 
-  // Each word must be present in the title
-  const conditions = words.map(word => ilike(pages.title, `%${word}%`));
+  // Each word must be present in the title (escaped to prevent LIKE injection)
+  const conditions = words.map(word => ilike(pages.title, `%${escapeLikePattern(word)}%`));
 
   return conditions.length === 1 ? conditions[0] : and(...conditions);
 }
@@ -240,12 +251,12 @@ export async function GET(request: Request) {
 
       // Search for users only within the authorized set
       if (authorizedUserIds.size > 0) {
-        // Build multi-word search for users
+        // Build multi-word search for users (escaped to prevent LIKE injection)
         const userSearchConditions: SQL[] = [];
         if (query.trim()) {
           const words = query.trim().split(/\s+/).filter(Boolean);
           for (const word of words) {
-            userSearchConditions.push(ilike(users.name, `%${word}%`));
+            userSearchConditions.push(ilike(users.name, `%${escapeLikePattern(word)}%`));
           }
         }
 

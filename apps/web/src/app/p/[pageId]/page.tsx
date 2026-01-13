@@ -36,7 +36,7 @@ export default async function PageRedirect({ params }: PageProps) {
     columns: { id: true, driveId: true, isTrashed: true },
   });
 
-  if (!page) {
+  if (!page || page.isTrashed) {
     notFound();
   }
 
