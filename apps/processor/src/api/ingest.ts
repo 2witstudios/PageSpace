@@ -11,7 +11,7 @@ const router = Router();
 router.post('/by-page/:pageId', async (req, res) => {
   try {
     if (!req.auth) {
-      return res.status(401).json({ error: 'Authentication required' });
+      return res.status(401).json({ error: 'Service authentication required' });
     }
 
     const userId = req.auth.userId;
