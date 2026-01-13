@@ -282,7 +282,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   if (message.messageType === 'todo_list') {
     if (isLoadingTasks) {
       return (
-        <div className="mb-3">
+        <div className="mb-3" data-message-id={message.id} data-message-role={message.role}>
           <div className="bg-primary/10 dark:bg-primary/20 border border-primary/20 dark:border-primary/30 rounded-md p-2">
             <div className="animate-pulse">
               <div className="h-3 bg-primary/30 dark:bg-primary/50 rounded w-2/3 mb-1"></div>
@@ -299,7 +299,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
     if (!taskList || tasks.length === 0) {
       return (
-        <div className="mb-3">
+        <div className="mb-3" data-message-id={message.id} data-message-role={message.role}>
           <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
             <div className="text-xs text-yellow-700 dark:text-yellow-300">
               No tasks found for this todo list.
@@ -310,24 +310,26 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
     }
 
     return (
-      <ErrorBoundary
-        fallback={
-          <div className="mb-3">
-            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
-              <div className="text-xs text-yellow-700 dark:text-yellow-300">
-                Failed to load TODO list. Please refresh the page.
+      <div data-message-id={message.id} data-message-role={message.role}>
+        <ErrorBoundary
+          fallback={
+            <div className="mb-3">
+              <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
+                <div className="text-xs text-yellow-700 dark:text-yellow-300">
+                  Failed to load TODO list. Please refresh the page.
+                </div>
               </div>
             </div>
-          </div>
-        }
-      >
-        <CompactTodoListMessage
-          tasks={tasks}
-          taskList={taskList}
-          createdAt={message.createdAt}
-          onTaskUpdate={handleTaskStatusUpdate}
-        />
-      </ErrorBoundary>
+          }
+        >
+          <CompactTodoListMessage
+            tasks={tasks}
+            taskList={taskList}
+            createdAt={message.createdAt}
+            onTaskUpdate={handleTaskStatusUpdate}
+          />
+        </ErrorBoundary>
+      </div>
     );
   }
 
@@ -338,7 +340,13 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
   return (
     <>
-      <div key={message.id} className="mb-1 min-w-0 max-w-full" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
+      <div
+        key={message.id}
+        data-message-id={message.id}
+        data-message-role={message.role}
+        className="mb-1 min-w-0 max-w-full"
+        style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}
+      >
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;

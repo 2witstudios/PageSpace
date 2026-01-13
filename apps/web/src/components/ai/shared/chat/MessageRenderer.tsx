@@ -283,7 +283,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   if (message.messageType === 'todo_list') {
     if (isLoadingTasks) {
       return (
-        <div className="mb-4 mr-8">
+        <div className="mb-4 mr-8" data-message-id={message.id} data-message-role={message.role}>
           <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
             <div className="animate-pulse">
               <div className="h-4 bg-primary/20 dark:bg-primary/30 rounded w-1/3 mb-2"></div>
@@ -301,7 +301,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
 
     if (!taskList || tasks.length === 0) {
       return (
-        <div className="mb-4 mr-8">
+        <div className="mb-4 mr-8" data-message-id={message.id} data-message-role={message.role}>
           <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
             <div className="text-yellow-800 dark:text-yellow-200">
               No tasks found for this todo list.
@@ -312,24 +312,26 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
     }
 
     return (
-      <ErrorBoundary
-        fallback={
-          <div className="mb-4">
-            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-              <div className="text-yellow-800 dark:text-yellow-200">
-                Failed to load TODO list. Please refresh the page.
+      <div data-message-id={message.id} data-message-role={message.role}>
+        <ErrorBoundary
+          fallback={
+            <div className="mb-4">
+              <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                <div className="text-yellow-800 dark:text-yellow-200">
+                  Failed to load TODO list. Please refresh the page.
+                </div>
               </div>
             </div>
-          </div>
-        }
-      >
-        <TodoListMessage
-          tasks={tasks}
-          taskList={taskList}
-          createdAt={message.createdAt}
-          onTaskUpdate={handleTaskStatusUpdate}
-        />
-      </ErrorBoundary>
+          }
+        >
+          <TodoListMessage
+            tasks={tasks}
+            taskList={taskList}
+            createdAt={message.createdAt}
+            onTaskUpdate={handleTaskStatusUpdate}
+          />
+        </ErrorBoundary>
+      </div>
     );
   }
 
@@ -338,7 +340,13 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
+      <div
+        key={message.id}
+        data-message-id={message.id}
+        data-message-role={message.role}
+        className="mb-2"
+        style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}
+      >
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;

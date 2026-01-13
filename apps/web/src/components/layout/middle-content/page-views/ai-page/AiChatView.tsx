@@ -289,7 +289,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     );
     setInput('');
     inputRef.current?.clear();
-    setTimeout(() => chatLayoutRef.current?.scrollToBottom(), 100);
+    // Note: Scrolling to the user's message is now handled automatically
+    // by ChatMessagesArea when it detects a new lastUserMessageId
   }, [
     isReadOnly,
     input,
