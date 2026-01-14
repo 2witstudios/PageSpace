@@ -881,8 +881,8 @@ function setupPowerMonitor(): void {
 
   // Thermal state changed (macOS only) - may throttle network
   if (process.platform === 'darwin') {
-    powerMonitor.on('thermal-state-change' as any, () => {
-      logger.debug('[Power] Thermal state changed');
+    powerMonitor.on('thermal-state-change', (details) => {
+      logger.debug('[Power] Thermal state changed', { state: details.state });
     });
   }
 

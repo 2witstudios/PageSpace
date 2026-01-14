@@ -244,18 +244,19 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Check network connectivity before attempting refresh
-      const isOnline = navigator.onLine;
-      if (!isOnline) {
+      if (!navigator.onLine) {
         console.log('📡 [Power] Network offline after wake, waiting for connection...');
-        // Wait for online event before continuing
+        // Wait for online event before continuing (with timeout cleanup)
         await new Promise<void>(resolve => {
+          let timeoutId: ReturnType<typeof setTimeout> | null = null;
           const onlineHandler = () => {
+            if (timeoutId) clearTimeout(timeoutId);
             window.removeEventListener('online', onlineHandler);
             resolve();
           };
           window.addEventListener('online', onlineHandler);
           // Timeout after 30 seconds
-          setTimeout(() => {
+          timeoutId = setTimeout(() => {
             window.removeEventListener('online', onlineHandler);
             resolve();
           }, 30000);
