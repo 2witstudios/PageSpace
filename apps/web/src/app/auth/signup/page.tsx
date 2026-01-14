@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getOrCreateDeviceId, getDeviceName } from "@/lib/analytics";
+import { GoogleOneTap } from "@/components/auth";
 
 export default function SignUp() {
   const [name, setName] = useState("");
@@ -152,6 +153,18 @@ export default function SignUp() {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
+      {/* Google One Tap - displays automatically for signed-in Google users */}
+      <GoogleOneTap
+        onSuccess={() => {
+          // Toast handled internally by GoogleOneTap
+        }}
+        onError={(error) => {
+          console.error('Google One Tap error:', error);
+        }}
+        autoSelect={true}
+        cancelOnTapOutside={true}
+        context="signup"
+      />
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="text-2xl">Sign Up</CardTitle>
