@@ -233,7 +233,6 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
       resumeTime: number;
       sleepDuration: number;
       forceRefresh: boolean;
-      suspendedAt: number | null;
     }>) => {
       const { sleepDuration, forceRefresh } = event.detail;
       console.log(`🌅 [Power] System resumed after ${Math.round(sleepDuration / 60000)} minutes`, {
@@ -300,12 +299,12 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     // Type-safe event listeners using unknown cast
     window.addEventListener('power:suspend', handleSuspend as unknown as EventListener);
     window.addEventListener('power:resume', handleResume as unknown as EventListener);
-    window.addEventListener('power:unlock', handleUnlock as unknown as EventListener);
+    window.addEventListener('power:unlock-screen', handleUnlock as unknown as EventListener);
 
     return () => {
       window.removeEventListener('power:suspend', handleSuspend as unknown as EventListener);
       window.removeEventListener('power:resume', handleResume as unknown as EventListener);
-      window.removeEventListener('power:unlock', handleUnlock as unknown as EventListener);
+      window.removeEventListener('power:unlock-screen', handleUnlock as unknown as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // stopTokenRefresh, refreshToken, scheduleTokenRefresh are stable
