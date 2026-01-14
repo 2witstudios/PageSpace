@@ -3,6 +3,11 @@
  *
  * Tests RBAC enforcement at the data access layer.
  * Ensures authorization cannot be bypassed by direct DB queries.
+ *
+ * Following Eric Elliott's testing standards:
+ * - Given/Should test naming structure
+ * - Single assertion focus per test
+ * - Isolated tests with clear setup
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -66,251 +71,354 @@ const createMockFile = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+// Helper to create mock drive permissions
+const createMockDrivePermissions = (overrides: Record<string, unknown> = {}) => ({
+  hasAccess: true,
+  isOwner: false,
+  isAdmin: false,
+  isMember: true,
+  canEdit: true,
+  ...overrides,
+});
+
 describe('EnforcedFileRepository', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   describe('ForbiddenError', () => {
-    it('has correct status code (403)', () => {
+    it('given a ForbiddenError, should have status 403', () => {
       const error = new ForbiddenError('Access denied');
       expect(error.status).toBe(403);
+    });
+
+    it('given a ForbiddenError, should have name "ForbiddenError"', () => {
+      const error = new ForbiddenError('Access denied');
       expect(error.name).toBe('ForbiddenError');
-      expect(error.message).toBe('Access denied');
+    });
+
+    it('given a ForbiddenError with message, should preserve the message', () => {
+      const error = new ForbiddenError('Custom message');
+      expect(error.message).toBe('Custom message');
     });
   });
 
   describe('getFile', () => {
-    it('returns file for authorized user with files:read scope', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read'],
-        userRole: 'user',
-      });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
+    describe('given an authorized user with files:read scope and drive membership', () => {
+      it('should return the file record', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile();
 
-      const mockFile = createMockFile();
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue({
-        hasAccess: true,
-        isOwner: false,
-        isAdmin: false,
-        isMember: true,
-        canEdit: true,
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        const file = await repo.getFile('file-123');
+
+        expect(file).toEqual(mockFile);
       });
 
-      const file = await repo.getFile('file-123');
+      it('should verify drive membership', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      expect(file).toEqual(mockFile);
-      expect(db.query.files.findFirst).toHaveBeenCalled();
-      expect(getUserDrivePermissions).toHaveBeenCalledWith('user-123', 'drive-123');
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        await repo.getFile('file-123');
+
+        expect(getUserDrivePermissions).toHaveBeenCalledWith('user-123', 'drive-123');
+      });
     });
 
-    it('returns null for non-existent file', async () => {
-      const claims = createMockClaims({ scopes: ['files:read'] });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
+    describe('given a non-existent file', () => {
+      it('should return null', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
 
-      const file = await repo.getFile('non-existent');
+        const file = await repo.getFile('non-existent');
 
-      expect(file).toBeNull();
-      // Should not check permissions for non-existent file
-      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+        expect(file).toBeNull();
+      });
+
+      it('should not check drive permissions', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
+
+        await repo.getFile('non-existent');
+
+        expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      });
     });
 
-    it('throws ForbiddenError for non-member of drive', async () => {
-      const claims = createMockClaims({ scopes: ['files:read'] });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
+    describe('given a user who is not a member of the drive', () => {
+      it('should throw ForbiddenError', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile();
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue(null); // Not a member
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
 
-      await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
-      await expect(repo.getFile('file-123')).rejects.toThrow('User not a member of this drive');
+        await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
+      });
+
+      it('should throw with "User not a member of this drive" message', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+
+        await expect(repo.getFile('file-123')).rejects.toThrow('User not a member of this drive');
+      });
     });
 
-    it('throws ForbiddenError for resource binding mismatch', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read'],
-        resourceType: 'file',
-        resourceId: 'different-file-id', // Bound to different file
+    describe('given a token bound to a different file', () => {
+      it('should throw ForbiddenError', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'file',
+          resourceId: 'different-file-id',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile({ id: 'file-123' }));
+
+        await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
       });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile({ id: 'file-123' });
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+      it('should throw with "Token not authorized for this resource" message', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'file',
+          resourceId: 'different-file-id',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
-      await expect(repo.getFile('file-123')).rejects.toThrow('Token not authorized for this resource');
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile({ id: 'file-123' }));
+
+        await expect(repo.getFile('file-123')).rejects.toThrow(
+          'Token not authorized for this resource'
+        );
+      });
     });
 
-    it('throws ForbiddenError for missing files:read scope', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:write'], // Has write but not read
-      });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
+    describe('given a user without files:read scope', () => {
+      it('should throw ForbiddenError', async () => {
+        const claims = createMockClaims({ scopes: ['files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile();
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue({
-        hasAccess: true,
-        isOwner: false,
-        isAdmin: false,
-        isMember: true,
-        canEdit: true,
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
       });
 
-      await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
-      await expect(repo.getFile('file-123')).rejects.toThrow('Missing files:read scope');
+      it('should throw with "Missing files:read scope" message', async () => {
+        const claims = createMockClaims({ scopes: ['files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        await expect(repo.getFile('file-123')).rejects.toThrow('Missing files:read scope');
+      });
     });
 
-    it('admin bypasses drive membership check', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read'],
-        userRole: 'admin',
+    describe('given an admin user', () => {
+      it('should return file without checking drive membership', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          userRole: 'admin',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile();
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+
+        const file = await repo.getFile('file-123');
+
+        expect(file).toEqual(mockFile);
       });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile();
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      // Not setting up getUserDrivePermissions - admin should bypass
+      it('should bypass drive membership check', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          userRole: 'admin',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      const file = await repo.getFile('file-123');
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
 
-      expect(file).toEqual(mockFile);
-      // Admin should not need membership check
-      expect(getUserDrivePermissions).not.toHaveBeenCalled();
+        await repo.getFile('file-123');
+
+        expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      });
     });
 
-    it('allows access when token is bound to drive containing the file', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read'],
-        resourceType: 'drive',
-        resourceId: 'drive-123', // Bound to the drive
+    describe('given a token bound to the drive containing the file', () => {
+      it('should allow access', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'drive',
+          resourceId: 'drive-123',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile({ driveId: 'drive-123' });
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        const file = await repo.getFile('file-123');
+
+        expect(file).toEqual(mockFile);
       });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
-
-      const mockFile = createMockFile({ driveId: 'drive-123' });
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue({
-        hasAccess: true,
-        isOwner: false,
-        isAdmin: false,
-        isMember: true,
-        canEdit: true,
-      });
-
-      const file = await repo.getFile('file-123');
-
-      expect(file).toEqual(mockFile);
     });
   });
 
   describe('updateFile', () => {
-    it('updates file when user has files:write scope', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read', 'files:write'],
+    describe('given a user with files:write scope and edit permission', () => {
+      it('should return the updated file', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile();
+        const updatedFile = { ...mockFile, mimeType: 'image/jpeg' };
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        const mockReturning = vi.fn().mockResolvedValue([updatedFile]);
+        const mockWhere = vi.fn().mockReturnValue({ returning: mockReturning });
+        const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
+        vi.mocked(db.update).mockReturnValue({ set: mockSet } as any);
+
+        const result = await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
+
+        expect(result).toEqual(updatedFile);
       });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile();
-      const updatedFile = { ...mockFile, mimeType: 'image/jpeg' };
+      it('should call db.update', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile();
 
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue({
-        hasAccess: true,
-        isOwner: false,
-        isAdmin: false,
-        isMember: true,
-        canEdit: true,
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        const mockReturning = vi.fn().mockResolvedValue([mockFile]);
+        const mockWhere = vi.fn().mockReturnValue({ returning: mockReturning });
+        const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
+        vi.mocked(db.update).mockReturnValue({ set: mockSet } as any);
+
+        await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
+
+        expect(db.update).toHaveBeenCalled();
       });
-
-      // Mock the update chain
-      const mockReturning = vi.fn().mockResolvedValue([updatedFile]);
-      const mockWhere = vi.fn().mockReturnValue({ returning: mockReturning });
-      const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as any);
-
-      const result = await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
-
-      expect(result).toEqual(updatedFile);
-      expect(db.update).toHaveBeenCalled();
     });
 
-    it('throws ForbiddenError when missing files:write scope', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read'], // Only read, no write
-      });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
+    describe('given a user without files:write scope', () => {
+      it('should throw ForbiddenError', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile();
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue({
-        hasAccess: true,
-        isOwner: false,
-        isAdmin: false,
-        isMember: true,
-        canEdit: true,
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          ForbiddenError
+        );
       });
 
-      await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
-        ForbiddenError
-      );
-      await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
-        'Missing files:write scope'
-      );
+      it('should throw with "Missing files:write scope" message', async () => {
+        const claims = createMockClaims({ scopes: ['files:read'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          'Missing files:write scope'
+        );
+      });
     });
 
-    it('throws ForbiddenError when drive member has viewer role (canEdit=false)', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read', 'files:write'],
-      });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
+    describe('given a user with viewer role (canEdit=false)', () => {
+      it('should throw ForbiddenError', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      const mockFile = createMockFile();
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
-      vi.mocked(getUserDrivePermissions).mockResolvedValue({
-        hasAccess: true,
-        isOwner: false,
-        isAdmin: false,
-        isMember: true,
-        canEdit: false, // Viewer role
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(
+          createMockDrivePermissions({ canEdit: false })
+        );
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          ForbiddenError
+        );
       });
 
-      await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
-        ForbiddenError
-      );
-      await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
-        'Viewer role cannot modify files'
-      );
+      it('should throw with "Viewer role cannot modify files" message', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(
+          createMockDrivePermissions({ canEdit: false })
+        );
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          'Viewer role cannot modify files'
+        );
+      });
     });
 
-    it('throws ForbiddenError for non-existent file', async () => {
-      const claims = createMockClaims({
-        scopes: ['files:read', 'files:write'],
+    describe('given a non-existent file', () => {
+      it('should throw ForbiddenError', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
+
+        await expect(repo.updateFile('non-existent', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          ForbiddenError
+        );
       });
-      const context = EnforcedAuthContext.fromSession(claims);
-      const repo = new EnforcedFileRepository(context);
 
-      vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
+      it('should throw with "File not found" message', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
 
-      await expect(repo.updateFile('non-existent', { mimeType: 'image/jpeg' })).rejects.toThrow(
-        ForbiddenError
-      );
-      await expect(repo.updateFile('non-existent', { mimeType: 'image/jpeg' })).rejects.toThrow(
-        'File not found'
-      );
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
+
+        await expect(repo.updateFile('non-existent', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          'File not found'
+        );
+      });
     });
   });
 });
