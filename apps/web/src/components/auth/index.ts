@@ -1,0 +1,1 @@
+export { GoogleOneTap } from './GoogleOneTap';

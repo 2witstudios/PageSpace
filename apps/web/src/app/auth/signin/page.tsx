@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleOneTap } from "@/components/auth";
 
 function SignInForm() {
   const [email, setEmail] = useState("");
@@ -131,6 +132,18 @@ function SignInForm() {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
+      {/* Google One Tap - displays automatically for signed-in Google users */}
+      <GoogleOneTap
+        onSuccess={(user) => {
+          toast.success(`Welcome${user.name ? `, ${user.name}` : ''}!`);
+        }}
+        onError={(error) => {
+          console.error('Google One Tap error:', error);
+        }}
+        autoSelect={true}
+        cancelOnTapOutside={true}
+        context="signin"
+      />
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="text-2xl">Sign In</CardTitle>
