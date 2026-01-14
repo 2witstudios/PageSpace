@@ -42,3 +42,10 @@ export {
   type AgentRecord,
   type AgentConfigUpdate,
 } from './agent-repository';
+
+export {
+  EnforcedFileRepository,
+  ForbiddenError,
+  type FileRecord,
+  type FileUpdateInput,
+} from './enforced-file-repository';
