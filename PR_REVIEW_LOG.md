@@ -55,19 +55,19 @@
 - [x] **File**: `apps/web/src/app/api/auth/google/__tests__/one-tap.test.ts:16`
 - **Issue**: Comment referenced specific line numbers that will become stale
 - **Fix**: Rewrote comment to describe behavior instead of line numbers
-- **Commit**: (pending)
+- **Commit**: 7961f11e
 
 ### 8. Process.env Leakage (Minor)
 - [x] **File**: `apps/web/src/app/api/auth/google/__tests__/one-tap.test.ts:207`
 - **Issue**: beforeEach mutates env without restoring
 - **Fix**: Added afterEach to restore originalGoogleClientId
-- **Commit**: (pending)
+- **Commit**: 7961f11e
 
 ### 9. Cookie Header Assertion (Major)
 - [x] **File**: `apps/web/src/app/api/auth/google/__tests__/one-tap.test.ts:274`
 - **Issue**: Test only asserted serialize() calls, not actual headers
 - **Fix**: Added assertion for Set-Cookie header containing 'mock-cookie'
-- **Commit**: (pending)
+- **Commit**: 7961f11e
 
 ## Final Status
 - **Iteration**: 2
