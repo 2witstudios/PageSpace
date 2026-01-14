@@ -211,7 +211,9 @@ export async function POST(
       conversationId,
       selectedProvider: requestBody.selectedProvider,
       selectedModel: requestBody.selectedModel,
-      hasLocationContext: !!requestBody.locationContext
+      hasLocationContext: !!requestBody.locationContext,
+      webSearchEnabled: requestBody.webSearchEnabled,
+      isReadOnly: requestBody.isReadOnly
     });
     
     const {
@@ -621,10 +623,12 @@ MENTION PROCESSING:
     // Apply web search filtering (exclude web_search if disabled)
     let finalTools = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
 
-    loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
+    loggers.api.info('🔧 Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
-      totalTools: Object.keys(finalTools).length
+      totalTools: Object.keys(finalTools).length,
+      hasWebSearch: 'web_search' in finalTools,
+      toolNames: Object.keys(finalTools)
     });
 
     // Merge MCP tools if provided
