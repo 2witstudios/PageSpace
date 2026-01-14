@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session, safeStorage } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session, safeStorage, powerMonitor } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
@@ -30,6 +30,8 @@ const store = new Store<StoreSchema>({
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false; // Track if app is quitting (used to distinguish close from minimize to tray)
+let isSuspended = false; // Track system suspend state for auth refresh coordination
+let suspendTime: number | null = null; // Track when system was suspended
 
 interface StoredAuthSession {
   accessToken: string;
@@ -797,6 +799,96 @@ ipcMain.handle('ws:get-status', () => {
   return wsClient.getStatus();
 });
 
+// Power state IPC handlers
+ipcMain.handle('power:get-state', () => {
+  return {
+    isSuspended,
+    suspendTime,
+    systemIdleTime: powerMonitor.getSystemIdleTime(),
+  };
+});
+
+/**
+ * Setup power monitor to handle system sleep/wake events
+ * This prevents auth failures during sleep and ensures proper token refresh on wake
+ */
+function setupPowerMonitor(): void {
+  // System is about to suspend (sleep/hibernate)
+  powerMonitor.on('suspend', () => {
+    isSuspended = true;
+    suspendTime = Date.now();
+    logger.info('[Power] System suspending - pausing auth refresh');
+
+    // Notify renderer to pause token refresh timers
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('power:suspend', { suspendTime });
+    }
+  });
+
+  // System has resumed from suspend
+  powerMonitor.on('resume', () => {
+    const resumeTime = Date.now();
+    const sleepDuration = suspendTime ? resumeTime - suspendTime : 0;
+
+    logger.info('[Power] System resumed', {
+      sleepDurationMs: sleepDuration,
+      sleepDurationMin: Math.round(sleepDuration / 60000),
+    });
+
+    isSuspended = false;
+
+    // Notify renderer to resume auth and force token refresh
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('power:resume', {
+        resumeTime,
+        sleepDuration,
+        // Force refresh if slept for more than 5 minutes
+        forceRefresh: sleepDuration > 5 * 60 * 1000,
+      });
+    }
+
+    suspendTime = null;
+  });
+
+  // Screen is locked (user stepped away)
+  powerMonitor.on('lock-screen', () => {
+    logger.debug('[Power] Screen locked');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('power:lock-screen');
+    }
+  });
+
+  // Screen is unlocked (user returned)
+  powerMonitor.on('unlock-screen', () => {
+    logger.debug('[Power] Screen unlocked');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('power:unlock-screen', {
+        // Trigger a soft refresh on unlock to ensure fresh data
+        shouldRefresh: true,
+      });
+    }
+  });
+
+  // System is on AC power (plugged in)
+  powerMonitor.on('on-ac', () => {
+    logger.debug('[Power] On AC power');
+  });
+
+  // System is on battery power
+  powerMonitor.on('on-battery', () => {
+    logger.debug('[Power] On battery power');
+  });
+
+  // Thermal state changed (macOS only) - may throttle network
+  if (process.platform === 'darwin') {
+    powerMonitor.on('thermal-state-change', (details) => {
+      logger.debug('[Power] Thermal state changed', { state: details.state });
+    });
+  }
+
+  logger.info('[Power] Power monitor initialized');
+}
+
 // App lifecycle
 app.whenReady().then(async () => {
   authSessionPath = path.join(app.getPath('userData'), 'auth-session.bin');
@@ -815,6 +907,9 @@ app.whenReady().then(async () => {
   createWindow();
   createMenu();
   createTray();
+
+  // Initialize power monitor for sleep/wake handling
+  setupPowerMonitor();
 
   // Initialize WebSocket client for MCP bridge
   if (mainWindow) {

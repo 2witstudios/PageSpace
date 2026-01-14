@@ -218,6 +218,97 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // refreshToken is stable and doesn't need to be in deps
 
+  // Desktop power state handling - pause refresh during sleep, force on wake
+  useEffect(() => {
+    // Only relevant for desktop app
+    if (typeof window === 'undefined' || !window.electron?.isDesktop) return;
+
+    const handleSuspend = () => {
+      console.log('😴 [Power] System suspended - pausing token refresh');
+      // Clear any pending refresh timeouts
+      stopTokenRefresh();
+    };
+
+    const handleResume = async (event: CustomEvent<{
+      resumeTime: number;
+      sleepDuration: number;
+      forceRefresh: boolean;
+    }>) => {
+      const { sleepDuration, forceRefresh } = event.detail;
+      console.log(`🌅 [Power] System resumed after ${Math.round(sleepDuration / 60000)} minutes`, {
+        forceRefresh,
+      });
+
+      // Wait for network to stabilize after wake
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Check network connectivity before attempting refresh
+      if (!navigator.onLine) {
+        console.log('📡 [Power] Network offline after wake, waiting for connection...');
+        // Wait for online event before continuing (with timeout cleanup)
+        await new Promise<void>(resolve => {
+          let timeoutId: ReturnType<typeof setTimeout> | null = null;
+          const onlineHandler = () => {
+            if (timeoutId) clearTimeout(timeoutId);
+            window.removeEventListener('online', onlineHandler);
+            resolve();
+          };
+          window.addEventListener('online', onlineHandler);
+          // Timeout after 30 seconds
+          timeoutId = setTimeout(() => {
+            window.removeEventListener('online', onlineHandler);
+            resolve();
+          }, 30000);
+        });
+      }
+
+      // If sleep duration was significant (>5 min), force immediate refresh
+      if (forceRefresh || sleepDuration > 5 * 60 * 1000) {
+        console.log('🔄 [Power] Forcing immediate token refresh after wake');
+        retryCountRef.current = 0; // Reset retry count
+        const success = await refreshToken();
+
+        if (success) {
+          // Re-schedule normal refresh cycle
+          scheduleTokenRefresh();
+        } else {
+          // Use exponential backoff for retry
+          console.log('❌ [Power] Post-wake refresh failed, will retry with backoff');
+          scheduleTokenRefresh();
+        }
+      } else {
+        // Short sleep - just resume normal refresh schedule
+        console.log('⏰ [Power] Resuming normal token refresh schedule');
+        scheduleTokenRefresh();
+      }
+    };
+
+    const handleUnlock = async (event: CustomEvent<{ shouldRefresh: boolean }>) => {
+      const { shouldRefresh } = event.detail;
+      if (shouldRefresh) {
+        console.log('🔓 [Power] Screen unlocked, soft refresh check');
+        // Check if refresh is needed based on time since last refresh
+        const timeSinceLastRefresh = Date.now() - (lastRefreshTimeRef.current || 0);
+        if (timeSinceLastRefresh > 10 * 60 * 1000) { // More than 10 minutes
+          console.log('🔄 [Power] Triggering soft refresh after unlock');
+          await refreshToken();
+        }
+      }
+    };
+
+    // Type-safe event listeners using unknown cast
+    window.addEventListener('power:suspend', handleSuspend as unknown as EventListener);
+    window.addEventListener('power:resume', handleResume as unknown as EventListener);
+    window.addEventListener('power:unlock-screen', handleUnlock as unknown as EventListener);
+
+    return () => {
+      window.removeEventListener('power:suspend', handleSuspend as unknown as EventListener);
+      window.removeEventListener('power:resume', handleResume as unknown as EventListener);
+      window.removeEventListener('power:unlock-screen', handleUnlock as unknown as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // stopTokenRefresh, refreshToken, scheduleTokenRefresh are stable
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
