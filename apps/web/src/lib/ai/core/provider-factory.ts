@@ -35,6 +35,7 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
 } from './ai-utils';
+import { resolvePageSpaceModel } from './ai-providers-config';
 
 export interface ProviderRequest {
   selectedProvider?: string;
@@ -86,7 +87,12 @@ export async function createAIProvider(
   // Get user's current AI provider settings
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-  const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+  let currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+
+  // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.5-air')
+  if (currentProvider === 'pagespace') {
+    currentModel = resolvePageSpaceModel(currentModel);
+  }
 
   try {
     let model;

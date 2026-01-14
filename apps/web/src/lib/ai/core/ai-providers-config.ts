@@ -3,12 +3,42 @@
  * Single source of truth for all AI models across the application
  */
 
+/**
+ * PageSpace Model Aliases
+ * Allows agents to use friendly names (standard/pro) instead of underlying model IDs.
+ * This abstraction lets agents update their model without knowing the specific backend model.
+ */
+export const PAGESPACE_MODEL_ALIASES: Record<string, string> = {
+  standard: 'glm-4.5-air',
+  pro: 'glm-4.7',
+} as const;
+
+/**
+ * Resolve a PageSpace model alias to the actual model ID
+ * @param modelOrAlias - Either an alias ('standard', 'pro') or actual model ID
+ * @returns The resolved model ID
+ */
+export function resolvePageSpaceModel(modelOrAlias: string): string {
+  const lowercased = modelOrAlias.toLowerCase();
+  return PAGESPACE_MODEL_ALIASES[lowercased] || modelOrAlias;
+}
+
+/**
+ * Check if a string is a PageSpace model alias
+ */
+export function isPageSpaceModelAlias(model: string): boolean {
+  return model.toLowerCase() in PAGESPACE_MODEL_ALIASES;
+}
+
 export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
       'glm-4.5-air': 'Standard',
       'glm-4.7': 'Pro (Pro/Business)',
+      // Aliases are also valid model selections
+      standard: 'Standard',
+      pro: 'Pro (Pro/Business)',
     },
   },
   openrouter: {
@@ -366,7 +396,7 @@ export type AIModel<T extends AIProvider> = keyof typeof AI_PROVIDERS[T]['models
  * For all other providers: Shows "PageSpace AI" to abstract away the underlying model
  *
  * @param provider - The AI provider (e.g., 'pagespace', 'openrouter', 'google')
- * @param model - The model identifier (e.g., 'glm-4.5-air', 'glm-4.7')
+ * @param model - The model identifier (e.g., 'glm-4.5-air', 'glm-4.7', 'standard', 'pro')
  * @returns User-friendly display name
  */
 export function getUserFacingModelName(provider: string | null | undefined, model: string | null | undefined): string {
@@ -377,10 +407,12 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
 
   // For PageSpace provider, show tier-based naming
   if (provider === 'pagespace') {
-    if (model === 'glm-4.7') {
+    // Resolve alias to actual model for comparison
+    const resolvedModel = resolvePageSpaceModel(model);
+    if (resolvedModel === 'glm-4.7') {
       return 'PageSpace Pro';
     }
-    if (model === 'glm-4.5-air') {
+    if (resolvedModel === 'glm-4.5-air') {
       return 'PageSpace Standard';
     }
     // Any other PageSpace model defaults to Standard

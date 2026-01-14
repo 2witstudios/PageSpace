@@ -85,7 +85,7 @@ export async function POST(request: Request) {
     // Get next position
     const nextPosition = await pageAgentRepository.getNextPosition(drive.id, parentId || null);
 
-    // Prepare agent data
+    // Prepare agent data with default PageSpace provider and standard model
     const agentData: AgentData = {
       title,
       type: 'AI_CHAT',
@@ -95,17 +95,15 @@ export async function POST(request: Request) {
       parentId: parentId || null,
       isTrashed: false,
       systemPrompt,
+      // Default to PageSpace provider with "standard" model
+      // Agents can use 'standard' or 'pro' as friendly aliases
+      aiProvider: aiProvider || 'pagespace',
+      aiModel: aiModel || 'standard',
     };
 
     // Add optional configuration (save even if empty array)
     if (enabledTools !== undefined) {
       agentData.enabledTools = enabledTools;
-    }
-    if (aiProvider) {
-      agentData.aiProvider = aiProvider;
-    }
-    if (aiModel) {
-      agentData.aiModel = aiModel;
     }
 
     // Create the agent
@@ -143,8 +141,8 @@ export async function POST(request: Request) {
         systemPrompt: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
         enabledToolsCount: enabledTools?.length || 0,
         enabledTools: enabledTools || [],
-        aiProvider: aiProvider || 'default',
-        aiModel: aiModel || 'default',
+        aiProvider: agentData.aiProvider,
+        aiModel: agentData.aiModel,
         hasWelcomeMessage: !!welcomeMessage
       },
       stats: {
