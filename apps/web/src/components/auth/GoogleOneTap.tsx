@@ -89,9 +89,12 @@ export function GoogleOneTap({
             });
           }
 
-          // Redirect to dashboard or specified URL
+          // Redirect to dashboard or specified URL with auth=success param
+          // This matches regular OAuth callback behavior and triggers session reload in useAuth
           const targetUrl = redirectTo || data.redirectTo || '/dashboard';
-          router.replace(targetUrl);
+          const urlWithAuth = new URL(targetUrl, window.location.origin);
+          urlWithAuth.searchParams.set('auth', 'success');
+          router.replace(urlWithAuth.pathname + urlWithAuth.search);
         } else {
           const errorMessage = data.error || 'Google sign-in failed. Please try again.';
           toast.error(errorMessage);
