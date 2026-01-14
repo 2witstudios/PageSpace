@@ -280,82 +280,46 @@ export const useAuthStore = create<AuthState>()(
               // Update activity for new session
               get().updateActivity();
             } else if (response.status === 401) {
-              // For desktop: token might have expired during load, trigger refresh before logging out
+              // For desktop: use the unified refresh flow which handles device token properly
               if (isDesktop && window.electron) {
-                console.log('[AUTH_STORE] Desktop token validation failed, attempting device token authentication');
+                console.log('[AUTH_STORE] Desktop token validation failed, attempting token refresh');
 
-                // CRITICAL FIX: Try device token authentication (like iOS does)
-                // This ensures desktop stays logged in for 90 days (device token lifetime)
-                const session = await window.electron.auth.getSession();
-
-                if (session?.deviceToken) {
-                  console.log('[AUTH_STORE] Found device token, attempting device-based refresh');
-
-                  try {
-                    const deviceInfo = await window.electron.auth.getDeviceInfo();
-
-                    const deviceRefreshResponse = await fetch('/api/auth/device/refresh', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        deviceToken: session.deviceToken,
-                        deviceId: deviceInfo.deviceId,
-                        userAgent: deviceInfo.userAgent,
-                        appVersion: deviceInfo.appVersion,
-                      }),
-                    });
-
-                    if (deviceRefreshResponse.ok) {
-                      const data = await deviceRefreshResponse.json();
-
-                      // Store new tokens from device refresh
-                      await window.electron.auth.storeSession({
-                        accessToken: data.token,
-                        refreshToken: data.refreshToken,
-                        csrfToken: data.csrfToken,
-                        deviceToken: data.deviceToken,
-                      });
-
-                      console.log('[AUTH_STORE] Device token authentication succeeded, retrying session load');
-
-                      // Clear JWT cache to ensure fresh token is used
-                      const { clearJWTCache } = await import('@/lib/auth/auth-fetch');
-                      clearJWTCache();
-
-                      // Retry loading session with new tokens
-                      return get().loadSession(true);
-                    }
-
-                    console.log('[AUTH_STORE] Device token authentication failed, trying standard refresh');
-                  } catch (deviceError) {
-                    console.error('[AUTH_STORE] Device token authentication error:', deviceError);
-                  }
-                }
-
-                // Fallback: Try standard refresh token flow
-                console.log('[AUTH_STORE] Attempting standard token refresh');
-                const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+                // Use the unified refresh flow - it handles device token, rate limiting, etc.
+                const { refreshAuthSession, clearJWTCache } = await import('@/lib/auth/auth-fetch');
                 const refreshResult = await refreshAuthSession();
 
                 if (refreshResult.success) {
-                  console.log('[AUTH_STORE] Standard token refresh succeeded, retrying session load');
+                  console.log('[AUTH_STORE] Token refresh succeeded, retrying session load');
+                  clearJWTCache();
                   return get().loadSession(true);
                 }
 
-                console.log('[AUTH_STORE] All authentication methods failed, proceeding with logout');
+                // Only logout if explicitly told to (device token genuinely invalid)
+                if (!refreshResult.shouldLogout) {
+                  console.log('[AUTH_STORE] Token refresh failed but not fatal - will retry later');
+                  // Record failure but don't clear user - might be transient
+                  // Use get() to get current value since state may be stale after async operations
+                  set({
+                    failedAuthAttempts: get().failedAuthAttempts + 1,
+                    lastFailedAuthCheck: Date.now(),
+                  });
+                  return;
+                }
+
+                console.log('[AUTH_STORE] Authentication token invalid, user must re-authenticate');
               }
 
               // Unauthorized - clear user and record failure
               set({
                 user: null,
                 isAuthenticated: false,
-                failedAuthAttempts: state.failedAuthAttempts + 1,
+                failedAuthAttempts: get().failedAuthAttempts + 1,
                 lastFailedAuthCheck: Date.now(),
               });
             } else {
               // Other errors - record failure but don't clear user
               set({
-                failedAuthAttempts: state.failedAuthAttempts + 1,
+                failedAuthAttempts: get().failedAuthAttempts + 1,
                 lastFailedAuthCheck: Date.now(),
               });
             }
@@ -363,7 +327,7 @@ export const useAuthStore = create<AuthState>()(
             console.error('[AUTH_STORE] Session load failed:', error);
             // Network error - record failure
             set({
-              failedAuthAttempts: state.failedAuthAttempts + 1,
+              failedAuthAttempts: get().failedAuthAttempts + 1,
               lastFailedAuthCheck: Date.now(),
             });
           } finally {
@@ -490,6 +454,11 @@ export const authStoreHelpers = {
     return useAuthStore.getState().loadSession(force);
   },
 
+  // Cleanup functions for event listeners (stored for proper cleanup)
+  _authClearedCleanup: null as (() => void) | null,
+  _authRefreshedHandler: null as (() => void) | null,
+  _authExpiredHandler: null as (() => Promise<void>) | null,
+
   // Initialize auth event listeners (call once at app startup)
   initializeEventListeners: (): void => {
     if (typeof window === 'undefined') return;
@@ -570,17 +539,36 @@ export const authStoreHelpers = {
       state.endSession();
     };
 
-    // Remove existing listeners to prevent duplicates
-    window.removeEventListener('auth:refreshed', handleAuthRefreshed);
-    window.removeEventListener('auth:expired', handleAuthExpired);
+    // Remove existing listeners using stored references to prevent duplicates
+    if (authStoreHelpers._authRefreshedHandler) {
+      window.removeEventListener('auth:refreshed', authStoreHelpers._authRefreshedHandler);
+    }
+    if (authStoreHelpers._authExpiredHandler) {
+      window.removeEventListener('auth:expired', authStoreHelpers._authExpiredHandler);
+    }
+
+    // Store new handler references for future cleanup
+    authStoreHelpers._authRefreshedHandler = handleAuthRefreshed;
+    authStoreHelpers._authExpiredHandler = handleAuthExpired;
 
     // Add new listeners
     window.addEventListener('auth:refreshed', handleAuthRefreshed);
     window.addEventListener('auth:expired', handleAuthExpired);
 
     // Desktop-specific: Listen for IPC auth cleared event
+    // CRITICAL: Clean up previous listener to prevent memory leak
     if (typeof window !== 'undefined' && window.electron) {
-      window.electron.on?.('auth:cleared', handleAuthCleared);
+      // Clean up previous IPC listener if it exists
+      if (authStoreHelpers._authClearedCleanup) {
+        authStoreHelpers._authClearedCleanup();
+        authStoreHelpers._authClearedCleanup = null;
+      }
+
+      // Add new listener and store cleanup function
+      const cleanup = window.electron.on?.('auth:cleared', handleAuthCleared);
+      if (cleanup) {
+        authStoreHelpers._authClearedCleanup = cleanup;
+      }
     }
   },
 };

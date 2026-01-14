@@ -29,15 +29,35 @@ class AuthFetch {
   private jwtCache: { token: string | null; timestamp: number } | null = null;
   private readonly JWT_CACHE_TTL = 30000; // 30 seconds - balance between IPC overhead and staleness
   private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
+  private authClearedCleanup: (() => void) | null = null;
+  private initialized = false;
 
   constructor() {
+    this.initializeListeners();
+  }
+
+  private initializeListeners(): void {
+    // Prevent duplicate initialization (HMR, multiple imports)
+    if (this.initialized) return;
+    this.initialized = true;
+
     // Listen for desktop logout event to clear cache
     if (typeof window !== 'undefined' && window.electron) {
-      window.electron.on?.('auth:cleared', () => {
+      // Clean up any existing listener first
+      if (this.authClearedCleanup) {
+        this.authClearedCleanup();
+        this.authClearedCleanup = null;
+      }
+
+      const cleanup = window.electron.on?.('auth:cleared', () => {
         this.logger.info('Desktop auth cleared event received, clearing JWT cache');
         this.clearJWTCache();
         this.csrfToken = null;
       });
+
+      if (cleanup) {
+        this.authClearedCleanup = cleanup;
+      }
     }
   }
 
@@ -405,12 +425,18 @@ class AuthFetch {
       const refreshToken = session?.refreshToken;
       const deviceToken = session?.deviceToken;
 
-      let response: Response | null = null;
-      let shouldLogout = false;
+      // Desktop REQUIRES a device token for long-lived sessions
+      // If no device token exists, user needs to re-authenticate
+      if (!deviceToken) {
+        this.logger.warn('Desktop: No device token found - user must re-authenticate');
+        return { success: false, shouldLogout: true };
+      }
 
-      // PRIORITY 1: Try device token FIRST (90-day validity)
-      // This ensures desktop sessions last the full 90 days as intended
-      if (deviceToken) {
+      let response: Response | null = null;
+
+      // PRIORITY 1: Try device token refresh (90-day validity)
+      // This is the PRIMARY auth mechanism for desktop - designed for long-lived sessions
+      try {
         response = await fetch('/api/auth/device/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -425,39 +451,71 @@ class AuthFetch {
         if (response.ok) {
           this.logger.debug('Desktop: Device token refresh succeeded');
         }
+      } catch (networkError) {
+        // Network error - don't logout, let retry logic handle it
+        this.logger.warn('Desktop: Device token refresh network error', {
+          error: networkError instanceof Error ? networkError.message : String(networkError),
+        });
+        return { success: false, shouldLogout: false };
       }
 
-      // PRIORITY 2: Fall back to refresh token if device token fails or is unavailable
-      if (!response || response.status === 401) {
-        if (!refreshToken) {
-          this.logger.warn('Desktop: Cannot refresh session - no refresh token available');
-          return { success: false, shouldLogout: true };
-        }
+      // PRIORITY 2: Fall back to refresh token ONLY if available
+      // This is optional - desktop can work with device token alone
+      if (response?.status === 401 && refreshToken) {
+        this.logger.debug('Desktop: Device token rejected, trying refresh token fallback');
 
-        response = await fetch('/api/auth/mobile/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            refreshToken,
-            ...(deviceToken && { deviceToken }),
-            deviceId: deviceInfo.deviceId,
-            platform: 'desktop',
-          }),
-        });
-
-        if (response.status === 401) {
-          shouldLogout = true;
+        try {
+          response = await fetch('/api/auth/mobile/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              refreshToken,
+              deviceToken,
+              deviceId: deviceInfo.deviceId,
+              platform: 'desktop',
+            }),
+          });
+        } catch (networkError) {
+          this.logger.warn('Desktop: Refresh token fallback network error', {
+            error: networkError instanceof Error ? networkError.message : String(networkError),
+          });
+          return { success: false, shouldLogout: false };
         }
-      } else if (response?.status === 401) {
-        shouldLogout = !refreshToken;
       }
 
-      if (!response || !response.ok) {
-        this.logger.error('Desktop: Token refresh request failed', {
-          status: response?.status,
+      // Handle final response
+      if (!response) {
+        this.logger.error('Desktop: No response from token refresh');
+        return { success: false, shouldLogout: false };
+      }
+
+      if (response.status === 401) {
+        // 401 = token is genuinely invalid (expired or revoked)
+        // User must re-authenticate
+        this.logger.warn('Desktop: Authentication token rejected - user must re-authenticate', {
+          hadRefreshToken: !!refreshToken,
         });
-        return { success: false, shouldLogout };
+        return { success: false, shouldLogout: true };
+      }
+
+      if (response.status === 429) {
+        // Rate limited - don't logout, let retry logic handle it
+        this.logger.warn('Desktop: Token refresh rate limited');
+        return { success: false, shouldLogout: false };
+      }
+
+      if (response.status >= 500) {
+        // Server error - don't logout, let retry logic handle it
+        this.logger.warn('Desktop: Token refresh server error', { status: response.status });
+        return { success: false, shouldLogout: false };
+      }
+
+      if (!response.ok) {
+        this.logger.error('Desktop: Token refresh failed with unexpected status', {
+          status: response.status,
+        });
+        return { success: false, shouldLogout: false };
       }
 
       const data = await response.json();
@@ -479,6 +537,7 @@ class AuthFetch {
       this.logger.error('Desktop: Token refresh request threw an error', {
         error: error instanceof Error ? error : String(error),
       });
+      // Don't logout on unexpected errors - let retry logic handle it
       return { success: false, shouldLogout: false };
     }
   }
