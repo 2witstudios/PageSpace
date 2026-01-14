@@ -10,7 +10,8 @@ export interface ElectronAPI {
   onDeepLink: (callback: (url: string) => void) => void;
   onOpenPreferences: (callback: () => void) => void;
   retryConnection: () => Promise<void>;
-  on?: (channel: string, callback: (...args: unknown[]) => void) => void;
+  on?: (channel: string, callback: (...args: unknown[]) => void) => (() => void) | void;
+  removeAllListeners?: (channel: string) => void;
   platform: NodeJS.Platform;
   version: string;
   auth: {
@@ -71,6 +72,40 @@ export interface ElectronAPI {
       connected: boolean;
       reconnectAttempts: number;
     }>;
+  };
+  power: {
+    /**
+     * Gets the current power state from the main process.
+     */
+    getState: () => Promise<{
+      isSuspended: boolean;
+      suspendTime: number | null;
+      systemIdleTime: number;
+    }>;
+    /**
+     * Listens for system suspend (sleep/hibernate) events.
+     * @returns Cleanup function to remove the listener
+     */
+    onSuspend: (callback: (data: { suspendTime: number }) => void) => () => void;
+    /**
+     * Listens for system resume (wake from sleep) events.
+     * @returns Cleanup function to remove the listener
+     */
+    onResume: (callback: (data: {
+      resumeTime: number;
+      sleepDuration: number;
+      forceRefresh: boolean;
+    }) => void) => () => void;
+    /**
+     * Listens for screen lock events.
+     * @returns Cleanup function to remove the listener
+     */
+    onLockScreen: (callback: () => void) => () => void;
+    /**
+     * Listens for screen unlock events.
+     * @returns Cleanup function to remove the listener
+     */
+    onUnlockScreen: (callback: (data: { shouldRefresh: boolean }) => void) => () => void;
   };
   isDesktop: true;
 }

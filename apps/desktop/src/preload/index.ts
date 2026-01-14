@@ -85,6 +85,31 @@ contextBridge.exposeInMainWorld('electron', {
     getStatus: () => ipcRenderer.invoke('ws:get-status'),
   },
 
+  // Power state management (for handling sleep/wake auth coordination)
+  power: {
+    getState: () => ipcRenderer.invoke('power:get-state'),
+    onSuspend: (callback: (data: { suspendTime: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { suspendTime: number }) => callback(data);
+      ipcRenderer.on('power:suspend', handler);
+      return () => ipcRenderer.removeListener('power:suspend', handler);
+    },
+    onResume: (callback: (data: { resumeTime: number; sleepDuration: number; forceRefresh: boolean }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { resumeTime: number; sleepDuration: number; forceRefresh: boolean }) => callback(data);
+      ipcRenderer.on('power:resume', handler);
+      return () => ipcRenderer.removeListener('power:resume', handler);
+    },
+    onLockScreen: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('power:lock-screen', handler);
+      return () => ipcRenderer.removeListener('power:lock-screen', handler);
+    },
+    onUnlockScreen: (callback: (data: { shouldRefresh: boolean }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { shouldRefresh: boolean }) => callback(data);
+      ipcRenderer.on('power:unlock-screen', handler);
+      return () => ipcRenderer.removeListener('power:unlock-screen', handler);
+    },
+  },
+
   // Desktop flag for feature detection
   isDesktop: true,
 });
@@ -140,6 +165,17 @@ export interface ElectronAPI {
       connected: boolean;
       reconnectAttempts: number;
     }>;
+  };
+  power: {
+    getState: () => Promise<{
+      isSuspended: boolean;
+      suspendTime: number | null;
+      systemIdleTime: number;
+    }>;
+    onSuspend: (callback: (data: { suspendTime: number }) => void) => () => void;
+    onResume: (callback: (data: { resumeTime: number; sleepDuration: number; forceRefresh: boolean }) => void) => () => void;
+    onLockScreen: (callback: () => void) => () => void;
+    onUnlockScreen: (callback: (data: { shouldRefresh: boolean }) => void) => () => void;
   };
   isDesktop: true;
 }

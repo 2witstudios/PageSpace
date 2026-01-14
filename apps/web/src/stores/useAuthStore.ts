@@ -60,8 +60,9 @@ interface AuthState {
 const ACTIVITY_TIMEOUT = 60 * 60 * 1000; // 60 minutes (more forgiving)
 const AUTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes (token refresh handles validation every 12 min)
 const ACTIVITY_UPDATE_THROTTLE = 5 * 1000; // Only update activity every 5 seconds
-const MAX_FAILED_AUTH_ATTEMPTS = 3; // Max failed attempts before circuit breaker
-const FAILED_AUTH_TIMEOUT = 30 * 1000; // 30 seconds timeout for failed attempts
+const MAX_FAILED_AUTH_ATTEMPTS = 5; // Max failed attempts before circuit breaker (increased for network resilience)
+const MAX_FAILED_AUTH_ATTEMPTS_DESKTOP = 10; // Desktop gets more attempts (transient network issues after wake)
+const FAILED_AUTH_TIMEOUT = 60 * 1000; // 60 seconds timeout for failed attempts (increased from 30s)
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -215,8 +216,19 @@ export const useAuthStore = create<AuthState>()(
           return state._authPromise;
         }
 
-        // Skip if circuit breaker is active - clear user state to force re-login
+        // Skip if circuit breaker is active
         if (!force && authStoreHelpers.shouldSkipAuthCheck()) {
+          const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+
+          if (isDesktop) {
+            // Desktop: Don't clear user state on circuit breaker - network may be recovering
+            // after sleep/wake. Just skip this check and rely on token refresh to recover.
+            console.log('[AUTH_STORE] Circuit breaker active (desktop) - skipping auth check, keeping user state');
+            set({ isLoading: false });
+            return;
+          }
+
+          // Web: Clear user state to force re-login (web has more stable connectivity)
           console.log('[AUTH_STORE] Circuit breaker active - clearing user state');
           set({
             user: null,
@@ -412,8 +424,12 @@ export const authStoreHelpers = {
       return false;
     }
 
+    // Use higher threshold for desktop (more resilient to transient network issues)
+    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+    const maxAttempts = isDesktop ? MAX_FAILED_AUTH_ATTEMPTS_DESKTOP : MAX_FAILED_AUTH_ATTEMPTS;
+
     // Too many recent failures - skip auth check
-    return state.failedAuthAttempts >= MAX_FAILED_AUTH_ATTEMPTS;
+    return state.failedAuthAttempts >= maxAttempts;
   },
 
   // Check if auth check is needed (considering server initialization)
