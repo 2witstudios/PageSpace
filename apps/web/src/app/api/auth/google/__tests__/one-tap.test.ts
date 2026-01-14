@@ -157,6 +157,8 @@ const createOneTapRequest = (
 };
 
 describe('POST /api/auth/google/one-tap', () => {
+  const originalGoogleClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -206,6 +208,10 @@ describe('POST /api/auth/google/one-tap', () => {
     });
   });
 
+  afterEach(() => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = originalGoogleClientId;
+  });
+
   describe('successful authentication', () => {
     it('given valid credential for new user, should return success with user data', async () => {
       const request = createOneTapRequest(validOneTapPayload);
@@ -250,7 +256,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
     it('should set httpOnly cookies for web platform', async () => {
       const request = createOneTapRequest(validOneTapPayload);
-      await POST(request);
+      const response = await POST(request);
 
       expect(serialize).toHaveBeenCalledWith(
         'accessToken',
@@ -271,6 +277,10 @@ describe('POST /api/auth/google/one-tap', () => {
           path: '/',
         })
       );
+
+      // Verify cookies are actually attached to response headers
+      const setCookie = response.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain('mock-cookie');
     });
 
     it('should generate access and refresh tokens', async () => {
@@ -354,13 +364,13 @@ describe('POST /api/auth/google/one-tap', () => {
     });
   });
 
-  // NOTE: Google token verification errors (invalid token, missing payload) cannot be
-  // effectively unit tested here because vi.doMock doesn't re-evaluate already-imported
-  // modules. The OAuth2Client is instantiated at module load time in route.ts.
-  // These error paths are covered by:
-  // 1. The route's try-catch block which handles verifyIdToken rejections
-  // 2. The explicit null payload check on line 101-106 of route.ts
-  // 3. Integration/E2E tests with real Google tokens
+  // NOTE: Google token verification error paths (invalid token, missing payload) are tested
+  // via the hoisted vi.mock for google-auth-library. Changing mock behavior AFTER import
+  // (via vi.doMock) won't work because OAuth2Client is instantiated at module load time.
+  // The route handles these cases via:
+  // 1. A try-catch block around verifyIdToken that returns 401 on rejection
+  // 2. An explicit null/empty payload check that returns 401
+  // 3. Integration/E2E tests with real Google tokens for full coverage
 
   describe('desktop platform handling', () => {
     it('given desktop platform without deviceId, should return 400', async () => {
