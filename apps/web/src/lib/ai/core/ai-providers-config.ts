@@ -357,3 +357,37 @@ export function getModelDisplayName(provider: string, model: string): string {
 
 export type AIProvider = keyof typeof AI_PROVIDERS;
 export type AIModel<T extends AIProvider> = keyof typeof AI_PROVIDERS[T]['models'];
+
+/**
+ * Get user-facing display name for AI usage.
+ * Hides underlying model details from users for privacy/branding.
+ *
+ * For PageSpace provider: Shows "PageSpace Standard" or "PageSpace Pro"
+ * For all other providers: Shows "PageSpace AI" to abstract away the underlying model
+ *
+ * @param provider - The AI provider (e.g., 'pagespace', 'openrouter', 'google')
+ * @param model - The model identifier (e.g., 'glm-4.5-air', 'glm-4.7')
+ * @returns User-friendly display name
+ */
+export function getUserFacingModelName(provider: string | null | undefined, model: string | null | undefined): string {
+  // Default fallback
+  if (!model) {
+    return 'PageSpace AI';
+  }
+
+  // For PageSpace provider, show tier-based naming
+  if (provider === 'pagespace') {
+    if (model === 'glm-4.7') {
+      return 'PageSpace Pro';
+    }
+    if (model === 'glm-4.5-air') {
+      return 'PageSpace Standard';
+    }
+    // Any other PageSpace model defaults to Standard
+    return 'PageSpace Standard';
+  }
+
+  // For all other providers, abstract away the model details
+  // Users shouldn't see the underlying model names (GLM, Claude, GPT, etc.)
+  return 'PageSpace AI';
+}
