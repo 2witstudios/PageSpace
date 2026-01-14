@@ -90,7 +90,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     };
 
     return (
-      <div className="relative flex-1">
+      <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
           ref={textareaRef}
           value={value}
