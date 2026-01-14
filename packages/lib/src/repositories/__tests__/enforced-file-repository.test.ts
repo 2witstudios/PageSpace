@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
+import type { DrivePermissionLevel } from '../../permissions/permissions-cached';
 
 // Mock @pagespace/db
 vi.mock('@pagespace/db', () => ({
@@ -40,7 +41,11 @@ vi.mock('../../permissions/permissions-cached', () => ({
 }));
 
 // Import after mocks
-import { EnforcedFileRepository, ForbiddenError } from '../enforced-file-repository';
+import {
+  EnforcedFileRepository,
+  ForbiddenError,
+  type FileRecord,
+} from '../enforced-file-repository';
 import { db } from '@pagespace/db';
 import { getUserDrivePermissions } from '../../permissions/permissions-cached';
 
@@ -56,8 +61,8 @@ const createMockClaims = (overrides: Partial<SessionClaims> = {}): SessionClaims
   ...overrides,
 });
 
-// Helper to create mock file record
-const createMockFile = (overrides: Record<string, unknown> = {}) => ({
+// Helper to create mock file record with proper typing
+const createMockFile = (overrides: Partial<FileRecord> = {}): FileRecord => ({
   id: 'file-123',
   driveId: 'drive-123',
   sizeBytes: 1024,
@@ -71,8 +76,10 @@ const createMockFile = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-// Helper to create mock drive permissions
-const createMockDrivePermissions = (overrides: Record<string, unknown> = {}) => ({
+// Helper to create mock drive permissions with proper typing
+const createMockDrivePermissions = (
+  overrides: Partial<DrivePermissionLevel> = {}
+): DrivePermissionLevel => ({
   hasAccess: true,
   isOwner: false,
   isAdmin: false,
@@ -80,6 +87,17 @@ const createMockDrivePermissions = (overrides: Record<string, unknown> = {}) => 
   canEdit: true,
   ...overrides,
 });
+
+// Helper to mock db.update chain with proper type casting
+// Uses unknown intermediate cast since mock structure differs from actual Drizzle types
+const mockDbUpdate = (returnValue: FileRecord) => {
+  const mockReturning = vi.fn().mockResolvedValue([returnValue]);
+  const mockWhere = vi.fn().mockReturnValue({ returning: mockReturning });
+  const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
+  vi.mocked(db.update).mockReturnValue({
+    set: mockSet,
+  } as unknown as ReturnType<typeof db.update>);
+};
 
 describe('EnforcedFileRepository', () => {
   beforeEach(() => {
@@ -304,11 +322,7 @@ describe('EnforcedFileRepository', () => {
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
         vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
-
-        const mockReturning = vi.fn().mockResolvedValue([updatedFile]);
-        const mockWhere = vi.fn().mockReturnValue({ returning: mockReturning });
-        const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
-        vi.mocked(db.update).mockReturnValue({ set: mockSet } as any);
+        mockDbUpdate(updatedFile);
 
         const result = await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
 
@@ -323,11 +337,7 @@ describe('EnforcedFileRepository', () => {
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
         vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
-
-        const mockReturning = vi.fn().mockResolvedValue([mockFile]);
-        const mockWhere = vi.fn().mockReturnValue({ returning: mockReturning });
-        const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
-        vi.mocked(db.update).mockReturnValue({ set: mockSet } as any);
+        mockDbUpdate(mockFile);
 
         await repo.updateFile('file-123', { mimeType: 'image/jpeg' });
 
