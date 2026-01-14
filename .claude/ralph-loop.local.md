@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 1
+iteration: 4
 max_iterations: 65
 completion_promise: "OPTIMIZATION_COMPLETE"
 started_at: "2026-01-13T18:57:23Z"
