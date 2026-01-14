@@ -551,8 +551,8 @@ describe('authStoreHelpers', () => {
 
     it('given max failed attempts within timeout, should return true', () => {
       useAuthStore.setState({
-        failedAuthAttempts: 3, // MAX_FAILED_AUTH_ATTEMPTS
-        lastFailedAuthCheck: Date.now() - 1000, // 1 second ago (within 30s timeout)
+        failedAuthAttempts: 5, // MAX_FAILED_AUTH_ATTEMPTS (web threshold)
+        lastFailedAuthCheck: Date.now() - 1000, // 1 second ago (within 60s timeout)
       });
 
       expect(authStoreHelpers.shouldSkipAuthCheck()).toBe(true);
@@ -560,8 +560,8 @@ describe('authStoreHelpers', () => {
 
     it('given max failed attempts but timeout passed, should return false', () => {
       useAuthStore.setState({
-        failedAuthAttempts: 3,
-        lastFailedAuthCheck: Date.now() - 31000, // 31 seconds ago (past 30s timeout)
+        failedAuthAttempts: 5,
+        lastFailedAuthCheck: Date.now() - 61000, // 61 seconds ago (past 60s timeout)
       });
 
       expect(authStoreHelpers.shouldSkipAuthCheck()).toBe(false);
@@ -578,7 +578,7 @@ describe('authStoreHelpers', () => {
     it('given circuit breaker active, should return false', () => {
       useAuthStore.setState({
         hasHydrated: true,
-        failedAuthAttempts: 3,
+        failedAuthAttempts: 5, // MAX_FAILED_AUTH_ATTEMPTS (web threshold)
         lastFailedAuthCheck: Date.now(),
       });
 

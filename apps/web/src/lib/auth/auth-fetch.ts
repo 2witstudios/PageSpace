@@ -32,6 +32,11 @@ class AuthFetch {
   private authClearedCleanup: (() => void) | null = null;
   private initialized = false;
 
+  // Power state tracking for desktop (prevents refresh during sleep)
+  private isSuspended = false;
+  private suspendTime: number | null = null;
+  private powerEventCleanups: (() => void)[] = [];
+
   constructor() {
     this.initializeListeners();
   }
@@ -58,7 +63,92 @@ class AuthFetch {
       if (cleanup) {
         this.authClearedCleanup = cleanup;
       }
+
+      // Initialize power state listeners for desktop
+      this.initializePowerListeners();
     }
+  }
+
+  /**
+   * Initialize power state listeners for desktop app
+   * This prevents auth refresh attempts during sleep and forces refresh on wake
+   */
+  private initializePowerListeners(): void {
+    if (typeof window === 'undefined' || !window.electron?.power) return;
+
+    // Clean up any existing listeners
+    this.powerEventCleanups.forEach(cleanup => cleanup());
+    this.powerEventCleanups = [];
+
+    // Handle system suspend (sleep/hibernate)
+    const suspendCleanup = window.electron.power.onSuspend(({ suspendTime }) => {
+      this.isSuspended = true;
+      this.suspendTime = suspendTime;
+      this.logger.info('[Power] System suspended - pausing auth operations', { suspendTime });
+
+      // Dispatch event for other components (like useTokenRefresh) to pause
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('power:suspend', { detail: { suspendTime } }));
+      }
+    });
+    this.powerEventCleanups.push(suspendCleanup);
+
+    // Handle system resume (wake from sleep)
+    const resumeCleanup = window.electron.power.onResume(({ resumeTime, sleepDuration, forceRefresh }) => {
+      this.isSuspended = false;
+      const suspendedAt = this.suspendTime;
+      this.suspendTime = null;
+
+      this.logger.info('[Power] System resumed - resuming auth operations', {
+        resumeTime,
+        sleepDuration,
+        sleepDurationMin: Math.round(sleepDuration / 60000),
+        forceRefresh,
+      });
+
+      // Clear JWT cache on wake to ensure fresh token retrieval
+      this.clearJWTCache();
+
+      // Dispatch event for other components (like useTokenRefresh) to resume
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('power:resume', {
+          detail: { resumeTime, sleepDuration, forceRefresh, suspendedAt }
+        }));
+      }
+    });
+    this.powerEventCleanups.push(resumeCleanup);
+
+    // Handle screen unlock (user returned)
+    const unlockCleanup = window.electron.power.onUnlockScreen(({ shouldRefresh }) => {
+      this.logger.debug('[Power] Screen unlocked', { shouldRefresh });
+
+      if (shouldRefresh) {
+        // Clear JWT cache to ensure fresh auth state
+        this.clearJWTCache();
+
+        // Dispatch event for soft refresh
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('power:unlock', { detail: { shouldRefresh } }));
+        }
+      }
+    });
+    this.powerEventCleanups.push(unlockCleanup);
+
+    this.logger.info('[Power] Power state listeners initialized');
+  }
+
+  /**
+   * Check if the system is currently suspended (desktop only)
+   */
+  isSystemSuspended(): boolean {
+    return this.isSuspended;
+  }
+
+  /**
+   * Get the time when system was suspended (desktop only)
+   */
+  getSuspendTime(): number | null {
+    return this.suspendTime;
   }
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
@@ -415,6 +505,13 @@ class AuthFetch {
 
   private async refreshDesktopSession(): Promise<SessionRefreshResult> {
     if (!window.electron) {
+      return { success: false, shouldLogout: false };
+    }
+
+    // Don't attempt refresh if system is suspended - it will likely fail
+    // and could incorrectly trigger logout
+    if (this.isSuspended) {
+      this.logger.warn('Desktop: Skipping refresh while system is suspended');
       return { success: false, shouldLogout: false };
     }
 
@@ -786,3 +883,9 @@ export const clearJWTCache = () =>
 
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();
+
+export const isSystemSuspended = () =>
+  getAuthFetch().isSystemSuspended();
+
+export const getSuspendTime = () =>
+  getAuthFetch().getSuspendTime();
