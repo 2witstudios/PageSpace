@@ -4,6 +4,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/component
 import { Badge } from '@/components/ui/badge';
 import { StreamingMarkdown } from '@/components/ai/shared';
 import { cn } from '@/lib/utils';
+import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'error';
 
@@ -177,22 +178,14 @@ export const PageAgentConversationRenderer: React.FC<PageAgentConversationRender
         {/* Success state */}
         {taskStatus === 'completed' && output && (
           <div className="space-y-3">
-            {/* Provider/Model badges (only non-default) */}
-            {(output.metadata?.provider && output.metadata.provider !== 'default') ||
-             (output.metadata?.model && output.metadata.model !== 'default') ? (
+            {/* AI Model badge (only non-default) */}
+            {output.metadata?.model && output.metadata.model !== 'default' && (
               <div className="flex items-center gap-2 flex-wrap">
-                {output.metadata?.provider && output.metadata.provider !== 'default' && (
-                  <Badge variant="secondary" className="capitalize text-xs">
-                    {output.metadata.provider}
-                  </Badge>
-                )}
-                {output.metadata?.model && output.metadata.model !== 'default' && (
-                  <Badge variant="outline" className="text-xs">
-                    {output.metadata.model}
-                  </Badge>
-                )}
+                <Badge variant="secondary" className="text-xs">
+                  {getUserFacingModelName(output.metadata.provider, output.metadata.model)}
+                </Badge>
               </div>
-            ) : null}
+            )}
 
             {/* Context if provided */}
             {context && (

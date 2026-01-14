@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 
 interface AiUsageMonitorProps {
   conversationId?: string | null | undefined;
@@ -152,7 +153,7 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
               <TooltipContent>
                 <p>Session cost: {formatCost(usage.billing.cost)}</p>
                 <p className="text-xs text-muted-foreground">Total tokens billed: {formatNumber(usage.billing.totalTokens)}</p>
-                <p className="text-xs text-muted-foreground">Model: {usage.model}</p>
+                <p className="text-xs text-muted-foreground">Model: {getUserFacingModelName(usage.provider, usage.model)}</p>
               </TooltipContent>
             </Tooltip>
           )}
@@ -167,7 +168,7 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
         {/* Header */}
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="font-medium">AI Usage</span>
-          <span className="font-mono">{usage.model}</span>
+          <span className="font-mono">{getUserFacingModelName(usage.provider, usage.model)}</span>
         </div>
 
         {/* Context Window (Real Usage) - Show tokens/window instead of percentage */}
@@ -240,7 +241,7 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
               </TooltipTrigger>
               <TooltipContent>
                 <p>Total cost for this conversation</p>
-                <p className="text-xs text-muted-foreground">Provider: {usage.provider}</p>
+                <p className="text-xs text-muted-foreground">Powered by: {getUserFacingModelName(usage.provider, usage.model)}</p>
               </TooltipContent>
             </Tooltip>
           )}

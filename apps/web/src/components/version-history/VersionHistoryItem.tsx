@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from '@/components/activity/constants';
 import { getInitials } from '@/components/activity/utils';
+import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { useToast } from '@/hooks/useToast';
@@ -134,8 +135,7 @@ export function VersionHistoryItem({
             {activity.isAiGenerated && (
               <Badge variant="outline" className="text-xs gap-1">
                 <Bot className="h-3 w-3" />
-                AI
-                {activity.aiModel && <span className="text-muted-foreground">({activity.aiModel})</span>}
+                {getUserFacingModelName(activity.aiProvider, activity.aiModel)}
               </Badge>
             )}
           </div>

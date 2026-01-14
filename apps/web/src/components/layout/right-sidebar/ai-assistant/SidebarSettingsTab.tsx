@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle, XCircle, Key, ExternalLink, Zap, Bot, Wrench, FolderTree } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { AI_PROVIDERS, getBackendProvider } from '@/lib/ai/core/ai-providers-config';
+import { AI_PROVIDERS, getBackendProvider, getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import type { AgentInfo } from '@/types/agent';
@@ -395,15 +395,9 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Provider</span>
+                  <span className="text-muted-foreground">AI Model</span>
                   <Badge variant="secondary">
-                    {selectedAgent.aiProvider || 'Default'}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Model</span>
-                  <Badge variant="secondary">
-                    {selectedAgent.aiModel || 'Default'}
+                    {getUserFacingModelName(selectedAgent.aiProvider, selectedAgent.aiModel)}
                   </Badge>
                 </div>
                 {selectedAgent.enabledTools && selectedAgent.enabledTools.length > 0 && (

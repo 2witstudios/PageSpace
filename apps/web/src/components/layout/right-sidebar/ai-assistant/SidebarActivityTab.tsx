@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -482,12 +483,12 @@ export default function SidebarActivityTab() {
                               addSuffix: true,
                             })}
                           </span>
-                          {activity.isAiGenerated && activity.aiModel && (
+                          {activity.isAiGenerated && (
                             <Badge
                               variant="secondary"
                               className="text-[10px] h-4 px-1.5 py-0"
                             >
-                              {activity.aiModel}
+                              {getUserFacingModelName(activity.aiProvider, activity.aiModel)}
                             </Badge>
                           )}
                         </div>

@@ -18,6 +18,7 @@ import { useToast } from '@/hooks/useToast';
 import { post } from '@/lib/auth/auth-fetch';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
 import { getInitials } from './utils';
+import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import type { ActivityLog } from './types';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 
@@ -108,8 +109,7 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
           {activity.isAiGenerated && (
             <Badge variant="outline" className="text-xs gap-1">
               <Bot className="h-3 w-3" />
-              AI
-              {activity.aiModel && <span className="text-muted-foreground">({activity.aiModel})</span>}
+              {getUserFacingModelName(activity.aiProvider, activity.aiModel)}
             </Badge>
           )}
         </div>
