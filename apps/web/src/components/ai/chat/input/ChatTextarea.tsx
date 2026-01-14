@@ -99,7 +99,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           placeholder={placeholder}
           disabled={disabled}
           className={cn(
-            'min-h-[36px] max-h-48 resize-none',
+            'min-h-[36px] max-h-48 resize-none break-words',
             // Context-aware background:
             // - main: transparent to blend with InputCard, no shadow in light mode for flush look
             // - sidebar: white in light mode for contrast, slight gray lift in dark mode
