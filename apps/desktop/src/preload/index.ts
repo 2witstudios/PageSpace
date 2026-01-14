@@ -30,7 +30,15 @@ contextBridge.exposeInMainWorld('electron', {
 
   // Generic event listener for IPC messages
   on: (channel: string, callback: (...args: unknown[]) => void) => {
-    ipcRenderer.on(channel, (_event, ...args) => callback(...args));
+    const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => callback(...args);
+    ipcRenderer.on(channel, handler);
+    // Return cleanup function to remove this specific listener
+    return () => ipcRenderer.removeListener(channel, handler);
+  },
+
+  // Remove all listeners for a channel (for cleanup)
+  removeAllListeners: (channel: string) => {
+    ipcRenderer.removeAllListeners(channel);
   },
 
   // Platform information
@@ -88,7 +96,8 @@ export interface ElectronAPI {
   onDeepLink: (callback: (url: string) => void) => void;
   onOpenPreferences: (callback: () => void) => void;
   retryConnection: () => Promise<void>;
-  on: (channel: string, callback: (...args: unknown[]) => void) => void;
+  on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+  removeAllListeners: (channel: string) => void;
   platform: NodeJS.Platform;
   version: string;
   auth: {
