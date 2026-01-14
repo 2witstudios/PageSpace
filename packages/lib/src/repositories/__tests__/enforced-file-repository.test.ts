@@ -4,6 +4,9 @@
  * Tests RBAC enforcement at the data access layer.
  * Ensures authorization cannot be bypassed by direct DB queries.
  *
+ * SECURITY: Tests verify that unauthorized users cannot distinguish between
+ * "file not found" and "file exists but unauthorized" to prevent ID enumeration.
+ *
  * Following Eric Elliott's testing standards:
  * - Given/Should test naming structure
  * - Single assertion focus per test
@@ -38,6 +41,16 @@ vi.mock('@pagespace/db', () => ({
 // Mock permissions
 vi.mock('../../permissions/permissions-cached', () => ({
   getUserDrivePermissions: vi.fn(),
+}));
+
+// Mock loggers
+vi.mock('../../logging/logger-config', () => ({
+  loggers: {
+    api: {
+      warn: vi.fn(),
+      info: vi.fn(),
+    },
+  },
 }));
 
 // Import after mocks
@@ -177,8 +190,9 @@ describe('EnforcedFileRepository', () => {
       });
     });
 
-    describe('given a user who is not a member of the drive', () => {
-      it('should throw ForbiddenError', async () => {
+    // SECURITY: These tests verify null-masking to prevent enumeration attacks
+    describe('given a user who is not a member of the drive (SECURITY: prevents enumeration)', () => {
+      it('should return null instead of throwing (masks file existence)', async () => {
         const claims = createMockClaims({ scopes: ['files:read'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
@@ -186,23 +200,14 @@ describe('EnforcedFileRepository', () => {
         vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
         vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
 
-        await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
-      });
+        const result = await repo.getFile('file-123');
 
-      it('should throw with "User not a member of this drive" message', async () => {
-        const claims = createMockClaims({ scopes: ['files:read'] });
-        const context = EnforcedAuthContext.fromSession(claims);
-        const repo = new EnforcedFileRepository(context);
-
-        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
-        vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
-
-        await expect(repo.getFile('file-123')).rejects.toThrow('User not a member of this drive');
+        expect(result).toBeNull();
       });
     });
 
-    describe('given a token bound to a different file', () => {
-      it('should throw ForbiddenError', async () => {
+    describe('given a token bound to a different file (SECURITY: prevents enumeration)', () => {
+      it('should return null instead of throwing (masks file existence)', async () => {
         const claims = createMockClaims({
           scopes: ['files:read'],
           resourceType: 'file',
@@ -213,47 +218,32 @@ describe('EnforcedFileRepository', () => {
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile({ id: 'file-123' }));
 
-        await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
-      });
+        const result = await repo.getFile('file-123');
 
-      it('should throw with "Token not authorized for this resource" message', async () => {
-        const claims = createMockClaims({
-          scopes: ['files:read'],
-          resourceType: 'file',
-          resourceId: 'different-file-id',
-        });
-        const context = EnforcedAuthContext.fromSession(claims);
-        const repo = new EnforcedFileRepository(context);
-
-        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile({ id: 'file-123' }));
-
-        await expect(repo.getFile('file-123')).rejects.toThrow(
-          'Token not authorized for this resource'
-        );
+        expect(result).toBeNull();
       });
     });
 
-    describe('given a user without files:read scope', () => {
-      it('should throw ForbiddenError', async () => {
+    describe('given a user without files:read scope (SECURITY: prevents enumeration)', () => {
+      it('should return null instead of throwing (masks file existence)', async () => {
         const claims = createMockClaims({ scopes: ['files:write'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
 
-        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
-        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+        // Note: DB should not even be queried when scope is missing
+        const result = await repo.getFile('file-123');
 
-        await expect(repo.getFile('file-123')).rejects.toThrow(ForbiddenError);
+        expect(result).toBeNull();
       });
 
-      it('should throw with "Missing files:read scope" message', async () => {
+      it('should not query the database when scope is missing', async () => {
         const claims = createMockClaims({ scopes: ['files:write'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
 
-        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
-        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+        await repo.getFile('file-123');
 
-        await expect(repo.getFile('file-123')).rejects.toThrow('Missing files:read scope');
+        expect(db.query.files.findFirst).not.toHaveBeenCalled();
       });
     });
 
@@ -345,36 +335,31 @@ describe('EnforcedFileRepository', () => {
       });
     });
 
-    describe('given a user without files:write scope', () => {
-      it('should throw ForbiddenError', async () => {
+    // SECURITY: These tests verify generic "Access denied" errors to prevent enumeration
+    describe('given a user without files:write scope (SECURITY: generic error)', () => {
+      it('should throw ForbiddenError with generic message', async () => {
         const claims = createMockClaims({ scopes: ['files:read'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
-
-        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
-        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
 
         await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
           ForbiddenError
         );
       });
 
-      it('should throw with "Missing files:write scope" message', async () => {
+      it('should throw with "Access denied" message (not revealing specific reason)', async () => {
         const claims = createMockClaims({ scopes: ['files:read'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
 
-        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
-        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
-
         await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
-          'Missing files:write scope'
+          'Access denied'
         );
       });
     });
 
-    describe('given a user with viewer role (canEdit=false)', () => {
-      it('should throw ForbiddenError', async () => {
+    describe('given a user with viewer role (canEdit=false) (SECURITY: generic error)', () => {
+      it('should throw ForbiddenError with generic message', async () => {
         const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
@@ -389,7 +374,7 @@ describe('EnforcedFileRepository', () => {
         );
       });
 
-      it('should throw with "Viewer role cannot modify files" message', async () => {
+      it('should throw with "Access denied" message (not revealing specific reason)', async () => {
         const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
@@ -400,13 +385,13 @@ describe('EnforcedFileRepository', () => {
         );
 
         await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
-          'Viewer role cannot modify files'
+          'Access denied'
         );
       });
     });
 
-    describe('given a non-existent file', () => {
-      it('should throw ForbiddenError', async () => {
+    describe('given a non-existent file (SECURITY: same error as unauthorized)', () => {
+      it('should throw ForbiddenError (same as unauthorized to prevent enumeration)', async () => {
         const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
@@ -418,7 +403,7 @@ describe('EnforcedFileRepository', () => {
         );
       });
 
-      it('should throw with "File not found" message', async () => {
+      it('should throw with "Access denied" message (not "File not found")', async () => {
         const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
         const context = EnforcedAuthContext.fromSession(claims);
         const repo = new EnforcedFileRepository(context);
@@ -426,7 +411,22 @@ describe('EnforcedFileRepository', () => {
         vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
 
         await expect(repo.updateFile('non-existent', { mimeType: 'image/jpeg' })).rejects.toThrow(
-          'File not found'
+          'Access denied'
+        );
+      });
+    });
+
+    describe('given a user not in drive (SECURITY: same error as not found)', () => {
+      it('should throw ForbiddenError with generic "Access denied"', async () => {
+        const claims = createMockClaims({ scopes: ['files:read', 'files:write'] });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(createMockFile());
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+
+        await expect(repo.updateFile('file-123', { mimeType: 'image/jpeg' })).rejects.toThrow(
+          'Access denied'
         );
       });
     });
