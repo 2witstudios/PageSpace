@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, users, eq, and, desc, count, gte, lt, inArray } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, inArray } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
