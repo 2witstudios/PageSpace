@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useSWRConfig } from "swr";
 import {
   Activity,
+  CheckSquare,
   HardDrive,
   Lock,
   Plus,
@@ -147,6 +148,13 @@ export default function Sidebar({ className }: SidebarProps) {
           >
             <Activity className="h-4 w-4" />
             Activity
+          </Link>
+          <Link
+            href={driveId ? `/dashboard/${driveId}/tasks` : "/dashboard/tasks"}
+            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <CheckSquare className="h-4 w-4" />
+            Tasks
           </Link>
           {driveId && canManage && (
             <Link

@@ -1,7 +1,50 @@
-import { db, and, eq } from '@pagespace/db';
+import { db, and, eq, or } from '@pagespace/db';
 import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
 import { permissionCache } from '../services/permission-cache';
 import { loggers } from '../logging/logger-config';
+
+/**
+ * Get all drive IDs that a user has access to
+ * Includes owned drives, member drives, and drives with page permissions
+ */
+export async function getDriveIdsForUser(userId: string): Promise<string[]> {
+  const driveIdSet = new Set<string>();
+
+  // 1. Get drives owned by user
+  const ownedDrives = await db.select({ id: drives.id })
+    .from(drives)
+    .where(eq(drives.ownerId, userId));
+
+  for (const drive of ownedDrives) {
+    driveIdSet.add(drive.id);
+  }
+
+  // 2. Get drives where user is a member
+  const memberDrives = await db.select({ driveId: driveMembers.driveId })
+    .from(driveMembers)
+    .where(eq(driveMembers.userId, userId));
+
+  for (const membership of memberDrives) {
+    driveIdSet.add(membership.driveId);
+  }
+
+  // 3. Get drives where user has page permissions
+  const pageDrives = await db.select({ driveId: pages.driveId })
+    .from(pagePermissions)
+    .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
+    .where(and(
+      eq(pagePermissions.userId, userId),
+      eq(pagePermissions.canView, true)
+    ));
+
+  for (const page of pageDrives) {
+    if (page.driveId) {
+      driveIdSet.add(page.driveId);
+    }
+  }
+
+  return Array.from(driveIdSet);
+}
 
 /**
  * Get user access level for a page
