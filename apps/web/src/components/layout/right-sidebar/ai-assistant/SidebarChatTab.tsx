@@ -709,7 +709,7 @@ const SidebarChatTab: React.FC = () => {
       </div>
 
       {/* Input */}
-      <div className="border-t p-3 space-y-2">
+      <div className="border-t p-3 space-y-2 min-w-0 overflow-hidden">
         {error && showError && (
           <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex items-center justify-between">
             <p className="text-red-700 dark:text-red-300">
