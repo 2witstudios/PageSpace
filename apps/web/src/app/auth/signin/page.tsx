@@ -134,8 +134,8 @@ function SignInForm() {
     <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
       {/* Google One Tap - displays automatically for signed-in Google users */}
       <GoogleOneTap
-        onSuccess={(user) => {
-          toast.success(`Welcome${user.name ? `, ${user.name}` : ''}!`);
+        onSuccess={() => {
+          // Toast handled internally by GoogleOneTap
         }}
         onError={(error) => {
           console.error('Google One Tap error:', error);

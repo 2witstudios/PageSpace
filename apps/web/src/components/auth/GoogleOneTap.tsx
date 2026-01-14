@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback, useRef, useState } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import type { CredentialResponse, PromptMomentNotification } from '@/types/google-identity';
@@ -34,14 +34,14 @@ export function GoogleOneTap({
   redirectTo,
 }: GoogleOneTapProps) {
   const router = useRouter();
-  const [isLoading, setIsLoading] = useState(false);
+  const isLoadingRef = useRef(false);
   const initializedRef = useRef(false);
   const scriptLoadedRef = useRef(false);
 
   const handleCredentialResponse = useCallback(
     async (response: CredentialResponse) => {
-      if (isLoading) return;
-      setIsLoading(true);
+      if (isLoadingRef.current) return;
+      isLoadingRef.current = true;
 
       try {
         // Get device info for desktop
@@ -61,6 +61,7 @@ export function GoogleOneTap({
           headers: {
             'Content-Type': 'application/json',
           },
+          credentials: 'include',
           body: JSON.stringify({
             credential: response.credential,
             platform: isDesktop ? 'desktop' : 'web',
@@ -106,10 +107,10 @@ export function GoogleOneTap({
           onError(errorMessage);
         }
       } finally {
-        setIsLoading(false);
+        isLoadingRef.current = false;
       }
     },
-    [isLoading, onSuccess, onError, router, redirectTo]
+    [onSuccess, onError, router, redirectTo]
   );
 
   const handlePromptMoment = useCallback((notification: PromptMomentNotification) => {

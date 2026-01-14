@@ -233,9 +233,10 @@ export async function POST(req: Request) {
     // Log successful login
     logAuthEvent('login', user.id, email, clientIP, 'Google One Tap');
 
-    // Track login event
+    // Track login event (mask email to prevent PII in activity logs)
+    const maskedEmail = email.replace(/(.{2}).*(@.*)/, '$1***$2');
     trackAuthEvent(user.id, isNewUser ? 'signup' : 'login', {
-      email,
+      email: maskedEmail,
       ip: clientIP,
       provider: 'google-one-tap',
       userAgent: req.headers.get('user-agent'),
