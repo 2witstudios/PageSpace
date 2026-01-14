@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ContactForm from "@/components/shared/ContactForm";
 import PageSpaceDemo from "@/components/landing/PageSpaceDemo";
+import { GoogleOneTap } from "@/components/auth";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -114,6 +115,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen">
+      <GoogleOneTap context="signin" />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
