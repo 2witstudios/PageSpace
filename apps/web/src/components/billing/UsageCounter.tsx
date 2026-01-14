@@ -12,14 +12,9 @@ import { createClientLogger } from '@/lib/logging/client-logger';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { Skeleton } from '@/components/ui/skeleton';
 
 const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });
-
-// PageSpace model identifiers
-const PAGESPACE_STANDARD_MODEL = 'glm-4.5-air';
-const PAGESPACE_PRO_MODEL = 'glm-4.6';
 
 interface UsageData {
   subscriptionTier: 'free' | 'pro' | 'business';
@@ -50,22 +45,6 @@ export function UsageCounter() {
   // Check if any editing or streaming is active (state-based)
   const isAnyActive = useEditingStore(state => state.isAnyActive());
 
-  // Get current AI provider/model selection and ensure settings are loaded
-  const currentProvider = useAssistantSettingsStore(state => state.currentProvider);
-  const currentModel = useAssistantSettingsStore(state => state.currentModel);
-  const loadSettings = useAssistantSettingsStore(state => state.loadSettings);
-
-  // Load assistant settings on mount if not already loaded
-  useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
-
-  // Determine which quota type to show based on selected model
-  // Only show quota when provider is explicitly 'pagespace' (not null/unloaded)
-  const isPageSpaceProvider = currentProvider === 'pagespace';
-  const isStandardModel = currentModel === PAGESPACE_STANDARD_MODEL;
-  const isProModel = currentModel === PAGESPACE_PRO_MODEL;
-
   const { data: usage, error, mutate } = useSWR<UsageData>('/api/subscriptions/usage', fetcher, {
     refreshInterval: 0, // Disabled - rely on Socket.IO for real-time updates
     revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
@@ -76,7 +55,7 @@ export function UsageCounter() {
   const isBusiness = usage?.subscriptionTier === 'business';
   const isPaid = isPro || isBusiness;
 
-  // Check near limit based on which model is selected
+  // Check if near usage limits (for warning display)
   const isNearStandardLimit = usage && usage.standard.limit > 0 && usage.standard.remaining <= 10;
   const isNearProLimit = usage && usage.pro.limit > 0 && usage.pro.remaining <= 10;
 
@@ -127,38 +106,38 @@ export function UsageCounter() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [mutate]);
 
-  // Show Pro quota when Pro model is selected (and user has access)
-  const showProQuota = isPageSpaceProvider && isProModel && isPaid && usage && usage.pro.limit > 0;
-  // Show Standard quota when Standard model is selected
-  const showStandardQuota = isPageSpaceProvider && isStandardModel && usage;
+  // Always show Standard quota when usage data is available
+  const showStandardQuota = usage && usage.standard.limit > 0;
+  // Show Pro quota when user has access (paid subscription with pro limit)
+  const showProQuota = usage && isPaid && usage.pro.limit > 0;
 
-  // Render quota display section (only for PageSpace models with loaded usage data)
+  // Render quota display section
   const renderQuotaDisplay = () => {
-    // Show error state
+    // Show error state (hidden on mobile)
     if (error) {
       return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
           <AlertCircle className="h-4 w-4" />
           <span className="hidden md:inline">Usage unavailable</span>
         </div>
       );
     }
 
-    // Show loading state only for PageSpace provider
-    if (isPageSpaceProvider && !usage) {
+    // Show loading state while fetching usage data
+    if (!usage) {
       return (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
           <Skeleton className="h-4 w-4" />
           <span className="hidden md:inline">Loading...</span>
         </div>
       );
     }
 
-    // Show quota badges for PageSpace models
+    // Always show quota badges (hidden on mobile)
     if (showStandardQuota || showProQuota) {
       return (
-        <div className="flex items-center gap-3 text-sm">
-          {/* Standard Usage - only when Standard model selected */}
+        <div className="hidden sm:flex items-center gap-3 text-sm">
+          {/* Standard Usage - always shown */}
           {showStandardQuota && (
             <div className="flex items-center gap-1.5">
               <span className="hidden lg:inline text-muted-foreground text-xs">Standard:</span>
@@ -168,21 +147,19 @@ export function UsageCounter() {
               >
                 {usage.standard.current}/{usage.standard.limit}
               </Badge>
-              <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
             </div>
           )}
 
-          {/* Pro AI Usage - only when Pro model selected */}
+          {/* Pro AI Usage - shown when user has access */}
           {showProQuota && (
             <div className="flex items-center gap-1.5">
-              <span className="hidden lg:inline text-muted-foreground text-xs">Pro AI:</span>
+              <span className="hidden lg:inline text-muted-foreground text-xs">Pro:</span>
               <Badge
                 variant={isNearProLimit ? "destructive" : "secondary"}
                 className="text-xs font-medium"
               >
                 {usage.pro.current}/{usage.pro.limit}
               </Badge>
-              <span className="hidden lg:inline text-muted-foreground text-xs">Today</span>
             </div>
           )}
         </div>
@@ -194,7 +171,7 @@ export function UsageCounter() {
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* Quota display - conditional based on provider/model */}
+      {/* Quota display - always shown (hidden on mobile) */}
       {renderQuotaDisplay()}
 
       {/* Action Button - always visible for billing navigation */}
