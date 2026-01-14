@@ -215,7 +215,7 @@ export class EnforcedFileRepository {
         // Page binding requires checking file-page associations
         // For now, we allow if the file is in the same drive
         // TODO: Add filePages lookup for stricter validation
-        return true;
+        return this.ctx.driveId !== undefined && this.ctx.driveId === file.driveId;
       default:
         // Unknown binding type - deny by default
         return false;

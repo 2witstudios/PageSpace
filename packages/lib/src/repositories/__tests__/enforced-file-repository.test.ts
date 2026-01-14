@@ -299,6 +299,85 @@ describe('EnforcedFileRepository', () => {
         expect(file).toEqual(mockFile);
       });
     });
+
+    describe('given a token bound to a page in the same drive as the file', () => {
+      it('should allow access', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'page',
+          resourceId: 'page-123',
+          driveId: 'drive-123',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile({ driveId: 'drive-123' });
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
+
+        const file = await repo.getFile('file-123');
+
+        expect(file).toEqual(mockFile);
+      });
+    });
+
+    describe('given a token bound to a page in a different drive (SECURITY: prevents cross-drive access)', () => {
+      it('should return null instead of throwing (masks file existence)', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'page',
+          resourceId: 'page-in-other-drive',
+          driveId: 'different-drive-456',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile({ driveId: 'drive-123' });
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+
+        const result = await repo.getFile('file-123');
+
+        expect(result).toBeNull();
+      });
+
+      it('should not check drive permissions when resource binding fails', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'page',
+          resourceId: 'page-in-other-drive',
+          driveId: 'different-drive-456',
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile({ driveId: 'drive-123' });
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+
+        await repo.getFile('file-123');
+
+        expect(getUserDrivePermissions).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('given a page-bound token without driveId (SECURITY: denies access)', () => {
+      it('should return null when driveId is not set on context', async () => {
+        const claims = createMockClaims({
+          scopes: ['files:read'],
+          resourceType: 'page',
+          resourceId: 'page-123',
+          driveId: undefined,
+        });
+        const context = EnforcedAuthContext.fromSession(claims);
+        const repo = new EnforcedFileRepository(context);
+        const mockFile = createMockFile({ driveId: 'drive-123' });
+
+        vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+
+        const result = await repo.getFile('file-123');
+
+        expect(result).toBeNull();
+      });
+    });
   });
 
   describe('updateFile', () => {
