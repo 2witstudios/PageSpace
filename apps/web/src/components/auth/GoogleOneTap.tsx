@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import type { CredentialResponse, PromptMomentNotification } from '@/types/google-identity';
+import type { CredentialResponse } from '@/types/google-identity';
 
 interface GoogleOneTapProps {
   /** Called when sign-in is successful */
@@ -33,7 +32,6 @@ export function GoogleOneTap({
   disabled = false,
   redirectTo,
 }: GoogleOneTapProps) {
-  const router = useRouter();
   const isLoadingRef = useRef(false);
   const initializedRef = useRef(false);
   const scriptLoadedRef = useRef(false);
@@ -90,11 +88,12 @@ export function GoogleOneTap({
           }
 
           // Redirect to dashboard or specified URL with auth=success param
-          // This matches regular OAuth callback behavior and triggers session reload in useAuth
+          // Use full page navigation to ensure cookies are properly sent
+          // and auth state is fully initialized (avoids client-side nav race condition)
           const targetUrl = redirectTo || data.redirectTo || '/dashboard';
           const urlWithAuth = new URL(targetUrl, window.location.origin);
           urlWithAuth.searchParams.set('auth', 'success');
-          router.replace(urlWithAuth.pathname + urlWithAuth.search);
+          window.location.href = urlWithAuth.toString();
         } else {
           const errorMessage = data.error || 'Google sign-in failed. Please try again.';
           toast.error(errorMessage);
@@ -113,34 +112,14 @@ export function GoogleOneTap({
         isLoadingRef.current = false;
       }
     },
-    [onSuccess, onError, router, redirectTo]
+    [onSuccess, onError, redirectTo]
   );
 
-  const handlePromptMoment = useCallback((notification: PromptMomentNotification) => {
-    if (notification.isNotDisplayed()) {
-      const reason = notification.getNotDisplayedReason();
-      console.debug('Google One Tap not displayed:', reason);
-
-      // Don't show error for common non-error cases
-      if (reason === 'opt_out_or_no_session') {
-        // User is not signed into Google or has opted out - this is expected
-        return;
-      }
-      if (reason === 'suppressed_by_user') {
-        // User has previously dismissed One Tap - respect their choice
-        return;
-      }
-    }
-
-    if (notification.isSkippedMoment()) {
-      const reason = notification.getSkippedReason();
-      console.debug('Google One Tap skipped:', reason);
-    }
-
-    if (notification.isDismissedMoment()) {
-      const reason = notification.getDismissedReason();
-      console.debug('Google One Tap dismissed:', reason);
-    }
+  // FedCM migration: detailed prompt moment methods are deprecated
+  // The browser now handles prompt display through FedCM
+  // See: https://developers.google.com/identity/gsi/web/guides/fedcm-migration
+  const handlePromptMoment = useCallback(() => {
+    console.debug('Google One Tap prompt moment');
   }, []);
 
   useEffect(() => {
