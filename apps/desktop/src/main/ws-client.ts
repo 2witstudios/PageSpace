@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
-import { BrowserWindow } from 'electron';
 import { getMCPManager } from './mcp-manager';
 import { logger } from './logger';
+import { loadAuthSession } from './auth-storage';
 
 /**
  * WebSocket Client for MCP Bridge
@@ -38,10 +38,9 @@ export class WSClient {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private isIntentionallyClosed = false;
-  private mainWindow: BrowserWindow | null = null;
 
-  constructor(mainWindow: BrowserWindow) {
-    this.mainWindow = mainWindow;
+  constructor() {
+    // JWT is obtained from Electron secure storage, no window dependency needed
   }
 
   /**
@@ -70,27 +69,21 @@ export class WSClient {
   }
 
   /**
-   * Extract JWT token from browser cookies (used for initial auth to get WS token)
+   * Get JWT token from Electron secure storage
+   * Uses the same token source as Socket.IO for consistency
    */
   private async getJWTToken(): Promise<string | null> {
-    if (!this.mainWindow) {
-      logger.error('Main window not available', {});
-      return null;
-    }
-
     try {
-      const cookies = await this.mainWindow.webContents.session.cookies.get({
-        name: 'accessToken',
-      });
+      const storedSession = await loadAuthSession();
 
-      if (cookies.length > 0) {
-        return cookies[0].value;
+      if (storedSession?.accessToken) {
+        return storedSession.accessToken;
       }
 
-      logger.warn('JWT token not found in cookies', {});
+      logger.warn('JWT token not found in secure storage', {});
       return null;
     } catch (error) {
-      logger.error('Error extracting JWT token', { error });
+      logger.error('Error retrieving JWT token from storage', { error });
       return null;
     }
   }
@@ -397,15 +390,15 @@ let wsClient: WSClient | null = null;
 /**
  * Initialize WebSocket client
  */
-export function initializeWSClient(mainWindow: BrowserWindow): void {
+export function initializeWSClient(): void {
   if (wsClient) {
     logger.warn('Already initialized', {});
     return;
   }
 
-  wsClient = new WSClient(mainWindow);
+  wsClient = new WSClient();
 
-  // Give the app a moment to load and establish session cookies
+  // Give the app a moment to load and establish auth session
   setTimeout(() => {
     wsClient?.connect();
   }, 2000);
