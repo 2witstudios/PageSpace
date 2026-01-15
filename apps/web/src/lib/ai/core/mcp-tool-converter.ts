@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { tool, type Tool } from 'ai';
 import type { MCPTool } from '@/types/mcp';
 
 /**
@@ -220,23 +221,26 @@ export function convertMCPToolSchemaToZod(
 }
 
 /**
- * Converts an array of MCP tools to AI SDK tool format (schema only, no execute)
- * Returns a map of tool name to tool definition
+ * Converts an array of MCP tools to AI SDK tool format using the official tool() helper.
+ * This ensures proper schema normalization consistent with native PageSpace tools.
+ * Returns a map of tool name to tool definition (without execute - that's added later).
  */
 export function convertMCPToolsToAISDKSchemas(
   mcpTools: MCPTool[]
-): Record<string, { description: string; parameters: z.ZodObject<Record<string, z.ZodTypeAny>> }> {
-  const toolSchemas: Record<string, { description: string; parameters: z.ZodObject<Record<string, z.ZodTypeAny>> }> = {};
+): Record<string, Tool> {
+  const toolSchemas: Record<string, Tool> = {};
 
   for (const mcpTool of mcpTools) {
     try {
       // Validate and create safe tool name
       const toolName = createSafeToolName(mcpTool.serverName, mcpTool.name);
 
-      toolSchemas[toolName] = {
+      // Use the AI SDK's tool() helper for proper schema normalization
+      // This matches how native PageSpace tools are defined
+      toolSchemas[toolName] = tool({
         description: mcpTool.description || `Tool from MCP server: ${mcpTool.serverName}`,
         parameters: convertMCPToolSchemaToZod(mcpTool.inputSchema),
-      };
+      });
 
       console.log(`Converted MCP tool: ${toolName}`);
     } catch (error) {
