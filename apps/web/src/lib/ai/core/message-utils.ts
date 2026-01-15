@@ -1,6 +1,7 @@
 import { UIMessage } from 'ai';
 import { db, chatMessages, messages } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { sanitizeToolName } from './mcp-tool-converter';
 
 /**
  * Assistant utilities for AI tool calling and message handling
@@ -683,25 +684,30 @@ export function sanitizeContent(content: string): string {
 
 /**
  * Sanitize messages before passing to convertToModelMessages
- * Filters out tool parts without results to prevent "input-available" state errors
+ * - Filters out tool parts without results to prevent "input-available" state errors
+ * - Sanitizes tool names (replaces colons with underscores) for provider compatibility
  */
 export function sanitizeMessagesForModel(messages: UIMessage[]): UIMessage[] {
   return messages.map(message => ({
     ...message,
-    parts: message.parts?.filter(part => {
-      // Keep text parts
-      if (part.type === 'text') return true;
-      
-      // For tool parts, only keep those with results
+    parts: message.parts?.map(part => {
+      // For tool parts, sanitize the tool name and filter incomplete ones
       if (part.type.startsWith('tool-')) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const toolPart = part as any;
         // Only include tool parts that have output (completed executions)
-        return toolPart.state === 'output-available' && toolPart.output !== undefined;
+        if (toolPart.state !== 'output-available' || toolPart.output === undefined) {
+          return null; // Will be filtered out
+        }
+        // Sanitize tool name for provider compatibility (mcp:server:tool -> mcp__server__tool)
+        return {
+          ...toolPart,
+          toolName: sanitizeToolName(toolPart.toolName || ''),
+        };
       }
-      
-      // Keep other part types (step-start, etc.)
-      return true;
-    }) || []
+
+      // Keep text and other part types unchanged
+      return part;
+    }).filter(Boolean) || []
   }));
 }
