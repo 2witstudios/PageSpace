@@ -225,15 +225,25 @@ export async function GET(request: Request) {
     });
 
     // Enrich tasks with drive and task list page info
-    const enrichedTasks = tasks.map(task => {
-      const pageInfo = taskListToPageMap.get(task.taskListId);
-      return {
-        ...task,
-        driveId: pageInfo?.driveId,
-        taskListPageId: pageInfo?.pageId,
-        taskListPageTitle: pageInfo?.taskListTitle,
-      };
-    });
+    // Filter out orphaned tasks where pageInfo is missing to prevent undefined URLs
+    const enrichedTasks = tasks
+      .map(task => {
+        const pageInfo = taskListToPageMap.get(task.taskListId);
+        if (!pageInfo) {
+          loggers.api.warn('Task has orphaned taskListId - skipping', {
+            taskId: task.id,
+            taskListId: task.taskListId,
+          });
+          return null;
+        }
+        return {
+          ...task,
+          driveId: pageInfo.driveId,
+          taskListPageId: pageInfo.pageId,
+          taskListPageTitle: pageInfo.taskListTitle,
+        };
+      })
+      .filter((task): task is NonNullable<typeof task> => task !== null);
 
     // Get total count for pagination
     const [countResult] = await db
