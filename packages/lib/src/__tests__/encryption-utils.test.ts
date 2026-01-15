@@ -121,9 +121,15 @@ describe('encryption-utils', () => {
       const encrypted = await encrypt(testData)
       const parts = encrypted.split(':')
 
-      // Corrupt the auth tag - flip all bits in the first byte
+      // Corrupt the auth tag - invert all bytes to guarantee different value
       const authTagHex = parts[2]
-      const corruptedAuthTag = 'FF' + authTagHex.substring(2)
+      const corruptedAuthTag = authTagHex
+        .split('')
+        .map((c) => {
+          const val = parseInt(c, 16)
+          return (15 - val).toString(16) // Invert each hex digit
+        })
+        .join('')
       parts[2] = corruptedAuthTag
       const corrupted = parts.join(':')
 

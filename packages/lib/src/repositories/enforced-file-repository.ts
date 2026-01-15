@@ -7,7 +7,7 @@
  * @module @pagespace/lib/repositories/enforced-file-repository
  */
 
-import { db, files, eq } from '@pagespace/db';
+import { db, files, filePages, eq, and } from '@pagespace/db';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import { getUserDrivePermissions } from '../permissions/permissions-cached';
 import { loggers } from '../logging/logger-config';
@@ -102,7 +102,7 @@ export class EnforcedFileRepository {
 
     // 4. Check resource binding
     // Token may be bound to a specific file, drive, or page
-    if (!this.isResourceAccessAllowed(file)) {
+    if (!(await this.isResourceAccessAllowed(file))) {
       loggers.api.warn('File access denied: resource binding mismatch', {
         fileId,
         userId: this.ctx.userId,
@@ -195,9 +195,10 @@ export class EnforcedFileRepository {
    * A token can be bound to:
    * - A specific file (must match exactly)
    * - A specific drive (file must be in that drive)
+   * - A specific page (file must be linked to that page via filePages)
    * - No binding (unrestricted)
    */
-  private isResourceAccessAllowed(file: { id: string; driveId: string }): boolean {
+  private async isResourceAccessAllowed(file: { id: string; driveId: string }): Promise<boolean> {
     const binding = this.ctx.resourceBinding;
 
     // No binding = unrestricted
@@ -212,10 +213,14 @@ export class EnforcedFileRepository {
       case 'drive':
         return binding.id === file.driveId;
       case 'page':
-        // Page binding requires checking file-page associations
-        // For now, we allow if the file is in the same drive
-        // TODO: Add filePages lookup for stricter validation
-        return this.ctx.driveId !== undefined && this.ctx.driveId === file.driveId;
+        // Page binding: file must be linked to the bound page via filePages table
+        const filePageLink = await db.query.filePages.findFirst({
+          where: and(
+            eq(filePages.fileId, file.id),
+            eq(filePages.pageId, binding.id)
+          ),
+        });
+        return filePageLink !== undefined;
       default:
         // Unknown binding type - deny by default
         return false;
@@ -244,7 +249,7 @@ export class EnforcedFileRepository {
     }
 
     // Check resource binding
-    if (!this.isResourceAccessAllowed(file)) {
+    if (!(await this.isResourceAccessAllowed(file))) {
       loggers.api.warn('File update denied: resource binding mismatch', {
         fileId,
         userId: this.ctx.userId,
