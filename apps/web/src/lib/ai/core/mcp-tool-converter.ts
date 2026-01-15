@@ -169,6 +169,9 @@ function jsonSchemaToZod(
  * Handles edge cases where schema is missing, empty, or malformed.
  * Always returns a valid z.object() schema - even if input is malformed,
  * we try to extract properties if they exist.
+ *
+ * Note: Empty schemas get a hidden optional placeholder property to work around
+ * Azure/OpenRouter issues with truly empty object schemas (type: "None" errors).
  */
 export function convertMCPToolSchemaToZod(
   inputSchema?: {
@@ -177,9 +180,12 @@ export function convertMCPToolSchemaToZod(
     required?: string[];
   } | null
 ): z.ZodObject<Record<string, z.ZodTypeAny>> {
-  // Handle missing, null, or empty schemas - return empty object schema
+  // Handle missing, null, or empty schemas
+  // We add a hidden optional placeholder to avoid Azure "type: None" errors with empty schemas
   if (!inputSchema || !inputSchema.properties || Object.keys(inputSchema.properties).length === 0) {
-    return z.object({});
+    return z.object({
+      _placeholder: z.string().optional().describe('Internal placeholder - not used'),
+    });
   }
 
   // Note: We intentionally ignore inputSchema.type here because:
