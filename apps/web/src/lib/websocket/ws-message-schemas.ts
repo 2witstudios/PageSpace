@@ -29,30 +29,8 @@ export const PongMessageSchema = BaseMessageSchema.extend({
   timestamp: z.number(),
 });
 
-/**
- * Server -> Client: Challenge message for post-connection verification
- */
-export const ChallengeMessageSchema = BaseMessageSchema.extend({
-  type: z.literal('challenge'),
-  challenge: z.string().length(64), // SHA256 hex string
-  expiresIn: z.number().positive(),
-});
-
-/**
- * Client -> Server: Challenge response
- */
-export const ChallengeResponseMessageSchema = BaseMessageSchema.extend({
-  type: z.literal('challenge_response'),
-  response: z.string().length(64), // SHA256 hex string
-});
-
-/**
- * Server -> Client: Challenge verification result
- */
-export const ChallengeVerifiedMessageSchema = BaseMessageSchema.extend({
-  type: z.literal('challenge_verified'),
-  timestamp: z.number(),
-});
+// Note: Challenge schemas removed - auth migrated to opaque session tokens
+// See: fix/desktop-ws-opaque-token-auth
 
 /**
  * Client -> Server: Tool execution request
@@ -88,7 +66,6 @@ export const ErrorMessageSchema = BaseMessageSchema.extend({
 
 /**
  * Union of all incoming message types (Client -> Server)
- * Note: ChallengeResponseMessage is no longer used - auth is via opaque session tokens
  */
 export const IncomingMessageSchema = z.discriminatedUnion('type', [
   PingMessageSchema,
@@ -101,8 +78,6 @@ export const IncomingMessageSchema = z.discriminatedUnion('type', [
  */
 export const OutgoingMessageSchema = z.discriminatedUnion('type', [
   PongMessageSchema,
-  ChallengeMessageSchema,
-  ChallengeVerifiedMessageSchema,
   ErrorMessageSchema,
 ]);
 
@@ -111,9 +86,6 @@ export const OutgoingMessageSchema = z.discriminatedUnion('type', [
  */
 export type PingMessage = z.infer<typeof PingMessageSchema>;
 export type PongMessage = z.infer<typeof PongMessageSchema>;
-export type ChallengeMessage = z.infer<typeof ChallengeMessageSchema>;
-export type ChallengeResponseMessage = z.infer<typeof ChallengeResponseMessageSchema>;
-export type ChallengeVerifiedMessage = z.infer<typeof ChallengeVerifiedMessageSchema>;
 export type ToolExecuteMessage = z.infer<typeof ToolExecuteMessageSchema>;
 export type ToolResultMessage = z.infer<typeof ToolResultMessageSchema>;
 export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;

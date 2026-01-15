@@ -7,9 +7,6 @@ import { describe, it, expect } from 'vitest';
 import {
   PingMessageSchema,
   PongMessageSchema,
-  ChallengeMessageSchema,
-  ChallengeResponseMessageSchema,
-  ChallengeVerifiedMessageSchema,
   ToolExecuteMessageSchema,
   ToolResultMessageSchema,
   ErrorMessageSchema,
@@ -84,94 +81,7 @@ describe('WebSocket Message Schemas', () => {
     });
   });
 
-  describe('ChallengeMessageSchema', () => {
-    it('should validate valid challenge message', () => {
-      const validMessage = {
-        type: 'challenge',
-        challenge: 'a'.repeat(64), // 64 char hex string
-        expiresIn: 30000,
-      };
-
-      const result = ChallengeMessageSchema.safeParse(validMessage);
-      expect(result.success).toBe(true);
-    });
-
-    it('should reject challenge with wrong length', () => {
-      const invalidMessage = {
-        type: 'challenge',
-        challenge: 'abc', // Too short
-        expiresIn: 30000,
-      };
-
-      const result = ChallengeMessageSchema.safeParse(invalidMessage);
-      expect(result.success).toBe(false);
-    });
-
-    it('should reject challenge with negative expiration', () => {
-      const invalidMessage = {
-        type: 'challenge',
-        challenge: 'a'.repeat(64),
-        expiresIn: -1000,
-      };
-
-      const result = ChallengeMessageSchema.safeParse(invalidMessage);
-      expect(result.success).toBe(false);
-    });
-
-    it('should reject challenge with zero expiration', () => {
-      const invalidMessage = {
-        type: 'challenge',
-        challenge: 'a'.repeat(64),
-        expiresIn: 0,
-      };
-
-      const result = ChallengeMessageSchema.safeParse(invalidMessage);
-      expect(result.success).toBe(false);
-    });
-  });
-
-  describe('ChallengeResponseMessageSchema', () => {
-    it('should validate valid challenge response', () => {
-      const validMessage = {
-        type: 'challenge_response',
-        response: 'b'.repeat(64), // 64 char hex string
-      };
-
-      const result = ChallengeResponseMessageSchema.safeParse(validMessage);
-      expect(result.success).toBe(true);
-    });
-
-    it('should reject response with wrong length', () => {
-      const invalidMessage = {
-        type: 'challenge_response',
-        response: 'abc',
-      };
-
-      const result = ChallengeResponseMessageSchema.safeParse(invalidMessage);
-      expect(result.success).toBe(false);
-    });
-  });
-
-  describe('ChallengeVerifiedMessageSchema', () => {
-    it('should validate valid challenge verified message', () => {
-      const validMessage = {
-        type: 'challenge_verified',
-        timestamp: Date.now(),
-      };
-
-      const result = ChallengeVerifiedMessageSchema.safeParse(validMessage);
-      expect(result.success).toBe(true);
-    });
-
-    it('should reject without timestamp', () => {
-      const invalidMessage = {
-        type: 'challenge_verified',
-      };
-
-      const result = ChallengeVerifiedMessageSchema.safeParse(invalidMessage);
-      expect(result.success).toBe(false);
-    });
-  });
+  // Note: Challenge schema tests removed - auth migrated to opaque session tokens
 
   describe('ToolExecuteMessageSchema', () => {
     it('should validate valid tool execute message', () => {
@@ -400,24 +310,7 @@ describe('WebSocket Message Schemas', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should validate challenge message', () => {
-      const message = {
-        type: 'challenge',
-        challenge: 'a'.repeat(64),
-        expiresIn: 30000,
-      };
-      const result = OutgoingMessageSchema.safeParse(message);
-      expect(result.success).toBe(true);
-    });
-
-    it('should validate challenge_verified message', () => {
-      const message = {
-        type: 'challenge_verified',
-        timestamp: Date.now(),
-      };
-      const result = OutgoingMessageSchema.safeParse(message);
-      expect(result.success).toBe(true);
-    });
+    // Note: challenge and challenge_verified tests removed - auth migrated to opaque session tokens
 
     it('should validate error message', () => {
       const message = {
