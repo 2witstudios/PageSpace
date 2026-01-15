@@ -673,6 +673,22 @@ MENTION PROCESSING:
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute }) as any;
 
+        // Sanitize tool names for Gemini - it doesn't allow multiple colons in function names
+        // Convert mcp:servername:toolname to mcp__servername__toolname format
+        // The parseMCPToolName function already supports both formats, so execute still works
+        if (currentProvider === 'google' && finalTools) {
+          const sanitizedTools: Record<string, unknown> = {};
+          for (const [originalName, tool] of Object.entries(finalTools)) {
+            const sanitizedName = originalName.replace(/:/g, '__');
+            sanitizedTools[sanitizedName] = tool;
+          }
+          finalTools = sanitizedTools as typeof finalTools;
+          loggers.api.debug('Global Assistant Chat API: Sanitized tool names for Gemini compatibility', {
+            toolCount: Object.keys(sanitizedTools).length,
+            example: Object.keys(sanitizedTools)[0]
+          });
+        }
+
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,
           mcpTools: Object.keys(mcpToolSchemas).length,
