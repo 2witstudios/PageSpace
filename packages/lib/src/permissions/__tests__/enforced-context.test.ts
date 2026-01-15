@@ -10,6 +10,7 @@ describe('EnforcedAuthContext', () => {
     tokenVersion: 1,
     type: 'user',
     scopes: ['files:read'],
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
     driveId: undefined,
     ...overrides,
   });
