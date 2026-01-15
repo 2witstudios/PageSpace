@@ -165,16 +165,29 @@ function jsonSchemaToZod(
 }
 
 /**
- * Converts MCP tool input schema (JSON Schema) to Zod object schema
+ * Converts MCP tool input schema (JSON Schema) to Zod object schema.
+ * Handles edge cases where schema is missing, empty, or malformed.
+ * Always returns a valid z.object() schema - even if input is malformed,
+ * we try to extract properties if they exist.
  */
 export function convertMCPToolSchemaToZod(
-  inputSchema: {
-    type: 'object';
-    properties: Record<string, unknown>;
+  inputSchema?: {
+    type?: string;
+    properties?: Record<string, unknown>;
     required?: string[];
-  }
+  } | null
 ): z.ZodObject<Record<string, z.ZodTypeAny>> {
-  const properties = inputSchema.properties || {};
+  // Handle missing, null, or empty schemas - return empty object schema
+  if (!inputSchema || !inputSchema.properties || Object.keys(inputSchema.properties).length === 0) {
+    return z.object({});
+  }
+
+  // Note: We intentionally ignore inputSchema.type here because:
+  // 1. Some MCP servers (Python) may send type: "None" or null
+  // 2. We always want to produce a valid object schema
+  // 3. The properties are what matter - we'll convert them to Zod
+
+  const properties = inputSchema.properties;
   const required = inputSchema.required || [];
 
   const zodProperties: Record<string, z.ZodTypeAny> = {};
