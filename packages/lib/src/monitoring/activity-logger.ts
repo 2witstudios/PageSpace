@@ -462,8 +462,8 @@ function prepareActivityInsert(input: ActivityLogInput) {
  * Computes hash chain data for tamper-evident audit logging.
  */
 export async function logActivity(input: ActivityLogInput): Promise<void> {
-  try {
-    const values = prepareActivityInsert(input);
+  const insertActivityLog = async (pageId: string | undefined) => {
+    const values = prepareActivityInsert({ ...input, pageId });
 
     // Get the latest log hash to chain this entry
     const { previousHash, isFirstEntry } = await getLatestLogHash();
@@ -512,7 +512,30 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
         // Broadcast failure shouldn't break anything
       });
     }
+  };
+
+  try {
+    await insertActivityLog(input.pageId);
   } catch (error) {
+    // Check for FK constraint violation on pageId (page was deleted during async logging)
+    const isPageIdFkError =
+      error instanceof Error &&
+      'code' in error &&
+      (error as { code: string }).code === '23503' &&
+      'constraint' in error &&
+      (error as { constraint: string }).constraint === 'activity_logs_pageId_pages_id_fk';
+
+    if (isPageIdFkError && input.pageId) {
+      // Retry without pageId - the page was deleted but we still want to log the activity
+      try {
+        await insertActivityLog(undefined);
+        return;
+      } catch (retryError) {
+        console.error('[ActivityLogger] Failed to log activity after FK retry:', retryError);
+        return;
+      }
+    }
+
     // Fire and forget - log error but don't throw
     console.error('[ActivityLogger] Failed to log activity:', error);
   }
@@ -615,6 +638,10 @@ export function logPageActivity(
     stateHashAfter?: string;
   }
 ): void {
+  // For delete operations, don't set pageId since the page no longer exists in the database
+  // (the FK constraint would fail). The audit trail is preserved via resourceId and resourceTitle.
+  const pageIdForLog = operation === 'delete' ? undefined : page.id;
+
   logActivity({
     userId,
     actorEmail: options?.actorEmail ?? 'unknown@system',
@@ -624,7 +651,7 @@ export function logPageActivity(
     resourceId: page.id,
     resourceTitle: page.title,
     driveId: page.driveId,
-    pageId: page.id,
+    pageId: pageIdForLog,
     contentSnapshot: page.content,
     contentFormat: options?.contentFormat,
     contentRef: options?.contentRef,
