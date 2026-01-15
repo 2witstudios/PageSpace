@@ -238,15 +238,22 @@ The AI should use this data to form intuition about ongoing work and provide con
       limit: z
         .number()
         .min(1)
-        .max(200)
-        .default(100)
-        .describe('Maximum total activities to return across all drives'),
+        .max(100)
+        .default(50)
+        .describe('Maximum activities to fetch (hard cap 100)'),
+
+      maxOutputChars: z
+        .number()
+        .min(1000)
+        .max(50000)
+        .default(20000)
+        .describe('Hard limit on output size in chars (~4 chars/token). Default 20k chars ≈ 5k tokens'),
 
       includeDiffs: z
         .boolean()
         .default(true)
         .describe(
-          'Include detailed change diffs (previousValues/newValues). Set to false for a lighter response'
+          'Include change diffs. Set false for lighter response'
         ),
     }),
 
@@ -258,6 +265,7 @@ The AI should use this data to form intuition about ongoing work and provide con
         includeAiChanges,
         operationCategories,
         limit,
+        maxOutputChars,
         includeDiffs,
       },
       { experimental_context: context }
@@ -490,10 +498,23 @@ The AI should use this data to form intuition about ongoing work and provide con
         const totalActivities = activities.length;
         const totalAiGenerated = activities.filter((a) => a.isAiGenerated).length;
 
-        // Compact response structure optimized for AI context efficiency
-        return {
+        // Build initial response
+        const response: {
+          ok: boolean;
+          actors: CompactActor[];
+          drives: CompactDriveGroup[];
+          meta: {
+            total: number;
+            aiTotal: number;
+            window: string;
+            from: string;
+            lastVisit: string | null;
+            excludedSelf: boolean;
+            truncated?: { droppedDeltas?: boolean; droppedActivities?: number };
+          };
+        } = {
           ok: true,
-          actors: actorsList,  // Deduplicated actor list - activities reference by index
+          actors: actorsList,
           drives: driveGroups,
           meta: {
             total: totalActivities,
@@ -504,6 +525,63 @@ The AI should use this data to form intuition about ongoing work and provide con
             excludedSelf: excludeOwnActivity,
           },
         };
+
+        // Enforce output size limit with progressive degradation
+        let outputSize = JSON.stringify(response).length;
+
+        // Step 1: If over limit, drop all deltas
+        if (outputSize > maxOutputChars) {
+          for (const group of response.drives) {
+            for (const activity of group.activities) {
+              delete activity.delta;
+            }
+          }
+          response.meta.truncated = { droppedDeltas: true };
+          outputSize = JSON.stringify(response).length;
+        }
+
+        // Step 2: If still over limit, drop oldest activities from each drive
+        if (outputSize > maxOutputChars) {
+          let droppedCount = 0;
+          const targetSize = maxOutputChars * 0.9; // Leave 10% buffer
+
+          while (outputSize > targetSize) {
+            // Find drive with most activities and drop oldest
+            let maxDrive: CompactDriveGroup | null = null;
+            for (const group of response.drives) {
+              if (!maxDrive || group.activities.length > maxDrive.activities.length) {
+                maxDrive = group;
+              }
+            }
+
+            if (!maxDrive || maxDrive.activities.length <= 1) break;
+
+            // Drop oldest (last in array since sorted desc by timestamp)
+            maxDrive.activities.pop();
+            maxDrive.stats.total = maxDrive.activities.length;
+            droppedCount++;
+            outputSize = JSON.stringify(response).length;
+          }
+
+          if (droppedCount > 0) {
+            response.meta.truncated = {
+              ...response.meta.truncated,
+              droppedActivities: droppedCount,
+            };
+          }
+        }
+
+        // Step 3: If STILL over limit after dropping activities, drop entire drives
+        if (outputSize > maxOutputChars && response.drives.length > 1) {
+          while (outputSize > maxOutputChars && response.drives.length > 1) {
+            // Keep the drive with most activity, drop smallest
+            response.drives.sort((a, b) => b.stats.total - a.stats.total);
+            response.drives.pop();
+            outputSize = JSON.stringify(response).length;
+          }
+        }
+
+        return response;
       } catch (error) {
         console.error('get_activity error:', error);
         throw new Error(
