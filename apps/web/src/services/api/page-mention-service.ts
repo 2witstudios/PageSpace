@@ -1,7 +1,6 @@
 import * as cheerio from 'cheerio';
 import { db, mentions, userMentions, eq, and, inArray } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { createMentionNotification } from '@pagespace/lib/notifications';
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;
@@ -67,19 +66,31 @@ export interface SyncMentionsOptions {
   mentionedByUserId?: string;
 }
 
+export interface SyncMentionsResult {
+  newlyMentionedUserIds: string[];
+  sourcePageId: string;
+  mentionedByUserId?: string;
+}
+
 export async function syncMentions(
   sourcePageId: string,
   content: unknown,
   tx: TransactionType | DatabaseType,
   options?: SyncMentionsOptions
-): Promise<void> {
+): Promise<SyncMentionsResult> {
   const { pageIds: mentionedPageIds, userIds: mentionedUserIds } = findMentionNodes(content);
 
   // Sync page mentions
   await syncPageMentions(sourcePageId, mentionedPageIds, tx);
 
-  // Sync user mentions (with notifications)
-  await syncUserMentions(sourcePageId, mentionedUserIds, tx, options?.mentionedByUserId);
+  // Sync user mentions and get newly created user IDs
+  const newlyMentionedUserIds = await syncUserMentions(sourcePageId, mentionedUserIds, tx, options?.mentionedByUserId);
+
+  return {
+    newlyMentionedUserIds,
+    sourcePageId,
+    mentionedByUserId: options?.mentionedByUserId,
+  };
 }
 
 async function syncPageMentions(
@@ -118,7 +129,7 @@ async function syncUserMentions(
   mentionedUserIds: string[],
   tx: TransactionType | DatabaseType,
   mentionedByUserId?: string
-): Promise<void> {
+): Promise<string[]> {
   const mentionedUserIdSet = new Set(mentionedUserIds);
 
   const existingMentionsQuery = await tx
@@ -136,20 +147,6 @@ async function syncUserMentions(
       targetUserId,
       mentionedByUserId: mentionedByUserId || null,
     })));
-
-    // Send notifications for newly mentioned users (fire-and-forget, outside transaction)
-    if (mentionedByUserId) {
-      // Schedule notifications after transaction commits
-      // Use setTimeout to ensure this runs after the transaction completes
-      setTimeout(() => {
-        toCreate.forEach(targetUserId => {
-          createMentionNotification(targetUserId, sourcePageId, mentionedByUserId)
-            .catch((error: unknown) => {
-              loggers.api.error('Failed to send mention notification:', error as Error);
-            });
-        });
-      }, 0);
-    }
   }
 
   if (toDelete.length > 0) {
@@ -158,4 +155,7 @@ async function syncUserMentions(
       inArray(userMentions.targetUserId, toDelete)
     ));
   }
+
+  // Return newly created user IDs so caller can send notifications after transaction commits
+  return toCreate;
 }
