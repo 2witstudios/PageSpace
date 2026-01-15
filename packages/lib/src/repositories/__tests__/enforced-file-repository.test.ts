@@ -323,6 +323,9 @@ describe('EnforcedFileRepository', () => {
         vi.mocked(db.query.filePages.findFirst).mockResolvedValue({
           fileId: 'file-123',
           pageId: 'page-123',
+          linkedBy: null,
+          linkedAt: new Date(),
+          linkSource: null,
         });
         vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
 

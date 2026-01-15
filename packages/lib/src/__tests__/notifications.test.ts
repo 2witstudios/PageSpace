@@ -7,7 +7,7 @@ import {
   deleteNotification,
   getUnreadCount
 } from '../notifications'
-import { db, users } from '@pagespace/db'
+import { db, users, eq } from '@pagespace/db'
 import { factories } from '@pagespace/db/test/factories'
 
 // Mock fetch for broadcast testing
@@ -20,11 +20,9 @@ describe('notifications', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
 
   beforeEach(async () => {
-    // Clean up ALL test data first (ensures clean slate)
-    // Deleting users cascades to drives, pages, notifications
-    await db.delete(users)
-
-    // Create fresh test data (factories use unique IDs)
+    // Create fresh test data with unique IDs (factories use cuid2)
+    // NOTE: We don't delete ALL users as that can cause race conditions
+    // with other test files. Instead we rely on unique IDs per test run.
     testUser = await factories.createUser()
     otherUser = await factories.createUser()
     testDrive = await factories.createDrive(testUser.id)
@@ -33,6 +31,16 @@ describe('notifications', () => {
     // Reset fetch mock
     vi.clearAllMocks()
     ;(global.fetch as any).mockResolvedValue({ ok: true, json: async () => ({}) })
+  })
+
+  afterEach(async () => {
+    // Clean up only the test data we created (by cascade from users)
+    if (testUser?.id) {
+      await db.delete(users).where(eq(users.id, testUser.id))
+    }
+    if (otherUser?.id) {
+      await db.delete(users).where(eq(users.id, otherUser.id))
+    }
   })
 
   describe('createNotification', () => {
