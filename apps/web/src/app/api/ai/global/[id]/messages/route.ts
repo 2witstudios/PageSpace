@@ -29,6 +29,7 @@ import {
   getModelCapabilities,
   convertMCPToolsToAISDKSchemas,
   parseMCPToolName,
+  sanitizeToolNamesForProvider,
 } from '@/lib/ai/core';
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -667,22 +668,10 @@ MENTION PROCESSING:
           };
         }
 
-        // Merge MCP tools with PageSpace tools (type assertion safe since MCP tools match AI SDK format)
-        finalTools = { ...finalTools, ...mcpToolsWithExecute } as typeof finalTools;
-
-        // Sanitize tool names for all providers - many don't allow colons in function names
-        // (Google Gemini, Azure via OpenRouter, and others require alphanumeric/underscore/hyphen only)
-        // Convert mcp:servername:toolname to mcp__servername__toolname format
-        // The parseMCPToolName function already supports both formats, so execute still works
-        if (finalTools) {
-          const sanitizedTools: Record<string, unknown> = {};
-          for (const [originalName, tool] of Object.entries(finalTools)) {
-            const sanitizedName = originalName.replace(/:/g, '__');
-            sanitizedTools[sanitizedName] = tool;
-          }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          finalTools = sanitizedTools as any;
-        }
+        // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
+        // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute }) as any;
 
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,

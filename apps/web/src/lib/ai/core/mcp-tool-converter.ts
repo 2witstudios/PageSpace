@@ -282,3 +282,48 @@ export function parseMCPToolName(namespacedName: string): {
 export function isMCPTool(toolName: string): boolean {
   return toolName.startsWith('mcp:') || toolName.startsWith('mcp__');
 }
+
+/**
+ * Sanitizes a single tool name for AI provider compatibility.
+ * Replaces colons with double underscores.
+ *
+ * Many AI providers (Google Gemini, Azure, OpenAI) require tool names to match
+ * the pattern ^[a-zA-Z0-9_.-]+$ (no colons allowed).
+ *
+ * Internal format: mcp:server:tool (supports nested namespaces in tool names)
+ * Provider format: mcp__server__tool (universally compatible)
+ *
+ * The parseMCPToolName function handles both formats, so tool execution
+ * still works correctly after sanitization.
+ *
+ * @param toolName - The tool name to sanitize
+ * @returns Sanitized tool name with colons replaced by double underscores
+ */
+export function sanitizeToolName(toolName: string): string {
+  return toolName.replace(/:/g, '__');
+}
+
+/**
+ * Sanitizes all tool names in a tools object for AI provider compatibility.
+ * Creates a new object with sanitized keys while preserving the tool definitions.
+ *
+ * This should be called before sending tools to any AI provider to ensure
+ * compatibility across all providers (Google, Azure, OpenAI, Anthropic, etc.).
+ *
+ * @param tools - Object mapping tool names to tool definitions
+ * @returns New object with sanitized tool names as keys
+ *
+ * @example
+ * const tools = { 'mcp:filesystem:read_file': { ... } };
+ * const sanitized = sanitizeToolNamesForProvider(tools);
+ * // Result: { 'mcp__filesystem__read_file': { ... } }
+ */
+export function sanitizeToolNamesForProvider<T>(
+  tools: Record<string, T>
+): Record<string, T> {
+  const sanitized: Record<string, T> = {};
+  for (const [name, definition] of Object.entries(tools)) {
+    sanitized[sanitizeToolName(name)] = definition;
+  }
+  return sanitized;
+}
