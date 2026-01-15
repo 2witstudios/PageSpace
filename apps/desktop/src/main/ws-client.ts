@@ -31,7 +31,6 @@ interface ToolExecutionRequest {
 
 export class WSClient {
   private ws: WebSocket | null = null;
-  private wsToken: string | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = Infinity; // Always try to reconnect
   private reconnectDelay = 1000; // Start with 1 second
@@ -122,7 +121,7 @@ export class WSClient {
         return null;
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { token: string };
       return data.token;
     } catch (error) {
       logger.error('Error fetching WS token', { error });
@@ -147,7 +146,6 @@ export class WSClient {
       return;
     }
 
-    this.wsToken = token;
     const url = this.getWebSocketUrl();
     logger.info('Connecting to server', { url });
 

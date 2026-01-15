@@ -18,7 +18,6 @@ import {
   validateIncomingMessage,
   validateIncomingMessageWithError,
   isPingMessage,
-  isChallengeResponseMessage,
   isToolExecuteMessage,
   isToolResultMessage,
 } from '../ws-message-schemas';
@@ -351,14 +350,8 @@ describe('WebSocket Message Schemas', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should validate challenge_response message', () => {
-      const message = {
-        type: 'challenge_response',
-        response: 'a'.repeat(64),
-      };
-      const result = IncomingMessageSchema.safeParse(message);
-      expect(result.success).toBe(true);
-    });
+    // Note: challenge_response test removed - no longer part of IncomingMessageSchema
+    // Auth is now via opaque session tokens
 
     it('should validate tool_execute message', () => {
       const message = {
@@ -529,22 +522,8 @@ describe('WebSocket Message Schemas', () => {
       });
     });
 
-    describe('isChallengeResponseMessage', () => {
-      it('should identify challenge_response message', () => {
-        const message = {
-          type: 'challenge_response' as const,
-          response: 'a'.repeat(64),
-        };
-        const result = IncomingMessageSchema.parse(message);
-        expect(isChallengeResponseMessage(result)).toBe(true);
-      });
-
-      it('should reject non-challenge_response message', () => {
-        const message = { type: 'ping' as const };
-        const result = IncomingMessageSchema.parse(message);
-        expect(isChallengeResponseMessage(result)).toBe(false);
-      });
-    });
+    // Note: isChallengeResponseMessage tests removed - challenge_response no longer in IncomingMessageSchema
+    // Auth is now via opaque session tokens, not challenge-response
 
     describe('isToolExecuteMessage', () => {
       it('should identify tool_execute message', () => {
@@ -590,14 +569,9 @@ describe('WebSocket Message Schemas', () => {
       const ping = validateIncomingMessage({ type: 'ping' });
       expect(ping).not.toBeNull();
 
-      // 2. Client sends challenge response
-      const challengeResponse = validateIncomingMessage({
-        type: 'challenge_response',
-        response: 'a'.repeat(64),
-      });
-      expect(challengeResponse).not.toBeNull();
+      // Note: challenge_response step removed - auth is via opaque session tokens
 
-      // 3. Client sends tool execute
+      // 2. Client sends tool execute
       const toolExecute = validateIncomingMessage({
         type: 'tool_execute',
         id: 'req_1',
@@ -607,7 +581,7 @@ describe('WebSocket Message Schemas', () => {
       });
       expect(toolExecute).not.toBeNull();
 
-      // 4. Client sends tool result
+      // 3. Client sends tool result
       const toolResult = validateIncomingMessage({
         type: 'tool_result',
         id: 'req_1',
@@ -623,7 +597,6 @@ describe('WebSocket Message Schemas', () => {
         { type: null },
         { type: 123 },
         { type: 'tool_execute' }, // Missing required fields
-        { type: 'challenge_response', response: 'too-short' },
         { type: 'tool_result', id: '123' }, // Missing success field
       ];
 

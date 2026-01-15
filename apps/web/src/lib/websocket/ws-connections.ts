@@ -44,7 +44,8 @@ const wsLogger = logger.child({ component: 'ws-connections' });
 export function registerConnection(
   userId: string,
   ws: WebSocket,
-  fingerprint?: string
+  fingerprint?: string,
+  sessionId?: string
 ): void {
   // Close existing connection if any
   const existingConnection = connections.get(userId);
@@ -61,6 +62,7 @@ export function registerConnection(
   connections.set(userId, ws);
   connectionMetadata.set(ws, {
     userId,
+    sessionId,
     connectedAt: new Date(),
     fingerprint,
     challengeVerified: false,
@@ -68,6 +70,7 @@ export function registerConnection(
 
   wsLogger.info('WebSocket connection registered', {
     userId,
+    sessionId,
     totalConnections: connections.size,
     action: 'register',
   });

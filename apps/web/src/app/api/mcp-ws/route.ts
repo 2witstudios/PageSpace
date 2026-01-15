@@ -130,7 +130,7 @@ export async function UPGRADE(
   const fingerprint = getConnectionFingerprint(request);
 
   // Register the new connection (handles closing existing connections)
-  registerConnection(userId, client, fingerprint);
+  registerConnection(userId, client, fingerprint, claims.sessionId);
 
   // Mark as verified immediately - session service already validated the token
   markChallengeVerified(client);
