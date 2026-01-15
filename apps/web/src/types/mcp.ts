@@ -25,6 +25,12 @@ export interface MCPServerStatusInfo {
   lastCrashAt?: Date;
   enabled: boolean;
   autoStart: boolean;
+  /**
+   * Whether tools have been fetched and cached for this server.
+   * A server can be 'running' but not have tools ready yet (during initialization).
+   * Only consider tools "available" when BOTH status === 'running' AND toolsReady === true.
+   */
+  toolsReady?: boolean;
 }
 
 /**

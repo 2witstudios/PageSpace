@@ -753,6 +753,14 @@ app.whenReady().then(async () => {
     await mcpManager.initialize();
     logger.info('MCP Manager initialized successfully', {});
 
+    // Register callback for immediate broadcast when tools become ready
+    // This ensures renderer gets notified as soon as tools are available,
+    // without waiting for the 3-second polling interval
+    mcpManager.setOnToolsReady((serverName) => {
+      logger.debug('Tools ready callback triggered', { serverName });
+      broadcastMCPStatusChange();
+    });
+
     // Start broadcasting status changes
     startMCPStatusBroadcasting();
   } catch (error) {

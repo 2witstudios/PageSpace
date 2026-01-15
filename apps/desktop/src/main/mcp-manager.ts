@@ -28,6 +28,8 @@ interface MCPServerProcess {
   startedAt?: Date;
   crashCount: number;
   lastCrashAt?: Date;
+  /** Whether tools have been fetched and cached for this server */
+  toolsReady: boolean;
 }
 
 interface PendingJSONRPCRequest {
@@ -97,10 +99,21 @@ export class MCPManager {
   private readonly LOG_FLUSH_INTERVAL_MS = 1000; // 1 second
   private readonly LOG_BUFFER_MAX_SIZE = 100; // Flush after 100 lines
 
+  // Callback for immediate notification when tools become ready
+  private onToolsReadyCallback: ((serverName: string) => void) | null = null;
+
   constructor() {
     const userDataPath = app.getPath('userData');
     this.configPath = path.join(userDataPath, 'local-mcp-config.json');
     this.logDir = path.join(userDataPath, 'logs');
+  }
+
+  /**
+   * Register a callback to be invoked when tools become ready for a server.
+   * This allows immediate notification (vs polling) when tools are available.
+   */
+  setOnToolsReady(callback: (serverName: string) => void): void {
+    this.onToolsReadyCallback = callback;
   }
 
   /**
@@ -149,6 +162,7 @@ export class MCPManager {
             process: null,
             status: 'stopped',
             crashCount: 0,
+            toolsReady: false,
           });
         }
       }
@@ -230,6 +244,7 @@ export class MCPManager {
           process: null,
           status: 'stopped',
           crashCount: 0,
+          toolsReady: false,
         });
       } else {
         // Update config for existing server
@@ -284,6 +299,7 @@ export class MCPManager {
 
     const { config } = server;
     server.status = 'starting';
+    server.toolsReady = false; // Reset tools ready state on start
 
     try {
       // Resolve command path (critical for packaged apps where PATH is minimal)
@@ -359,8 +375,17 @@ export class MCPManager {
         // Initialize server with MCP protocol handshake, then fetch tools
         this.initializeServer(name)
           .then(() => this.getMCPTools(name))
+          .then(() => {
+            // Mark tools as ready and notify listeners for immediate broadcast
+            server.toolsReady = true;
+            logger.info('Tools ready for server', { serverName: name });
+            if (this.onToolsReadyCallback) {
+              this.onToolsReadyCallback(name);
+            }
+          })
           .catch((error) => {
             logger.error('Failed to initialize or fetch tools after startup', { serverName: name, error });
+            // Tools remain not ready on error (toolsReady stays false)
           });
       } else {
         throw new Error('Process exited immediately after start');
@@ -390,6 +415,7 @@ export class MCPManager {
     }
 
     server.status = 'stopped';
+    server.toolsReady = false; // Reset tools ready state on stop
 
     // Reject all pending JSON-RPC requests
     const pendingMap = this.pendingRequests.get(name);
@@ -484,6 +510,7 @@ export class MCPManager {
         lastCrashAt: server.lastCrashAt,
         enabled: server.config.enabled !== false,
         autoStart: server.config.autoStart || false,
+        toolsReady: server.toolsReady,
       };
     }
 
