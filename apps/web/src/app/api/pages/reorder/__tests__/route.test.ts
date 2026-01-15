@@ -161,16 +161,40 @@ describe('PATCH /api/pages/reorder', () => {
       expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
     });
 
-    it('returns 400 for negative position values', async () => {
+    it('accepts negative position values (for fractional positioning)', async () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
         newPosition: -1,
       }));
-      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(pageReorderService.reorderPage).toHaveBeenCalledWith(
+        expect.objectContaining({ newPosition: -1 })
+      );
+    });
+
+    it('accepts fractional position values (for between-item positioning)', async () => {
+      const response = await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: 2.5,
+      }));
+
+      expect(response.status).toBe(200);
+      expect(pageReorderService.reorderPage).toHaveBeenCalledWith(
+        expect.objectContaining({ newPosition: 2.5 })
+      );
+    });
+
+    it('returns 400 for non-finite position values', async () => {
+      const response = await PATCH(createRequest({
+        pageId: mockPageId,
+        newParentId: null,
+        newPosition: Infinity,
+      }));
 
       expect(response.status).toBe(400);
-      expect(body.error).toMatch(/position|non-negative/i);
       expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
     });
 
