@@ -117,7 +117,20 @@ export class WSClient {
       });
 
       if (!response.ok) {
-        logger.error('Failed to get WS token', { status: response.status });
+        // Differentiate error types for smarter retry behavior
+        if (response.status === 401) {
+          logger.error('JWT token expired or invalid - need re-authentication', {
+            status: response.status,
+          });
+        } else if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          logger.warn('Rate limited - too many token requests', {
+            status: response.status,
+            retryAfter,
+          });
+        } else {
+          logger.error('Failed to get WS token', { status: response.status });
+        }
         return null;
       }
 

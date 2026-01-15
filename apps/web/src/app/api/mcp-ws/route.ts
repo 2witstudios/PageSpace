@@ -219,7 +219,7 @@ export async function UPGRADE(
 
       // Handle ping/pong for health checks
       if (isPingMessage(message)) {
-        // SECURITY CHECK 5: Verify connection fingerprint on ping to detect session hijacking
+        // SECURITY CHECK 6: Verify connection fingerprint on ping to detect session hijacking
         const currentFingerprint = getConnectionFingerprint(request);
         if (!verifyConnectionFingerprint(client, currentFingerprint)) {
           logSecurityEvent('ws_fingerprint_mismatch', {
@@ -243,7 +243,7 @@ export async function UPGRADE(
         return;
       }
 
-      // SECURITY CHECK 6: Connection health check before tool execution
+      // SECURITY CHECK 7: Connection health check before tool execution
       if (isToolExecuteMessage(message)) {
         const health = checkConnectionHealth(client);
 

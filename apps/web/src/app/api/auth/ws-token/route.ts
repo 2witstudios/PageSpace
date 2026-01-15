@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth, getClientIP } from '@/lib/auth';
 import { sessionService } from '@pagespace/lib';
-import {
-  checkDistributedRateLimit,
-  resetDistributedRateLimit,
-} from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
 const WS_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour - connection is persistent
 
@@ -49,9 +46,6 @@ export async function POST(request: Request) {
     createdByService: 'desktop',
     createdByIp: getClientIP(request),
   });
-
-  // Reset rate limit on successful token creation
-  await resetDistributedRateLimit(`ws-token:user:${user.id}`);
 
   return NextResponse.json({ token });
 }
