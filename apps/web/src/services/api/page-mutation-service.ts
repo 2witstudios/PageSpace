@@ -212,7 +212,7 @@ export async function applyPageMutation({
     }
 
     if (updates.content !== undefined) {
-      await syncMentions(pageId, nextContent, transaction);
+      await syncMentions(pageId, nextContent, transaction, { mentionedByUserId: context.userId });
     }
 
     await logActivityWithTx({

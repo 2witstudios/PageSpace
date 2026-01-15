@@ -391,7 +391,7 @@ async function applyPageUpdateWithRevision(
   }
 
   if (updateData.content !== undefined) {
-    await syncMentions(pageId, nextContent, database);
+    await syncMentions(pageId, nextContent, database, { mentionedByUserId: options?.userId ?? undefined });
   }
 
   const changeGroupId = options?.changeGroupId ?? createChangeGroupId();

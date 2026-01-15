@@ -194,6 +194,36 @@ export type TosPrivacyUpdatedNotification = NotificationBase & {
   };
 };
 
+// Mention notification - when a user is @mentioned in a page
+export type MentionNotification = NotificationBase & {
+  type: 'MENTION';
+  title: string;
+  message: string;
+  metadata: {
+    pageTitle: string;
+    pageType: string;
+    driveName?: string;
+    driveSlug?: string;
+    mentionerName: string;
+  };
+};
+
+// Task assignment notification - when a user is assigned to a task
+export type TaskAssignedNotification = NotificationBase & {
+  type: 'TASK_ASSIGNED';
+  title: string;
+  message: string;
+  metadata: {
+    taskId: string;
+    taskTitle: string;
+    taskListPageId: string;
+    taskListPageTitle: string;
+    driveName?: string;
+    driveSlug?: string;
+    assignerName: string;
+  };
+};
+
 // Union of all notification types
 export type Notification =
   | ConnectionRequestNotification
@@ -208,7 +238,9 @@ export type Notification =
   | DriveJoinedNotification
   | DriveRoleChangedNotification
   | EmailVerificationRequiredNotification
-  | TosPrivacyUpdatedNotification;
+  | TosPrivacyUpdatedNotification
+  | MentionNotification
+  | TaskAssignedNotification;
 
 // Type for notification types
 export type NotificationType = Notification['type'];

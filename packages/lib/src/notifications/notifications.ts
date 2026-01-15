@@ -348,6 +348,98 @@ export async function createOrUpdateMessageNotification(
 }
 
 /**
+ * Creates a notification when a user is @mentioned in a page
+ */
+export async function createMentionNotification(
+  targetUserId: string,
+  pageId: string,
+  triggeredByUserId: string
+) {
+  // Don't notify users who mention themselves
+  if (targetUserId === triggeredByUserId) return null;
+
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    with: {
+      drive: true,
+    },
+  });
+
+  if (!page) return null;
+
+  const triggeredByUser = await db.query.users.findFirst({
+    where: eq(users.id, triggeredByUserId),
+  });
+
+  const mentionerName = triggeredByUser?.name || 'Someone';
+
+  return createNotification({
+    userId: targetUserId,
+    type: 'MENTION',
+    title: 'You were mentioned',
+    message: `${mentionerName} mentioned you in "${page.title}"`,
+    metadata: {
+      pageTitle: page.title,
+      pageType: page.type,
+      driveName: page.drive?.name,
+      driveSlug: page.drive?.slug,
+      mentionerName,
+    },
+    pageId,
+    driveId: page.driveId,
+    triggeredByUserId,
+  });
+}
+
+/**
+ * Creates a notification when a user is assigned to a task
+ */
+export async function createTaskAssignedNotification(
+  targetUserId: string,
+  taskId: string,
+  taskTitle: string,
+  taskListPageId: string,
+  triggeredByUserId: string
+) {
+  // Don't notify users who assign tasks to themselves
+  if (targetUserId === triggeredByUserId) return null;
+
+  const taskListPage = await db.query.pages.findFirst({
+    where: eq(pages.id, taskListPageId),
+    with: {
+      drive: true,
+    },
+  });
+
+  if (!taskListPage) return null;
+
+  const triggeredByUser = await db.query.users.findFirst({
+    where: eq(users.id, triggeredByUserId),
+  });
+
+  const assignerName = triggeredByUser?.name || 'Someone';
+
+  return createNotification({
+    userId: targetUserId,
+    type: 'TASK_ASSIGNED',
+    title: 'Task assigned to you',
+    message: `${assignerName} assigned you to "${taskTitle}"`,
+    metadata: {
+      taskId,
+      taskTitle,
+      taskListPageId,
+      taskListPageTitle: taskListPage.title,
+      driveName: taskListPage.drive?.name,
+      driveSlug: taskListPage.drive?.slug,
+      assignerName,
+    },
+    pageId: taskListPageId,
+    driveId: taskListPage.driveId,
+    triggeredByUserId,
+  });
+}
+
+/**
  * Broadcasts TOS/Privacy update notifications to all users
  * @param documentType - The type of document that was updated ('tos' | 'privacy')
  * @param documentUrl - The URL to the updated document (e.g., '/terms' or '/privacy')

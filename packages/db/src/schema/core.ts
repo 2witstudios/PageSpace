@@ -145,6 +145,21 @@ export const mentions = pgTable('mentions', {
     }
 });
 
+// User mentions table - tracks when users are @mentioned in pages
+export const userMentions = pgTable('user_mentions', {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+    createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+    sourcePageId: text('sourcePageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+    targetUserId: text('targetUserId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    mentionedByUserId: text('mentionedByUserId').references(() => users.id, { onDelete: 'set null' }),
+}, (table) => {
+    return {
+        sourceUserKey: index('user_mentions_source_page_id_target_user_id_key').on(table.sourcePageId, table.targetUserId),
+        sourcePageIdx: index('user_mentions_source_page_id_idx').on(table.sourcePageId),
+        targetUserIdx: index('user_mentions_target_user_id_idx').on(table.targetUserId),
+    }
+});
+
 export const drivesRelations = relations(drives, ({ one, many }) => ({
     owner: one(users, {
         fields: [drives.ownerId],
@@ -178,6 +193,7 @@ export const pagesRelations = relations(pages, ({ one, many }) => ({
     favorites: many(favorites),
     mentionsFrom: many(mentions, { relationName: 'MentionsFrom' }),
     mentionsTo: many(mentions, { relationName: 'MentionsTo' }),
+    userMentionsFrom: many(userMentions, { relationName: 'UserMentionsFrom' }),
     messages: many(chatMessages),
     // permissions relation handled separately to avoid circular dependency
 }));
@@ -231,5 +247,23 @@ export const mentionsRelations = relations(mentions, ({ one }) => ({
         fields: [mentions.targetPageId],
         references: [pages.id],
         relationName: 'MentionsTo',
+    }),
+}));
+
+export const userMentionsRelations = relations(userMentions, ({ one }) => ({
+    sourcePage: one(pages, {
+        fields: [userMentions.sourcePageId],
+        references: [pages.id],
+        relationName: 'UserMentionsFrom',
+    }),
+    targetUser: one(users, {
+        fields: [userMentions.targetUserId],
+        references: [users.id],
+        relationName: 'UserMentionsTo',
+    }),
+    mentionedByUser: one(users, {
+        fields: [userMentions.mentionedByUserId],
+        references: [users.id],
+        relationName: 'UserMentionedBy',
     }),
 }));
