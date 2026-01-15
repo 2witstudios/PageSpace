@@ -25,6 +25,9 @@ vi.mock('@pagespace/db', () => ({
       files: {
         findFirst: vi.fn(),
       },
+      filePages: {
+        findFirst: vi.fn(),
+      },
     },
     update: vi.fn(() => ({
       set: vi.fn(() => ({
@@ -35,7 +38,9 @@ vi.mock('@pagespace/db', () => ({
     })),
   },
   files: { id: 'id' },
+  filePages: { fileId: 'fileId', pageId: 'pageId' },
   eq: vi.fn((a, b) => ({ type: 'eq', a, b })),
+  and: vi.fn((...args) => ({ type: 'and', conditions: args })),
 }));
 
 // Mock permissions
@@ -314,6 +319,11 @@ describe('EnforcedFileRepository', () => {
         const mockFile = createMockFile({ driveId: 'drive-123' });
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        // Mock file-page link exists (file is linked to the bound page)
+        vi.mocked(db.query.filePages.findFirst).mockResolvedValue({
+          fileId: 'file-123',
+          pageId: 'page-123',
+        });
         vi.mocked(getUserDrivePermissions).mockResolvedValue(createMockDrivePermissions());
 
         const file = await repo.getFile('file-123');
@@ -335,6 +345,8 @@ describe('EnforcedFileRepository', () => {
         const mockFile = createMockFile({ driveId: 'drive-123' });
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        // Mock no file-page link exists (file is NOT linked to this page)
+        vi.mocked(db.query.filePages.findFirst).mockResolvedValue(undefined);
 
         const result = await repo.getFile('file-123');
 
@@ -353,6 +365,8 @@ describe('EnforcedFileRepository', () => {
         const mockFile = createMockFile({ driveId: 'drive-123' });
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        // Mock no file-page link exists (file is NOT linked to this page)
+        vi.mocked(db.query.filePages.findFirst).mockResolvedValue(undefined);
 
         await repo.getFile('file-123');
 
@@ -373,6 +387,8 @@ describe('EnforcedFileRepository', () => {
         const mockFile = createMockFile({ driveId: 'drive-123' });
 
         vi.mocked(db.query.files.findFirst).mockResolvedValue(mockFile);
+        // Mock no file-page link exists (file is NOT linked to this page)
+        vi.mocked(db.query.filePages.findFirst).mockResolvedValue(undefined);
 
         const result = await repo.getFile('file-123');
 
