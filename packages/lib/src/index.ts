@@ -27,6 +27,7 @@ export type { DrivePermissionLevel } from './permissions/permissions-cached';
 
 // Export specific functions from original permissions that aren't in cached version
 export {
+  getDriveIdsForUser,
   getUserAccessiblePagesInDriveWithDetails,
   getUserAccessiblePagesInDrive,
   isDriveOwnerOrAdmin,
