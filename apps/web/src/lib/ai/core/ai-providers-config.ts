@@ -36,9 +36,6 @@ export const AI_PROVIDERS = {
     models: {
       'glm-4.5-air': 'Standard',
       'glm-4.7': 'Pro (Pro/Business)',
-      // Aliases are also valid model selections
-      standard: 'Standard',
-      pro: 'Pro (Pro/Business)',
     },
   },
   openrouter: {
@@ -373,6 +370,10 @@ export function getDefaultModel(provider: string): string {
 export function isValidModel(provider: string, model: string): boolean {
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) return false;
+  // For PageSpace, also accept aliases (standard, pro)
+  if (provider === 'pagespace' && isPageSpaceModelAlias(model)) {
+    return true;
+  }
   return model in providerConfig.models;
 }
 
