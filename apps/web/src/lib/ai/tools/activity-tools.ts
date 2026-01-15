@@ -95,47 +95,78 @@ async function getLastVisitTime(userId: string): Promise<Date | undefined> {
   return lastLogin?.timestamp;
 }
 
-// Format activity for AI consumption
-interface FormattedActivity {
-  id: string;
-  timestamp: string;
-  operation: string;
-  resourceType: string;
-  resourceTitle: string | null;
+// Compact activity format optimized for AI context efficiency
+interface CompactActivity {
+  ts: string;              // ISO timestamp
+  op: string;              // operation
+  res: string;             // resourceType
+  title: string | null;    // resourceTitle
   pageId: string | null;
-  actor: {
-    name: string | null;
-    email: string;
-    isCurrentUser: boolean;
-  };
-  isAiGenerated: boolean;
-  aiInfo?: {
-    provider: string | null;
-    model: string | null;
-  };
-  changes?: {
-    updatedFields: string[] | null;
-    previousValues: Record<string, unknown> | null;
-    newValues: Record<string, unknown> | null;
-  };
-  metadata: Record<string, unknown> | null;
+  actor: number;           // index into actors array
+  ai?: string;             // AI model if ai-generated (e.g., "gpt-4o")
+  fields?: string[];       // which fields changed
+  delta?: Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }>;
 }
 
-interface DriveActivityGroup {
+interface CompactDriveGroup {
   drive: {
     id: string;
     name: string;
     slug: string;
-    prompt: string | null;
+    context: string | null;  // drivePrompt - gives AI context about the workspace purpose
   };
-  activities: FormattedActivity[];
-  summary: {
-    totalChanges: number;
-    byOperation: Record<string, number>;
-    byResourceType: Record<string, number>;
-    contributors: Array<{ email: string; name: string | null; count: number }>;
-    aiGeneratedCount: number;
+  activities: CompactActivity[];
+  stats: {
+    total: number;
+    byOp: Record<string, number>;
+    aiCount: number;
   };
+}
+
+interface CompactActor {
+  email: string;
+  name: string | null;
+  isYou: boolean;  // is this the current user
+  count: number;   // activity count
+}
+
+// Helper to create compact delta from previousValues/newValues
+function createCompactDelta(
+  updatedFields: string[] | null,
+  prev: Record<string, unknown> | null,
+  next: Record<string, unknown> | null
+): Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }> | undefined {
+  if (!updatedFields || updatedFields.length === 0) return undefined;
+
+  const delta: Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }> = {};
+
+  for (const field of updatedFields) {
+    const fromVal = prev?.[field];
+    const toVal = next?.[field];
+
+    // For content/text fields, just show length change to save tokens
+    if (field === 'content' || field === 'systemPrompt' || field === 'drivePrompt') {
+      const fromLen = typeof fromVal === 'string' ? fromVal.length : 0;
+      const toLen = typeof toVal === 'string' ? toVal.length : 0;
+      if (fromLen !== toLen) {
+        delta[field] = { len: { from: fromLen, to: toLen } };
+      }
+    } else if (field === 'title') {
+      // Title changes are small and meaningful - include full values
+      delta[field] = { from: fromVal, to: toVal };
+    } else if (typeof fromVal === 'boolean' || typeof toVal === 'boolean') {
+      // Booleans are small
+      delta[field] = { from: fromVal, to: toVal };
+    } else if (typeof fromVal === 'number' || typeof toVal === 'number') {
+      // Numbers are small
+      delta[field] = { from: fromVal, to: toVal };
+    } else {
+      // For other fields, just note they changed
+      delta[field] = {};
+    }
+  }
+
+  return Object.keys(delta).length > 0 ? delta : undefined;
 }
 
 export const activityTools = {
@@ -360,8 +391,33 @@ The AI should use this data to form intuition about ongoing work and provide con
           limit,
         });
 
-        // Group activities by drive
-        const driveGroupsMap = new Map<string, DriveActivityGroup>();
+        // Build actor index for deduplication (saves tokens by not repeating actor info)
+        const actorMap = new Map<string, { idx: number; name: string | null; isYou: boolean; count: number }>();
+        const actorsList: CompactActor[] = [];
+
+        for (const activity of activities) {
+          const email = activity.actorEmail;
+          if (!actorMap.has(email)) {
+            const idx = actorsList.length;
+            const actor: CompactActor = {
+              email,
+              name: activity.actorDisplayName || activity.user?.name || null,
+              isYou: activity.userId === userId,
+              count: 0,
+            };
+            actorsList.push(actor);
+            actorMap.set(email, { idx, name: actor.name, isYou: actor.isYou, count: 0 });
+          }
+          actorMap.get(email)!.count++;
+        }
+
+        // Update counts in actorsList
+        for (const actor of actorsList) {
+          actor.count = actorMap.get(actor.email)!.count;
+        }
+
+        // Group activities by drive using compact format
+        const driveGroupsMap = new Map<string, CompactDriveGroup>();
 
         for (const activity of activities) {
           if (!activity.driveId || !activity.drive) continue;
@@ -373,124 +429,80 @@ The AI should use this data to form intuition about ongoing work and provide con
                 id: activity.drive.id,
                 name: activity.drive.name,
                 slug: activity.drive.slug,
-                prompt: activity.drive.drivePrompt,
+                context: activity.drive.drivePrompt,
               },
               activities: [],
-              summary: {
-                totalChanges: 0,
-                byOperation: {},
-                byResourceType: {},
-                contributors: [],
-                aiGeneratedCount: 0,
+              stats: {
+                total: 0,
+                byOp: {},
+                aiCount: 0,
               },
             };
             driveGroupsMap.set(activity.driveId, group);
           }
 
-          // Format activity
-          const formattedActivity: FormattedActivity = {
-            id: activity.id,
-            timestamp: activity.timestamp.toISOString(),
-            operation: activity.operation,
-            resourceType: activity.resourceType,
-            resourceTitle: activity.resourceTitle,
+          // Build compact activity
+          const actorIdx = actorMap.get(activity.actorEmail)!.idx;
+          const compact: CompactActivity = {
+            ts: activity.timestamp.toISOString(),
+            op: activity.operation,
+            res: activity.resourceType,
+            title: activity.resourceTitle,
             pageId: activity.pageId,
-            actor: {
-              name: activity.actorDisplayName || activity.user?.name || null,
-              email: activity.actorEmail,
-              isCurrentUser: activity.userId === userId,
-            },
-            isAiGenerated: activity.isAiGenerated,
-            metadata: activity.metadata,
+            actor: actorIdx,
           };
 
-          if (activity.isAiGenerated) {
-            formattedActivity.aiInfo = {
-              provider: activity.aiProvider,
-              model: activity.aiModel,
-            };
+          // Add AI model if ai-generated (compact: just the model name)
+          if (activity.isAiGenerated && activity.aiModel) {
+            compact.ai = activity.aiModel;
           }
 
-          if (includeDiffs && (activity.updatedFields || activity.previousValues || activity.newValues)) {
-            formattedActivity.changes = {
-              updatedFields: activity.updatedFields || null,
-              previousValues: activity.previousValues || null,
-              newValues: activity.newValues || null,
-            };
-          }
-
-          group.activities.push(formattedActivity);
-
-          // Update summary
-          group.summary.totalChanges++;
-          group.summary.byOperation[activity.operation] =
-            (group.summary.byOperation[activity.operation] || 0) + 1;
-          group.summary.byResourceType[activity.resourceType] =
-            (group.summary.byResourceType[activity.resourceType] || 0) + 1;
-
-          if (activity.isAiGenerated) {
-            group.summary.aiGeneratedCount++;
-          }
-        }
-
-        // Calculate contributors for each drive
-        for (const group of driveGroupsMap.values()) {
-          const contributorMap = new Map<
-            string,
-            { email: string; name: string | null; count: number }
-          >();
-
-          for (const activity of group.activities) {
-            const existing = contributorMap.get(activity.actor.email);
-            if (existing) {
-              existing.count++;
-            } else {
-              contributorMap.set(activity.actor.email, {
-                email: activity.actor.email,
-                name: activity.actor.name,
-                count: 1,
-              });
+          // Add compact delta if diffs requested
+          if (includeDiffs && activity.updatedFields) {
+            compact.fields = activity.updatedFields;
+            const delta = createCompactDelta(
+              activity.updatedFields,
+              activity.previousValues,
+              activity.newValues
+            );
+            if (delta) {
+              compact.delta = delta;
             }
           }
 
-          group.summary.contributors = Array.from(contributorMap.values()).sort(
-            (a, b) => b.count - a.count
-          );
+          group.activities.push(compact);
+
+          // Update stats
+          group.stats.total++;
+          group.stats.byOp[activity.operation] =
+            (group.stats.byOp[activity.operation] || 0) + 1;
+          if (activity.isAiGenerated) {
+            group.stats.aiCount++;
+          }
         }
 
         // Convert to array and sort by activity count
         const driveGroups = Array.from(driveGroupsMap.values()).sort(
-          (a, b) => b.summary.totalChanges - a.summary.totalChanges
+          (a, b) => b.stats.total - a.stats.total
         );
 
         // Calculate overall summary
         const totalActivities = activities.length;
         const totalAiGenerated = activities.filter((a) => a.isAiGenerated).length;
 
+        // Compact response structure optimized for AI context efficiency
         return {
-          success: true,
-          driveGroups,
-          summary: {
-            totalActivities,
-            totalAiGenerated,
-            drivesWithActivity: driveGroups.length,
-            timeWindow: since,
-            timeWindowStart: timeWindowStart.toISOString(),
-            lastVisitTime: lastVisitTime?.toISOString() || null,
-            excludedOwnActivity: excludeOwnActivity,
+          ok: true,
+          actors: actorsList,  // Deduplicated actor list - activities reference by index
+          drives: driveGroups,
+          meta: {
+            total: totalActivities,
+            aiTotal: totalAiGenerated,
+            window: since,
+            from: timeWindowStart.toISOString(),
+            lastVisit: lastVisitTime?.toISOString() || null,
+            excludedSelf: excludeOwnActivity,
           },
-          message:
-            totalActivities === 0
-              ? `No activity found in the last ${since === 'last_visit' ? 'visit period' : since}`
-              : `Found ${totalActivities} activities across ${driveGroups.length} workspace(s)`,
-          nextSteps:
-            totalActivities > 0
-              ? [
-                  'Review the drive summaries to understand what has been happening',
-                  'Use read_page to examine specific pages that were modified',
-                  'Consider mentioning notable changes when greeting the user',
-                ]
-              : ['The workspace has been quiet - consider checking in with the user about their current work'],
         };
       } catch (error) {
         console.error('get_activity error:', error);
