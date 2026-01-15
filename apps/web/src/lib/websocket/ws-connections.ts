@@ -15,6 +15,7 @@ const connections = new Map<string, WebSocket>();
 interface ConnectionMetadata {
   userId: string;
   sessionId?: string; // From session service
+  sessionExpiresAt?: Date; // When the session token expires - connection should be closed after this
   connectedAt: Date;
   lastPing?: Date;
   fingerprint?: string;
@@ -45,7 +46,8 @@ export function registerConnection(
   userId: string,
   ws: WebSocket,
   fingerprint?: string,
-  sessionId?: string
+  sessionId?: string,
+  sessionExpiresAt?: Date
 ): void {
   // Close existing connection if any
   const existingConnection = connections.get(userId);
@@ -63,6 +65,7 @@ export function registerConnection(
   connectionMetadata.set(ws, {
     userId,
     sessionId,
+    sessionExpiresAt,
     connectedAt: new Date(),
     fingerprint,
     challengeVerified: false,
@@ -71,6 +74,7 @@ export function registerConnection(
   wsLogger.info('WebSocket connection registered', {
     userId,
     sessionId,
+    sessionExpiresAt: sessionExpiresAt?.toISOString(),
     totalConnections: connections.size,
     action: 'register',
   });
@@ -171,25 +175,38 @@ export function verifyConnectionFingerprint(
 }
 
 /**
- * Clean up stale connections that are closed or inactive
- * Prevents memory leaks from connections that weren't properly unregistered
+ * Clean up stale connections that are closed, inactive, or have expired sessions
+ * Prevents memory leaks and enforces session expiry security
  */
 function cleanupStaleConnections(): void {
   const now = Date.now();
-  const staleConnections: Array<{ userId: string; ws: WebSocket }> = [];
+  const nowDate = new Date();
+  const staleConnections: Array<{ userId: string; ws: WebSocket; reason: string }> = [];
 
-  // Find closed or stale connections
+  // Find closed, stale, or expired connections
   for (const [userId, ws] of connections.entries()) {
     const metadata = connectionMetadata.get(ws);
 
     // Check if WebSocket is closed (readyState 2 = CLOSING, 3 = CLOSED)
     if (ws.readyState === 2 || ws.readyState === 3) {
-      staleConnections.push({ userId, ws });
+      staleConnections.push({ userId, ws, reason: 'closed' });
       continue;
     }
 
-    // Check if connection has been inactive for too long
     if (metadata) {
+      // Check if session has expired (critical security check)
+      if (metadata.sessionExpiresAt && nowDate > metadata.sessionExpiresAt) {
+        wsLogger.warn('Closing connection due to expired session', {
+          userId,
+          sessionId: metadata.sessionId,
+          expiredAt: metadata.sessionExpiresAt.toISOString(),
+          action: 'session_expired_cleanup',
+        });
+        staleConnections.push({ userId, ws, reason: 'session_expired' });
+        continue;
+      }
+
+      // Check if connection has been inactive for too long
       const lastActivity = metadata.lastPing?.getTime() || metadata.connectedAt.getTime();
       const inactiveDuration = now - lastActivity;
 
@@ -199,7 +216,7 @@ function cleanupStaleConnections(): void {
           inactiveDurationMinutes: Math.round(inactiveDuration / 60000),
           action: 'stale_detected',
         });
-        staleConnections.push({ userId, ws });
+        staleConnections.push({ userId, ws, reason: 'inactive' });
       }
     }
   }
@@ -211,14 +228,19 @@ function cleanupStaleConnections(): void {
       action: 'cleanup_start',
     });
 
-    for (const { userId, ws } of staleConnections) {
+    for (const { userId, ws, reason } of staleConnections) {
       // Try to close if not already closed
       if (ws.readyState === 0 || ws.readyState === 1) {
         try {
-          ws.close(1000, 'Connection cleanup - inactive');
+          // Use appropriate close message based on reason
+          const closeMessage = reason === 'session_expired'
+            ? 'Session expired'
+            : 'Connection cleanup - inactive';
+          ws.close(1000, closeMessage);
         } catch (error) {
           wsLogger.warn('Error closing stale connection', {
             userId,
+            reason,
             error: error instanceof Error ? error.message : String(error),
             action: 'close_error',
           });
@@ -321,11 +343,12 @@ export interface ConnectionHealthCheck {
   readyState: number;
   lastPing?: Date;
   connectedDuration: number;
+  sessionExpired?: boolean;
 }
 
 /**
  * Performs comprehensive health check on a WebSocket connection
- * Verifies connection is open, authenticated, and responsive
+ * Verifies connection is open, authenticated, session not expired, and responsive
  * Should be called before executing expensive operations like tool execution
  *
  * @param ws - WebSocket connection to check
@@ -364,6 +387,24 @@ export function checkConnectionHealth(ws: WebSocket): ConnectionHealthCheck {
       readyState: ws.readyState,
       lastPing: metadata.lastPing,
       connectedDuration: Date.now() - metadata.connectedAt.getTime(),
+    };
+  }
+
+  // Check 4: Session not expired (critical for security - prevents indefinite access)
+  if (metadata.sessionExpiresAt && new Date() > metadata.sessionExpiresAt) {
+    wsLogger.warn('Session expired for WebSocket connection', {
+      userId: metadata.userId,
+      sessionId: metadata.sessionId,
+      expiredAt: metadata.sessionExpiresAt.toISOString(),
+      action: 'session_expired',
+    });
+    return {
+      isHealthy: false,
+      reason: 'Session expired',
+      readyState: ws.readyState,
+      lastPing: metadata.lastPing,
+      connectedDuration: Date.now() - metadata.connectedAt.getTime(),
+      sessionExpired: true,
     };
   }
 

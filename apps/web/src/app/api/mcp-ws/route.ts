@@ -130,7 +130,8 @@ export async function UPGRADE(
   const fingerprint = getConnectionFingerprint(request);
 
   // Register the new connection (handles closing existing connections)
-  registerConnection(userId, client, fingerprint, claims.sessionId);
+  // Pass sessionExpiresAt to enforce TTL on persistent connections
+  registerConnection(userId, client, fingerprint, claims.sessionId, claims.expiresAt);
 
   // Mark as verified immediately - session service already validated the token
   markChallengeVerified(client);

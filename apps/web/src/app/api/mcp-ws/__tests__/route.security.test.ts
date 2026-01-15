@@ -71,6 +71,9 @@ import {
 } from '@/lib/websocket';
 import { sessionService } from '@pagespace/lib';
 
+// Mock session expiry (1 hour from now)
+const mockSessionExpiry = new Date(Date.now() + 60 * 60 * 1000);
+
 describe('WebSocket MCP Bridge - Security Tests', () => {
   let mockClient: WebSocket;
   let mockRequest: NextRequest;
@@ -139,12 +142,13 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String), 'session_123');
+      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String), 'session_123', mockSessionExpiry);
       expect(markChallengeVerified).toHaveBeenCalledWith(mockClient);
     });
 
@@ -156,6 +160,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['read:pages'], // Missing mcp:* scope
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -206,6 +211,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -233,6 +239,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -249,6 +256,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       vi.mocked(verifyConnectionFingerprint).mockReturnValue(false);
@@ -322,6 +330,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -345,6 +354,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -378,6 +388,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       vi.mocked(validateMessageSize).mockReturnValue({
@@ -419,6 +430,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       vi.mocked(validateMessageSize).mockReturnValue({ valid: true });
@@ -455,6 +467,7 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         tokenVersion: 1,
         type: 'service',
         scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
