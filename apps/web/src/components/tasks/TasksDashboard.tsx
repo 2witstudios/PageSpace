@@ -452,7 +452,7 @@ function TaskCard({ task, drives, showDrive }: TaskCardProps) {
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <Link
-              href={task.pageId ? `/dashboard/${task.driveId}/page/${task.pageId}` : '#'}
+              href={task.pageId && task.driveId ? `/dashboard/${task.driveId}/page/${task.pageId}` : '#'}
               className="font-medium hover:underline line-clamp-1"
             >
               {task.title}
@@ -462,7 +462,7 @@ function TaskCard({ task, drives, showDrive }: TaskCardProps) {
               {showDrive && drive && (
                 <span className="truncate max-w-[150px]">{drive.name}</span>
               )}
-              {task.taskListPageTitle && (
+              {task.taskListPageTitle && task.driveId && task.taskListPageId && (
                 <>
                   {showDrive && drive && <span>·</span>}
                   <Link

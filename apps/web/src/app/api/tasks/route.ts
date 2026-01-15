@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, inArray } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, inArray, or, isNull, not } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -165,11 +165,22 @@ export async function GET(request: Request) {
       }
     }
 
+    // Get trashed page IDs to exclude tasks referencing them
+    // This ensures pagination counts match the actual filtered results
+    const trashedPages = await db.select({ id: pages.id })
+      .from(pages)
+      .where(eq(pages.isTrashed, true));
+    const trashedPageIds = trashedPages.map(p => p.id);
+
     // Build filter conditions for tasks
     const filterConditions = [
       inArray(taskItems.taskListId, taskListIds),
       eq(taskItems.assigneeId, userId), // Only tasks assigned to the current user
-    ];
+      // Exclude tasks whose linked page is trashed (pageId is null OR not in trashed list)
+      trashedPageIds.length > 0
+        ? or(isNull(taskItems.pageId), not(inArray(taskItems.pageId, trashedPageIds)))
+        : undefined,
+    ].filter(Boolean);
 
     if (params.status) {
       filterConditions.push(eq(taskItems.status, params.status));
@@ -213,11 +224,8 @@ export async function GET(request: Request) {
       offset: params.offset,
     });
 
-    // Filter out tasks whose linked pages are trashed
-    const filteredTasks = tasks.filter(task => !task.page?.isTrashed);
-
     // Enrich tasks with drive and task list page info
-    const enrichedTasks = filteredTasks.map(task => {
+    const enrichedTasks = tasks.map(task => {
       const pageInfo = taskListToPageMap.get(task.taskListId);
       return {
         ...task,
