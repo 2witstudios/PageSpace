@@ -10,7 +10,7 @@ const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 const reorderSchema = z.object({
   pageId: z.string(),
   newParentId: z.string().nullable(),
-  newPosition: z.number().int().gte(0, 'Position must be a non-negative integer'),
+  newPosition: z.number().finite(),
 });
 
 export async function PATCH(request: Request) {
