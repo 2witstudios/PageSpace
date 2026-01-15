@@ -1,34 +1,25 @@
 import type { WebSocket, WebSocketServer } from 'ws';
 import type { NextRequest } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
 import { getMCPBridge } from '@/lib/mcp';
 import {
   registerConnection,
   unregisterConnection,
   updateLastPing,
   markChallengeVerified,
-  isChallengeVerified,
   startCleanupInterval,
   checkConnectionHealth,
-  setJWTExpiryTimer,
   verifyConnectionFingerprint,
-  generateChallenge,
-  verifyChallengeResponse,
-  clearChallenge,
   getConnectionFingerprint,
   validateMessageSize,
   logSecurityEvent,
   isSecureConnection,
-  getSessionIdFromPayload,
   validateIncomingMessageWithError,
   type IncomingMessage,
   isPingMessage,
-  isChallengeResponseMessage,
   isToolExecuteMessage,
   isToolResultMessage,
 } from '@/lib/websocket';
-import { decodeToken } from '@pagespace/lib/server';
-import { getCookieValueFromHeader } from '@/lib/utils/get-cookie-value';
+import { sessionService, type SessionClaims } from '@pagespace/lib';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections
@@ -40,25 +31,22 @@ startCleanupInterval();
  * This route accepts WebSocket connections from the PageSpace Desktop app,
  * allowing the server to execute MCP tools locally on the user's machine.
  *
- * Security Flow:
- * 1. Desktop app connects with JWT in cookie (httpOnly, secure)
- * 2. Server validates JWT signature and expiration
- * 3. Server verifies secure connection (WSS in production)
- * 4. Server generates connection fingerprint (IP + User-Agent hash)
- * 5. Server extracts JWT expiry and sets automatic disconnection timer
- * 6. Server sends cryptographic challenge to client
- * 7. Client responds with SHA256(challenge + userId + sessionId)
- * 8. Server verifies challenge response (max 3 attempts, 30s expiration)
- * 9. Connection marked as verified, tool execution enabled
- * 10. On each ping: verify fingerprint hasn't changed (detect session hijacking)
- * 11. Connection health check before each tool execution
- * 12. All security events logged for audit trail
+ * Security Flow (Opaque Token Authentication):
+ * 1. Desktop app fetches opaque WS token from /api/auth/ws-token (authenticated via JWT)
+ * 2. Desktop connects with Authorization: Bearer <opaque_token>
+ * 3. Server validates opaque token via session service
+ * 4. Server verifies secure connection (WSS in production)
+ * 5. Server generates connection fingerprint (IP + User-Agent hash)
+ * 6. Connection marked as verified immediately (session service did the auth)
+ * 7. On each ping: verify fingerprint hasn't changed (detect session hijacking)
+ * 8. Connection health check before each tool execution
+ * 9. All security events logged for audit trail
  *
  * Note: Tool execution rate limiting is handled by AI SDK's stepCountIs(100) limit per request
  *
  * Defense in Depth:
- * - JWT authentication (initial + automatic expiry enforcement)
- * - Challenge-response verification (post-connection)
+ * - Opaque token authentication (no JWT timing issues, instant revocation)
+ * - Session service validates tokenVersion (revoke all sessions on password change)
  * - Connection fingerprinting (verified on each ping, detects session hijacking)
  * - Connection health checks (verify state before tool execution)
  * - Message size validation (prevent DoS)
@@ -86,67 +74,81 @@ export async function UPGRADE(
     return;
   }
 
-  // SECURITY CHECK 2: Verify JWT authentication
-  const user = await verifyAuth(request);
-
-  if (!user) {
+  // SECURITY CHECK 2: Extract and validate opaque token from Authorization header
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
     logSecurityEvent('ws_authentication_failed', {
       ip: clientIp,
       severity: 'warn',
-      reason: 'Invalid or missing JWT',
+      reason: 'Missing Authorization header',
     });
-    client.close(1008, 'Unauthorized');
+    client.close(1008, 'Authorization required');
     return;
   }
 
-  const userId = user.id;
+  const token = authHeader.slice(7).trim();
 
-  // SECURITY CHECK 3: Generate connection fingerprint
+  // Validate opaque token via session service
+  let claims: SessionClaims | null = null;
+  try {
+    claims = await sessionService.validateSession(token);
+  } catch (error) {
+    logSecurityEvent('ws_session_validation_error', {
+      ip: clientIp,
+      severity: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    client.close(1008, 'Authentication error');
+    return;
+  }
+
+  if (!claims) {
+    logSecurityEvent('ws_authentication_failed', {
+      ip: clientIp,
+      severity: 'warn',
+      reason: 'Invalid or expired session token',
+    });
+    client.close(1008, 'Invalid or expired token');
+    return;
+  }
+
+  const userId = claims.userId;
+
+  // SECURITY CHECK 3: Verify scope allows MCP operations
+  if (!claims.scopes.includes('mcp:*') && !claims.scopes.includes('*')) {
+    logSecurityEvent('ws_insufficient_permissions', {
+      userId,
+      ip: clientIp,
+      severity: 'warn',
+      scopes: claims.scopes,
+    });
+    client.close(1008, 'Insufficient permissions');
+    return;
+  }
+
+  // SECURITY CHECK 4: Generate connection fingerprint
   const fingerprint = getConnectionFingerprint(request);
 
   // Register the new connection (handles closing existing connections)
   registerConnection(userId, client, fingerprint);
 
+  // Mark as verified immediately - session service already validated the token
+  markChallengeVerified(client);
+
   logSecurityEvent('ws_connection_established', {
     userId,
+    sessionId: claims.sessionId,
     ip: clientIp,
     severity: 'info',
-    fingerprint: fingerprint.substring(0, 16) + '...', // Partial for privacy
+    fingerprint: fingerprint.substring(0, 16) + '...',
   });
 
-  // SECURITY CHECK 4: Extract JWT and set expiry timer for automatic disconnection
-  const cookieHeader = request.headers.get('cookie');
-  const accessToken = getCookieValueFromHeader(cookieHeader, 'accessToken');
-
-  if (accessToken) {
-    const payload = await decodeToken(accessToken);
-    if (payload?.exp) {
-      const expiresAt = new Date(payload.exp * 1000); // JWT exp is in seconds
-      setJWTExpiryTimer(client, expiresAt, () => {
-        logSecurityEvent('ws_jwt_expired', {
-          userId,
-          expiresAt: expiresAt.toISOString(),
-          severity: 'info',
-        });
-      });
-
-      logSecurityEvent('ws_jwt_expiry_timer_set', {
-        userId,
-        expiresAt: expiresAt.toISOString(),
-        severity: 'info',
-      });
-    }
-  }
-
-  // SECURITY CHECK 5: Generate challenge for post-connection verification
-  const challenge = generateChallenge(userId);
-
-  // Send challenge to client
+  // Send welcome message (no challenge needed - session service did the auth)
   client.send(
     JSON.stringify({
-      type: 'challenge',
-      challenge,
-      expiresIn: 30000, // 30 seconds
+      type: 'connected',
+      userId,
+      timestamp: Date.now(),
     })
   );
 
@@ -215,93 +217,9 @@ export async function UPGRADE(
 
       const message: IncomingMessage = validationResult.data;
 
-      // Handle challenge response (must be first message after connection)
-      if (isChallengeResponseMessage(message)) {
-        // Get session ID from JWT for challenge verification
-        const challengeCookieHeader = request.headers.get('cookie');
-        const challengeAccessToken = getCookieValueFromHeader(challengeCookieHeader, 'accessToken');
-
-        if (!challengeAccessToken) {
-          logSecurityEvent('ws_challenge_failed_no_token', {
-            userId,
-            severity: 'error',
-          });
-          client.close(1008, 'Session expired');
-          return;
-        }
-
-        // Decode JWT to get session ID
-        decodeToken(challengeAccessToken).then((payload) => {
-          if (!payload) {
-            logSecurityEvent('ws_challenge_failed_invalid_token', {
-              userId,
-              severity: 'error',
-            });
-            client.close(1008, 'Session expired');
-            return;
-          }
-
-          const sessionId = getSessionIdFromPayload(payload);
-
-          // Verify challenge response
-          const verification = verifyChallengeResponse(
-            userId,
-            message.response,
-            sessionId
-          );
-
-          if (!verification.valid) {
-            logSecurityEvent('ws_challenge_verification_failed', {
-              userId,
-              reason: verification.failureReason,
-              severity: 'warn',
-            });
-            client.close(1008, 'Challenge verification failed');
-            return;
-          }
-
-          // Mark connection as verified
-          markChallengeVerified(client);
-
-          logSecurityEvent('ws_challenge_verified', {
-            userId,
-            severity: 'info',
-          });
-
-          // Send success response
-          client.send(
-            JSON.stringify({
-              type: 'challenge_verified',
-              timestamp: Date.now(),
-            })
-          );
-        });
-
-        return;
-      }
-
-      // SECURITY CHECK 6: Require challenge verification before tool execution
-      if (isToolExecuteMessage(message) || isToolResultMessage(message)) {
-        if (!isChallengeVerified(client)) {
-          logSecurityEvent('ws_unauthorized_tool_execution_attempt', {
-            userId,
-            toolName: isToolExecuteMessage(message) ? message.toolName : undefined,
-            severity: 'warn',
-          });
-          client.send(
-            JSON.stringify({
-              type: 'error',
-              error: 'challenge_required',
-              message: 'Complete challenge verification first',
-            })
-          );
-          return;
-        }
-      }
-
       // Handle ping/pong for health checks
       if (isPingMessage(message)) {
-        // SECURITY CHECK 7: Verify connection fingerprint on ping to detect session hijacking
+        // SECURITY CHECK 5: Verify connection fingerprint on ping to detect session hijacking
         const currentFingerprint = getConnectionFingerprint(request);
         if (!verifyConnectionFingerprint(client, currentFingerprint)) {
           logSecurityEvent('ws_fingerprint_mismatch', {
@@ -325,7 +243,7 @@ export async function UPGRADE(
         return;
       }
 
-      // SECURITY CHECK 8: Connection health check before tool execution
+      // SECURITY CHECK 6: Connection health check before tool execution
       if (isToolExecuteMessage(message)) {
         const health = checkConnectionHealth(client);
 
@@ -388,7 +306,6 @@ export async function UPGRADE(
 
     // Clean up resources
     unregisterConnection(userId, client);
-    clearChallenge(userId);
   });
 
   // Handle errors
@@ -399,9 +316,6 @@ export async function UPGRADE(
       severity: 'error',
     });
   });
-
-  // Note: Welcome message NOT sent until challenge is verified
-  // Client must complete challenge-response before tool execution
 }
 
 // Fallback for non-WebSocket requests

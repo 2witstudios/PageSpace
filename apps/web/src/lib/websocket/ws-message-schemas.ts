@@ -88,10 +88,10 @@ export const ErrorMessageSchema = BaseMessageSchema.extend({
 
 /**
  * Union of all incoming message types (Client -> Server)
+ * Note: ChallengeResponseMessage is no longer used - auth is via opaque session tokens
  */
 export const IncomingMessageSchema = z.discriminatedUnion('type', [
   PingMessageSchema,
-  ChallengeResponseMessageSchema,
   ToolExecuteMessageSchema,
   ToolResultMessageSchema,
 ]);
@@ -175,10 +175,6 @@ export function validateIncomingMessageWithError(data: unknown): {
  */
 export function isPingMessage(msg: IncomingMessage): msg is PingMessage {
   return msg.type === 'ping';
-}
-
-export function isChallengeResponseMessage(msg: IncomingMessage): msg is ChallengeResponseMessage {
-  return msg.type === 'challenge_response';
 }
 
 export function isToolExecuteMessage(msg: IncomingMessage): msg is ToolExecuteMessage {

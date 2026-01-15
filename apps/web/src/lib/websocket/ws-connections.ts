@@ -14,12 +14,11 @@ const connections = new Map<string, WebSocket>();
 // Track connection metadata
 interface ConnectionMetadata {
   userId: string;
+  sessionId?: string; // From session service
   connectedAt: Date;
   lastPing?: Date;
   fingerprint?: string;
-  challengeVerified: boolean;
-  jwtExpiryTimer?: NodeJS.Timeout;
-  jwtExpiresAt?: Date;
+  challengeVerified: boolean; // True once authenticated (immediately for opaque tokens)
 }
 
 const connectionMetadata = new Map<WebSocket, ConnectionMetadata>();
@@ -79,9 +78,6 @@ export function registerConnection(
  * Only removes the connection if it's still the active one (prevents race condition)
  */
 export function unregisterConnection(userId: string, ws: WebSocket): void {
-  // Clear JWT expiry timer before unregistering
-  clearJWTExpiryTimer(ws);
-
   // Only remove if this is still the active connection
   // Prevents race condition when old connection closes after new one registered
   const currentConnection = connections.get(userId);
@@ -148,76 +144,8 @@ export function markChallengeVerified(ws: WebSocket): void {
 }
 
 /**
- * Set JWT expiry timer for automatic disconnection
- * Schedules connection closure when JWT expires
- */
-export function setJWTExpiryTimer(
-  ws: WebSocket,
-  expiresAt: Date,
-  onExpiry?: () => void
-): void {
-  const metadata = connectionMetadata.get(ws);
-  if (!metadata) {
-    return;
-  }
-
-  // Clear existing timer if any
-  if (metadata.jwtExpiryTimer) {
-    clearTimeout(metadata.jwtExpiryTimer);
-  }
-
-  const now = Date.now();
-  const expiresAtMs = expiresAt.getTime();
-  const timeUntilExpiry = expiresAtMs - now;
-
-  // Only set timer if expiry is in the future
-  if (timeUntilExpiry > 0) {
-    metadata.jwtExpiresAt = expiresAt;
-    metadata.jwtExpiryTimer = setTimeout(() => {
-      wsLogger.info('JWT expired, closing connection', {
-        userId: metadata.userId,
-        expiresAt: expiresAt.toISOString(),
-        action: 'jwt_expiry',
-      });
-
-      // Execute callback if provided
-      if (onExpiry) {
-        onExpiry();
-      }
-
-      // Close connection with Session Expired message
-      if (ws.readyState === 1) {
-        // OPEN
-        ws.close(1008, 'Session expired');
-      }
-
-      // Clean up metadata
-      metadata.jwtExpiryTimer = undefined;
-      metadata.jwtExpiresAt = undefined;
-    }, timeUntilExpiry);
-  } else {
-    wsLogger.warn('JWT already expired', {
-      userId: metadata.userId,
-      expiresAt: expiresAt.toISOString(),
-      action: 'jwt_already_expired',
-    });
-  }
-}
-
-/**
- * Clear JWT expiry timer (used on disconnect)
- */
-export function clearJWTExpiryTimer(ws: WebSocket): void {
-  const metadata = connectionMetadata.get(ws);
-  if (metadata?.jwtExpiryTimer) {
-    clearTimeout(metadata.jwtExpiryTimer);
-    metadata.jwtExpiryTimer = undefined;
-    metadata.jwtExpiresAt = undefined;
-  }
-}
-
-/**
  * Check if connection has completed challenge verification
+ * With opaque token auth, this is set to true immediately after session validation
  */
 export function isChallengeVerified(ws: WebSocket): boolean {
   const metadata = connectionMetadata.get(ws);
@@ -425,11 +353,11 @@ export function checkConnectionHealth(ws: WebSocket): ConnectionHealthCheck {
     };
   }
 
-  // Check 3: Challenge verification completed
+  // Check 3: Authentication verified (set immediately after session validation)
   if (!metadata.challengeVerified) {
     return {
       isHealthy: false,
-      reason: 'Challenge verification not completed',
+      reason: 'Authentication not completed',
       readyState: ws.readyState,
       lastPing: metadata.lastPing,
       connectedDuration: Date.now() - metadata.connectedAt.getTime(),

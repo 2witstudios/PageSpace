@@ -1,7 +1,6 @@
 import WebSocket from 'ws';
 import { BrowserWindow } from 'electron';
 import { getMCPManager } from './mcp-manager';
-import crypto from 'crypto';
 import { logger } from './logger';
 
 /**
@@ -10,7 +9,7 @@ import { logger } from './logger';
  * Connects desktop app to VPS server, allowing server to execute MCP tools locally.
  *
  * Features:
- * - Automatic JWT extraction from browser cookies
+ * - Opaque session tokens for WebSocket auth (no JWT timing issues)
  * - Heartbeat ping/pong for connection health
  * - Exponential backoff reconnection
  * - Tool execution request handling
@@ -32,6 +31,7 @@ interface ToolExecutionRequest {
 
 export class WSClient {
   private ws: WebSocket | null = null;
+  private wsToken: string | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = Infinity; // Always try to reconnect
   private reconnectDelay = 1000; // Start with 1 second
@@ -46,9 +46,9 @@ export class WSClient {
   }
 
   /**
-   * Get WebSocket URL based on environment
+   * Get base URL for API requests
    */
-  private getWebSocketUrl(): string {
+  private getBaseUrl(): string {
     let baseUrl =
       process.env.NODE_ENV === 'development'
         ? process.env.PAGESPACE_URL || 'http://localhost:3000'
@@ -59,12 +59,19 @@ export class WSClient {
       baseUrl = baseUrl.replace(/^http:/, 'https:');
     }
 
-    // Convert http/https to ws/wss
-    return baseUrl.replace(/^http/, 'ws') + '/api/mcp-ws';
+    return baseUrl;
   }
 
   /**
-   * Extract JWT token from browser cookies
+   * Get WebSocket URL based on environment
+   */
+  private getWebSocketUrl(): string {
+    // Convert http/https to ws/wss
+    return this.getBaseUrl().replace(/^http/, 'ws') + '/api/mcp-ws';
+  }
+
+  /**
+   * Extract JWT token from browser cookies (used for initial auth to get WS token)
    */
   private async getJWTToken(): Promise<string | null> {
     if (!this.mainWindow) {
@@ -90,6 +97,40 @@ export class WSClient {
   }
 
   /**
+   * Get WebSocket session token from server
+   * Uses JWT to authenticate, receives opaque token for WebSocket connection
+   */
+  private async getWSToken(): Promise<string | null> {
+    try {
+      const accessToken = await this.getJWTToken();
+      if (!accessToken) {
+        logger.error('No JWT token available to get WS token', {});
+        return null;
+      }
+
+      const baseUrl = this.getBaseUrl();
+      const response = await fetch(`${baseUrl}/api/auth/ws-token`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        logger.error('Failed to get WS token', { status: response.status });
+        return null;
+      }
+
+      const data = await response.json();
+      return data.token;
+    } catch (error) {
+      logger.error('Error fetching WS token', { error });
+      return null;
+    }
+  }
+
+  /**
    * Connect to WebSocket server
    */
   async connect(): Promise<void> {
@@ -98,22 +139,22 @@ export class WSClient {
       return;
     }
 
-    // Get JWT token
-    const token = await this.getJWTToken();
+    // Get opaque WebSocket token (authenticated via JWT)
+    const token = await this.getWSToken();
     if (!token) {
-      logger.error('Cannot connect without JWT token', {});
-      // Retry after delay
+      logger.error('Cannot connect without WS token', {});
       this.scheduleReconnect();
       return;
     }
 
+    this.wsToken = token;
     const url = this.getWebSocketUrl();
     logger.info('Connecting to server', { url });
 
     try {
       this.ws = new WebSocket(url, {
         headers: {
-          Cookie: `accessToken=${token}`,
+          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -167,19 +208,11 @@ export class WSClient {
 
       switch (message.type) {
         case 'connected':
-          logger.debug('Welcome message received', { message });
+          logger.info('Connected and authenticated', { userId: message.userId });
           break;
 
         case 'pong':
           // Heartbeat response
-          break;
-
-        case 'challenge':
-          await this.handleChallenge(message.challenge);
-          break;
-
-        case 'challenge_verified':
-          logger.info('Challenge verified successfully', {});
           break;
 
         case 'tool_execute':
@@ -245,70 +278,6 @@ export class WSClient {
         success: false,
         error: errorMessage,
       });
-    }
-  }
-
-  /**
-   * Handle challenge-response authentication
-   */
-  private async handleChallenge(challenge: string): Promise<void> {
-    logger.debug('Received authentication challenge', {});
-
-    try {
-      // Get JWT token to extract userId and sessionId
-      const token = await this.getJWTToken();
-      if (!token) {
-        logger.error('No JWT token available for challenge response', {});
-        return;
-      }
-
-      // Decode JWT to extract userId, tokenVersion, and iat
-      const payload = this.decodeJWT(token);
-      if (!payload || !payload.userId || payload.tokenVersion === undefined) {
-        logger.error('Invalid JWT payload for challenge response', {});
-        return;
-      }
-
-      // Compute sessionId the same way the server does
-      // sessionId = SHA256(userId:tokenVersion:iat)
-      const sessionId = crypto.createHash('sha256')
-        .update(`${payload.userId}:${payload.tokenVersion}:${payload.iat || 0}`)
-        .digest('hex');
-
-      // Compute challenge response: SHA256(challenge + userId + sessionId)
-      const responseString = `${challenge}${payload.userId}${sessionId}`;
-      const response = crypto.createHash('sha256').update(responseString).digest('hex');
-
-      logger.debug('Sending challenge response', {});
-
-      // Send challenge response to server
-      this.sendMessage({
-        type: 'challenge_response',
-        response,
-      });
-    } catch (error) {
-      logger.error('Error handling challenge', { error });
-    }
-  }
-
-  /**
-   * Decode JWT token to extract payload
-   */
-  private decodeJWT(token: string): { userId: string; tokenVersion: number; iat?: number } | null {
-    try {
-      // JWT format: header.payload.signature
-      const parts = token.split('.');
-      if (parts.length !== 3) {
-        logger.error('Invalid JWT format', {});
-        return null;
-      }
-
-      // Decode base64url payload
-      const payload = Buffer.from(parts[1], 'base64url').toString('utf-8');
-      return JSON.parse(payload);
-    } catch (error) {
-      logger.error('Error decoding JWT', { error });
-      return null;
     }
   }
 
