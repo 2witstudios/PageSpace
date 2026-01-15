@@ -9,6 +9,9 @@ import {
   validateToolName,
   validateServerName,
   createSafeToolName,
+  sanitizeToolName,
+  sanitizeToolNamesForProvider,
+  parseMCPToolName,
 } from '../mcp-tool-converter';
 
 describe('MCP Tool Name Validation - Security (Web)', () => {
@@ -89,6 +92,97 @@ describe('MCP Tool Name Validation - Security (Web)', () => {
     it('should prevent null byte injection', () => {
       expect(() => validateToolName('tool\x00.txt')).toThrow('Tool name contains invalid characters');
       expect(() => validateServerName('server\x00.conf')).toThrow('Server name contains invalid characters');
+    });
+  });
+});
+
+describe('MCP Tool Name Sanitization for Providers', () => {
+  describe('sanitizeToolName', () => {
+    it('should replace colons with double underscores', () => {
+      expect(sanitizeToolName('mcp:server:tool')).toBe('mcp__server__tool');
+    });
+
+    it('should handle multiple colons (nested namespaces)', () => {
+      expect(sanitizeToolName('mcp:server:namespace:tool:subcommand')).toBe('mcp__server__namespace__tool__subcommand');
+    });
+
+    it('should leave names without colons unchanged', () => {
+      expect(sanitizeToolName('read_page')).toBe('read_page');
+      expect(sanitizeToolName('mcp__server__tool')).toBe('mcp__server__tool');
+    });
+
+    it('should handle empty string', () => {
+      expect(sanitizeToolName('')).toBe('');
+    });
+  });
+
+  describe('sanitizeToolNamesForProvider', () => {
+    it('should sanitize all tool names in an object', () => {
+      const tools = {
+        'mcp:filesystem:read_file': { description: 'Read a file' },
+        'mcp:filesystem:write_file': { description: 'Write a file' },
+        'read_page': { description: 'Read a page' },
+      };
+
+      const result = sanitizeToolNamesForProvider(tools);
+
+      expect(result).toEqual({
+        'mcp__filesystem__read_file': { description: 'Read a file' },
+        'mcp__filesystem__write_file': { description: 'Write a file' },
+        'read_page': { description: 'Read a page' },
+      });
+    });
+
+    it('should preserve tool definitions', () => {
+      const toolDef = {
+        description: 'Test tool',
+        parameters: { type: 'object' },
+        execute: () => 'result',
+      };
+      const tools = { 'mcp:server:tool': toolDef };
+
+      const result = sanitizeToolNamesForProvider(tools);
+
+      expect(result['mcp__server__tool']).toBe(toolDef);
+    });
+
+    it('should handle empty object', () => {
+      expect(sanitizeToolNamesForProvider({})).toEqual({});
+    });
+  });
+
+  describe('Round-trip: sanitize then parse', () => {
+    it('should correctly parse sanitized tool names', () => {
+      // Create a tool name
+      const original = createSafeToolName('my-server', 'read-file');
+      expect(original).toBe('mcp:my-server:read-file');
+
+      // Sanitize it for provider
+      const sanitized = sanitizeToolName(original);
+      expect(sanitized).toBe('mcp__my-server__read-file');
+
+      // Parse the sanitized name - should still work
+      const parsed = parseMCPToolName(sanitized);
+      expect(parsed).toEqual({
+        serverName: 'my-server',
+        toolName: 'read-file',
+      });
+    });
+
+    it('should handle nested namespaces in round-trip', () => {
+      // Tool name with nested namespace
+      const original = 'mcp:server:namespace:tool:subcommand';
+
+      // Sanitize
+      const sanitized = sanitizeToolName(original);
+      expect(sanitized).toBe('mcp__server__namespace__tool__subcommand');
+
+      // Parse - server is first part, rest is tool name
+      const parsed = parseMCPToolName(sanitized);
+      expect(parsed).toEqual({
+        serverName: 'server',
+        toolName: 'namespace__tool__subcommand',
+      });
     });
   });
 });
