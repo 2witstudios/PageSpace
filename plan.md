@@ -1090,11 +1090,13 @@ describe('Sessions Schema', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] Schema deployed to all environments
-- [ ] Indexes verified efficient
-- [ ] Relations to users table working
+- [x] Schema deployed to all environments
+- [x] Indexes verified efficient
+- [x] Relations to users table working
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-13)
 
 ---
 
@@ -1166,12 +1168,14 @@ describe('Opaque Token Generation', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] Tokens have 256 bits of entropy
-- [ ] Format is parseable and type-identifiable
-- [ ] Hashing is consistent
-- [ ] Format validation is robust
+- [x] Tokens have 256 bits of entropy
+- [x] Format is parseable and type-identifiable
+- [x] Hashing is consistent
+- [x] Format validation is robust
 
 **Dependencies:** None
+
+**Status:** ✅ COMPLETED (2026-01-13)
 
 ---
 
@@ -1358,12 +1362,14 @@ describe('Session Service', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] Session creation validates user exists
-- [ ] Token validation is comprehensive
-- [ ] Revocation is immediate
-- [ ] tokenVersion changes invalidate all sessions
+- [x] Session creation validates user exists
+- [x] Token validation is comprehensive
+- [x] Revocation is immediate
+- [x] tokenVersion changes invalidate all sessions
 
 **Dependencies:** P2-T1, P2-T2
+
+**Status:** ✅ COMPLETED (2026-01-13)
 
 ---
 
@@ -1446,12 +1452,14 @@ describe('Dual Mode Authentication', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] Both token types validated correctly
-- [ ] Legacy usage tracked in audit log
-- [ ] Migration metrics available
-- [ ] No functionality regression
+- [x] Both token types validated correctly (N/A - clean cutover, no dual mode needed)
+- [x] Legacy usage tracked in audit log (N/A - clean cutover)
+- [x] Migration metrics available (N/A - clean cutover)
+- [x] No functionality regression
 
 **Dependencies:** P2-T3
+
+**Status:** ⏭️ SKIPPED (2026-01-13) - Clean cutover completed, dual-mode not needed
 
 ---
 
@@ -1525,12 +1533,14 @@ describe('Enforced Auth Context', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] No way to create context without validated session
-- [ ] Context is frozen/immutable
-- [ ] Scope checking is comprehensive
-- [ ] Resource binding enforced
+- [x] No way to create context without validated session
+- [x] Context is frozen/immutable
+- [x] Scope checking is comprehensive
+- [x] Resource binding enforced
 
 **Dependencies:** P2-T3
+
+**Status:** ✅ COMPLETED (2026-01-13)
 
 ---
 
@@ -1618,12 +1628,14 @@ describe('Processor Auth Middleware', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] All processor endpoints use new middleware
-- [ ] Both token types work during migration
-- [ ] EnforcedAuthContext available on all requests
-- [ ] Scope checking enforced
+- [x] All processor endpoints use new middleware
+- [x] Both token types work during migration (N/A - clean cutover, opaque tokens only)
+- [x] EnforcedAuthContext available on all requests
+- [x] Scope checking enforced
 
 **Dependencies:** P2-T4, P2-T5
+
+**Status:** ✅ COMPLETED (2026-01-13)
 
 ---
 
