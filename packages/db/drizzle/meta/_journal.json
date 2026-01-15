@@ -267,6 +267,13 @@
       "when": 1768285686596,
       "tag": "0037_slimy_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1768500960919,
+      "tag": "0038_salty_phalanx",
+      "breakpoints": true
     }
   ]
 }

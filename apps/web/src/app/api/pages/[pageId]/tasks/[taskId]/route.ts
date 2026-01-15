@@ -5,6 +5,7 @@ import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
 
 const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
 
@@ -218,6 +219,18 @@ export async function PATCH(
 
   if (!taskWithRelations) {
     return NextResponse.json({ error: 'Task not found after update' }, { status: 404 });
+  }
+
+  // Send notification if assignee was changed to a new user
+  if (assigneeId !== undefined && assigneeId !== existingTask.assigneeId && assigneeId !== null) {
+    // Fire-and-forget notification - don't block the response
+    void createTaskAssignedNotification(
+      assigneeId,
+      taskId,
+      taskWithRelations.title,
+      pageId,
+      userId
+    );
   }
 
   // Broadcast events

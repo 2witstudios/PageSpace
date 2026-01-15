@@ -17,7 +17,9 @@ import {
   CheckCheck,
   Bell,
   MessageCircle,
-  Mail
+  Mail,
+  AtSign,
+  ListTodo
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -53,6 +55,10 @@ const NotificationIcon = ({ type }: { type: string }) => {
     case 'DRIVE_JOINED':
     case 'DRIVE_ROLE_CHANGED':
       return <Users className="h-4 w-4" />;
+    case 'MENTION':
+      return <AtSign className="h-4 w-4" />;
+    case 'TASK_ASSIGNED':
+      return <ListTodo className="h-4 w-4" />;
     default:
       return <FileText className="h-4 w-4" />;
   }
@@ -193,6 +199,12 @@ export default function NotificationDropdown() {
                         // Navigate to the direct message conversation
                         setIsDropdownOpen(false);
                         router.push(`/dashboard/messages/${notification.metadata.conversationId}`);
+                      } else if ((notification.type === 'MENTION' || notification.type === 'TASK_ASSIGNED') &&
+                          notification.pageId &&
+                          notification.driveId) {
+                        // Navigate to the page where user was mentioned or task list
+                        setIsDropdownOpen(false);
+                        router.push(`/dashboard/${notification.driveId}/${notification.pageId}`);
                       } else if (notification.drive?.id) {
                         // Navigate to drive if available
                         setIsDropdownOpen(false);

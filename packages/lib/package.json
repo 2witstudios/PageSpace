@@ -207,6 +207,11 @@
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js",
       "require": "./dist/auth/index.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications/notifications.d.ts",
+      "import": "./dist/notifications/notifications.js",
+      "require": "./dist/notifications/notifications.js"
     }
   },
   "typesVersions": {
@@ -324,6 +329,9 @@
       ],
       "auth": [
         "./dist/auth/index.d.ts"
+      ],
+      "notifications": [
+        "./dist/notifications/notifications.d.ts"
       ]
     }
   },

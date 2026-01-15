@@ -33,7 +33,8 @@ import {
   type ChangeGroupType,
 } from '@pagespace/lib/server';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content';
-import { syncMentions } from '@/services/api/page-mention-service';
+import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
+import { createMentionNotification } from '@pagespace/lib/notifications';
 
 /**
  * Valid activity operations for filtering
@@ -283,6 +284,7 @@ interface PageMutationMeta {
   contentRefAfter: string | null;
   contentSizeAfter: number | null;
   contentFormatAfter: PageContentFormat;
+  mentionsResult?: SyncMentionsResult;
 }
 
 interface PageChangeResult {
@@ -390,8 +392,9 @@ async function applyPageUpdateWithRevision(
     throw new Error('Page was modified while applying rollback');
   }
 
+  let mentionsResult: SyncMentionsResult | undefined;
   if (updateData.content !== undefined) {
-    await syncMentions(pageId, nextContent, database);
+    mentionsResult = await syncMentions(pageId, nextContent, database, { mentionedByUserId: options?.userId ?? undefined });
   }
 
   const changeGroupId = options?.changeGroupId ?? createChangeGroupId();
@@ -419,6 +422,7 @@ async function applyPageUpdateWithRevision(
     contentRefAfter: version.contentRef ?? contentRefAfter ?? null,
     contentSizeAfter: version.contentSize ?? null,
     contentFormatAfter,
+    mentionsResult,
   };
 }
 
@@ -1796,6 +1800,17 @@ export async function executeRollback(
       resourceType: activity.resourceType,
       resourceId: activity.resourceId,
     });
+
+    // Send notifications for newly mentioned users after all operations complete (fire-and-forget)
+    const mentionsResult = pageMutationMeta?.mentionsResult;
+    if (mentionsResult && mentionsResult.mentionedByUserId && mentionsResult.newlyMentionedUserIds.length > 0) {
+      for (const targetUserId of mentionsResult.newlyMentionedUserIds) {
+        createMentionNotification(targetUserId, mentionsResult.sourcePageId, mentionsResult.mentionedByUserId)
+          .catch((error: unknown) => {
+            loggers.api.error('Failed to send mention notification:', error as Error);
+          });
+      }
+    }
 
     return {
       success: true,

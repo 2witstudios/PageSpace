@@ -10,11 +10,13 @@ import {
   computePageStateHash,
   createPageVersion,
   type PageVersionSource,
+  loggers,
 } from '@pagespace/lib/server';
 import { writePageContent } from '@pagespace/lib/server';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content';
 import { hashWithPrefix } from '@pagespace/lib/server';
-import { syncMentions } from '@/services/api/page-mention-service';
+import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
+import { createMentionNotification } from '@pagespace/lib/notifications';
 
 export class PageRevisionMismatchError extends Error {
   currentRevision: number;
@@ -187,6 +189,9 @@ export async function applyPageMutation({
     newValues[field] = updates[field];
   }
 
+  // Track newly mentioned users to send notifications after transaction commits
+  let mentionsResult: SyncMentionsResult | null = null;
+
   const applyMutationInTx = async (transaction: typeof db) => {
     const updateWhere = expectedRevision !== undefined
       ? and(eq(pages.id, pageId), eq(pages.revision, expectedRevision))
@@ -212,7 +217,7 @@ export async function applyPageMutation({
     }
 
     if (updates.content !== undefined) {
-      await syncMentions(pageId, nextContent, transaction);
+      mentionsResult = await syncMentions(pageId, nextContent, transaction, { mentionedByUserId: context.userId });
     }
 
     await logActivityWithTx({
@@ -266,6 +271,19 @@ export async function applyPageMutation({
     await db.transaction(async (transaction) => {
       await applyMutationInTx(transaction);
     });
+  }
+
+  // Send notifications for newly mentioned users after transaction commits (fire-and-forget)
+  if (mentionsResult) {
+    const result = mentionsResult as SyncMentionsResult;
+    if (result.mentionedByUserId && result.newlyMentionedUserIds.length > 0) {
+      for (const targetUserId of result.newlyMentionedUserIds) {
+        createMentionNotification(targetUserId, result.sourcePageId, result.mentionedByUserId)
+          .catch((error: unknown) => {
+            loggers.api.error('Failed to send mention notification:', error as Error);
+          });
+      }
+    }
   }
 
   return {

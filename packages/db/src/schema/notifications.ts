@@ -18,7 +18,9 @@ export const notificationType = pgEnum('NotificationType', [
   'CONNECTION_REJECTED',
   'NEW_DIRECT_MESSAGE',
   'EMAIL_VERIFICATION_REQUIRED',
-  'TOS_PRIVACY_UPDATED'
+  'TOS_PRIVACY_UPDATED',
+  'MENTION',
+  'TASK_ASSIGNED'
 ]);
 
 export const notifications = pgTable('notifications', {

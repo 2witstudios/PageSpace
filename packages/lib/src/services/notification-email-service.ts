@@ -27,7 +27,9 @@ type NotificationType =
   | 'CONNECTION_REJECTED'
   | 'NEW_DIRECT_MESSAGE'
   | 'EMAIL_VERIFICATION_REQUIRED'
-  | 'TOS_PRIVACY_UPDATED';
+  | 'TOS_PRIVACY_UPDATED'
+  | 'MENTION'
+  | 'TASK_ASSIGNED';
 
 interface NotificationEmailData {
   userId: string;
