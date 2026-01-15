@@ -6,6 +6,7 @@ import { taskManagementTools } from '../tools/task-management-tools';
 import { agentTools } from '../tools/agent-tools';
 import { agentCommunicationTools } from '../tools/agent-communication-tools';
 import { webSearchTools } from '../tools/web-search-tools';
+import { activityTools } from '../tools/activity-tools';
 
 /**
  * PageSpace AI Tools - Internal AI SDK tool implementations
@@ -21,6 +22,7 @@ export const pageSpaceTools = {
   ...agentTools,
   ...agentCommunicationTools,
   ...webSearchTools,
+  ...activityTools,
 };
 
 export type PageSpaceTools = typeof pageSpaceTools;
