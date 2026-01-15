@@ -62,11 +62,13 @@ export function useMCPTools({ conversationId }: UseMCPToolsOptions): UseMCPTools
   // All MCP tool schemas from running servers (unfiltered)
   const [allMcpToolSchemas, setAllMcpToolSchemas] = useState<MCPToolSchema[]>([]);
 
-  // Get names of running servers
+  // Get names of running servers with tools ready
+  // Only consider tools "available" when BOTH status === 'running' AND toolsReady === true
+  // This prevents the race condition where server shows running but tools aren't cached yet
   const runningServerNames = useMemo(() => {
     if (!mcp.isDesktop) return [];
     return Object.entries(mcp.serverStatuses)
-      .filter(([, status]) => status.status === 'running')
+      .filter(([, status]) => status.status === 'running' && status.toolsReady === true)
       .map(([name]) => name);
   }, [mcp.isDesktop, mcp.serverStatuses]);
 
