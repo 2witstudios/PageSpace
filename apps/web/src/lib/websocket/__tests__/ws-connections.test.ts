@@ -257,7 +257,7 @@ describe('WebSocket Connection Manager', () => {
       const health = checkConnectionHealth(mockClient);
 
       expect(health.isHealthy).toBe(false);
-      expect(health.reason).toBe('Challenge verification not completed');
+      expect(health.reason).toBe('Authentication not completed');
     });
 
     it('should return unhealthy for unregistered connection', () => {

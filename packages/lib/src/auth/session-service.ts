@@ -12,6 +12,7 @@ export interface SessionClaims {
   tokenVersion: number;
   type: 'user' | 'service' | 'mcp' | 'device';
   scopes: string[];
+  expiresAt: Date; // When this session expires - critical for enforcing TTL on persistent connections
   resourceType?: string;
   resourceId?: string;
   driveId?: string;
@@ -111,6 +112,7 @@ export class SessionService {
       tokenVersion: session.tokenVersion,
       type: session.type,
       scopes: session.scopes,
+      expiresAt: session.expiresAt,
       resourceType: session.resourceType ?? undefined,
       resourceId: session.resourceId ?? undefined,
       driveId: session.driveId ?? undefined,

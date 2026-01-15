@@ -2,9 +2,9 @@
 
 > **Zero-Trust Enterprise Cloud Architecture Implementation**
 >
-> Status: Phase 0-2 Complete, Phase 3 Ready
+> Status: Phase 0-2 Complete, Desktop WS Migration Complete, Phase 3 Ready
 > Created: 2026-01-05
-> Last Updated: 2026-01-13
+> Last Updated: 2026-01-14
 > Sources: cloud-security-analysis.md, cloud-security-gaps.md, cloud-security-tdd-spec.md, zero-trust-architecture.md
 
 ---
@@ -42,9 +42,14 @@ Phase 5: Monitoring & Incident Response
 
 ---
 
-## Lessons Learned (P0-P1 Implementation)
+## Lessons Learned (P0-P2 Implementation)
 
-> Post-implementation insights from PR #167 remediation rounds.
+> Post-implementation insights from PR #167 remediation rounds and desktop WS migration.
+
+### Desktop WebSocket JWT Timing Bug (P2 Epilogue)
+- **Issue:** Desktop MCP WebSocket auth used JWT + challenge-response. JWT refresh between connection and challenge caused `iat` mismatch, breaking all MCP tool execution.
+- **Solution:** Migrated to opaque session tokens via `/api/auth/ws-token` endpoint. Desktop requests WS token, connects with `Authorization: Bearer`, server validates via session service.
+- **Lesson:** JWT payloads are mutable (refreshes change `iat`). Use opaque tokens for persistent connections where timing matters.
 
 ### IP Extraction Standardization
 - **Issue:** IP extraction logic duplicated across 12 auth routes

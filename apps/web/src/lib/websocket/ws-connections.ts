@@ -14,12 +14,12 @@ const connections = new Map<string, WebSocket>();
 // Track connection metadata
 interface ConnectionMetadata {
   userId: string;
+  sessionId?: string; // From session service
+  sessionExpiresAt?: Date; // When the session token expires - connection should be closed after this
   connectedAt: Date;
   lastPing?: Date;
   fingerprint?: string;
-  challengeVerified: boolean;
-  jwtExpiryTimer?: NodeJS.Timeout;
-  jwtExpiresAt?: Date;
+  challengeVerified: boolean; // True once authenticated (immediately for opaque tokens)
 }
 
 const connectionMetadata = new Map<WebSocket, ConnectionMetadata>();
@@ -45,7 +45,9 @@ const wsLogger = logger.child({ component: 'ws-connections' });
 export function registerConnection(
   userId: string,
   ws: WebSocket,
-  fingerprint?: string
+  fingerprint?: string,
+  sessionId?: string,
+  sessionExpiresAt?: Date
 ): void {
   // Close existing connection if any
   const existingConnection = connections.get(userId);
@@ -62,6 +64,8 @@ export function registerConnection(
   connections.set(userId, ws);
   connectionMetadata.set(ws, {
     userId,
+    sessionId,
+    sessionExpiresAt,
     connectedAt: new Date(),
     fingerprint,
     challengeVerified: false,
@@ -69,6 +73,8 @@ export function registerConnection(
 
   wsLogger.info('WebSocket connection registered', {
     userId,
+    sessionId,
+    sessionExpiresAt: sessionExpiresAt?.toISOString(),
     totalConnections: connections.size,
     action: 'register',
   });
@@ -79,9 +85,6 @@ export function registerConnection(
  * Only removes the connection if it's still the active one (prevents race condition)
  */
 export function unregisterConnection(userId: string, ws: WebSocket): void {
-  // Clear JWT expiry timer before unregistering
-  clearJWTExpiryTimer(ws);
-
   // Only remove if this is still the active connection
   // Prevents race condition when old connection closes after new one registered
   const currentConnection = connections.get(userId);
@@ -148,76 +151,8 @@ export function markChallengeVerified(ws: WebSocket): void {
 }
 
 /**
- * Set JWT expiry timer for automatic disconnection
- * Schedules connection closure when JWT expires
- */
-export function setJWTExpiryTimer(
-  ws: WebSocket,
-  expiresAt: Date,
-  onExpiry?: () => void
-): void {
-  const metadata = connectionMetadata.get(ws);
-  if (!metadata) {
-    return;
-  }
-
-  // Clear existing timer if any
-  if (metadata.jwtExpiryTimer) {
-    clearTimeout(metadata.jwtExpiryTimer);
-  }
-
-  const now = Date.now();
-  const expiresAtMs = expiresAt.getTime();
-  const timeUntilExpiry = expiresAtMs - now;
-
-  // Only set timer if expiry is in the future
-  if (timeUntilExpiry > 0) {
-    metadata.jwtExpiresAt = expiresAt;
-    metadata.jwtExpiryTimer = setTimeout(() => {
-      wsLogger.info('JWT expired, closing connection', {
-        userId: metadata.userId,
-        expiresAt: expiresAt.toISOString(),
-        action: 'jwt_expiry',
-      });
-
-      // Execute callback if provided
-      if (onExpiry) {
-        onExpiry();
-      }
-
-      // Close connection with Session Expired message
-      if (ws.readyState === 1) {
-        // OPEN
-        ws.close(1008, 'Session expired');
-      }
-
-      // Clean up metadata
-      metadata.jwtExpiryTimer = undefined;
-      metadata.jwtExpiresAt = undefined;
-    }, timeUntilExpiry);
-  } else {
-    wsLogger.warn('JWT already expired', {
-      userId: metadata.userId,
-      expiresAt: expiresAt.toISOString(),
-      action: 'jwt_already_expired',
-    });
-  }
-}
-
-/**
- * Clear JWT expiry timer (used on disconnect)
- */
-export function clearJWTExpiryTimer(ws: WebSocket): void {
-  const metadata = connectionMetadata.get(ws);
-  if (metadata?.jwtExpiryTimer) {
-    clearTimeout(metadata.jwtExpiryTimer);
-    metadata.jwtExpiryTimer = undefined;
-    metadata.jwtExpiresAt = undefined;
-  }
-}
-
-/**
  * Check if connection has completed challenge verification
+ * With opaque token auth, this is set to true immediately after session validation
  */
 export function isChallengeVerified(ws: WebSocket): boolean {
   const metadata = connectionMetadata.get(ws);
@@ -240,25 +175,38 @@ export function verifyConnectionFingerprint(
 }
 
 /**
- * Clean up stale connections that are closed or inactive
- * Prevents memory leaks from connections that weren't properly unregistered
+ * Clean up stale connections that are closed, inactive, or have expired sessions
+ * Prevents memory leaks and enforces session expiry security
  */
 function cleanupStaleConnections(): void {
   const now = Date.now();
-  const staleConnections: Array<{ userId: string; ws: WebSocket }> = [];
+  const nowDate = new Date();
+  const staleConnections: Array<{ userId: string; ws: WebSocket; reason: string }> = [];
 
-  // Find closed or stale connections
+  // Find closed, stale, or expired connections
   for (const [userId, ws] of connections.entries()) {
     const metadata = connectionMetadata.get(ws);
 
     // Check if WebSocket is closed (readyState 2 = CLOSING, 3 = CLOSED)
     if (ws.readyState === 2 || ws.readyState === 3) {
-      staleConnections.push({ userId, ws });
+      staleConnections.push({ userId, ws, reason: 'closed' });
       continue;
     }
 
-    // Check if connection has been inactive for too long
     if (metadata) {
+      // Check if session has expired (critical security check)
+      if (metadata.sessionExpiresAt && nowDate > metadata.sessionExpiresAt) {
+        wsLogger.warn('Closing connection due to expired session', {
+          userId,
+          sessionId: metadata.sessionId,
+          expiredAt: metadata.sessionExpiresAt.toISOString(),
+          action: 'session_expired_cleanup',
+        });
+        staleConnections.push({ userId, ws, reason: 'session_expired' });
+        continue;
+      }
+
+      // Check if connection has been inactive for too long
       const lastActivity = metadata.lastPing?.getTime() || metadata.connectedAt.getTime();
       const inactiveDuration = now - lastActivity;
 
@@ -268,7 +216,7 @@ function cleanupStaleConnections(): void {
           inactiveDurationMinutes: Math.round(inactiveDuration / 60000),
           action: 'stale_detected',
         });
-        staleConnections.push({ userId, ws });
+        staleConnections.push({ userId, ws, reason: 'inactive' });
       }
     }
   }
@@ -280,14 +228,19 @@ function cleanupStaleConnections(): void {
       action: 'cleanup_start',
     });
 
-    for (const { userId, ws } of staleConnections) {
+    for (const { userId, ws, reason } of staleConnections) {
       // Try to close if not already closed
       if (ws.readyState === 0 || ws.readyState === 1) {
         try {
-          ws.close(1000, 'Connection cleanup - inactive');
+          // Use appropriate close message based on reason
+          const closeMessage = reason === 'session_expired'
+            ? 'Session expired'
+            : 'Connection cleanup - inactive';
+          ws.close(1000, closeMessage);
         } catch (error) {
           wsLogger.warn('Error closing stale connection', {
             userId,
+            reason,
             error: error instanceof Error ? error.message : String(error),
             action: 'close_error',
           });
@@ -390,11 +343,12 @@ export interface ConnectionHealthCheck {
   readyState: number;
   lastPing?: Date;
   connectedDuration: number;
+  sessionExpired?: boolean;
 }
 
 /**
  * Performs comprehensive health check on a WebSocket connection
- * Verifies connection is open, authenticated, and responsive
+ * Verifies connection is open, authenticated, session not expired, and responsive
  * Should be called before executing expensive operations like tool execution
  *
  * @param ws - WebSocket connection to check
@@ -425,14 +379,32 @@ export function checkConnectionHealth(ws: WebSocket): ConnectionHealthCheck {
     };
   }
 
-  // Check 3: Challenge verification completed
+  // Check 3: Authentication verified (set immediately after session validation)
   if (!metadata.challengeVerified) {
     return {
       isHealthy: false,
-      reason: 'Challenge verification not completed',
+      reason: 'Authentication not completed',
       readyState: ws.readyState,
       lastPing: metadata.lastPing,
       connectedDuration: Date.now() - metadata.connectedAt.getTime(),
+    };
+  }
+
+  // Check 4: Session not expired (critical for security - prevents indefinite access)
+  if (metadata.sessionExpiresAt && new Date() > metadata.sessionExpiresAt) {
+    wsLogger.warn('Session expired for WebSocket connection', {
+      userId: metadata.userId,
+      sessionId: metadata.sessionId,
+      expiredAt: metadata.sessionExpiresAt.toISOString(),
+      action: 'session_expired',
+    });
+    return {
+      isHealthy: false,
+      reason: 'Session expired',
+      readyState: ws.readyState,
+      lastPing: metadata.lastPing,
+      connectedDuration: Date.now() - metadata.connectedAt.getTime(),
+      sessionExpired: true,
     };
   }
 

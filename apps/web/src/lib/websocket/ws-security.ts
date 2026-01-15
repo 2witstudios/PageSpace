@@ -1,147 +1,17 @@
 import type { NextRequest } from 'next/server';
-import { createHash, randomBytes } from 'crypto';
+import { createHash } from 'crypto';
 import { logger } from '@pagespace/lib';
 
 /**
  * WebSocket Security Utilities
  *
  * Implements defense-in-depth security controls for WebSocket connections:
- * - Challenge-response authentication
  * - Connection fingerprinting (IP + User-Agent hashing)
  * - Message size validation
  * - Security event logging
- */
-
-// ============================================================================
-// CHALLENGE-RESPONSE AUTHENTICATION
-// ============================================================================
-
-interface Challenge {
-  challenge: string;
-  expiresAt: number;
-  attempts: number;
-}
-
-// Store active challenges by connection (in-memory for single-instance deployment)
-const activeChallenges = new Map<string, Challenge>();
-
-// Clean up expired challenges every 5 minutes
-setInterval(
-  () => {
-    const now = Date.now();
-    for (const [key, challenge] of activeChallenges.entries()) {
-      if (now > challenge.expiresAt) {
-        activeChallenges.delete(key);
-      }
-    }
-  },
-  5 * 60 * 1000
-);
-
-/**
- * Generate a cryptographic challenge for post-connection verification
  *
- * @param userId - User ID to associate challenge with
- * @returns Challenge string to send to client
+ * Note: Authentication is now handled by session service (opaque tokens)
  */
-export function generateChallenge(userId: string): string {
-  // Generate 32-byte random challenge
-  const challenge = randomBytes(32).toString('hex');
-
-  // Store challenge with 30-second expiration
-  activeChallenges.set(userId, {
-    challenge,
-    expiresAt: Date.now() + 30000, // 30 seconds
-    attempts: 0,
-  });
-
-  return challenge;
-}
-
-/**
- * Verify challenge response from client
- *
- * Client must compute: SHA256(challenge + userId + sessionId)
- *
- * @param userId - User ID
- * @param response - Client's challenge response
- * @param sessionId - Session ID from JWT
- * @returns true if response is valid and within attempt limits
- */
-export function verifyChallengeResponse(
-  userId: string,
-  response: string,
-  sessionId: string
-): { valid: boolean; failureReason?: string } {
-  const challengeData = activeChallenges.get(userId);
-
-  if (!challengeData) {
-    return {
-      valid: false,
-      failureReason: 'No active challenge or challenge expired',
-    };
-  }
-
-  // Check expiration
-  if (Date.now() > challengeData.expiresAt) {
-    activeChallenges.delete(userId);
-    return { valid: false, failureReason: 'Challenge expired' };
-  }
-
-  // Increment attempt counter
-  challengeData.attempts++;
-
-  // Prevent brute force - max 3 attempts
-  if (challengeData.attempts > 3) {
-    activeChallenges.delete(userId);
-    return {
-      valid: false,
-      failureReason: 'Too many failed challenge attempts',
-    };
-  }
-
-  // Compute expected response: SHA256(challenge + userId + sessionId)
-  const expectedResponse = createHash('sha256')
-    .update(challengeData.challenge + userId + sessionId)
-    .digest('hex');
-
-  // Timing-safe comparison
-  const valid = timingSafeEqual(
-    Buffer.from(response, 'hex'),
-    Buffer.from(expectedResponse, 'hex')
-  );
-
-  if (valid) {
-    // Clear challenge on success
-    activeChallenges.delete(userId);
-    return { valid: true };
-  }
-
-  return { valid: false, failureReason: 'Invalid challenge response' };
-}
-
-/**
- * Timing-safe equality check to prevent timing attacks
- */
-function timingSafeEqual(a: Buffer, b: Buffer): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a[i] ^ b[i];
-  }
-
-  return result === 0;
-}
-
-/**
- * Clear challenge for a user (e.g., on disconnect)
- */
-export function clearChallenge(userId: string): void {
-  activeChallenges.delete(userId);
-}
 
 // ============================================================================
 // CONNECTION FINGERPRINTING
@@ -324,26 +194,4 @@ export function isSecureConnection(url: string, request?: { headers: { get: (nam
 
   // Fallback: check URL protocol directly (for direct connections without proxy)
   return url.startsWith('wss://') || url.startsWith('https://');
-}
-
-/**
- * Extract session ID from JWT payload
- *
- * Session ID is used for challenge-response and CSRF validation
- *
- * @param jwtPayload - Decoded JWT payload
- * @returns Session ID
- */
-export function getSessionIdFromPayload(jwtPayload: {
-  userId: string;
-  tokenVersion: number;
-  iat?: number;
-}): string {
-  // Session ID = hash(userId + tokenVersion + iat)
-  // This ensures session changes when token refreshes
-  return createHash('sha256')
-    .update(
-      `${jwtPayload.userId}:${jwtPayload.tokenVersion}:${jwtPayload.iat || 0}`
-    )
-    .digest('hex');
 }

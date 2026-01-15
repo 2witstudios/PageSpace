@@ -11,13 +11,11 @@ import type { NextRequest } from 'next/server';
  * - A04: Insecure Design
  * - A07: Identification and Authentication Failures
  * - A09: Security Logging and Monitoring Failures
+ *
+ * Auth flow: Opaque session tokens (not JWT challenge-response)
  */
 
 // Mock dependencies
-vi.mock('@/lib/auth', () => ({
-  verifyAuth: vi.fn(),
-}));
-
 vi.mock('@/lib/websocket/ws-connections', () => ({
   registerConnection: vi.fn(),
   unregisterConnection: vi.fn(),
@@ -26,10 +24,9 @@ vi.mock('@/lib/websocket/ws-connections', () => ({
   verifyConnectionFingerprint: vi.fn(),
   startCleanupInterval: vi.fn(),
   stopCleanupInterval: vi.fn(),
-  setJWTExpiryTimer: vi.fn(),
-  clearJWTExpiryTimer: vi.fn(),
   markChallengeVerified: vi.fn(),
-  isChallengeVerified: vi.fn(),
+  isChallengeVerified: vi.fn(() => true),
+  checkConnectionHealth: vi.fn(() => ({ isHealthy: true })),
 }));
 
 vi.mock('@/lib/mcp/mcp-bridge', () => ({
@@ -39,34 +36,43 @@ vi.mock('@/lib/mcp/mcp-bridge', () => ({
 }));
 
 vi.mock('@/lib/websocket/ws-security', () => ({
-  generateChallenge: vi.fn(() => 'mock_challenge_12345'),
-  verifyChallengeResponse: vi.fn(() => ({ valid: true })),
   getConnectionFingerprint: vi.fn(() => 'mock_fingerprint_hash_1234567890abcdef'),
   verifyFingerprint: vi.fn(() => true),
   validateMessageSize: vi.fn(() => ({ valid: true })),
   logSecurityEvent: vi.fn(),
   isSecureConnection: vi.fn(() => true),
-  getSessionIdFromPayload: vi.fn(() => 'session_123'),
-  clearChallenge: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
-  decodeToken: vi.fn(() => Promise.resolve({ userId: 'user_123', tokenVersion: 1, iat: 1234567890 })),
+vi.mock('@pagespace/lib', () => ({
+  sessionService: {
+    validateSession: vi.fn(),
+    createSession: vi.fn(),
+  },
+  logger: {
+    child: vi.fn(() => ({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      fatal: vi.fn(),
+    })),
+  },
 }));
 
-import { verifyAuth } from '@/lib/auth';
 import {
   registerConnection,
   verifyConnectionFingerprint,
-  isChallengeVerified,
+  markChallengeVerified,
 } from '@/lib/websocket';
 import {
-  generateChallenge,
-  verifyChallengeResponse,
   getConnectionFingerprint,
   logSecurityEvent,
   validateMessageSize,
 } from '@/lib/websocket';
+import { sessionService } from '@pagespace/lib';
+
+// Mock session expiry (1 hour from now)
+const mockSessionExpiry = new Date(Date.now() + 60 * 60 * 1000);
 
 describe('WebSocket MCP Bridge - Security Tests', () => {
   let mockClient: WebSocket;
@@ -84,12 +90,12 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       readyState: 1, // OPEN
     } as unknown as WebSocket;
 
-    // Create mock request
+    // Create mock request with Authorization header (opaque token auth)
     mockRequest = {
       headers: new Headers({
         'user-agent': 'Mozilla/5.0 Test',
         'x-forwarded-for': '192.168.1.1',
-        'cookie': 'accessToken=mock_jwt_token',
+        'authorization': 'Bearer svc_mock_opaque_token_12345',
       }),
       url: 'wss://example.com/api/mcp-ws',
     } as unknown as NextRequest;
@@ -102,78 +108,72 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
   });
 
   describe('A01 - Broken Access Control', () => {
-    it('should reject unauthenticated WebSocket connection', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue(null);
+    it('should reject connection without Authorization header', async () => {
+      const requestWithoutAuth = {
+        ...mockRequest,
+        headers: new Headers({
+          'user-agent': 'Mozilla/5.0 Test',
+          'x-forwarded-for': '192.168.1.1',
+        }),
+      } as unknown as NextRequest;
 
       const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
+      await UPGRADE(mockClient, mockServer, requestWithoutAuth);
 
-      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Unauthorized');
+      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Authorization required');
       expect(registerConnection).not.toHaveBeenCalled();
     });
 
-    it('should reject connection after JWT expires mid-session', async () => {
-      // Initial connection succeeds
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
+    it('should reject connection with invalid session token', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      // registerConnection is called with userId, ws, and fingerprint
-      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String));
-
-      // Simulate JWT expiration - connection should be terminated
-      // This test ensures connections don't persist after token expiration
+      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Invalid or expired token');
+      expect(registerConnection).not.toHaveBeenCalled();
     });
 
-    it('should prevent unauthorized tool execution', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+    it('should accept connection with valid session token', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      const messageHandler = vi.mocked(mockClient.on).mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      if (messageHandler) {
-        // Attempt to execute tool before challenge completion
-        const toolRequest = JSON.stringify({
-          type: 'tool_execute',
-          id: 'req_123',
-          serverName: 'test-server',
-          toolName: 'test-tool',
-        });
-
-        await messageHandler.call(mockClient, Buffer.from(toolRequest));
-
-        // Should reject if challenge not completed
-        expect(mockClient.send).toHaveBeenCalledWith(
-          expect.stringContaining('challenge_required')
-        );
-      }
+      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String), 'session_123', mockSessionExpiry);
+      expect(markChallengeVerified).toHaveBeenCalledWith(mockClient);
     });
 
-    it('should close existing connection when user connects from new device', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+    it('should reject connection with insufficient scopes', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['read:pages'], // Missing mcp:* scope
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      // registerConnection should handle closing existing connections (includes fingerprint)
-      expect(registerConnection).toHaveBeenCalledWith('user_123', mockClient, expect.any(String));
+      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Insufficient permissions');
+      expect(logSecurityEvent).toHaveBeenCalledWith(
+        'ws_insufficient_permissions',
+        expect.objectContaining({
+          userId: 'user_123',
+          severity: 'warn',
+        })
+      );
     });
   });
 
@@ -183,6 +183,10 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         ...mockRequest,
         url: 'ws://example.com/api/mcp-ws', // Non-secure protocol
       } as unknown as NextRequest;
+
+      // Mock isSecureConnection to return false for this test
+      const { isSecureConnection } = await import('@/lib/websocket/ws-security');
+      vi.mocked(isSecureConnection).mockReturnValue(false);
 
       // In production, should enforce WSS
       if (process.env.NODE_ENV === 'production') {
@@ -196,36 +200,29 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       }
     });
 
-    it('should verify JWT signature cryptographically', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue(null);
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // verifyAuth should have been called, which validates JWT signature
-      expect(verifyAuth).toHaveBeenCalledWith(mockRequest);
-      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Unauthorized');
-    });
-
-    it('should not leak encryption keys or sensitive data in logs', async () => {
+    it('should not leak sensitive data in logs', async () => {
       const consoleSpy = vi.spyOn(console, 'log');
       const errorSpy = vi.spyOn(console, 'error');
 
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      // Check no sensitive data in logs
       const allLogs = [
         ...consoleSpy.mock.calls.flat(),
         ...errorSpy.mock.calls.flat(),
       ].join(' ');
 
+      // Should not contain tokens, API keys, passwords
       expect(allLogs).not.toMatch(/password|secret|key|token(?!Version)/i);
 
       consoleSpy.mockRestore();
@@ -234,93 +231,34 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
   });
 
   describe('A04 - Insecure Design', () => {
-    it('should implement challenge-response after initial connection', async () => {
-      const mockChallenge = 'challenge_abc123';
-
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      vi.mocked(generateChallenge).mockReturnValue(mockChallenge);
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // Should send challenge to client
-      expect(mockClient.send).toHaveBeenCalledWith(
-        expect.stringContaining('challenge')
-      );
-    });
-
-    it('should verify challenge response before allowing tool execution', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      vi.mocked(verifyChallengeResponse).mockReturnValue({ valid: false, failureReason: 'Invalid response' });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      const messageHandler = vi.mocked(mockClient.on).mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      expect(messageHandler).toBeDefined();
-
-      // Invalid challenge response (must be 64 chars - SHA256 hex format)
-      const response = JSON.stringify({
-        type: 'challenge_response',
-        response: 'a'.repeat(64), // Valid format but wrong value
-      });
-
-      messageHandler!.call(mockClient, Buffer.from(response));
-
-      // Wait for async decodeToken promise to resolve
-      await vi.waitFor(() => {
-        expect(logSecurityEvent).toHaveBeenCalledWith(
-          'ws_challenge_verification_failed',
-          expect.objectContaining({
-            userId: 'user_123',
-            reason: 'Invalid response',
-            severity: 'warn',
-          })
-        );
-      });
-
-      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Challenge verification failed');
-    });
-
     it('should implement connection fingerprinting', async () => {
-      const mockFingerprint = 'fingerprint_hash_abc123';
-
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
-
-      vi.mocked(getConnectionFingerprint).mockReturnValue(mockFingerprint);
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
 
-      // Should generate fingerprint from IP + User-Agent
       expect(getConnectionFingerprint).toHaveBeenCalledWith(mockRequest);
     });
 
-    it('should detect fingerprint changes and require re-verification', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+    it('should detect fingerprint changes and close connection', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
-      // Fingerprint check happens on ping message
       vi.mocked(verifyConnectionFingerprint).mockReturnValue(false);
 
       const { UPGRADE } = await import('../route');
@@ -336,7 +274,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const pingMessage = JSON.stringify({ type: 'ping' });
       messageHandler!.call(mockClient, Buffer.from(pingMessage));
 
-      // Should log fingerprint mismatch and close connection
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'ws_fingerprint_mismatch',
         expect.objectContaining({
@@ -345,105 +282,13 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         })
       );
 
-      expect(mockClient.send).toHaveBeenCalledWith(
-        expect.stringContaining('fingerprint_mismatch')
-      );
-
       expect(mockClient.close).toHaveBeenCalledWith(1008, 'Security violation');
-    });
-
-    it('should implement connection timeout for inactive connections', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // After 5 minutes of no ping, connection should be closed
-      // This test would need to advance timers in real implementation
     });
   });
 
   describe('A07 - Identification and Authentication Failures', () => {
-    it('should invalidate connection when token version changes', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // Token version incremented (password change, logout all sessions)
-      // Connection should be terminated
-      // This would be handled by periodic token revalidation
-    });
-
-    it('should enforce session expiration even for active connections', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // Even if connection is active, JWT expiration should terminate it
-      // Should implement periodic revalidation
-    });
-
-    it('should prevent brute force challenge attempts', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      // Simulate brute force detection - too many failed attempts
-      vi.mocked(verifyChallengeResponse).mockReturnValue({
-        valid: false,
-        failureReason: 'Too many failed challenge attempts',
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      const messageHandler = vi.mocked(mockClient.on).mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      expect(messageHandler).toBeDefined();
-
-      // Challenge response must be 64 chars (SHA256 hex format)
-      const response = JSON.stringify({
-        type: 'challenge_response',
-        response: 'b'.repeat(64),
-      });
-
-      messageHandler!.call(mockClient, Buffer.from(response));
-
-      // Wait for async processing
-      await vi.waitFor(() => {
-        expect(logSecurityEvent).toHaveBeenCalledWith(
-          'ws_challenge_verification_failed',
-          expect.objectContaining({
-            userId: 'user_123',
-            reason: 'Too many failed challenge attempts',
-            severity: 'warn',
-          })
-        );
-      });
-
-      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Challenge verification failed');
-    });
-
-    it('should log all authentication failures', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue(null);
+    it('should log authentication failures', async () => {
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const { UPGRADE } = await import('../route');
       await UPGRADE(mockClient, mockServer, mockRequest);
@@ -452,20 +297,40 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         'ws_authentication_failed',
         expect.objectContaining({
           severity: 'warn',
-          reason: 'Invalid or missing JWT',
+          reason: 'Invalid or expired session token',
         })
       );
 
-      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Unauthorized');
+      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Invalid or expired token');
+    });
+
+    it('should handle session validation errors gracefully', async () => {
+      vi.mocked(sessionService.validateSession).mockRejectedValue(new Error('Database error'));
+
+      const { UPGRADE } = await import('../route');
+      await UPGRADE(mockClient, mockServer, mockRequest);
+
+      expect(logSecurityEvent).toHaveBeenCalledWith(
+        'ws_session_validation_error',
+        expect.objectContaining({
+          severity: 'error',
+        })
+      );
+
+      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Authentication error');
     });
   });
 
   describe('A09 - Security Logging and Monitoring Failures', () => {
     it('should log successful connections with user ID', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -475,82 +340,21 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
         'ws_connection_established',
         expect.objectContaining({
           userId: 'user_123',
+          sessionId: 'session_123',
           severity: 'info',
         })
       );
-    });
-
-    it('should log tool execution requests for audit trail', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      // Mark challenge as verified so tool_result can be processed
-      vi.mocked(isChallengeVerified).mockReturnValue(true);
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      const messageHandler = vi.mocked(mockClient.on).mock.calls.find(
-        (call) => call[0] === 'message'
-      )?.[1];
-
-      expect(messageHandler).toBeDefined();
-
-      const toolResult = JSON.stringify({
-        type: 'tool_result',
-        id: 'req_123',
-        success: true,
-      });
-
-      messageHandler!.call(mockClient, Buffer.from(toolResult));
-
-      expect(logSecurityEvent).toHaveBeenCalledWith(
-        'ws_tool_execution_result',
-        expect.objectContaining({
-          userId: 'user_123',
-          requestId: 'req_123',
-          success: true,
-          severity: 'info',
-        })
-      );
-    });
-
-    it('should NOT log sensitive data (tokens, passwords, keys)', async () => {
-      const consoleSpy = vi.spyOn(console, 'log');
-      const errorSpy = vi.spyOn(console, 'error');
-
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      const allLogs = [
-        ...consoleSpy.mock.calls.flat(),
-        ...errorSpy.mock.calls.flat(),
-      ]
-        .map((arg) => String(arg))
-        .join(' ');
-
-      // Should not contain JWT tokens, API keys, passwords
-      expect(allLogs).not.toMatch(/Bearer\s+[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+/);
-      expect(allLogs).not.toMatch(/password|api[_-]?key|secret/i);
-
-      consoleSpy.mockRestore();
-      errorSpy.mockRestore();
     });
 
     it('should log disconnections with reason', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -577,13 +381,16 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
   describe('Additional Security Controls', () => {
     it('should validate message size to prevent DoS', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
-      // Mock validateMessageSize to return invalid for large messages
       vi.mocked(validateMessageSize).mockReturnValue({
         valid: false,
         size: 10 * 1024 * 1024,
@@ -599,7 +406,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(messageHandler).toBeDefined();
 
-      // Send a message (size validation is mocked)
       const largeMessage = JSON.stringify({ type: 'ping' });
       messageHandler!.call(mockClient, Buffer.from(largeMessage));
 
@@ -617,13 +423,16 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
     });
 
     it('should handle malformed JSON gracefully', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
-      // Reset validateMessageSize to valid for this test
       vi.mocked(validateMessageSize).mockReturnValue({ valid: true });
 
       const { UPGRADE } = await import('../route');
@@ -635,7 +444,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(messageHandler).toBeDefined();
 
-      // Send malformed JSON
       messageHandler!.call(mockClient, Buffer.from('{ invalid json'));
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
@@ -651,31 +459,15 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       );
     });
 
-    it('should enforce secure cookie attributes', async () => {
-      // JWT cookies should have:
-      // - httpOnly: true (prevent XSS)
-      // - secure: true (HTTPS only in production)
-      // - sameSite: 'strict' or 'lax' (prevent CSRF)
-
-      // This is validated by verifyAuth implementation
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
-        tokenVersion: 1,
-      });
-
-      const { UPGRADE } = await import('../route');
-      await UPGRADE(mockClient, mockServer, mockRequest);
-
-      // If verifyAuth succeeds, cookies were properly validated
-      expect(verifyAuth).toHaveBeenCalled();
-    });
-
     it('should handle WebSocket errors without crashing', async () => {
-      vi.mocked(verifyAuth).mockResolvedValue({
-        id: 'user_123',
-        role: 'user',
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'session_123',
+        userId: 'user_123',
+        userRole: 'user',
         tokenVersion: 1,
+        type: 'service',
+        scopes: ['mcp:*'],
+        expiresAt: mockSessionExpiry,
       });
 
       const { UPGRADE } = await import('../route');
@@ -687,7 +479,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
 
       expect(errorHandler).toBeDefined();
 
-      // Call error handler - should not throw
       errorHandler!.call(mockClient, new Error('Test error'));
 
       expect(logSecurityEvent).toHaveBeenCalledWith(
@@ -714,7 +505,6 @@ describe('WebSocket MCP Bridge - Security Tests', () => {
       const { GET } = await import('../route');
       const response = GET();
 
-      // Should have security headers
       expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
       expect(response.headers.get('X-Frame-Options')).toBe('DENY');
     });
