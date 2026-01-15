@@ -82,6 +82,65 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
+const createPageFixture = (overrides: Partial<{
+  id: string;
+  driveId: string;
+  title: string;
+}> = {}) => ({
+  id: overrides.id ?? 'page_1',
+  driveId: overrides.driveId ?? 'drive_1',
+  title: overrides.title ?? 'Test Page',
+  type: 'TASK_LIST' as const,
+  content: '',
+  isPaginated: false,
+  position: 0,
+  isTrashed: false,
+  trashedAt: null,
+  aiProvider: null,
+  aiModel: null,
+  systemPrompt: null,
+  enabledTools: null,
+  includeDrivePrompt: false,
+  agentDefinition: null,
+  visibleToGlobalAssistant: true,
+  includePageTree: false,
+  pageTreeScope: 'children' as const,
+  fileSize: null,
+  mimeType: null,
+  originalFileName: null,
+  filePath: null,
+  fileMetadata: null,
+  processingStatus: 'pending',
+  processingError: null,
+  processedAt: null,
+  extractionMethod: null,
+  extractionMetadata: null,
+  contentHash: null,
+  createdAt: new Date('2024-01-01'),
+  updatedAt: new Date('2024-01-01'),
+  revision: 0,
+  stateHash: null,
+  parentId: null,
+  originalParentId: null,
+});
+
+const createTaskListFixture = (overrides: Partial<{
+  id: string;
+  pageId: string;
+  title: string;
+}> = {}) => ({
+  id: overrides.id ?? 'tasklist_1',
+  pageId: overrides.pageId ?? 'page_tasklist',
+  title: overrides.title ?? 'My Tasks',
+  userId: 'user_123',
+  conversationId: null,
+  description: null,
+  status: 'pending' as const,
+  metadata: null,
+  createdAt: new Date('2024-01-01'),
+  updatedAt: new Date('2024-01-01'),
+});
+
 const createTaskFixture = (overrides: Partial<{
   id: string;
   taskListId: string;
@@ -89,8 +148,8 @@ const createTaskFixture = (overrides: Partial<{
   assigneeId: string;
   pageId: string;
   title: string;
-  status: string;
-  priority: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
+  priority: 'low' | 'medium' | 'high';
   position: number;
   updatedAt: Date;
   assignee: object | null;
@@ -105,13 +164,14 @@ const createTaskFixture = (overrides: Partial<{
   pageId: overrides.pageId ?? 'page_task',
   title: overrides.title ?? 'Test Task',
   description: null,
-  status: overrides.status ?? 'pending',
-  priority: overrides.priority ?? 'medium',
+  status: overrides.status ?? ('pending' as const),
+  priority: overrides.priority ?? ('medium' as const),
   position: overrides.position ?? 0,
   dueDate: null,
   completedAt: null,
   createdAt: new Date('2024-01-01'),
   updatedAt: overrides.updatedAt ?? new Date('2024-01-02'),
+  metadata: null,
   assignee: overrides.assignee ?? { id: 'user_123', name: 'Test User', image: null },
   assigneeAgent: null,
   user: { id: 'user_creator', name: 'Creator', image: null },
@@ -196,10 +256,10 @@ describe('GET /api/tasks', () => {
     it('should return tasks only from user-accessible drives', async () => {
       vi.mocked(getDriveIdsForUser).mockResolvedValue(['drive_1', 'drive_2']);
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        { id: 'page_tasklist', driveId: 'drive_1', title: 'Task List' },
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Task List' }),
       ]);
       vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        { id: 'tasklist_1', pageId: 'page_tasklist' },
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
         createTaskFixture({ id: 'task_1' }),
@@ -256,10 +316,10 @@ describe('GET /api/tasks', () => {
 
     it('should return tasks with enriched drive info', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        { id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' },
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }),
       ]);
       vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        { id: 'tasklist_1', pageId: 'page_tasklist' },
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
         createTaskFixture({ id: 'task_1', taskListId: 'tasklist_1' }),
@@ -283,10 +343,10 @@ describe('GET /api/tasks', () => {
   describe('pagination', () => {
     it('should respect limit and offset parameters', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        { id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' },
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
       ]);
       vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        { id: 'tasklist_1', pageId: 'page_tasklist' },
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
 
       const request = new Request('https://example.com/api/tasks?context=user&limit=10&offset=5');
@@ -302,10 +362,10 @@ describe('GET /api/tasks', () => {
 
     it('should return hasMore=true when more tasks exist', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        { id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' },
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
       ]);
       vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        { id: 'tasklist_1', pageId: 'page_tasklist' },
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
         createTaskFixture({ id: 'task_1' }),
@@ -331,10 +391,10 @@ describe('GET /api/tasks', () => {
   describe('filters', () => {
     beforeEach(() => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        { id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' },
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
       ]);
       vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        { id: 'tasklist_1', pageId: 'page_tasklist' },
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
     });
 
@@ -371,10 +431,10 @@ describe('GET /api/tasks', () => {
       } as any);
 
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        { id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' },
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
       ]);
       vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        { id: 'tasklist_1', pageId: 'page_tasklist' },
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
       ]);
 
       const request = new Request('https://example.com/api/tasks?context=user');
