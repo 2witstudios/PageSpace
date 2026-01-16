@@ -9,6 +9,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useLayoutStore } from '@/stores/useLayoutStore';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { getCookieValue } from '@/lib/utils/get-cookie-value';
@@ -71,7 +72,6 @@ import {
   TaskItem,
   TaskListData,
   TaskStatus,
-  ViewMode,
   STATUS_CONFIG,
   PRIORITY_CONFIG,
   TaskHandlers,
@@ -332,7 +332,8 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const viewMode = useLayoutStore((state) => state.taskListViewMode);
+  const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   const socketRef = useRef<Socket | null>(null);
   const hasLoadedRef = useRef(false);
 
