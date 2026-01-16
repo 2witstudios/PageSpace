@@ -1,10 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+type TaskListViewMode = 'table' | 'kanban';
+
 interface LayoutState {
   // UI panels state (PERSISTED)
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
+  taskListViewMode: TaskListViewMode;
 
   // Hydration state
   rehydrated: boolean;
@@ -15,6 +18,7 @@ interface LayoutState {
   toggleRightSidebar: () => void;
   setLeftSidebarOpen: (open: boolean) => void;
   setRightSidebarOpen: (open: boolean) => void;
+  setTaskListViewMode: (mode: TaskListViewMode) => void;
 }
 
 export const useLayoutStore = create<LayoutState>()(
@@ -23,10 +27,15 @@ export const useLayoutStore = create<LayoutState>()(
       // Initial state
       leftSidebarOpen: true,
       rightSidebarOpen: false,
+      taskListViewMode: 'table',
       rehydrated: false,
 
       setRehydrated: () => {
         set({ rehydrated: true });
+      },
+
+      setTaskListViewMode: (mode: TaskListViewMode) => {
+        set({ taskListViewMode: mode });
       },
 
       toggleLeftSidebar: () => {
@@ -50,6 +59,7 @@ export const useLayoutStore = create<LayoutState>()(
       partialize: (state) => ({
         leftSidebarOpen: state.leftSidebarOpen,
         rightSidebarOpen: state.rightSidebarOpen,
+        taskListViewMode: state.taskListViewMode,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setRehydrated();
