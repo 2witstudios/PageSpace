@@ -11,6 +11,7 @@ import {
   useSensor,
   useSensors,
   closestCorners,
+  useDroppable,
 } from '@dnd-kit/core';
 import type { DraggableAttributes } from '@dnd-kit/core';
 import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
@@ -297,6 +298,25 @@ function ColumnHeader({ status, count, canEdit, onAddTask }: ColumnHeaderProps) 
   );
 }
 
+// Droppable column wrapper to allow drops on empty columns
+interface KanbanColumnProps {
+  status: TaskStatus;
+  children: React.ReactNode;
+}
+
+function KanbanColumn({ status, children }: KanbanColumnProps) {
+  const { setNodeRef } = useDroppable({ id: status });
+  return (
+    <div
+      ref={setNodeRef}
+      className="space-y-2 min-h-[100px] p-1 rounded-lg bg-muted/30"
+      data-status={status}
+    >
+      {children}
+    </div>
+  );
+}
+
 // New task input for column
 interface NewTaskInputProps {
   status: TaskStatus;
@@ -468,10 +488,7 @@ export function TaskKanbanView({
                 items={tasksByStatus[status].map((t) => t.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <div
-                  className="space-y-2 min-h-[100px] p-1 rounded-lg bg-muted/30"
-                  data-status={status}
-                >
+                <KanbanColumn status={status}>
                   {tasksByStatus[status].map((task) => (
                     <SortableTaskCard
                       key={task.id}
@@ -491,7 +508,7 @@ export function TaskKanbanView({
                       No tasks
                     </div>
                   )}
-                </div>
+                </KanbanColumn>
               </SortableContext>
 
               {addingToColumn === status && (

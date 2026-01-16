@@ -424,7 +424,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
 
   // Create new task (with optional status for kanban)
   const handleCreateTask = async (title?: string, status?: TaskStatus) => {
-    const taskTitle = title || newTaskTitle.trim();
+    const taskTitle = (title ?? newTaskTitle).trim();
     if (!taskTitle || !canEdit) return;
 
     try {
@@ -692,6 +692,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Table view"
+              aria-label="Table view"
             >
               <LayoutList className="h-4 w-4" />
             </button>
@@ -704,6 +705,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Kanban view"
+              aria-label="Kanban view"
             >
               <Kanban className="h-4 w-4" />
             </button>
