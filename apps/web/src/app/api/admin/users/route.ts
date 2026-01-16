@@ -182,21 +182,15 @@ export async function GET(request: Request) {
       };
     });
 
-    // Remove the count fields from the response
+    // Remove the count fields from the response (underscore prefix indicates intentionally unused)
     const cleanUsers = enrichedUsers.map((userData) => {
       const {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        drivesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        pagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        chatMessagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        globalMessagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        refreshTokensCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        aiSettingsCount,
+        drivesCount: _drivesCount,
+        pagesCount: _pagesCount,
+        chatMessagesCount: _chatMessagesCount,
+        globalMessagesCount: _globalMessagesCount,
+        refreshTokensCount: _refreshTokensCount,
+        aiSettingsCount: _aiSettingsCount,
         ...user
       } = userData;
       return user;

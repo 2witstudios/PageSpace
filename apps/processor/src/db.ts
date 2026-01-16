@@ -1,19 +1,40 @@
-// Import pg without type dependency to keep processor build self-contained
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { Pool }: any = require('pg');
+/**
+ * Minimal type definitions for pg module
+ * Keeps processor build self-contained without requiring @types/pg
+ */
+interface QueryResult<T = Record<string, unknown>> {
+  rows: T[];
+  rowCount: number | null;
+}
+
+interface PoolClient {
+  query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
+  release(): void;
+}
+
+interface Pool {
+  connect(): Promise<PoolClient>;
+}
+
+interface PoolConstructor {
+  new (config: { connectionString: string; max?: number }): Pool;
+}
+
+// Dynamic import to avoid bundling issues - pg is a CommonJS module
+const { Pool: PgPool } = require('pg') as { Pool: PoolConstructor };
 
 // Simple PG helper for processor-owned updates to page processing fields
 // Uses DATABASE_URL env var (same as PgBoss)
 
-let pool: any = null;
+let pool: Pool | null = null;
 
-function getPool(): any {
+function getPool(): Pool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error('DATABASE_URL is not configured');
     }
-    pool = new Pool({ connectionString, max: 5 });
+    pool = new PgPool({ connectionString, max: 5 });
   }
   return pool;
 }
@@ -33,7 +54,7 @@ export async function setPageProcessing(pageId: string): Promise<void> {
 export async function setPageCompleted(
   pageId: string,
   content: string,
-  metadata: any | null,
+  metadata: Record<string, unknown> | null,
   extractionMethod: 'text' | 'ocr' | 'visual' | 'hybrid' | 'none' = 'text'
 ): Promise<void> {
   const client = await getPool().connect();

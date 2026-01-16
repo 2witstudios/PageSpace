@@ -33,11 +33,40 @@ export interface ToolSchemaInfo {
 }
 
 /**
+ * Internal Zod schema structure types
+ * These mirror Zod's private API for introspection purposes
+ * Note: These are not part of Zod's public API and may change between versions
+ */
+interface ZodDef {
+  typeName?: string;
+  description?: string;
+  innerType?: ZodSchemaLike;
+  shape?: Record<string, ZodSchemaLike>;
+  type?: ZodSchemaLike;
+  values?: string[] | Record<string, string>;
+  value?: unknown;
+  options?: ZodSchemaLike[];
+  defaultValue?: () => unknown;
+}
+
+interface ZodInternal {
+  def?: ZodDef;
+}
+
+interface ZodSchemaLike {
+  _def?: ZodDef;
+  _zod?: ZodInternal;
+  shape?: Record<string, ZodSchemaLike>;
+  description?: string;
+  isOptional?: () => boolean;
+  constructor?: { name?: string };
+}
+
+/**
  * Convert a Zod schema to JSON Schema format using its internal structure
  * Works with Zod v4's _zod property
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function zodToJsonSchema(schema: any): JsonSchema {
+export function zodToJsonSchema(schema: ZodSchemaLike | null | undefined): JsonSchema {
   const result: JsonSchema = {
     type: 'object',
     properties: {},
@@ -70,8 +99,7 @@ export function zodToJsonSchema(schema: any): JsonSchema {
 /**
  * Check if a Zod type is optional
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isOptional(schema: any): boolean {
+function isOptional(schema: ZodSchemaLike | null | undefined): boolean {
   if (!schema) return true;
 
   // Check various ways Zod marks optionality
@@ -99,8 +127,7 @@ function isOptional(schema: any): boolean {
 /**
  * Get the Zod type name from a schema
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getZodTypeName(schema: any): string {
+function getZodTypeName(schema: ZodSchemaLike | null | undefined): string {
   if (!schema) return 'unknown';
 
   // Try different ways to get the type name
@@ -113,8 +140,7 @@ function getZodTypeName(schema: any): string {
 /**
  * Get the inner type from an optional/nullable wrapper
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function unwrapType(schema: any): any {
+function unwrapType(schema: ZodSchemaLike | null | undefined): ZodSchemaLike | null | undefined {
   if (!schema) return schema;
 
   const typeName = getZodTypeName(schema);
@@ -130,8 +156,7 @@ function unwrapType(schema: any): any {
 /**
  * Convert a single Zod type to JSON Schema property
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function zodTypeToJsonSchema(schema: any): JsonSchemaProperty {
+function zodTypeToJsonSchema(schema: ZodSchemaLike | null | undefined): JsonSchemaProperty {
   const isOpt = isOptional(schema);
   const unwrapped = unwrapType(schema);
   const typeName = getZodTypeName(unwrapped);
@@ -192,14 +217,13 @@ function zodTypeToJsonSchema(schema: any): JsonSchemaProperty {
     }
 
     case 'ZodUnion': {
-      const options = unwrapped._def?.options || unwrapped._zod?.def?.options || [];
+      const options = unwrapped?._def?.options || unwrapped?._zod?.def?.options || [];
       // For unions, try to represent as enum if all literals
-      const allLiterals = options.every((opt: unknown) => getZodTypeName(opt) === 'ZodLiteral');
+      const allLiterals = options.every((opt: ZodSchemaLike) => getZodTypeName(opt) === 'ZodLiteral');
       if (allLiterals && options.length > 0) {
         result = {
           type: 'string',
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          enum: options.map((opt: any) => String(opt._def?.value ?? opt._def?.values?.[0] ?? '')),
+          enum: options.map((opt: ZodSchemaLike) => String(opt._def?.value ?? '')),
         };
       } else {
         result = { type: 'union' };
@@ -246,8 +270,7 @@ function zodTypeToJsonSchema(schema: any): JsonSchemaProperty {
  * Extract tool schemas from PageSpace tools
  */
 export function extractToolSchemas(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  tools: Record<string, { description?: string; parameters?: any }>
+  tools: Record<string, { description?: string; parameters?: ZodSchemaLike }>
 ): ToolSchemaInfo[] {
   return Object.entries(tools).map(([name, tool]) => {
     const parameters = tool.parameters

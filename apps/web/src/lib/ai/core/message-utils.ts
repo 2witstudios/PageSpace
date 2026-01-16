@@ -56,6 +56,70 @@ interface ToolPart {
   state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
 }
 
+/**
+ * UI Message part types from AI SDK v5
+ * Using discriminated union for type-safe access
+ */
+type UIMessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'step-start' }
+  | { type: string; toolCallId: string; toolName: string; input?: Record<string, unknown>; output?: unknown; state: string };
+
+/**
+ * Type guard for text parts in UIMessage
+ */
+function isTextPart(part: UIMessagePart): part is { type: 'text'; text: string } {
+  return part.type === 'text' && 'text' in part;
+}
+
+/**
+ * Type guard for tool parts in UIMessage (type starts with 'tool-')
+ */
+function isToolPart(part: UIMessagePart): part is { type: string; toolCallId: string; toolName: string; input?: Record<string, unknown>; output?: unknown; state: string } {
+  return part.type.startsWith('tool-') && 'toolCallId' in part;
+}
+
+/**
+ * Type guard for tool parts with output available
+ */
+function hasToolOutput(part: UIMessagePart): part is { type: string; toolCallId: string; toolName: string; output: unknown; state: 'output-available' | 'output-error' } {
+  return isToolPart(part) && 'output' in part && part.output !== undefined;
+}
+
+/**
+ * Safely cast UIMessage.parts to typed array
+ */
+function getTypedParts(message: UIMessage): UIMessagePart[] {
+  return (message.parts ?? []) as UIMessagePart[];
+}
+
+/**
+ * Extended UIMessage type for PageSpace with additional fields
+ * This extends the base AI SDK UIMessage with our custom properties
+ */
+export interface PageSpaceUIMessage extends Omit<UIMessage, 'parts'> {
+  parts: UIMessagePart[];
+  editedAt?: Date | null;
+  messageType?: 'standard' | 'todo_list';
+}
+
+/**
+ * Create a PageSpaceUIMessage from components
+ * This ensures type safety when constructing messages
+ */
+function createPageSpaceMessage(params: {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  parts: UIMessagePart[];
+  createdAt: Date;
+  editedAt?: Date | null;
+  messageType?: 'standard' | 'todo_list';
+}): UIMessage {
+  // Cast to UIMessage for compatibility with AI SDK
+  // The extended fields are preserved at runtime
+  return params as unknown as UIMessage;
+}
+
 interface DatabaseMessage {
   id: string;
   pageId: string;
@@ -89,38 +153,35 @@ interface GlobalAssistantMessage {
  * Extract text content from UIMessage parts
  */
 export function extractMessageContent(message: UIMessage): string {
-  if (!message.parts) {
+  const parts = getTypedParts(message);
+
+  if (parts.length === 0) {
     debugLogAI('extractMessageContent: No parts in message');
     return '';
   }
 
   debugLogAI('extractMessageContent: Message analysis', {
-    partsCount: message.parts.length,
-    partTypes: message.parts.map(p => p.type)
+    partsCount: parts.length,
+    partTypes: parts.map(p => p.type)
   });
 
-  const textParts = message.parts.filter(part => part.type === 'text');
+  const textParts = parts.filter(isTextPart);
   debugLogAI('extractMessageContent: Text parts analysis', {
     textPartsFound: textParts.length
   });
 
   // Create safe metadata for each text part
-  const textPartsMetadata = textParts.map((part, index) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const text = (part as any).text || '';
-    return {
-      partIndex: index + 1,
-      ...createContentMetadata(text)
-    };
-  });
+  const textPartsMetadata = textParts.map((part, index) => ({
+    partIndex: index + 1,
+    ...createContentMetadata(part.text)
+  }));
 
   debugLogAI('extractMessageContent: Text parts metadata', {
     parts: textPartsMetadata
   });
 
   const textContent = textParts
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .map(part => (part as any).text || '')
+    .map(part => part.text)
     .filter(text => text.trim() !== '')
     .join('');
 
@@ -133,41 +194,32 @@ export function extractMessageContent(message: UIMessage): string {
  * Extract tool calls from UIMessage parts
  */
 export function extractToolCalls(message: UIMessage): ToolCall[] {
-  if (!message.parts) return [];
-  
-  return message.parts
-    .filter(part => part.type.startsWith('tool-'))
-    .map(part => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toolPart = part as any;
-      return {
-        toolCallId: toolPart.toolCallId,
-        toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-        input: toolPart.input || {},
-        state: toolPart.state,
-      };
-    });
+  const parts = getTypedParts(message);
+
+  return parts
+    .filter(isToolPart)
+    .map(toolPart => ({
+      toolCallId: toolPart.toolCallId,
+      toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
+      input: toolPart.input || {},
+      state: toolPart.state as ToolCall['state'],
+    }));
 }
 
 /**
  * Extract tool results from UIMessage parts
  */
 export function extractToolResults(message: UIMessage): ToolResult[] {
-  if (!message.parts) return [];
-  
-  return message.parts
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .filter(part => part.type.startsWith('tool-') && (part as any).output !== undefined)
-    .map(part => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toolPart = part as any;
-      return {
-        toolCallId: toolPart.toolCallId,
-        toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-        output: toolPart.output,
-        state: toolPart.state as 'output-available' | 'output-error',
-      };
-    });
+  const parts = getTypedParts(message);
+
+  return parts
+    .filter(hasToolOutput)
+    .map(toolPart => ({
+      toolCallId: toolPart.toolCallId,
+      toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
+      output: toolPart.output,
+      state: toolPart.state as ToolResult['state'],
+    }));
 }
 
 /**
@@ -193,16 +245,14 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
   }
 
   // Simple text message
-  return {
+  return createPageSpaceMessage({
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
+    parts: [{ type: 'text', text: dbMessage.content || '' }],
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  });
 }
 
 /**
@@ -272,17 +322,19 @@ function reconstructMessageFromStructuredContent(
       // Skip step-start parts for now - they're AI SDK internal
     }
   });
-  
-  return {
+
+  const finalParts: UIMessagePart[] = parts.length > 0
+    ? parts
+    : [{ type: 'text', text: structuredData.originalContent || '' }];
+
+  return createPageSpaceMessage({
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
+    parts: finalParts,
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  });
 }
 
 /**
@@ -312,27 +364,26 @@ export async function saveMessageToDatabase({
 }) {
   try {
     let structuredContent = content;
-    
+
     // If we have the complete UIMessage, store structured content to preserve chronological order
     if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      const textParts = uiMessage.parts
-        .filter(p => p.type === 'text')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map(p => (p as any).text || '');
-      
-      const partsOrder = uiMessage.parts.map((p, i) => ({
+      const typedParts = getTypedParts(uiMessage);
+      const textParts = typedParts
+        .filter(isTextPart)
+        .map(p => p.text);
+
+      const partsOrder = typedParts.map((p, i) => ({
         index: i,
         type: p.type,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        toolCallId: p.type.startsWith('tool-') ? (p as any).toolCallId : undefined
+        toolCallId: isToolPart(p) ? p.toolCallId : undefined
       }));
-      
+
       structuredContent = JSON.stringify({
         textParts,
         partsOrder,
         originalContent: content, // Keep original for backward compatibility
       });
-      
+
       debugLogAI('Saving structured content', {
         textPartsCount: textParts.length,
         totalPartsCount: partsOrder.length
@@ -390,16 +441,14 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
   }
 
   // Simple text message
-  return {
+  return createPageSpaceMessage({
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
+    parts: [{ type: 'text', text: dbMessage.content || '' }],
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  });
 }
 
 /**
@@ -469,17 +518,19 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
       // Skip step-start parts for now - they're AI SDK internal
     }
   });
-  
-  return {
+
+  const finalParts: UIMessagePart[] = parts.length > 0
+    ? parts
+    : [{ type: 'text', text: structuredData.originalContent || '' }];
+
+  return createPageSpaceMessage({
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
+    parts: finalParts,
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  });
 }
 
 
@@ -508,27 +559,26 @@ export async function saveGlobalAssistantMessageToDatabase({
 }) {
   try {
     let structuredContent = content;
-    
+
     // If we have the complete UIMessage, store structured content to preserve chronological order
     if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      const textParts = uiMessage.parts
-        .filter(p => p.type === 'text')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map(p => (p as any).text || '');
-      
-      const partsOrder = uiMessage.parts.map((p, i) => ({
+      const typedParts = getTypedParts(uiMessage);
+      const textParts = typedParts
+        .filter(isTextPart)
+        .map(p => p.text);
+
+      const partsOrder = typedParts.map((p, i) => ({
         index: i,
         type: p.type,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        toolCallId: p.type.startsWith('tool-') ? (p as any).toolCallId : undefined
+        toolCallId: isToolPart(p) ? p.toolCallId : undefined
       }));
-      
+
       structuredContent = JSON.stringify({
         textParts,
         partsOrder,
         originalContent: content, // Keep original for backward compatibility
       });
-      
+
       debugLogAI('Global Assistant: Saving structured content', {
         textPartsCount: textParts.length,
         totalPartsCount: partsOrder.length
@@ -685,23 +735,25 @@ export function sanitizeContent(content: string): string {
  * Sanitize messages before passing to convertToModelMessages
  * Filters out tool parts without results to prevent "input-available" state errors
  */
-export function sanitizeMessagesForModel(messages: UIMessage[]): UIMessage[] {
-  return messages.map(message => ({
-    ...message,
-    parts: message.parts?.filter(part => {
+export function sanitizeMessagesForModel(inputMessages: UIMessage[]): UIMessage[] {
+  return inputMessages.map(message => {
+    const typedParts = getTypedParts(message);
+    const filteredParts = typedParts.filter(part => {
       // Keep text parts
-      if (part.type === 'text') return true;
-      
-      // For tool parts, only keep those with results
-      if (part.type.startsWith('tool-')) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const toolPart = part as any;
-        // Only include tool parts that have output (completed executions)
-        return toolPart.state === 'output-available' && toolPart.output !== undefined;
+      if (isTextPart(part)) return true;
+
+      // For tool parts, only keep those with completed output
+      if (isToolPart(part)) {
+        return hasToolOutput(part);
       }
-      
+
       // Keep other part types (step-start, etc.)
       return true;
-    }) || []
-  }));
+    });
+
+    return {
+      ...message,
+      parts: filteredParts
+    } as UIMessage;
+  });
 }

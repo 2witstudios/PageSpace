@@ -31,10 +31,8 @@ export function SortableTreeItem({
   id,
   depth,
   indentationWidth,
-  /* eslint-disable @typescript-eslint/no-unused-vars */
-  isActive, // Passed through to children via render props
-  isOver,   // Passed through to children via render props
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+  isActive: _isActive,
+  isOver: _isOver,
   projected,
   children,
 }: SortableTreeItemProps) {

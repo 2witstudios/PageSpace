@@ -1,30 +1,61 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable @typescript-eslint/no-require-imports */
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, ComponentType, ReactNode } from 'react';
 import { TreePage } from '@/hooks/usePageTree';
 import { Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-// Dynamically import react-pdf to avoid SSR issues
-let Document: any;
-let Page: any;
-let pdfjs: any;
+/**
+ * Type definitions for react-pdf components
+ * Using interfaces instead of importing types to avoid SSR issues with the library
+ */
+interface DocumentProps {
+  file: ArrayBuffer | string | { url: string } | null;
+  onLoadSuccess?: (pdf: { numPages: number }) => void;
+  loading?: ReactNode;
+  children?: ReactNode;
+}
 
+interface PageProps {
+  pageNumber: number;
+  className?: string;
+  renderTextLayer?: boolean;
+  renderAnnotationLayer?: boolean;
+}
+
+interface PdfJs {
+  version: string;
+  GlobalWorkerOptions: {
+    workerSrc: string;
+  };
+}
+
+// Store components loaded dynamically to avoid SSR issues
+let DocumentComponent: ComponentType<DocumentProps> | null = null;
+let PageComponent: ComponentType<PageProps> | null = null;
+let pdfjsLib: PdfJs | null = null;
+
+// Initialize react-pdf on client side only
 if (typeof window !== 'undefined') {
-  const reactPdf = require('react-pdf');
-  Document = reactPdf.Document;
-  Page = reactPdf.Page;
-  pdfjs = reactPdf.pdfjs;
-  
-  // Set up the worker for PDF.js
-  pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-  
-  // Import styles
-  require('react-pdf/dist/Page/AnnotationLayer.css');
-  require('react-pdf/dist/Page/TextLayer.css');
+  // Dynamic import using require for CSS and module loading
+  // This pattern is necessary for react-pdf which doesn't support ESM SSR
+  const loadReactPdf = async () => {
+    const reactPdf = await import('react-pdf');
+    DocumentComponent = reactPdf.Document as ComponentType<DocumentProps>;
+    PageComponent = reactPdf.Page as ComponentType<PageProps>;
+    pdfjsLib = reactPdf.pdfjs as unknown as PdfJs;
+
+    // Set up the worker for PDF.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+  };
+
+  // Import styles - these are side-effect only imports
+  import('react-pdf/dist/Page/AnnotationLayer.css');
+  import('react-pdf/dist/Page/TextLayer.css');
+
+  // Trigger the load
+  loadReactPdf();
 }
 
 interface PDFViewerProps {
@@ -94,13 +125,16 @@ export default function PDFViewer({ page }: PDFViewerProps) {
     );
   }
 
-  if (!Document || !Page) {
+  if (!DocumentComponent || !PageComponent) {
     return (
       <div className="flex items-center justify-center h-full">
         <p className="text-muted-foreground">PDF viewer is loading...</p>
       </div>
     );
   }
+
+  const Document = DocumentComponent;
+  const Page = PageComponent;
 
   return (
     <div className="h-full flex flex-col">
@@ -141,7 +175,7 @@ export default function PDFViewer({ page }: PDFViewerProps) {
               </div>
             }
           >
-            <Page 
+            <Page
               pageNumber={pageNumber}
               className="shadow-lg"
               renderTextLayer={true}
