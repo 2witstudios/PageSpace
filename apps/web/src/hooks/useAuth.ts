@@ -215,16 +215,19 @@ export function useAuth(): {
 
   // Logout function
   const logout = useCallback(async () => {
+    console.log('[AUTH_HOOK] logout() called - clearing auth');
     try {
       await post('/api/auth/logout');
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('[AUTH_HOOK] Logout API error:', error);
     } finally {
       if (typeof window !== 'undefined' && window.electron?.isDesktop) {
         try {
+          console.log('[AUTH_HOOK] Desktop: calling clearAuth() to clear secure storage');
           await window.electron.auth.clearAuth();
+          console.log('[AUTH_HOOK] Desktop: clearAuth() completed');
         } catch (err) {
-          console.error('Failed to clear desktop auth session', err);
+          console.error('[AUTH_HOOK] Failed to clear desktop auth session', err);
         }
         clearJWTCache();
       }
@@ -246,15 +249,20 @@ export function useAuth(): {
   }, [endSession, router]);
 
   // Refresh authentication
+  // NOTE: refreshToken() internally handles shouldLogout=true case by calling logout()
+  // We should NOT call logout() here for transient failures (network errors, 429, 500)
   const refreshAuth = useCallback(async () => {
+    console.log('[AUTH_HOOK] refreshAuth() called');
     const success = await refreshToken();
     if (success) {
       // Force reload session after token refresh
       await authStoreHelpers.loadSession(true);
     } else {
-      await logout();
+      // Don't call logout() here - useTokenRefresh already handles shouldLogout=true internally
+      // Calling logout() here would incorrectly log out users for transient failures
+      console.log('[AUTH_HOOK] refreshAuth() failed - useTokenRefresh handles logout if needed');
     }
-  }, [refreshToken, logout]);
+  }, [refreshToken]);
 
 
   // Session management and token refresh startup

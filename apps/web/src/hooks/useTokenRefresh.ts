@@ -39,17 +39,20 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   };
 
   const logout = async () => {
+    console.log('[TOKEN_REFRESH] logout() called - clearing auth');
     try {
       await post('/api/auth/logout');
       await mutate('/api/auth/me', null, false);
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('[TOKEN_REFRESH] Logout API error:', error);
     } finally {
       if (typeof window !== 'undefined' && window.electron?.isDesktop) {
         try {
+          console.log('[TOKEN_REFRESH] Desktop: calling clearAuth() to clear secure storage');
           await window.electron.auth.clearAuth();
+          console.log('[TOKEN_REFRESH] Desktop: clearAuth() completed');
         } catch (error) {
-          console.error('Desktop logout: failed to clear secure session', error);
+          console.error('[TOKEN_REFRESH] Desktop: failed to clear secure session', error);
         }
         clearJWTCache();
       }
@@ -102,13 +105,11 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         }
 
         if (shouldLogout) {
-          console.log('Refresh token expired or revoked, logging out');
-
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('auth:expired'));
-          }
-
-          await logout();
+          console.log('[TOKEN_REFRESH] Refresh failed with shouldLogout=true');
+          // NOTE: auth-fetch.ts already dispatches auth:expired when shouldLogout=true
+          // The auth store's handleAuthExpired listener handles the logout including clearAuth()
+          // DO NOT call logout() here - it would cause DOUBLE clearAuth() calls
+          // Just return false; the auth:expired event will trigger proper cleanup
           return false;
         }
 

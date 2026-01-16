@@ -521,11 +521,13 @@ export const authStoreHelpers = {
     };
 
     const handleAuthExpired = async () => {
-      console.log('[AUTH_STORE] Token expired - logging out');
+      console.log('[AUTH_STORE] handleAuthExpired triggered by auth:expired event');
 
       if (typeof window !== 'undefined' && window.electron?.isDesktop) {
         try {
+          console.log('[AUTH_STORE] Desktop: calling clearAuth() to clear secure storage');
           await window.electron.auth.clearAuth();
+          console.log('[AUTH_STORE] Desktop: clearAuth() completed');
         } catch (error) {
           console.error('[AUTH_STORE] Failed to clear desktop auth session on expiry', error);
         }

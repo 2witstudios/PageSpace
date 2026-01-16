@@ -399,6 +399,7 @@ class AuthFetch {
       }
 
       if (shouldLogout && typeof window !== 'undefined') {
+        this.logger.info('Dispatching auth:expired event due to shouldLogout=true');
         window.dispatchEvent(new CustomEvent('auth:expired'));
       }
 
@@ -525,7 +526,11 @@ class AuthFetch {
       // Desktop REQUIRES a device token for long-lived sessions
       // If no device token exists, user needs to re-authenticate
       if (!deviceToken) {
-        this.logger.warn('Desktop: No device token found - user must re-authenticate');
+        this.logger.warn('Desktop: No device token found in stored session - user must re-authenticate', {
+          hasSession: !!session,
+          hasAccessToken: !!session?.accessToken,
+          hasRefreshToken: !!session?.refreshToken,
+        });
         return { success: false, shouldLogout: true };
       }
 
@@ -617,15 +622,38 @@ class AuthFetch {
 
       const data = await response.json();
 
-      await window.electron.auth.storeSession({
+      const sessionToStore = {
         accessToken: data.token,
         refreshToken: data.refreshToken,
         csrfToken: data.csrfToken,
         deviceToken: data.deviceToken,
+      };
+
+      this.logger.debug('Desktop: Storing refreshed session', {
+        hasAccessToken: !!sessionToStore.accessToken,
+        hasRefreshToken: !!sessionToStore.refreshToken,
+        hasDeviceToken: !!sessionToStore.deviceToken,
+        deviceTokenLength: sessionToStore.deviceToken?.length || 0,
       });
 
+      await window.electron.auth.storeSession(sessionToStore);
+
+      // Verify the session was stored correctly by reading it back
+      const verifySession = await window.electron.auth.getSession();
+      if (!verifySession?.deviceToken) {
+        this.logger.error('Desktop: CRITICAL - Device token was NOT stored properly!', {
+          storedDeviceToken: !!sessionToStore.deviceToken,
+          retrievedDeviceToken: !!verifySession?.deviceToken,
+        });
+        // Return transient failure so retry logic kicks in
+        // Don't use shouldLogout:true - this might be a temporary storage issue
+        return { success: false, shouldLogout: false };
+      }
+
       this.clearJWTCache();
-      this.logger.info('Desktop: Session refreshed successfully via secure storage');
+      this.logger.info('Desktop: Session refreshed successfully via secure storage', {
+        deviceTokenStored: !!verifySession?.deviceToken,
+      });
       if (typeof window !== 'undefined' && window.dispatchEvent) {
         window.dispatchEvent(new CustomEvent('auth:refreshed'));
       }
