@@ -107,6 +107,7 @@ export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
     'list_trash',
     'list_agents',
     'multi_drive_list_agents',
+    'get_activity',
     // Search tools
     'regex_search',
     'glob_search',
