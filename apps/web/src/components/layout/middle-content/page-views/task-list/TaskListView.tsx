@@ -45,6 +45,8 @@ import {
   Trash2,
   FileText,
   GripVertical,
+  LayoutList,
+  Kanban,
 } from 'lucide-react';
 import {
   DndContext,
@@ -64,72 +66,20 @@ import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { AssigneeSelect } from './AssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
-
-interface TaskItem {
-  id: string;
-  taskListId: string;
-  userId: string;
-  assigneeId: string | null;
-  assigneeAgentId: string | null;
-  pageId: string | null;
-  title: string;
-  description: string | null;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  priority: 'low' | 'medium' | 'high';
-  position: number;
-  dueDate: string | null;
-  completedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  assignee?: {
-    id: string;
-    name: string | null;
-    image: string | null;
-  } | null;
-  assigneeAgent?: {
-    id: string;
-    title: string | null;
-    type: string;
-  } | null;
-  user?: {
-    id: string;
-    name: string | null;
-    image: string | null;
-  } | null;
-  page?: {
-    id: string;
-    isTrashed: boolean;
-    position: number;
-  } | null;
-}
-
-interface TaskListData {
-  taskList: {
-    id: string;
-    title: string;
-    description: string | null;
-    status: string;
-    updatedAt: string;
-  };
-  tasks: TaskItem[];
-}
+import { TaskKanbanView } from './TaskKanbanView';
+import {
+  TaskItem,
+  TaskListData,
+  TaskStatus,
+  ViewMode,
+  STATUS_CONFIG,
+  PRIORITY_CONFIG,
+  TaskHandlers,
+} from './task-list-types';
 
 interface TaskListViewProps {
   page: TreePage;
 }
-
-const STATUS_CONFIG = {
-  pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
-  in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
-  completed: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
-  blocked: { label: 'Blocked', color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
-};
-
-const PRIORITY_CONFIG = {
-  low: { label: 'Low', color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
-  medium: { label: 'Medium', color: 'bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400' },
-  high: { label: 'High', color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400' },
-};
 
 const fetcher = async (url: string) => {
   const res = await fetchWithAuth(url);
@@ -382,6 +332,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('table');
   const socketRef = useRef<Socket | null>(null);
 
   // Drag-and-drop sensors
@@ -468,15 +419,17 @@ export default function TaskListView({ page }: TaskListViewProps) {
     return true;
   }) || [];
 
-  // Create new task
-  const handleCreateTask = async () => {
-    if (!newTaskTitle.trim() || !canEdit) return;
+  // Create new task (with optional status for kanban)
+  const handleCreateTask = async (title?: string, status?: TaskStatus) => {
+    const taskTitle = title || newTaskTitle.trim();
+    if (!taskTitle || !canEdit) return;
 
     try {
       await post(`/api/pages/${page.id}/tasks`, {
-        title: newTaskTitle.trim(),
+        title: taskTitle,
+        ...(status && { status }),
       });
-      setNewTaskTitle('');
+      if (!title) setNewTaskTitle('');
       mutate(`/api/pages/${page.id}/tasks`);
     } catch {
       toast.error('Failed to create task');
@@ -646,6 +599,26 @@ export default function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
+  // Navigate to task page
+  const handleNavigate = (task: TaskItem) => {
+    if (task.pageId) {
+      router.push(`/dashboard/${page.driveId}/${task.pageId}`);
+    }
+  };
+
+  // Handlers object for kanban view
+  const taskHandlers: TaskHandlers = {
+    onToggleComplete: handleToggleComplete,
+    onStatusChange: handleStatusChange,
+    onPriorityChange: handlePriorityChange,
+    onAssigneeChange: handleAssigneeChange,
+    onDueDateChange: handleDueDateChange,
+    onSaveTitle: handleSaveTaskTitle,
+    onDelete: handleDeleteTask,
+    onNavigate: handleNavigate,
+    onStartEdit: handleStartEdit,
+  };
+
   // Stats
   const stats = {
     total: data?.tasks.length || 0,
@@ -704,20 +677,50 @@ export default function TaskListView({ page }: TaskListViewProps) {
           </div>
         </div>
 
-        {canEdit && (
-          <Button
-            size="sm"
-            className="w-full sm:w-auto"
-            onClick={() => {
-              const mobileInput = document.getElementById('new-task-input-mobile');
-              const desktopInput = document.getElementById('new-task-input');
-              (mobileInput ?? desktopInput)?.focus();
-            }}
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            New Task
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* View toggle (desktop only) */}
+          <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+            <button
+              onClick={() => setViewMode('table')}
+              className={cn(
+                'p-1.5 rounded transition-colors',
+                viewMode === 'table'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+              title="Table view"
+            >
+              <LayoutList className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={cn(
+                'p-1.5 rounded transition-colors',
+                viewMode === 'kanban'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+              title="Kanban view"
+            >
+              <Kanban className="h-4 w-4" />
+            </button>
+          </div>
+
+          {canEdit && viewMode === 'table' && (
+            <Button
+              size="sm"
+              className="w-full sm:w-auto"
+              onClick={() => {
+                const mobileInput = document.getElementById('new-task-input-mobile');
+                const desktopInput = document.getElementById('new-task-input');
+                (mobileInput ?? desktopInput)?.focus();
+              }}
+            >
+              <Plus className="h-4 w-4 mr-1" />
+              New Task
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Mobile Card View */}
@@ -771,215 +774,232 @@ export default function TaskListView({ page }: TaskListViewProps) {
         )}
       </div>
 
-      {/* Desktop Table View */}
+      {/* Desktop View (Table or Kanban) */}
       <div className="flex-1 overflow-auto hidden md:block">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-8"></TableHead>
-                <TableHead className="w-10"></TableHead>
-                <TableHead className="min-w-[300px]">Task</TableHead>
-                <TableHead className="w-32">Status</TableHead>
-                <TableHead className="w-28">Priority</TableHead>
-                <TableHead className="w-32">Assignee</TableHead>
-                <TableHead className="w-28">Due Date</TableHead>
-                <TableHead className="w-16"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <SortableContext
-              items={filteredTasks.map(t => t.id)}
-              strategy={verticalListSortingStrategy}
+        {viewMode === 'kanban' ? (
+          <TaskKanbanView
+            tasks={filteredTasks}
+            driveId={page.driveId}
+            pageId={page.id}
+            canEdit={canEdit}
+            handlers={taskHandlers}
+            editingTaskId={editingTaskId}
+            editingTitle={editingTitle}
+            onEditingTitleChange={setEditingTitle}
+            onCancelEdit={() => setEditingTaskId(null)}
+            onCreateTask={handleCreateTask}
+          />
+        ) : (
+          <>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
             >
-              <TableBody>
-                {filteredTasks.map((task) => (
-                  <SortableTaskRow
-                    key={task.id}
-                    task={task}
-                    canEdit={canEdit}
-                    isCompleted={task.status === 'completed'}
-                  >
-                    {/* Checkbox */}
-                    <TableCell>
-                      <Checkbox
-                        checked={task.status === 'completed'}
-                        onCheckedChange={() => handleToggleComplete(task)}
-                        disabled={!canEdit}
-                      />
-                    </TableCell>
-
-                {/* Title */}
-                <TableCell>
-                  {editingTaskId === task.id ? (
-                    <Input
-                      value={editingTitle}
-                      onChange={(e) => setEditingTitle(e.target.value)}
-                      onBlur={handleSaveEdit}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSaveEdit();
-                        if (e.key === 'Escape') setEditingTaskId(null);
-                      }}
-                      autoFocus
-                      className="h-8"
-                    />
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          'cursor-pointer hover:text-primary hover:underline',
-                          task.status === 'completed' && 'line-through'
-                        )}
-                        onClick={() => {
-                          if (task.pageId) {
-                            router.push(`/dashboard/${page.driveId}/${task.pageId}`);
-                          }
-                        }}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8"></TableHead>
+                    <TableHead className="w-10"></TableHead>
+                    <TableHead className="min-w-[300px]">Task</TableHead>
+                    <TableHead className="w-32">Status</TableHead>
+                    <TableHead className="w-28">Priority</TableHead>
+                    <TableHead className="w-32">Assignee</TableHead>
+                    <TableHead className="w-28">Due Date</TableHead>
+                    <TableHead className="w-16"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <SortableContext
+                  items={filteredTasks.map(t => t.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <TableBody>
+                    {filteredTasks.map((task) => (
+                      <SortableTaskRow
+                        key={task.id}
+                        task={task}
+                        canEdit={canEdit}
+                        isCompleted={task.status === 'completed'}
                       >
-                        {task.title}
-                      </span>
-                    </div>
-                  )}
-                </TableCell>
+                        {/* Checkbox */}
+                        <TableCell>
+                          <Checkbox
+                            checked={task.status === 'completed'}
+                            onCheckedChange={() => handleToggleComplete(task)}
+                            disabled={!canEdit}
+                          />
+                        </TableCell>
 
-                {/* Status */}
-                <TableCell>
-                  <Select
-                    value={task.status}
-                    onValueChange={(value) => handleStatusChange(task.id, value)}
-                    disabled={!canEdit}
-                  >
-                    <SelectTrigger className="h-8 w-28">
-                      <SelectValue>
-                        <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                          {STATUS_CONFIG[task.status].label}
-                        </Badge>
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(STATUS_CONFIG).map(([key, { label, color }]) => (
-                        <SelectItem key={key} value={key}>
-                          <Badge className={cn('text-xs', color)}>{label}</Badge>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </TableCell>
+                        {/* Title */}
+                        <TableCell>
+                          {editingTaskId === task.id ? (
+                            <Input
+                              value={editingTitle}
+                              onChange={(e) => setEditingTitle(e.target.value)}
+                              onBlur={handleSaveEdit}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSaveEdit();
+                                if (e.key === 'Escape') setEditingTaskId(null);
+                              }}
+                              autoFocus
+                              className="h-8"
+                            />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={cn(
+                                  'cursor-pointer hover:text-primary hover:underline',
+                                  task.status === 'completed' && 'line-through'
+                                )}
+                                onClick={() => {
+                                  if (task.pageId) {
+                                    router.push(`/dashboard/${page.driveId}/${task.pageId}`);
+                                  }
+                                }}
+                              >
+                                {task.title}
+                              </span>
+                            </div>
+                          )}
+                        </TableCell>
 
-                {/* Priority */}
-                <TableCell>
-                  <Select
-                    value={task.priority}
-                    onValueChange={(value) => handlePriorityChange(task.id, value)}
-                    disabled={!canEdit}
-                  >
-                    <SelectTrigger className="h-8 w-28">
-                      <SelectValue>
-                        <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                          {PRIORITY_CONFIG[task.priority].label}
-                        </Badge>
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
-                        <SelectItem key={key} value={key}>
-                          <Badge className={cn('text-xs', color)}>{label}</Badge>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </TableCell>
+                        {/* Status */}
+                        <TableCell>
+                          <Select
+                            value={task.status}
+                            onValueChange={(value) => handleStatusChange(task.id, value)}
+                            disabled={!canEdit}
+                          >
+                            <SelectTrigger className="h-8 w-28">
+                              <SelectValue>
+                                <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
+                                  {STATUS_CONFIG[task.status].label}
+                                </Badge>
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.entries(STATUS_CONFIG).map(([key, { label, color }]) => (
+                                <SelectItem key={key} value={key}>
+                                  <Badge className={cn('text-xs', color)}>{label}</Badge>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
 
-                {/* Assignee */}
-                <TableCell>
-                  <AssigneeSelect
-                    driveId={page.driveId}
-                    currentAssignee={task.assignee}
-                    currentAssigneeAgent={task.assigneeAgent}
-                    onSelect={(assigneeId, agentId) => handleAssigneeChange(task.id, assigneeId, agentId)}
-                    disabled={!canEdit}
-                  />
-                </TableCell>
+                        {/* Priority */}
+                        <TableCell>
+                          <Select
+                            value={task.priority}
+                            onValueChange={(value) => handlePriorityChange(task.id, value)}
+                            disabled={!canEdit}
+                          >
+                            <SelectTrigger className="h-8 w-28">
+                              <SelectValue>
+                                <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
+                                  {PRIORITY_CONFIG[task.priority].label}
+                                </Badge>
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
+                                <SelectItem key={key} value={key}>
+                                  <Badge className={cn('text-xs', color)}>{label}</Badge>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
 
-                {/* Due Date */}
-                <TableCell>
-                  <DueDatePicker
-                    currentDate={task.dueDate}
-                    onSelect={(date) => handleDueDateChange(task.id, date)}
-                    disabled={!canEdit}
-                  />
-                </TableCell>
+                        {/* Assignee */}
+                        <TableCell>
+                          <AssigneeSelect
+                            driveId={page.driveId}
+                            currentAssignee={task.assignee}
+                            currentAssigneeAgent={task.assigneeAgent}
+                            onSelect={(assigneeId, agentId) => handleAssigneeChange(task.id, assigneeId, agentId)}
+                            disabled={!canEdit}
+                          />
+                        </TableCell>
 
-                {/* Actions */}
-                <TableCell>
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {task.pageId && (
-                          <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
-                            <FileText className="h-4 w-4 mr-2" />
-                            Open
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
-                          <Pencil className="h-4 w-4 mr-2" />
-                          Rename
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteTask(task.id)}
-                          className="text-destructive"
-                          disabled={!canEdit}
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </TableCell>
-                  </SortableTaskRow>
-                ))}
-              </TableBody>
-            </SortableContext>
+                        {/* Due Date */}
+                        <TableCell>
+                          <DueDatePicker
+                            currentDate={task.dueDate}
+                            onSelect={(date) => handleDueDateChange(task.id, date)}
+                            disabled={!canEdit}
+                          />
+                        </TableCell>
 
-            {/* New task row - outside SortableContext */}
-            {canEdit && (
-              <TableBody>
-                <TableRow>
-                  <TableCell></TableCell>
-                  <TableCell>
-                    <Checkbox disabled className="opacity-30" />
-                  </TableCell>
-                  <TableCell colSpan={6}>
-                    <Input
-                      id="new-task-input"
-                      placeholder="+ Add a new task..."
-                      value={newTaskTitle}
-                      onChange={(e) => setNewTaskTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleCreateTask();
-                      }}
-                      className="border-0 shadow-none focus-visible:ring-0 px-0"
-                    />
-                  </TableCell>
-                </TableRow>
-              </TableBody>
+                        {/* Actions */}
+                        <TableCell>
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8">
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {task.pageId && (
+                                  <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
+                                    <FileText className="h-4 w-4 mr-2" />
+                                    Open
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleDeleteTask(task.id)}
+                                  className="text-destructive"
+                                  disabled={!canEdit}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </TableCell>
+                      </SortableTaskRow>
+                    ))}
+                  </TableBody>
+                </SortableContext>
+
+                {/* New task row - outside SortableContext */}
+                {canEdit && (
+                  <TableBody>
+                    <TableRow>
+                      <TableCell></TableCell>
+                      <TableCell>
+                        <Checkbox disabled className="opacity-30" />
+                      </TableCell>
+                      <TableCell colSpan={6}>
+                        <Input
+                          id="new-task-input"
+                          placeholder="+ Add a new task..."
+                          value={newTaskTitle}
+                          onChange={(e) => setNewTaskTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleCreateTask();
+                          }}
+                          className="border-0 shadow-none focus-visible:ring-0 px-0"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                )}
+              </Table>
+            </DndContext>
+
+            {filteredTasks.length === 0 && !canEdit && (
+              <div className="text-center py-12 text-muted-foreground">
+                No tasks yet
+              </div>
             )}
-          </Table>
-        </DndContext>
-
-        {filteredTasks.length === 0 && !canEdit && (
-          <div className="text-center py-12 text-muted-foreground">
-            No tasks yet
-          </div>
+          </>
         )}
       </div>
 
