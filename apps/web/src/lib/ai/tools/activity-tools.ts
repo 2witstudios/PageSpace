@@ -8,6 +8,7 @@ import {
   sessions,
   eq,
   and,
+  or,
   desc,
   gte,
   ne,
@@ -301,9 +302,10 @@ The AI should use this data to form intuition about ongoing work and provide con
           targetDriveIds = accessibleDrives.map((c) => c.driveId);
 
           if (deniedDrives.length > 0) {
-            console.warn(
-              `User ${userId} denied access to drives: ${deniedDrives.map((d) => d.driveId).join(', ')}`
-            );
+            console.warn('get_activity: access denied for some drives', {
+              deniedDriveCount: deniedDrives.length,
+              requestedDriveCount: driveIds.length,
+            });
           }
         } else {
           // Single query to get all accessible drive IDs:
@@ -380,7 +382,8 @@ The AI should use this data to form intuition about ongoing work and provide con
         ];
 
         if (excludeOwnActivity) {
-          conditions.push(ne(activityLogs.userId, userId));
+          // Include activities from other users OR system/AI activities with NULL userId
+          conditions.push(or(ne(activityLogs.userId, userId), isNull(activityLogs.userId))!);
         }
 
         if (!includeAiChanges) {
