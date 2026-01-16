@@ -51,7 +51,7 @@ import {
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
   driveId: string;
-  pageId: string;
+  _pageId?: string;
   canEdit: boolean;
   handlers: TaskHandlers;
   editingTaskId: string | null;
@@ -65,7 +65,7 @@ interface TaskKanbanViewProps {
 interface SortableTaskCardProps {
   task: TaskItem;
   canEdit: boolean;
-  driveId: string;
+  _driveId?: string;
   handlers: TaskHandlers;
   isEditing: boolean;
   editingTitle: string;
@@ -76,7 +76,7 @@ interface SortableTaskCardProps {
 function SortableTaskCard({
   task,
   canEdit,
-  driveId,
+  _driveId,
   handlers,
   isEditing,
   editingTitle,
@@ -102,7 +102,7 @@ function SortableTaskCard({
       <TaskCard
         task={task}
         canEdit={canEdit}
-        driveId={driveId}
+        _driveId={_driveId}
         handlers={handlers}
         isEditing={isEditing}
         editingTitle={editingTitle}
@@ -119,7 +119,7 @@ function SortableTaskCard({
 interface TaskCardProps {
   task: TaskItem;
   canEdit: boolean;
-  driveId: string;
+  _driveId?: string;
   handlers: TaskHandlers;
   isEditing: boolean;
   editingTitle: string;
@@ -135,7 +135,7 @@ interface TaskCardProps {
 function TaskCard({
   task,
   canEdit,
-  driveId,
+  _driveId,
   handlers,
   isEditing,
   editingTitle,
@@ -338,7 +338,7 @@ function NewTaskInput({ status, onSubmit, onCancel }: NewTaskInputProps) {
 export function TaskKanbanView({
   tasks,
   driveId,
-  pageId,
+  _pageId,
   canEdit,
   handlers,
   editingTaskId,
@@ -388,7 +388,7 @@ export function TaskKanbanView({
     }
   };
 
-  const handleDragOver = (event: DragOverEvent) => {
+  const handleDragOver = (_event: DragOverEvent) => {
     // This is called as the item moves over different droppable areas
     // We don't need to do anything here since we handle everything in dragEnd
   };
@@ -405,14 +405,14 @@ export function TaskKanbanView({
     // Determine the target status
     // The over.id could be either a task id or a column id
     let targetStatus: TaskStatus | null = null;
-    let targetTask: TaskItem | null = null;
+    let _targetTask: TaskItem | null = null;
 
     // Check if dropped over a task
     for (const status of STATUS_ORDER) {
       const task = tasksByStatus[status].find((t) => t.id === over.id);
       if (task) {
         targetStatus = status;
-        targetTask = task;
+        _targetTask = task;
         break;
       }
     }
@@ -475,7 +475,7 @@ export function TaskKanbanView({
                       key={task.id}
                       task={task}
                       canEdit={canEdit}
-                      driveId={driveId}
+                      _driveId={driveId}
                       handlers={handlers}
                       isEditing={editingTaskId === task.id}
                       editingTitle={editingTitle}
@@ -510,7 +510,7 @@ export function TaskKanbanView({
           <TaskCard
             task={activeTask}
             canEdit={false}
-            driveId={driveId}
+            _driveId={driveId}
             handlers={handlers}
             isEditing={false}
             editingTitle=""

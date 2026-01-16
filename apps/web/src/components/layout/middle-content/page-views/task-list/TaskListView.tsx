@@ -780,7 +780,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
           <TaskKanbanView
             tasks={filteredTasks}
             driveId={page.driveId}
-            pageId={page.id}
+            _pageId={page.id}
             canEdit={canEdit}
             handlers={taskHandlers}
             editingTaskId={editingTaskId}
