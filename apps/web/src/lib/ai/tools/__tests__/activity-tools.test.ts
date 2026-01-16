@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 // Mock boundaries
 vi.mock('@pagespace/lib', () => ({
@@ -86,10 +87,8 @@ describe('activity-tools', () => {
       const schema = activityTools.get_activity.inputSchema;
       expect(schema).toBeDefined();
 
-      // Verify schema is a Zod object with expected structure
-      // In Zod v4, use .type instead of ._def.typeName
-      const schemaType = (schema as { type?: string })?.type;
-      expect(schemaType).toBe('object');
+      // Verify schema is a Zod object using instanceof check
+      expect(schema).toBeInstanceOf(z.ZodObject);
     });
 
     it('description explains use cases', () => {
