@@ -11,6 +11,29 @@ import type { ToolExecutionContext } from '../../core';
 
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 
+// Properly typed test input matching the Zod schema with defaults
+type ActivityToolInput = {
+  since: '1h' | '24h' | '7d' | '30d' | 'last_visit';
+  excludeOwnActivity: boolean;
+  includeAiChanges: boolean;
+  limit: number;
+  maxOutputChars: number;
+  includeDiffs: boolean;
+  driveIds?: string[];
+  operationCategories?: ('content' | 'permissions' | 'membership')[];
+};
+
+// Default values matching the Zod schema defaults
+const createTestInput = (overrides: Partial<ActivityToolInput> = {}): ActivityToolInput => ({
+  since: '24h',
+  excludeOwnActivity: false,
+  includeAiChanges: true,
+  limit: 50,
+  maxOutputChars: 20000,
+  includeDiffs: true,
+  ...overrides,
+});
+
 /**
  * @scaffold - happy path coverage deferred
  *
@@ -40,11 +63,9 @@ describe('activity-tools', () => {
     it('requires user authentication', async () => {
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
-      /* eslint-disable @typescript-eslint/no-explicit-any */
       await expect(
-        (activityTools.get_activity.execute as any)({ since: '24h' }, context)
+        activityTools.get_activity.execute!(createTestInput(), context)
       ).rejects.toThrow('User authentication required');
-      /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
     it('throws error when specified drive access denied', async () => {
@@ -56,11 +77,9 @@ describe('activity-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      /* eslint-disable @typescript-eslint/no-explicit-any */
       await expect(
-        (activityTools.get_activity.execute as any)({ since: '24h', driveIds: ['drive-1'] }, context)
+        activityTools.get_activity.execute!(createTestInput({ driveIds: ['drive-1'] }), context)
       ).rejects.toThrow('No access to any of the specified drives');
-      /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
     it('has expected input schema shape', () => {
