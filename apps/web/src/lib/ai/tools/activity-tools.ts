@@ -8,7 +8,6 @@ import {
   sessions,
   eq,
   and,
-  or,
   desc,
   gte,
   ne,
@@ -356,7 +355,7 @@ The AI should use this data to form intuition about ongoing work and provide con
         }
 
         // Build operation filter
-        let operationFilter: string[] = [];
+        const operationFilter: string[] = [];
         if (operationCategories && operationCategories.length > 0) {
           for (const category of operationCategories) {
             switch (category) {
@@ -612,6 +611,68 @@ The AI should use this data to form intuition about ongoing work and provide con
             response.drives.sort((a, b) => b.stats.total - a.stats.total);
             response.drives.pop();
             outputSize = JSON.stringify(response).length;
+          }
+        }
+
+        // Recompute all derived counters after truncation to ensure consistency
+        if (response.meta.truncated) {
+          // Reset actor counts
+          for (const actor of response.actors) {
+            actor.count = 0;
+          }
+
+          // Recompute from remaining activities
+          let newTotal = 0;
+          let newAiTotal = 0;
+
+          for (const group of response.drives) {
+            // Reset and recompute drive stats
+            group.stats.total = group.activities.length;
+            group.stats.byOp = {};
+            group.stats.aiCount = 0;
+
+            for (const activity of group.activities) {
+              // Update actor count
+              if (activity.actor < response.actors.length) {
+                response.actors[activity.actor].count++;
+              }
+
+              // Update drive stats
+              group.stats.byOp[activity.op] = (group.stats.byOp[activity.op] || 0) + 1;
+              if (activity.ai) {
+                group.stats.aiCount++;
+                newAiTotal++;
+              }
+
+              newTotal++;
+            }
+          }
+
+          // Update meta totals
+          response.meta.total = newTotal;
+          response.meta.aiTotal = newAiTotal;
+
+          // Remove actors with zero count (their activities were all truncated)
+          const activeActorIndices = new Map<number, number>();
+          const filteredActors: CompactActor[] = [];
+          for (let i = 0; i < response.actors.length; i++) {
+            if (response.actors[i].count > 0) {
+              activeActorIndices.set(i, filteredActors.length);
+              filteredActors.push(response.actors[i]);
+            }
+          }
+
+          // Remap actor indices in activities if any actors were removed
+          if (filteredActors.length < response.actors.length) {
+            for (const group of response.drives) {
+              for (const activity of group.activities) {
+                const newIdx = activeActorIndices.get(activity.actor);
+                if (newIdx !== undefined) {
+                  activity.actor = newIdx;
+                }
+              }
+            }
+            response.actors = filteredActors;
           }
         }
 
