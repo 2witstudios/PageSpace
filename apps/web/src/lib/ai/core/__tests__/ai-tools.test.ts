@@ -72,6 +72,12 @@ vi.mock('../../tools/web-search-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/activity-tools', () => ({
+  activityTools: {
+    get_activity: { name: 'get_activity', description: 'Get activity' },
+  },
+}));
+
 import { pageSpaceTools } from '../ai-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
@@ -81,6 +87,7 @@ import { taskManagementTools } from '../../tools/task-management-tools';
 import { agentTools } from '../../tools/agent-tools';
 import { agentCommunicationTools } from '../../tools/agent-communication-tools';
 import { webSearchTools } from '../../tools/web-search-tools';
+import { activityTools } from '../../tools/activity-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -94,6 +101,7 @@ describe('ai-tools', () => {
         ...agentTools,
         ...agentCommunicationTools,
         ...webSearchTools,
+        ...activityTools,
       });
     });
 
@@ -107,6 +115,7 @@ describe('ai-tools', () => {
         Object.keys(agentTools),
         Object.keys(agentCommunicationTools),
         Object.keys(webSearchTools),
+        Object.keys(activityTools),
       ];
 
       const allKeys = moduleKeysets.flat();
