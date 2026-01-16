@@ -40,9 +40,10 @@ describe('activity-tools', () => {
     it('requires user authentication', async () => {
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
+      // Cast to any to bypass Zod's transformed type requirements - schema defaults are applied at runtime
       await expect(
         activityTools.get_activity.execute!(
-          { since: '24h' },
+          { since: '24h' } as Parameters<typeof activityTools.get_activity.execute>[0],
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -57,9 +58,10 @@ describe('activity-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
+      // Cast to any to bypass Zod's transformed type requirements - schema defaults are applied at runtime
       await expect(
         activityTools.get_activity.execute!(
-          { since: '24h', driveIds: ['drive-1'] },
+          { since: '24h', driveIds: ['drive-1'] } as Parameters<typeof activityTools.get_activity.execute>[0],
           context
         )
       ).rejects.toThrow('No access to any of the specified drives');

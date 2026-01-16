@@ -388,10 +388,11 @@ The AI should use this data to form intuition about ongoing work and provide con
         }
 
         if (operationFilter.length > 0) {
+          // Cast to the column's enum type for type safety with inArray
           conditions.push(
             inArray(
               activityLogs.operation,
-              operationFilter as [string, ...string[]]
+              operationFilter as (typeof activityLogs.operation._.data)[]
             )
           );
         }
