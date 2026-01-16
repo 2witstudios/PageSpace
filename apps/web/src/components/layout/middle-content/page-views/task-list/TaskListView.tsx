@@ -334,6 +334,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const [editingTitle, setEditingTitle] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const socketRef = useRef<Socket | null>(null);
+  const hasLoadedRef = useRef(false);
 
   // Drag-and-drop sensors
   const sensors = useSensors(
@@ -353,12 +354,14 @@ export default function TaskListView({ page }: TaskListViewProps) {
   }, [editingTaskId, page.id]);
 
   // Fetch tasks with refresh protection
+  // CRITICAL: Only pause AFTER initial load - never block the first fetch
   const { data, error, isLoading } = useSWR<TaskListData>(
     `/api/pages/${page.id}/tasks`,
     fetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyActive,
+      onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
     }
   );

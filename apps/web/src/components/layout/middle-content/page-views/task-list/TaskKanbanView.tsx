@@ -12,6 +12,8 @@ import {
   useSensors,
   closestCorners,
 } from '@dnd-kit/core';
+import type { DraggableAttributes } from '@dnd-kit/core';
+import type { SyntheticListenerMap } from '@dnd-kit/core/dist/hooks/utilities';
 import {
   SortableContext,
   useSortable,
@@ -127,8 +129,8 @@ interface TaskCardProps {
   onCancelEdit: () => void;
   isDragging?: boolean;
   dragHandleProps?: {
-    attributes: Record<string, unknown>;
-    listeners: Record<string, unknown> | undefined;
+    attributes: DraggableAttributes;
+    listeners: SyntheticListenerMap | undefined;
   };
 }
 
@@ -160,7 +162,7 @@ function TaskCard({
           {canEdit && dragHandleProps && (
             <button
               {...dragHandleProps.attributes}
-              {...(dragHandleProps.listeners as React.HTMLAttributes<HTMLButtonElement>)}
+              {...dragHandleProps.listeners}
               className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
             >
               <GripVertical className="h-4 w-4" />
