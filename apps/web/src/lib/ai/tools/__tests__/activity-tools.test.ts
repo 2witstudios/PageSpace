@@ -39,10 +39,11 @@ describe('activity-tools', () => {
 
     it('requires user authentication', async () => {
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
+      // Test input params - schema defaults are applied at runtime
+      const input = { since: '24h' } as Record<string, unknown>;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await expect(
-        activityTools.get_activity.execute!({ since: '24h' } as any, context)
+        activityTools.get_activity.execute!(input, context)
       ).rejects.toThrow('User authentication required');
     });
 
@@ -54,10 +55,11 @@ describe('activity-tools', () => {
         messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
+      // Test input params - schema defaults are applied at runtime
+      const input = { since: '24h', driveIds: ['drive-1'] } as Record<string, unknown>;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await expect(
-        activityTools.get_activity.execute!({ since: '24h', driveIds: ['drive-1'] } as any, context)
+        activityTools.get_activity.execute!(input, context)
       ).rejects.toThrow('No access to any of the specified drives');
     });
 
