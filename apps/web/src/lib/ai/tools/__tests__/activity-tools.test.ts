@@ -39,12 +39,12 @@ describe('activity-tools', () => {
 
     it('requires user authentication', async () => {
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
-      // Test input params - schema defaults are applied at runtime
-      const input = { since: '24h' } as Record<string, unknown>;
 
+      /* eslint-disable @typescript-eslint/no-explicit-any */
       await expect(
-        activityTools.get_activity.execute!(input, context)
+        (activityTools.get_activity.execute as any)({ since: '24h' }, context)
       ).rejects.toThrow('User authentication required');
+      /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
     it('throws error when specified drive access denied', async () => {
@@ -55,12 +55,12 @@ describe('activity-tools', () => {
         messages: [],
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
-      // Test input params - schema defaults are applied at runtime
-      const input = { since: '24h', driveIds: ['drive-1'] } as Record<string, unknown>;
 
+      /* eslint-disable @typescript-eslint/no-explicit-any */
       await expect(
-        activityTools.get_activity.execute!(input, context)
+        (activityTools.get_activity.execute as any)({ since: '24h', driveIds: ['drive-1'] }, context)
       ).rejects.toThrow('No access to any of the specified drives');
+      /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
     it('has expected input schema shape', () => {
