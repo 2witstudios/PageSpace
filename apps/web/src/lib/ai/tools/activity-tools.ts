@@ -4,9 +4,11 @@ import {
   db,
   activityLogs,
   drives,
+  driveMembers,
   sessions,
   eq,
   and,
+  or,
   desc,
   gte,
   ne,
@@ -29,12 +31,6 @@ import { type ToolExecutionContext } from '../core';
 const CONTENT_OPERATIONS = ['create', 'update', 'delete', 'restore', 'move', 'trash', 'reorder'] as const;
 const PERMISSION_OPERATIONS = ['permission_grant', 'permission_update', 'permission_revoke'] as const;
 const MEMBERSHIP_OPERATIONS = ['member_add', 'member_remove', 'member_role_change', 'ownership_transfer'] as const;
-const AUTH_OPERATIONS = ['login', 'logout', 'signup'] as const;
-
-type ContentOperation = typeof CONTENT_OPERATIONS[number];
-type PermissionOperation = typeof PERMISSION_OPERATIONS[number];
-type MembershipOperation = typeof MEMBERSHIP_OPERATIONS[number];
-type AuthOperation = typeof AUTH_OPERATIONS[number];
 
 // Time window helpers
 function getTimeWindowStart(window: string, lastVisitTime?: Date): Date {
@@ -311,34 +307,51 @@ The AI should use this data to form intuition about ongoing work and provide con
             );
           }
         } else {
-          // Get all drives user is a member of
-          const userDrives = await db
-            .select({ id: drives.id })
-            .from(drives)
-            .where(eq(drives.isTrashed, false));
+          // Single query to get all accessible drive IDs:
+          // 1. Drives user is a member of (via driveMembers)
+          // 2. Drives user owns (via drives.ownerId)
+          const [memberDrives, ownedDrives] = await Promise.all([
+            db
+              .select({ driveId: driveMembers.driveId })
+              .from(driveMembers)
+              .innerJoin(drives, eq(driveMembers.driveId, drives.id))
+              .where(
+                and(
+                  eq(driveMembers.userId, userId),
+                  eq(drives.isTrashed, false)
+                )
+              ),
+            db
+              .select({ id: drives.id })
+              .from(drives)
+              .where(
+                and(
+                  eq(drives.ownerId, userId),
+                  eq(drives.isTrashed, false)
+                )
+              ),
+          ]);
 
-          // Filter to only drives user has access to
-          const accessibleDriveIds: string[] = [];
-          for (const drive of userDrives) {
-            if (await isUserDriveMember(userId, drive.id)) {
-              accessibleDriveIds.push(drive.id);
-            }
-          }
-
-          targetDriveIds = accessibleDriveIds;
+          // Combine and deduplicate drive IDs
+          const driveIdSet = new Set<string>();
+          for (const d of memberDrives) driveIdSet.add(d.driveId);
+          for (const d of ownedDrives) driveIdSet.add(d.id);
+          targetDriveIds = Array.from(driveIdSet);
         }
 
         if (targetDriveIds.length === 0) {
           return {
-            success: true,
-            driveGroups: [],
-            summary: {
-              totalActivities: 0,
-              timeWindow: since,
-              timeWindowStart: timeWindowStart.toISOString(),
-              lastVisitTime: lastVisitTime?.toISOString() || null,
+            ok: true,
+            actors: [],
+            drives: [],
+            meta: {
+              total: 0,
+              aiTotal: 0,
+              window: since,
+              from: timeWindowStart.toISOString(),
+              lastVisit: lastVisitTime?.toISOString() || null,
+              excludedSelf: excludeOwnActivity,
             },
-            message: 'No accessible drives found',
           };
         }
 
@@ -400,28 +413,25 @@ The AI should use this data to form intuition about ongoing work and provide con
         });
 
         // Build actor index for deduplication (saves tokens by not repeating actor info)
-        const actorMap = new Map<string, { idx: number; name: string | null; isYou: boolean; count: number }>();
+        // Store actor reference directly so count updates are shared
+        const actorMap = new Map<string, { idx: number; actor: CompactActor }>();
         const actorsList: CompactActor[] = [];
 
         for (const activity of activities) {
           const email = activity.actorEmail;
-          if (!actorMap.has(email)) {
-            const idx = actorsList.length;
+          let entry = actorMap.get(email);
+          if (!entry) {
             const actor: CompactActor = {
               email,
               name: activity.actorDisplayName || activity.user?.name || null,
               isYou: activity.userId === userId,
               count: 0,
             };
+            entry = { idx: actorsList.length, actor };
             actorsList.push(actor);
-            actorMap.set(email, { idx, name: actor.name, isYou: actor.isYou, count: 0 });
+            actorMap.set(email, entry);
           }
-          actorMap.get(email)!.count++;
-        }
-
-        // Update counts in actorsList
-        for (const actor of actorsList) {
-          actor.count = actorMap.get(actor.email)!.count;
+          entry.actor.count++;
         }
 
         // Group activities by drive using compact format
@@ -540,11 +550,24 @@ The AI should use this data to form intuition about ongoing work and provide con
           outputSize = JSON.stringify(response).length;
         }
 
-        // Step 2: If still over limit, drop oldest activities from each drive
+        // Step 2: If still over limit, drop oldest activities using batched approach
+        // to avoid expensive JSON.stringify on every single drop
         if (outputSize > maxOutputChars) {
           let droppedCount = 0;
           const targetSize = maxOutputChars * 0.9; // Leave 10% buffer
+          const totalActivityCount = response.drives.reduce((sum, g) => sum + g.activities.length, 0);
 
+          // Estimate avg chars per activity (avoid divide by zero)
+          const avgActivitySize = totalActivityCount > 0
+            ? Math.ceil(outputSize / totalActivityCount)
+            : 200;
+
+          // Estimate how many activities to drop
+          const excessChars = outputSize - targetSize;
+          const estimatedDrops = Math.ceil(excessChars / avgActivitySize);
+          const batchSize = Math.max(1, Math.min(10, Math.ceil(estimatedDrops / 5)));
+
+          let dropsSinceLastCheck = 0;
           while (outputSize > targetSize) {
             // Find drive with most activities and drop oldest
             let maxDrive: CompactDriveGroup | null = null;
@@ -560,6 +583,17 @@ The AI should use this data to form intuition about ongoing work and provide con
             maxDrive.activities.pop();
             maxDrive.stats.total = maxDrive.activities.length;
             droppedCount++;
+            dropsSinceLastCheck++;
+
+            // Only re-serialize periodically to check actual size
+            if (dropsSinceLastCheck >= batchSize) {
+              outputSize = JSON.stringify(response).length;
+              dropsSinceLastCheck = 0;
+            }
+          }
+
+          // Final size check
+          if (dropsSinceLastCheck > 0) {
             outputSize = JSON.stringify(response).length;
           }
 

@@ -65,17 +65,22 @@ describe('activity-tools', () => {
       ).rejects.toThrow('No access to any of the specified drives');
     });
 
-    it('accepts valid time window options', () => {
-      // Verify the schema accepts all documented time windows
+    it('has expected input schema shape', () => {
       const schema = activityTools.get_activity.inputSchema;
       expect(schema).toBeDefined();
-      // Schema validation happens at runtime via Zod
+
+      // Verify schema is a Zod object with expected structure
+      // Using _def to access internal Zod schema properties
+      const def = (schema as { _def?: { typeName?: string } })._def;
+      expect(def?.typeName).toBe('ZodObject');
     });
 
-    it('has output size limit parameter', () => {
-      const schema = activityTools.get_activity.inputSchema;
-      expect(schema).toBeDefined();
-      // maxOutputChars should be part of the schema
+    it('description explains use cases', () => {
+      const desc = activityTools.get_activity.description;
+      expect(desc).toContain('activity');
+      expect(desc).toContain('workspace');
+      // Should mention key use cases
+      expect(desc).toMatch(/collaborat|pulse|welcome|context/i);
     });
   });
 });
