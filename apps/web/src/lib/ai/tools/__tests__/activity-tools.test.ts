@@ -72,9 +72,9 @@ describe('activity-tools', () => {
       expect(schema).toBeDefined();
 
       // Verify schema is a Zod object with expected structure
-      // Using _def to access internal Zod schema properties
-      const def = (schema as { _def?: { typeName?: string } })._def;
-      expect(def?.typeName).toBe('ZodObject');
+      // In Zod v4, use .type instead of ._def.typeName
+      const schemaType = (schema as { type?: string })?.type;
+      expect(schemaType).toBe('object');
     });
 
     it('description explains use cases', () => {

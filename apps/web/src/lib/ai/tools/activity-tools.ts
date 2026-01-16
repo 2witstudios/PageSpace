@@ -520,7 +520,7 @@ The AI should use this data to form intuition about ongoing work and provide con
             from: string;
             lastVisit: string | null;
             excludedSelf: boolean;
-            truncated?: { droppedDeltas?: boolean; droppedActivities?: number };
+            truncated?: { droppedDeltas?: boolean; droppedActivities?: number; hardCapExceeded?: boolean };
           };
         } = {
           ok: true,
@@ -612,6 +612,36 @@ The AI should use this data to form intuition about ongoing work and provide con
             response.drives.sort((a, b) => b.stats.total - a.stats.total);
             response.drives.pop();
             outputSize = JSON.stringify(response).length;
+          }
+        }
+
+        // Step 4: Last-resort string trimming to enforce hard cap
+        // This handles edge cases where a single drive/activity has very large strings
+        if (outputSize > maxOutputChars) {
+          const maxContextLen = 500;
+          const maxTitleLen = 200;
+
+          for (const group of response.drives) {
+            // Truncate drive context
+            if (group.drive.context && group.drive.context.length > maxContextLen) {
+              group.drive.context = group.drive.context.slice(0, maxContextLen) + '…';
+            }
+            // Truncate activity titles
+            for (const activity of group.activities) {
+              if (activity.title && activity.title.length > maxTitleLen) {
+                activity.title = activity.title.slice(0, maxTitleLen) + '…';
+              }
+            }
+          }
+
+          outputSize = JSON.stringify(response).length;
+
+          // If still over after string truncation, record in truncated meta
+          if (outputSize > maxOutputChars) {
+            response.meta.truncated = {
+              ...response.meta.truncated,
+              hardCapExceeded: true,
+            };
           }
         }
 
