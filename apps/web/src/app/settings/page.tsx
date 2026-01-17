@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield } from "lucide-react";
+import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Blocks } from "lucide-react";
 
 interface SettingsCategory {
   title: string;
@@ -66,6 +66,13 @@ export default function SettingsPage() {
       description: "Configure AI provider API keys",
       icon: Key,
       href: "/settings/ai",
+      available: true,
+    },
+    {
+      title: "Integrations",
+      description: "Connect third-party services for AI tools",
+      icon: Blocks,
+      href: "/settings/integrations",
       available: true,
     },
     // Admin category (only shown to admin users)

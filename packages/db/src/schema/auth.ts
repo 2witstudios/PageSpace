@@ -164,6 +164,7 @@ export const socketTokens = pgTable('socket_tokens', {
 import { userAiSettings } from './ai';
 import { subscriptions } from './subscriptions';
 import { sessions } from './sessions';
+import { userIntegrations } from './integrations';
 
 export const usersRelations = relations(users, ({ many }) => ({
   refreshTokens: many(refreshTokens),
@@ -175,6 +176,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   socketTokens: many(socketTokens),
   subscriptions: many(subscriptions),
   sessions: many(sessions),
+  integrations: many(userIntegrations),
 }));
 
 export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({

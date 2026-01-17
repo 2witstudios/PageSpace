@@ -32,6 +32,7 @@ import {
   getUserLMStudioSettings,
   getUserGLMSettings,
   pageSpaceTools,
+  getIntegrationToolsForUser,
   extractMessageContent,
   extractToolCalls,
   extractToolResults,
@@ -452,6 +453,31 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
+    // Load integration tools for this user (e.g., Apify, etc.)
+    let integrationTools: Record<string, unknown> = {};
+    try {
+      integrationTools = await getIntegrationToolsForUser(userId);
+      if (Object.keys(integrationTools).length > 0) {
+        loggers.ai.info('AI Chat API: Loaded integration tools', {
+          userId: maskIdentifier(userId),
+          integrationToolCount: Object.keys(integrationTools).length,
+          toolNames: Object.keys(integrationTools)
+        });
+      }
+    } catch (error) {
+      loggers.ai.error('AI Chat API: Failed to load integration tools', error as Error, {
+        userId: maskIdentifier(userId)
+      });
+      // Continue without integration tools
+    }
+
+    // Combine PageSpace tools with integration tools
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allAvailableTools: Record<string, any> = {
+      ...pageSpaceTools,
+      ...integrationTools,
+    };
+
     // Filter tools based on custom enabled tools configuration
     // - null or [] = no tools enabled (default behavior)
     // - ['tool1', 'tool2'] = specific tools → use only those
@@ -460,7 +486,9 @@ export async function POST(request: Request) {
       // No tools configured - default to no tools
       filteredTools = {};
       loggers.ai.debug('AI Page Chat API: No tools enabled', {
-        totalTools: Object.keys(pageSpaceTools).length,
+        totalTools: Object.keys(allAvailableTools).length,
+        pageSpaceTools: Object.keys(pageSpaceTools).length,
+        integrationTools: Object.keys(integrationTools).length,
         enabledTools: 0,
         filteredTools: 0,
         isReadOnly: readOnlyMode
@@ -471,9 +499,8 @@ export async function POST(request: Request) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const filtered: Record<string, any> = {};
       for (const toolName of enabledTools) {
-        if (toolName in pageSpaceTools) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          filtered[toolName] = (pageSpaceTools as any)[toolName];
+        if (toolName in allAvailableTools) {
+          filtered[toolName] = allAvailableTools[toolName];
         }
       }
       // Apply read-only filtering on top of enabled tools
@@ -482,7 +509,9 @@ export async function POST(request: Request) {
       filteredTools = filterToolsForWebSearch(postReadOnlyFiltered, webSearchMode);
 
       loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
-        totalTools: Object.keys(pageSpaceTools).length,
+        totalTools: Object.keys(allAvailableTools).length,
+        pageSpaceTools: Object.keys(pageSpaceTools).length,
+        integrationTools: Object.keys(integrationTools).length,
         enabledTools: enabledTools.length,
         filteredTools: Object.keys(filteredTools).length,
         isReadOnly: readOnlyMode,
