@@ -78,13 +78,48 @@ export function createSafeToolName(serverName: string, toolName: string): string
 /**
  * Converts a single JSON Schema property to a Zod schema
  * Handles common JSON Schema types: string, number, boolean, object, array
+ * Also handles nullable types and union schemas for OpenAI/GPT compatibility
  */
 function jsonSchemaToZod(
   schema: Record<string, unknown>,
   propertyName: string
 ): z.ZodTypeAny {
-  const type = schema.type as string;
+  const rawType = schema.type;
   const description = schema.description as string | undefined;
+
+  // Handle type arrays like ["string", "null"] for nullable types
+  // OpenAI strict mode doesn't support type arrays, so we extract the primary type
+  let type: string;
+  let isNullable = false;
+
+  if (Array.isArray(rawType)) {
+    // Filter out 'null' and use the first non-null type
+    const nonNullTypes = rawType.filter((t: string) => t !== 'null');
+    type = nonNullTypes[0] as string || 'string';
+    isNullable = rawType.includes('null');
+  } else {
+    type = rawType as string;
+  }
+
+  // Handle anyOf/oneOf patterns (common in MCP tools)
+  // Convert to the first valid type for OpenAI compatibility
+  if (!type && (schema.anyOf || schema.oneOf)) {
+    const unionSchemas = (schema.anyOf || schema.oneOf) as Record<string, unknown>[];
+    if (unionSchemas && unionSchemas.length > 0) {
+      // Find the first non-null schema
+      const primarySchema = unionSchemas.find(s => s.type !== 'null') || unionSchemas[0];
+      // Recursively convert the primary schema
+      let zodSchema = jsonSchemaToZod(primarySchema, propertyName);
+      // Check if null is one of the options
+      if (unionSchemas.some(s => s.type === 'null')) {
+        zodSchema = zodSchema.nullable();
+      }
+      if (description) {
+        zodSchema = zodSchema.describe(description);
+      }
+      return zodSchema;
+    }
+  }
 
   let zodSchema: z.ZodTypeAny;
 
@@ -135,8 +170,9 @@ function jsonSchemaToZod(
         zodSchema = z.object(zodProperties);
       } else {
         // Fallback for objects without defined properties
-        // z.record requires explicit key type (z.string())
-        zodSchema = z.record(z.string(), z.unknown());
+        // Use empty z.object({}) instead of z.record() for OpenAI/GPT compatibility
+        // z.record() translates to additionalProperties: true which GPT strict mode rejects
+        zodSchema = z.object({});
       }
       break;
 
@@ -146,14 +182,23 @@ function jsonSchemaToZod(
         const itemSchema = jsonSchemaToZod(items, `${propertyName}Item`);
         zodSchema = z.array(itemSchema);
       } else {
-        zodSchema = z.array(z.unknown());
+        // Use z.array(z.string()) instead of z.array(z.unknown()) for OpenAI/GPT compatibility
+        // z.unknown() translates to an empty schema {} which GPT strict mode rejects
+        zodSchema = z.array(z.string());
       }
       break;
 
     default:
-      // Fallback for unsupported types
-      console.warn(`Unsupported JSON Schema type "${type}" for property "${propertyName}", using z.unknown()`);
-      zodSchema = z.unknown();
+      // Fallback for unsupported types - use z.string() for OpenAI/GPT compatibility
+      // z.unknown() translates to an empty schema {} which GPT strict mode rejects
+      console.warn(`Unsupported JSON Schema type "${type}" for property "${propertyName}", using z.string() for compatibility`);
+      zodSchema = z.string();
+  }
+
+  // Handle nullable: apply .nullable() if the type included null or nullable flag is set
+  // Note: OpenAI strict mode may not fully support nullable, but this is better than failing
+  if (isNullable || schema.nullable === true) {
+    zodSchema = zodSchema.nullable();
   }
 
   // Add description if available
