@@ -16,6 +16,7 @@ export * from './schema/subscriptions';
 export * from './schema/contact';
 export * from './schema/storage';
 export * from './schema/tasks';
+export * from './schema/integrations';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -35,6 +36,7 @@ import * as subscriptions from './schema/subscriptions';
 import * as contact from './schema/contact';
 import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
+import * as integrations from './schema/integrations';
 
 export const schema = {
   ...auth,
@@ -55,4 +57,5 @@ export const schema = {
   ...contact,
   ...storage,
   ...tasks,
+  ...integrations,
 };
