@@ -18,8 +18,15 @@ beforeEach(() => {
 describe('AuthFetch', () => {
   describe('refreshAuthSession queue drain', () => {
     let mockFetch: ReturnType<typeof vi.fn>;
+    let originalFetch: typeof global.fetch;
+    let originalWindow: typeof global.window;
+    let originalLocalStorage: typeof global.localStorage;
 
     beforeEach(() => {
+      // Save originals before modifying
+      originalFetch = global.fetch;
+      originalWindow = global.window;
+      originalLocalStorage = global.localStorage;
       // Setup global fetch mock
       mockFetch = vi.fn();
       global.fetch = mockFetch;
@@ -51,6 +58,15 @@ describe('AuthFetch', () => {
 
     afterEach(() => {
       vi.restoreAllMocks();
+      global.fetch = originalFetch;
+      Object.defineProperty(global, 'window', {
+        value: originalWindow,
+        writable: true,
+      });
+      Object.defineProperty(global, 'localStorage', {
+        value: originalLocalStorage,
+        writable: true,
+      });
     });
 
     it('should process queued requests after successful refreshAuthSession', async () => {
