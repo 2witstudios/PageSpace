@@ -12,6 +12,14 @@ vi.mock('socket.io-client', () => ({
   io: vi.fn(() => mockSocket),
 }));
 
+// Mock auth-fetch module for unified refresh mechanism
+const mockRefreshAuthSession = vi.fn();
+const mockClearJWTCache = vi.fn();
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  refreshAuthSession: () => mockRefreshAuthSession(),
+  clearJWTCache: () => mockClearJWTCache(),
+}));
+
 vi.mock('@pagespace/lib/broadcast-auth', () => ({
   createSignedBroadcastHeaders: vi.fn(() => ({
     'Content-Type': 'application/json',
@@ -78,6 +86,10 @@ describe('Socket.IO Integration', () => {
     mockSocket.auth = {};
     mockSocket.io.opts.reconnection = true;
     mockSocket._handlers.clear();
+
+    // Reset auth-fetch mocks with default success behavior
+    mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
+    mockClearJWTCache.mockClear();
 
     // Mock window
     Object.defineProperty(global, 'window', {
@@ -178,11 +190,14 @@ describe('Socket.IO Integration', () => {
   });
 
   describe('token refresh cycle', () => {
-    it('given token expires, should refresh and reconnect seamlessly', async () => {
+    it('given token expires, should refresh via unified auth-fetch and reconnect seamlessly', async () => {
       vi.useFakeTimers();
 
       const newToken = 'ps_sock_refreshed-token';
-      // Mock fetch to return different tokens for different calls
+      // Mock refreshAuthSession to return success
+      mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
+
+      // Mock fetch to return different tokens for different calls to socket-token endpoint
       let socketTokenCallCount = 0;
       global.fetch = vi.fn().mockImplementation((url: string) => {
         if (url === '/api/auth/socket-token') {
@@ -194,7 +209,6 @@ describe('Socket.IO Integration', () => {
             json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
           });
         }
-        // Refresh endpoint
         return Promise.resolve({ ok: true });
       });
 
@@ -210,11 +224,11 @@ describe('Socket.IO Integration', () => {
       // Advance past refresh delay
       await vi.advanceTimersByTimeAsync(2100);
 
-      // Verify token refresh was attempted
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/auth/refresh',
-        expect.objectContaining({ method: 'POST', credentials: 'include' })
-      );
+      // Verify unified token refresh was attempted (not direct fetch)
+      expect(mockRefreshAuthSession).toHaveBeenCalled();
+
+      // Verify JWT cache was cleared after successful refresh
+      expect(mockClearJWTCache).toHaveBeenCalled();
 
       // Verify socket reconnected with new token
       expect(mockSocket.auth).toEqual({ token: newToken });

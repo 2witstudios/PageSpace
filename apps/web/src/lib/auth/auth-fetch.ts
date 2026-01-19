@@ -681,9 +681,47 @@ class AuthFetch {
     try {
       const result = await this.refreshPromise;
 
+      // Process queued requests (mirroring refreshToken() behavior)
+      const queue = [...this.refreshQueue];
+      this.refreshQueue = [];
+
       if (result.success) {
         // Track successful refresh for cooldown
         this.lastSuccessfulRefresh = Date.now();
+
+        // Clear JWT cache for queued requests to get fresh token
+        this.clearJWTCache();
+
+        // Retry all queued requests
+        this.logger.info('refreshAuthSession: Retrying queued requests', {
+          queuedRequests: queue.length,
+        });
+
+        queue.forEach(async ({ resolve, reject, url, options }) => {
+          try {
+            this.logger.debug('Retrying queued request after refreshAuthSession', { url });
+            const response = await this.fetch(url, options);
+            this.logger.debug('Queued request retry successful', {
+              url,
+              status: response.status,
+            });
+            resolve(response);
+          } catch (error) {
+            this.logger.error('Queued request retry failed', {
+              url,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            reject(error as Error);
+          }
+        });
+      } else {
+        // Reject all queued requests
+        this.logger.warn('refreshAuthSession: Rejecting queued requests', {
+          queuedRequests: queue.length,
+        });
+        queue.forEach(({ reject }) => {
+          reject(new Error('Authentication failed'));
+        });
       }
 
       if (result.shouldLogout && typeof window !== 'undefined') {
