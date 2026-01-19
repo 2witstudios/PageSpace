@@ -116,8 +116,8 @@ describe('AuthFetch', () => {
 
       // Verify fetch was called for queued requests
       const fetchCalls = mockFetch.mock.calls;
-      expect(fetchCalls.some((call: [string, RequestInit?]) => call[0] === '/api/test/0')).toBe(true);
-      expect(fetchCalls.some((call: [string, RequestInit?]) => call[0] === '/api/test/1')).toBe(true);
+      expect(fetchCalls.some((call) => call[0] === '/api/test/0')).toBe(true);
+      expect(fetchCalls.some((call) => call[0] === '/api/test/1')).toBe(true);
     });
 
     it('should reject queued requests after failed refreshAuthSession', async () => {
@@ -175,7 +175,8 @@ describe('AuthFetch', () => {
 
       // Wait for queued promise to reject
       await expect(queuedPromise).rejects.toThrow('Authentication failed');
-      expect(rejectedError?.message).toBe('Authentication failed');
+      expect(rejectedError).not.toBeNull();
+      expect(rejectedError!.message).toBe('Authentication failed');
       expect(resolvedValue).toBeNull();
     });
 
