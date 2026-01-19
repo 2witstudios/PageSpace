@@ -269,12 +269,18 @@ export function useAuth(): {
         startTokenRefresh();
       }
 
-      // Check for session expiry every 5 minutes (more forgiving)
-      activityCheckInterval = setInterval(() => {
-        if (authStoreHelpers.isSessionExpired()) {
-          logout();
-        }
-      }, 5 * 60 * 1000);
+      // Inactivity timeout - ONLY for web, NOT for desktop
+      // Desktop apps with saved devices should stay logged in indefinitely
+      // (until device token expires in 90 days or user explicitly logs out)
+      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+      if (!isDesktop) {
+        // Web only: Check for session expiry every 5 minutes
+        activityCheckInterval = setInterval(() => {
+          if (authStoreHelpers.isSessionExpired()) {
+            logout();
+          }
+        }, 5 * 60 * 1000);
+      }
     } else if (!isAuthenticated || !user) {
       // Stop token refresh when not authenticated
       if (tokenRefreshActiveRef.current) {

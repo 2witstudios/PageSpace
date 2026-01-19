@@ -379,10 +379,16 @@ export const useAuthStore = create<AuthState>()(
 // Helper functions for auth store
 export const authStoreHelpers = {
   // Check if session is expired due to inactivity
+  // NOTE: Desktop apps with saved devices NEVER expire due to inactivity
+  // They stay logged in until device token expires (90 days) or user logs out
   isSessionExpired: (): boolean => {
+    // Desktop apps don't have inactivity timeout - saved devices stay logged in
+    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+    if (isDesktop) return false;
+
     const state = useAuthStore.getState();
     if (!state.lastActivity || !state.isAuthenticated) return false;
-    
+
     return Date.now() - state.lastActivity > ACTIVITY_TIMEOUT;
   },
 
