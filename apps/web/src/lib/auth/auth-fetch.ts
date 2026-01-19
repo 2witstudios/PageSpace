@@ -640,7 +640,36 @@ class AuthFetch {
   }
 
   async refreshAuthSession(): Promise<SessionRefreshResult> {
-    return this.doRefresh();
+    // CRITICAL FIX: Use the same deduplication as refreshToken() to prevent race conditions
+    // Previously this called doRefresh() directly, allowing concurrent refreshes when:
+    // 1. auth-fetch's internal refreshToken() is triggered by 401
+    // 2. useTokenRefresh's scheduled refresh calls refreshAuthSession()
+    // Both would call doRefresh() independently, and if device token was rotated by the first,
+    // the second would fail with 401 → shouldLogout: true → user logged out!
+    if (this.refreshPromise) {
+      this.logger.debug('Refresh already in progress via refreshAuthSession, joining existing promise');
+      return this.refreshPromise;
+    }
+
+    // Clear JWT cache before refresh to prevent stale token usage
+    this.clearJWTCache();
+
+    // Set the shared promise
+    this.isRefreshing = true;
+    this.refreshPromise = this.doRefresh();
+
+    try {
+      const result = await this.refreshPromise;
+
+      if (result.shouldLogout && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+      }
+
+      return result;
+    } finally {
+      this.isRefreshing = false;
+      this.refreshPromise = null;
+    }
   }
 
   /**
