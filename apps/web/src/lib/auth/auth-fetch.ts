@@ -37,6 +37,12 @@ class AuthFetch {
   private suspendTime: number | null = null;
   private powerEventCleanups: (() => void)[] = [];
 
+  // Refresh cooldown tracking - prevents rapid re-refresh after successful refresh
+  // This handles the case where delayed callbacks (e.g., socket's 2-second timeout)
+  // try to refresh after the main refresh already completed and rotated the device token
+  private lastSuccessfulRefresh: number | null = null;
+  private readonly REFRESH_COOLDOWN_MS = 5000; // 5 seconds cooldown after successful refresh
+
   constructor() {
     this.initializeListeners();
   }
@@ -357,6 +363,9 @@ class AuthFetch {
       this.refreshQueue = [];
 
       if (success) {
+        // Track successful refresh for cooldown (prevents delayed callbacks from re-refreshing)
+        this.lastSuccessfulRefresh = Date.now();
+
         // Defensive: Clear JWT cache again for queued requests
         // (Already cleared before doRefresh, but clear again in case queue accumulated during refresh)
         this.clearJWTCache();
@@ -651,6 +660,17 @@ class AuthFetch {
       return this.refreshPromise;
     }
 
+    // COOLDOWN CHECK: If we just successfully refreshed, skip this attempt
+    // This prevents delayed callbacks (e.g., socket's 2-second timeout) from triggering
+    // a redundant refresh after the main refresh already completed and rotated the device token
+    if (this.lastSuccessfulRefresh && (Date.now() - this.lastSuccessfulRefresh) < this.REFRESH_COOLDOWN_MS) {
+      this.logger.debug('Skipping refresh - within cooldown period after recent successful refresh', {
+        timeSinceLastRefresh: Date.now() - this.lastSuccessfulRefresh,
+        cooldownMs: this.REFRESH_COOLDOWN_MS,
+      });
+      return { success: true, shouldLogout: false };
+    }
+
     // Clear JWT cache before refresh to prevent stale token usage
     this.clearJWTCache();
 
@@ -660,6 +680,11 @@ class AuthFetch {
 
     try {
       const result = await this.refreshPromise;
+
+      if (result.success) {
+        // Track successful refresh for cooldown
+        this.lastSuccessfulRefresh = Date.now();
+      }
 
       if (result.shouldLogout && typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('auth:expired'));
