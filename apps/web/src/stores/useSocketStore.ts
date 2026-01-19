@@ -114,46 +114,29 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           console.log('🔄 Auth error detected, will retry after token refresh...');
           // Stop automatic reconnection for auth errors
           newSocket.io.opts.reconnection = false;
-          
-          // Attempt token refresh after a delay
+
+          // Attempt token refresh after a delay using the unified auth-fetch mechanism
+          // CRITICAL: Use refreshAuthSession() to share deduplication with other refresh paths
+          // Previously this called the endpoint directly, causing race conditions when:
+          // - Multiple 401s triggered concurrent refreshes
+          // - Device token was rotated by one refresh, invalidating others
           setTimeout(async () => {
             try {
-              // Re-check desktop status inside setTimeout to avoid closure issue
-              const isDesktopNow = typeof window !== 'undefined' &&
-                                   window.electron &&
-                                   typeof window.electron.auth?.getJWT === 'function';
+              // Use the unified refresh mechanism from auth-fetch
+              // This shares deduplication with all other refresh paths
+              const { refreshAuthSession, clearJWTCache } = await import('@/lib/auth/auth-fetch');
+              const result = await refreshAuthSession();
 
-              // Desktop uses different refresh endpoint than web
-              const refreshEndpoint = isDesktopNow ? '/api/auth/device/refresh' : '/api/auth/refresh';
+              if (result.success) {
+                console.log('🔄 Token refreshed via unified auth, reconnecting socket...');
 
-              let refreshPayload: RequestInit = {
-                method: 'POST',
-                credentials: 'include',
-              };
+                // Clear JWT cache to ensure fresh token retrieval
+                clearJWTCache();
 
-              // Desktop needs to provide device info for device token refresh
-              if (isDesktopNow && window.electron?.auth?.getDeviceInfo) {
-                const deviceInfo = await window.electron.auth.getDeviceInfo();
-                const session = await window.electron.auth.getSession();
-
-                refreshPayload = {
-                  ...refreshPayload,
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    deviceToken: session?.deviceToken,
-                    deviceId: deviceInfo.deviceId,
-                    userAgent: navigator.userAgent,
-                  }),
-                };
-              }
-
-              // Try to refresh by making a request to our token refresh endpoint
-              const response = await fetch(refreshEndpoint, refreshPayload);
-
-              if (response.ok) {
-                console.log('🔄 Token refreshed, reconnecting socket...');
+                // Re-check desktop status
+                const isDesktopNow = typeof window !== 'undefined' &&
+                                     window.electron &&
+                                     typeof window.electron.auth?.getJWT === 'function';
 
                 // Re-fetch the new token from storage or socket-token endpoint
                 let newToken: string | undefined;
@@ -172,7 +155,10 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
                 newSocket.io.opts.reconnection = true;
                 newSocket.connect();
               } else {
-                console.error('🚨 Failed to refresh token for Socket.IO');
+                // Don't log error if shouldLogout is true - user will be redirected
+                if (!result.shouldLogout) {
+                  console.error('🚨 Failed to refresh token for Socket.IO (will retry)');
+                }
                 set({ connectionStatus: 'error' });
               }
             } catch (error) {

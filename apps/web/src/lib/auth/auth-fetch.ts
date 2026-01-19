@@ -37,6 +37,12 @@ class AuthFetch {
   private suspendTime: number | null = null;
   private powerEventCleanups: (() => void)[] = [];
 
+  // Refresh cooldown tracking - prevents rapid re-refresh after successful refresh
+  // This handles the case where delayed callbacks (e.g., socket's 2-second timeout)
+  // try to refresh after the main refresh already completed and rotated the device token
+  private lastSuccessfulRefresh: number | null = null;
+  private readonly REFRESH_COOLDOWN_MS = 5000; // 5 seconds cooldown after successful refresh
+
   constructor() {
     this.initializeListeners();
   }
@@ -357,6 +363,9 @@ class AuthFetch {
       this.refreshQueue = [];
 
       if (success) {
+        // Track successful refresh for cooldown (prevents delayed callbacks from re-refreshing)
+        this.lastSuccessfulRefresh = Date.now();
+
         // Defensive: Clear JWT cache again for queued requests
         // (Already cleared before doRefresh, but clear again in case queue accumulated during refresh)
         this.clearJWTCache();
@@ -640,7 +649,90 @@ class AuthFetch {
   }
 
   async refreshAuthSession(): Promise<SessionRefreshResult> {
-    return this.doRefresh();
+    // CRITICAL FIX: Use the same deduplication as refreshToken() to prevent race conditions
+    // Previously this called doRefresh() directly, allowing concurrent refreshes when:
+    // 1. auth-fetch's internal refreshToken() is triggered by 401
+    // 2. useTokenRefresh's scheduled refresh calls refreshAuthSession()
+    // Both would call doRefresh() independently, and if device token was rotated by the first,
+    // the second would fail with 401 → shouldLogout: true → user logged out!
+    if (this.refreshPromise) {
+      this.logger.debug('Refresh already in progress via refreshAuthSession, joining existing promise');
+      return this.refreshPromise;
+    }
+
+    // COOLDOWN CHECK: If we just successfully refreshed, skip this attempt
+    // This prevents delayed callbacks (e.g., socket's 2-second timeout) from triggering
+    // a redundant refresh after the main refresh already completed and rotated the device token
+    if (this.lastSuccessfulRefresh && (Date.now() - this.lastSuccessfulRefresh) < this.REFRESH_COOLDOWN_MS) {
+      this.logger.debug('Skipping refresh - within cooldown period after recent successful refresh', {
+        timeSinceLastRefresh: Date.now() - this.lastSuccessfulRefresh,
+        cooldownMs: this.REFRESH_COOLDOWN_MS,
+      });
+      return { success: true, shouldLogout: false };
+    }
+
+    // Clear JWT cache before refresh to prevent stale token usage
+    this.clearJWTCache();
+
+    // Set the shared promise
+    this.isRefreshing = true;
+    this.refreshPromise = this.doRefresh();
+
+    try {
+      const result = await this.refreshPromise;
+
+      // Process queued requests (mirroring refreshToken() behavior)
+      const queue = [...this.refreshQueue];
+      this.refreshQueue = [];
+
+      if (result.success) {
+        // Track successful refresh for cooldown
+        this.lastSuccessfulRefresh = Date.now();
+
+        // Clear JWT cache for queued requests to get fresh token
+        this.clearJWTCache();
+
+        // Retry all queued requests
+        this.logger.info('refreshAuthSession: Retrying queued requests', {
+          queuedRequests: queue.length,
+        });
+
+        queue.forEach(async ({ resolve, reject, url, options }) => {
+          try {
+            this.logger.debug('Retrying queued request after refreshAuthSession', { url });
+            const response = await this.fetch(url, options);
+            this.logger.debug('Queued request retry successful', {
+              url,
+              status: response.status,
+            });
+            resolve(response);
+          } catch (error) {
+            this.logger.error('Queued request retry failed', {
+              url,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            reject(error as Error);
+          }
+        });
+      } else {
+        // Reject all queued requests
+        this.logger.warn('refreshAuthSession: Rejecting queued requests', {
+          queuedRequests: queue.length,
+        });
+        queue.forEach(({ reject }) => {
+          reject(new Error('Authentication failed'));
+        });
+      }
+
+      if (result.shouldLogout && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+      }
+
+      return result;
+    } finally {
+      this.isRefreshing = false;
+      this.refreshPromise = null;
+    }
   }
 
   /**

@@ -12,6 +12,14 @@ vi.mock('socket.io-client', () => ({
   io: vi.fn(() => mockSocket),
 }));
 
+// Mock auth-fetch module for unified refresh mechanism
+const mockRefreshAuthSession = vi.fn();
+const mockClearJWTCache = vi.fn();
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  refreshAuthSession: () => mockRefreshAuthSession(),
+  clearJWTCache: () => mockClearJWTCache(),
+}));
+
 // Import after mocks are set up
 import { useSocketStore } from '../useSocketStore';
 import { io } from 'socket.io-client';
@@ -52,6 +60,10 @@ describe('useSocketStore', () => {
     mockSocket.auth = {};
     mockSocket.io.opts.reconnection = true;
     mockSocket._handlers.clear();
+
+    // Reset auth-fetch mocks with default success behavior
+    mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
+    mockClearJWTCache.mockClear();
 
     // Mock window event listeners
     Object.defineProperty(global, 'window', {
@@ -221,7 +233,7 @@ describe('useSocketStore', () => {
       expect(mockSocket.io.opts.reconnection).toBe(false);
     });
 
-    it('given Authentication error, should attempt token refresh after delay', async () => {
+    it('given Authentication error, should attempt token refresh via unified auth-fetch after delay', async () => {
       vi.useFakeTimers();
 
       const { connect } = useSocketStore.getState();
@@ -232,24 +244,22 @@ describe('useSocketStore', () => {
       // Fast-forward past the 2 second delay
       await vi.advanceTimersByTimeAsync(2100);
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/auth/refresh',
-        expect.objectContaining({
-          method: 'POST',
-          credentials: 'include',
-        })
-      );
+      // Should use the unified refreshAuthSession instead of direct fetch
+      expect(mockRefreshAuthSession).toHaveBeenCalled();
 
       vi.useRealTimers();
     });
   });
 
   describe('token refresh success', () => {
-    it('given refresh endpoint returns 200, should update socket.auth with new token', async () => {
+    it('given refreshAuthSession returns success, should update socket.auth with new token', async () => {
       vi.useFakeTimers();
 
       const newToken = 'ps_sock_refreshed-token';
-      // Mock fetch to return different tokens for different calls
+      // Mock refreshAuthSession to return success
+      mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
+
+      // Mock fetch to return different tokens for different calls to socket-token endpoint
       let callCount = 0;
       global.fetch = vi.fn().mockImplementation((url: string) => {
         if (url === '/api/auth/socket-token') {
@@ -261,7 +271,6 @@ describe('useSocketStore', () => {
             json: () => Promise.resolve({ token, expiresAt: new Date(Date.now() + 300000).toISOString() }),
           });
         }
-        // Refresh endpoint
         return Promise.resolve({ ok: true });
       });
 
@@ -272,6 +281,11 @@ describe('useSocketStore', () => {
 
       await vi.advanceTimersByTimeAsync(2100);
 
+      // Verify unified refresh was called
+      expect(mockRefreshAuthSession).toHaveBeenCalled();
+      // Verify JWT cache was cleared
+      expect(mockClearJWTCache).toHaveBeenCalled();
+      // Verify socket gets new token and reconnects
       expect(mockSocket.auth).toEqual({ token: newToken });
       expect(mockSocket.connect).toHaveBeenCalled();
 
@@ -280,10 +294,11 @@ describe('useSocketStore', () => {
   });
 
   describe('token refresh failure', () => {
-    it('given refresh endpoint returns error, should set status to error', async () => {
+    it('given refreshAuthSession returns failure, should set status to error', async () => {
       vi.useFakeTimers();
 
-      vi.mocked(global.fetch).mockResolvedValue({ ok: false } as Response);
+      // Mock refreshAuthSession to return failure (but not requiring logout)
+      mockRefreshAuthSession.mockResolvedValue({ success: false, shouldLogout: false });
 
       const { connect } = useSocketStore.getState();
       await connect();
@@ -292,6 +307,9 @@ describe('useSocketStore', () => {
 
       await vi.advanceTimersByTimeAsync(2100);
 
+      // Verify unified refresh was attempted
+      expect(mockRefreshAuthSession).toHaveBeenCalled();
+      // Verify connection status is set to error
       const { connectionStatus } = useSocketStore.getState();
       expect(connectionStatus).toBe('error');
 

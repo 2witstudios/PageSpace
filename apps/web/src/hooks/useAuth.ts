@@ -54,7 +54,7 @@ export function useAuth(): {
   const hasHydrated = useAuthStore(state => state.hasHydrated);
 
   // Access stable methods without subscribing (they don't change)
-  const { setUser, setLoading, setHydrated, startSession, endSession, updateActivity } = useAuthStore.getState();
+  const { setUser, setLoading, setHydrated, startSession, endSession } = useAuthStore.getState();
 
   const { refreshToken, startTokenRefresh, stopTokenRefresh } = useTokenRefresh();
   const router = useRouter();
@@ -259,8 +259,6 @@ export function useAuth(): {
 
   // Session management and token refresh startup
   useEffect(() => {
-    let activityCheckInterval: NodeJS.Timeout;
-
     // Only start token refresh if we have a user AND are authenticated AND hydrated
     if (isAuthenticated && user && hasHydrated) {
       // Only start if not already active to prevent spam
@@ -268,13 +266,6 @@ export function useAuth(): {
         tokenRefreshActiveRef.current = true;
         startTokenRefresh();
       }
-
-      // Check for session expiry every 5 minutes (more forgiving)
-      activityCheckInterval = setInterval(() => {
-        if (authStoreHelpers.isSessionExpired()) {
-          logout();
-        }
-      }, 5 * 60 * 1000);
     } else if (!isAuthenticated || !user) {
       // Stop token refresh when not authenticated
       if (tokenRefreshActiveRef.current) {
@@ -282,12 +273,8 @@ export function useAuth(): {
         stopTokenRefresh();
       }
     }
-
-    return () => {
-      if (activityCheckInterval) clearInterval(activityCheckInterval);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, user?.id, hasHydrated, logout, startTokenRefresh, stopTokenRefresh]); // user intentionally omitted - only depends on ID for stability
+  }, [isAuthenticated, user?.id, hasHydrated, startTokenRefresh, stopTokenRefresh]); // user intentionally omitted - only depends on ID for stability
 
   // Set hydrated state when component mounts
   useEffect(() => {
@@ -436,29 +423,6 @@ export function useAuth(): {
     // This prevents duplicate event listeners when multiple components use useAuth
     authStoreHelpers.initializeEventListeners();
   }, []); // Empty dependency array ensures this runs only once
-
-  // Track user activity
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    const trackActivity = () => {
-      updateActivity();
-    };
-
-    // Track various user activities
-    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
-    
-    events.forEach(event => {
-      document.addEventListener(event, trackActivity, true);
-    });
-
-    return () => {
-      events.forEach(event => {
-        document.removeEventListener(event, trackActivity, true);
-      });
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated]); // updateActivity intentionally omitted to prevent infinite loop
 
   return {
     user,

@@ -467,38 +467,6 @@ describe('authStoreHelpers', () => {
     });
   });
 
-  describe('isSessionExpired', () => {
-    it('given no lastActivity, should return false', () => {
-      useAuthStore.setState({ lastActivity: null, isAuthenticated: true });
-
-      expect(authStoreHelpers.isSessionExpired()).toBe(false);
-    });
-
-    it('given not authenticated, should return false', () => {
-      useAuthStore.setState({ lastActivity: Date.now(), isAuthenticated: false });
-
-      expect(authStoreHelpers.isSessionExpired()).toBe(false);
-    });
-
-    it('given recent activity, should return false', () => {
-      useAuthStore.setState({
-        lastActivity: Date.now() - 1000, // 1 second ago
-        isAuthenticated: true,
-      });
-
-      expect(authStoreHelpers.isSessionExpired()).toBe(false);
-    });
-
-    it('given old activity beyond timeout, should return true', () => {
-      useAuthStore.setState({
-        lastActivity: Date.now() - 61 * 60 * 1000, // 61 minutes ago (timeout is 60 min)
-        isAuthenticated: true,
-      });
-
-      expect(authStoreHelpers.isSessionExpired()).toBe(true);
-    });
-  });
-
   describe('needsAuthCheck', () => {
     it('given no lastAuthCheck, should return true', () => {
       useAuthStore.setState({ lastAuthCheck: null });

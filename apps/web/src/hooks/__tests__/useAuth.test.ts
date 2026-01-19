@@ -29,7 +29,6 @@ type MockAuthStoreState = {
   setHydrated: ReturnType<typeof vi.fn<(hydrated: boolean) => void>>;
   startSession: ReturnType<typeof vi.fn<() => void>>;
   endSession: ReturnType<typeof vi.fn<() => void>>;
-  updateActivity: ReturnType<typeof vi.fn<() => void>>;
 };
 
 // Create hoisted mocks with state simulation
@@ -44,7 +43,6 @@ const {
   mockStopTokenRefresh,
   mockAuthStore,
   mockLoadSession,
-  mockIsSessionExpired,
   mockGetSessionDuration,
   mockShouldLoadSession,
   mockInitializeEventListeners,
@@ -71,7 +69,6 @@ const {
       store.user = null;
       store.isAuthenticated = false;
     }),
-    updateActivity: vi.fn<() => void>(),
   };
 
   return {
@@ -85,7 +82,6 @@ const {
     mockStopTokenRefresh: vi.fn(),
     mockAuthStore: store,
     mockLoadSession: vi.fn(),
-    mockIsSessionExpired: vi.fn(() => false),
     mockGetSessionDuration: vi.fn(() => 0),
     mockShouldLoadSession: vi.fn(() => false),
     mockInitializeEventListeners: vi.fn(),
@@ -135,7 +131,6 @@ vi.mock('@/stores/useAuthStore', () => {
     useAuthStore: useAuthStoreMock,
     authStoreHelpers: {
       loadSession: mockLoadSession,
-      isSessionExpired: mockIsSessionExpired,
       getSessionDuration: mockGetSessionDuration,
       shouldLoadSession: mockShouldLoadSession,
       initializeEventListeners: mockInitializeEventListeners,
