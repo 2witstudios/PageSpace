@@ -57,7 +57,6 @@ interface AuthState {
   initializeFromServer: (initialUser: User | null) => void;
 }
 
-const ACTIVITY_TIMEOUT = 60 * 60 * 1000; // 60 minutes (more forgiving)
 const AUTH_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes (token refresh handles validation every 12 min)
 const ACTIVITY_UPDATE_THROTTLE = 5 * 1000; // Only update activity every 5 seconds
 const MAX_FAILED_AUTH_ATTEMPTS = 5; // Max failed attempts before circuit breaker (increased for network resilience)
@@ -378,20 +377,6 @@ export const useAuthStore = create<AuthState>()(
 
 // Helper functions for auth store
 export const authStoreHelpers = {
-  // Check if session is expired due to inactivity
-  // NOTE: Desktop apps with saved devices NEVER expire due to inactivity
-  // They stay logged in until device token expires (90 days) or user logs out
-  isSessionExpired: (): boolean => {
-    // Desktop apps don't have inactivity timeout - saved devices stay logged in
-    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-    if (isDesktop) return false;
-
-    const state = useAuthStore.getState();
-    if (!state.lastActivity || !state.isAuthenticated) return false;
-
-    return Date.now() - state.lastActivity > ACTIVITY_TIMEOUT;
-  },
-
   // Check if auth data is stale and needs refresh
   needsAuthCheck: (): boolean => {
     const state = useAuthStore.getState();
