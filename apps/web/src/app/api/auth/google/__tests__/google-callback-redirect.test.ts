@@ -117,7 +117,7 @@ vi.mock('crypto', async () => {
   };
 });
 
-import { db, users, refreshTokens } from '@pagespace/db';
+import { db, refreshTokens } from '@pagespace/db';
 import {
   decodeToken,
   generateAccessToken,
@@ -125,7 +125,7 @@ import {
   getRefreshTokenMaxAge,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
-import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
+import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
 // Test fixtures
