@@ -1,5 +1,5 @@
 import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, or } from '@pagespace/db';
+import { db, eq, or, and } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import {
@@ -61,6 +61,7 @@ export async function GET(req: Request) {
     // Parse and verify state parameter signature
     let platform: 'web' | 'desktop' = 'web';
     let deviceId: string | undefined;
+    let deviceName: string | undefined;
     let returnUrl = '/dashboard';
 
     if (stateParam) {
@@ -87,11 +88,13 @@ export async function GET(req: Request) {
           // Signature valid, trust the data
           platform = data.platform || 'web';
           deviceId = data.deviceId;
+          deviceName = data.deviceName;
           returnUrl = data.returnUrl || '/dashboard';
         } else {
           // Legacy format: unsigned state (backward compatibility)
           platform = stateWithSignature.platform || 'web';
           deviceId = stateWithSignature.deviceId;
+          deviceName = stateWithSignature.deviceName;
           returnUrl = stateWithSignature.returnUrl || '/dashboard';
         }
       } catch {
@@ -324,6 +327,48 @@ export async function GET(req: Request) {
 
     // Add a parameter to trigger auth state refresh after OAuth
     redirectUrl.searchParams.set('auth', 'success');
+
+    // Create device token for web platform (90-day persistence for "stay logged in")
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        const result = await validateOrCreateDeviceToken({
+          providedDeviceToken: undefined, // New token for OAuth
+          userId: user.id,
+          deviceId,
+          platform: 'web',
+          tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP,
+        });
+        deviceTokenValue = result.deviceToken;
+
+        // Link refresh token to device token for proper revocation
+        // This ensures revoking a device also revokes its refresh token
+        if (result.deviceTokenRecordId) {
+          await db.update(refreshTokens)
+            .set({ deviceTokenId: result.deviceTokenRecordId })
+            .where(
+              and(
+                eq(refreshTokens.userId, user.id),
+                eq(refreshTokens.tokenHash, refreshTokenHash)
+              )
+            );
+        }
+
+        // Pass device token to client via URL (client will store in localStorage)
+        redirectUrl.searchParams.set('deviceToken', deviceTokenValue);
+        loggers.auth.debug('Created device token for web OAuth', { userId: user.id, deviceId });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token for web OAuth', {
+          userId: user.id,
+          deviceId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Continue without device token - session will still work via cookies
+      }
+    }
 
     const accessTokenCookie = serialize('accessToken', accessToken, {
       httpOnly: true,

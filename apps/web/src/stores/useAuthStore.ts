@@ -36,6 +36,15 @@ interface AuthState {
   failedAuthAttempts: number;
   lastFailedAuthCheck: number | null;
 
+  // Permanent auth failure flag (survives page reload to break rehydration loops)
+  // This is set when auth definitively fails (e.g., device token revoked)
+  // and prevents Zustand rehydration from restoring stale isAuthenticated: true
+  authFailedPermanently: boolean;
+
+  // Auth attempt timestamps for loop detection
+  // If 5+ attempts occur within 10 seconds, we've detected a loop
+  authAttemptTimestamps: number[];
+
   // Deduplication state
   _authPromise: Promise<void> | null; // Track in-flight auth requests
   _serverSessionInitialized: boolean; // Track if server session was loaded
@@ -47,6 +56,7 @@ interface AuthState {
   setRefreshTimeout: (timeoutId: NodeJS.Timeout | null) => void;
   setCsrfToken: (token: string | null) => void;
   setHydrated: (hydrated: boolean) => void;
+  setAuthFailedPermanently: (failed: boolean) => void;
   updateActivity: () => void;
   startSession: () => void;
   endSession: () => void;
@@ -62,6 +72,8 @@ const ACTIVITY_UPDATE_THROTTLE = 5 * 1000; // Only update activity every 5 secon
 const MAX_FAILED_AUTH_ATTEMPTS = 5; // Max failed attempts before circuit breaker (increased for network resilience)
 const MAX_FAILED_AUTH_ATTEMPTS_DESKTOP = 10; // Desktop gets more attempts (transient network issues after wake)
 const FAILED_AUTH_TIMEOUT = 60 * 1000; // 60 seconds timeout for failed attempts (increased from 30s)
+const AUTH_LOOP_WINDOW_MS = 10 * 1000; // 10 second window for loop detection
+const AUTH_LOOP_THRESHOLD = 5; // 5+ attempts in window = loop detected
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -80,6 +92,8 @@ export const useAuthStore = create<AuthState>()(
       lastActivityUpdate: null,
       failedAuthAttempts: 0,
       lastFailedAuthCheck: null,
+      authFailedPermanently: false,
+      authAttemptTimestamps: [],
       _authPromise: null,
       _serverSessionInitialized: false,
 
@@ -92,9 +106,11 @@ export const useAuthStore = create<AuthState>()(
           // Start session if user is set and session not already started
           sessionStartTime: user && !state.sessionStartTime ? Date.now() : state.sessionStartTime,
           lastActivity: user ? Date.now() : state.lastActivity,
-          // Clear failed attempts on successful auth
+          // Clear failed attempts and permanent failure flag on successful auth
           failedAuthAttempts: user ? 0 : state.failedAuthAttempts,
           lastFailedAuthCheck: user ? null : state.lastFailedAuthCheck,
+          authFailedPermanently: user ? false : state.authFailedPermanently,
+          authAttemptTimestamps: user ? [] : state.authAttemptTimestamps,
         }));
       },
 
@@ -107,6 +123,13 @@ export const useAuthStore = create<AuthState>()(
       setCsrfToken: (csrfToken) => set({ csrfToken }),
 
       setHydrated: (hasHydrated) => set({ hasHydrated }),
+
+      setAuthFailedPermanently: (authFailedPermanently) => {
+        if (authFailedPermanently) {
+          console.log('[AUTH_STORE] Setting permanent auth failure flag');
+        }
+        set({ authFailedPermanently });
+      },
 
       updateActivity: () => {
         const now = Date.now();
@@ -189,6 +212,8 @@ export const useAuthStore = create<AuthState>()(
           lastActivityUpdate: null,
           failedAuthAttempts: 0,
           lastFailedAuthCheck: null,
+          authFailedPermanently: false,
+          authAttemptTimestamps: [],
           _authPromise: null,
           _serverSessionInitialized: false,
         });
@@ -214,6 +239,40 @@ export const useAuthStore = create<AuthState>()(
         if (state._authPromise && !force) {
           return state._authPromise;
         }
+
+        // CRITICAL: Check for permanent auth failure BEFORE attempting any auth
+        // This breaks the rehydration loop where Zustand restores stale isAuthenticated: true
+        if (state.authFailedPermanently && !force) {
+          console.log('[AUTH_STORE] Auth permanently failed - skipping session load (user must login again)');
+          set({
+            user: null,
+            isAuthenticated: false,
+            isLoading: false,
+          });
+          return;
+        }
+
+        // Loop detection: Check if we're in a rapid auth attempt loop
+        const now = Date.now();
+        const recentAttempts = state.authAttemptTimestamps.filter(
+          (timestamp) => now - timestamp < AUTH_LOOP_WINDOW_MS
+        );
+        if (recentAttempts.length >= AUTH_LOOP_THRESHOLD) {
+          console.error('[AUTH_STORE] Auth loop detected! 5+ auth attempts in 10 seconds - breaking loop');
+          set({
+            user: null,
+            isAuthenticated: false,
+            isLoading: false,
+            authFailedPermanently: true, // Prevent further attempts until manual login
+            authAttemptTimestamps: [], // Clear timestamps
+          });
+          return;
+        }
+
+        // Track this auth attempt
+        set({
+          authAttemptTimestamps: [...recentAttempts, now],
+        });
 
         // Skip if circuit breaker is active
         if (!force && authStoreHelpers.shouldSkipAuthCheck()) {
@@ -272,19 +331,25 @@ export const useAuthStore = create<AuthState>()(
 
               if (hasChanged) {
                 // Data changed - update everything
+                // Clear failure flags to allow auth after successful OAuth login
                 set({
                   user: userData,
                   isAuthenticated: true,
                   lastAuthCheck: Date.now(),
                   failedAuthAttempts: 0,
                   lastFailedAuthCheck: null,
+                  authFailedPermanently: false,
+                  authAttemptTimestamps: [],
                 });
               } else {
                 // Data identical - only update timestamp
+                // Clear failure flags to allow auth after successful OAuth login
                 set({
                   lastAuthCheck: Date.now(),
                   failedAuthAttempts: 0,
                   lastFailedAuthCheck: null,
+                  authFailedPermanently: false,
+                  authAttemptTimestamps: [],
                 });
               }
 
@@ -318,6 +383,15 @@ export const useAuthStore = create<AuthState>()(
                 }
 
                 console.log('[AUTH_STORE] Authentication token invalid, user must re-authenticate');
+                // Set permanent failure flag to break rehydration loop
+                set({
+                  user: null,
+                  isAuthenticated: false,
+                  failedAuthAttempts: get().failedAuthAttempts + 1,
+                  lastFailedAuthCheck: Date.now(),
+                  authFailedPermanently: true, // CRITICAL: Prevents loop on page reload
+                });
+                return;
               }
 
               // Unauthorized - clear user and record failure
@@ -362,6 +436,9 @@ export const useAuthStore = create<AuthState>()(
         lastAuthCheck: state.lastAuthCheck,
         // Persist auth state to avoid logout on refresh
         isAuthenticated: state.isAuthenticated,
+        // Persist permanent failure flag to break rehydration loops
+        // When auth definitively fails, this flag survives page reload
+        authFailedPermanently: state.authFailedPermanently,
         // Persist basic user info for faster initial load
         user: state.user ? {
           id: state.user.id,
@@ -371,6 +448,15 @@ export const useAuthStore = create<AuthState>()(
           emailVerified: state.user.emailVerified,
         } : null,
       }),
+      // Handle rehydration safely - clear stale auth state if permanent failure flag is set
+      onRehydrateStorage: () => (state) => {
+        if (state?.authFailedPermanently) {
+          console.log('[AUTH_STORE] Rehydrated with permanent failure flag - clearing auth state');
+          // Clear auth state but keep the failure flag until user successfully logs in
+          state.user = null;
+          state.isAuthenticated = false;
+        }
+      },
     }
   )
 );

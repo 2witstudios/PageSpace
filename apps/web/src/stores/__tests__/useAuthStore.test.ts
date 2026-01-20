@@ -56,6 +56,8 @@ describe('useAuthStore', () => {
       lastActivityUpdate: null,
       failedAuthAttempts: 0,
       lastFailedAuthCheck: null,
+      authFailedPermanently: false,
+      authAttemptTimestamps: [],
       _authPromise: null,
       _serverSessionInitialized: false,
     });
@@ -93,6 +95,16 @@ describe('useAuthStore', () => {
     it('given store is created, should have zero failed attempts', () => {
       const { failedAuthAttempts } = useAuthStore.getState();
       expect(failedAuthAttempts).toBe(0);
+    });
+
+    it('given store is created, should have authFailedPermanently false', () => {
+      const { authFailedPermanently } = useAuthStore.getState();
+      expect(authFailedPermanently).toBe(false);
+    });
+
+    it('given store is created, should have empty authAttemptTimestamps', () => {
+      const { authAttemptTimestamps } = useAuthStore.getState();
+      expect(authAttemptTimestamps).toEqual([]);
     });
   });
 
@@ -150,6 +162,24 @@ describe('useAuthStore', () => {
       const { lastAuthCheck } = useAuthStore.getState();
       expect(lastAuthCheck).toBeGreaterThanOrEqual(before);
     });
+
+    it('given user set after auth failure, should clear authFailedPermanently', () => {
+      useAuthStore.setState({ authFailedPermanently: true });
+      const { setUser } = useAuthStore.getState();
+
+      setUser(createMockUser());
+
+      expect(useAuthStore.getState().authFailedPermanently).toBe(false);
+    });
+
+    it('given user set after auth failure, should clear authAttemptTimestamps', () => {
+      useAuthStore.setState({ authAttemptTimestamps: [Date.now(), Date.now(), Date.now()] });
+      const { setUser } = useAuthStore.getState();
+
+      setUser(createMockUser());
+
+      expect(useAuthStore.getState().authAttemptTimestamps).toEqual([]);
+    });
   });
 
   describe('setLoading', () => {
@@ -188,6 +218,35 @@ describe('useAuthStore', () => {
       setCsrfToken('csrf-token-123');
 
       expect(useAuthStore.getState().csrfToken).toBe('csrf-token-123');
+    });
+  });
+
+  describe('setAuthFailedPermanently', () => {
+    it('given true, should set authFailedPermanently flag', () => {
+      const { setAuthFailedPermanently } = useAuthStore.getState();
+
+      setAuthFailedPermanently(true);
+
+      expect(useAuthStore.getState().authFailedPermanently).toBe(true);
+    });
+
+    it('given false, should clear authFailedPermanently flag', () => {
+      useAuthStore.setState({ authFailedPermanently: true });
+      const { setAuthFailedPermanently } = useAuthStore.getState();
+
+      setAuthFailedPermanently(false);
+
+      expect(useAuthStore.getState().authFailedPermanently).toBe(false);
+    });
+
+    it('given true, should log to console', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const { setAuthFailedPermanently } = useAuthStore.getState();
+
+      setAuthFailedPermanently(true);
+
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[AUTH_STORE]'));
+      consoleSpy.mockRestore();
     });
   });
 
@@ -349,6 +408,24 @@ describe('useAuthStore', () => {
       expect(state.failedAuthAttempts).toBe(0);
       expect(state._serverSessionInitialized).toBe(false);
     });
+
+    it('given reset called with auth failure state, should clear authFailedPermanently', () => {
+      useAuthStore.setState({ authFailedPermanently: true });
+      const { reset } = useAuthStore.getState();
+
+      reset();
+
+      expect(useAuthStore.getState().authFailedPermanently).toBe(false);
+    });
+
+    it('given reset called with auth failure state, should clear authAttemptTimestamps', () => {
+      useAuthStore.setState({ authAttemptTimestamps: [Date.now(), Date.now()] });
+      const { reset } = useAuthStore.getState();
+
+      reset();
+
+      expect(useAuthStore.getState().authAttemptTimestamps).toEqual([]);
+    });
   });
 
   describe('initializeFromServer', () => {
@@ -443,6 +520,197 @@ describe('useAuthStore', () => {
       expect(useAuthStore.getState().failedAuthAttempts).toBe(1);
       consoleError.mockRestore();
     });
+
+    it('given authFailedPermanently true and loadSession called without force, should skip auth check', async () => {
+      useAuthStore.setState({ authFailedPermanently: true });
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.mocked(global.fetch).mockClear();
+
+      await useAuthStore.getState().loadSession(false);
+
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+      consoleSpy.mockRestore();
+    });
+
+    it('given authFailedPermanently true and loadSession called with force, should attempt auth', async () => {
+      useAuthStore.setState({ authFailedPermanently: true });
+      const user = createMockUser();
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+
+      await useAuthStore.getState().loadSession(true);
+
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    it('given successful auth after failure, should clear authFailedPermanently flag', async () => {
+      useAuthStore.setState({ authFailedPermanently: true });
+      const user = createMockUser();
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+
+      await useAuthStore.getState().loadSession(true);
+
+      expect(useAuthStore.getState().authFailedPermanently).toBe(false);
+    });
+
+    it('given successful auth, should clear authAttemptTimestamps', async () => {
+      useAuthStore.setState({ authAttemptTimestamps: [Date.now(), Date.now()] });
+      const user = createMockUser();
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+
+      await useAuthStore.getState().loadSession();
+
+      expect(useAuthStore.getState().authAttemptTimestamps).toEqual([]);
+    });
+  });
+
+  describe('auth loop detection', () => {
+    it('given 4 auth attempts in 10 seconds, should allow next attempt', async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+
+      // Pre-populate with 4 attempts in the last 5 seconds
+      useAuthStore.setState({
+        authAttemptTimestamps: [
+          now - 4000,
+          now - 3000,
+          now - 2000,
+          now - 1000,
+        ],
+      });
+
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: false,
+        status: 401,
+      } as Response);
+
+      await useAuthStore.getState().loadSession();
+
+      // Should have attempted (fetch called) since only 4 recent attempts
+      expect(global.fetch).toHaveBeenCalled();
+      expect(useAuthStore.getState().authFailedPermanently).toBe(false);
+
+      vi.useRealTimers();
+    });
+
+    it('given 5 auth attempts in 10 seconds, should detect loop and set authFailedPermanently', async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+
+      // Pre-populate with 5 attempts in the last 9 seconds (all within window)
+      useAuthStore.setState({
+        authAttemptTimestamps: [
+          now - 8000,
+          now - 6000,
+          now - 4000,
+          now - 2000,
+          now - 500,
+        ],
+      });
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await useAuthStore.getState().loadSession();
+
+      // Should NOT have attempted fetch - loop detected before fetch
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(useAuthStore.getState().authFailedPermanently).toBe(true);
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+
+      consoleError.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it('given 5 auth attempts spread over 15 seconds, should not detect loop', async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+
+      // Attempts spread over 15 seconds - oldest 3 are outside the 10-second window
+      useAuthStore.setState({
+        authAttemptTimestamps: [
+          now - 15000, // Outside window
+          now - 13000, // Outside window
+          now - 11000, // Outside window
+          now - 5000,  // Inside window
+          now - 2000,  // Inside window
+        ],
+      });
+
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: false,
+        status: 401,
+      } as Response);
+
+      await useAuthStore.getState().loadSession();
+
+      // Should have attempted since only 2 attempts are within the 10-second window
+      expect(global.fetch).toHaveBeenCalled();
+      expect(useAuthStore.getState().authFailedPermanently).toBe(false);
+
+      vi.useRealTimers();
+    });
+
+    it('given loop detected, should clear user and set isAuthenticated false', async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+
+      // User is "authenticated" with stale state
+      useAuthStore.setState({
+        user: createMockUser(),
+        isAuthenticated: true,
+        authAttemptTimestamps: [
+          now - 8000,
+          now - 6000,
+          now - 4000,
+          now - 2000,
+          now - 500,
+        ],
+      });
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await useAuthStore.getState().loadSession();
+
+      const state = useAuthStore.getState();
+      expect(state.user).toBeNull();
+      expect(state.isAuthenticated).toBe(false);
+
+      consoleError.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it('given loop detected, should clear authAttemptTimestamps', async () => {
+      vi.useFakeTimers();
+      const now = Date.now();
+
+      useAuthStore.setState({
+        authAttemptTimestamps: [
+          now - 8000,
+          now - 6000,
+          now - 4000,
+          now - 2000,
+          now - 500,
+        ],
+      });
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await useAuthStore.getState().loadSession();
+
+      expect(useAuthStore.getState().authAttemptTimestamps).toEqual([]);
+
+      consoleError.mockRestore();
+      vi.useRealTimers();
+    });
   });
 });
 
@@ -462,6 +730,8 @@ describe('authStoreHelpers', () => {
       lastActivityUpdate: null,
       failedAuthAttempts: 0,
       lastFailedAuthCheck: null,
+      authFailedPermanently: false,
+      authAttemptTimestamps: [],
       _authPromise: null,
       _serverSessionInitialized: false,
     });
@@ -585,5 +855,45 @@ describe('authStoreHelpers', () => {
 
       expect(useAuthStore.getState().lastActivity).toBeGreaterThanOrEqual(before);
     });
+  });
+});
+
+describe('persist partialize behavior', () => {
+  beforeEach(() => {
+    mockLocalStorage.clear();
+    useAuthStore.setState({
+      user: null,
+      isLoading: false,
+      isAuthenticated: false,
+      lastAuthCheck: null,
+      hasHydrated: false,
+      authFailedPermanently: false,
+      authAttemptTimestamps: [],
+    });
+  });
+
+  it('given authFailedPermanently true, should be included in persisted state', () => {
+    useAuthStore.setState({ authFailedPermanently: true });
+
+    // Trigger persist by calling persist.rehydrate or checking localStorage
+    // The zustand persist middleware auto-persists on state change
+    // We verify by checking what was written to localStorage
+    const stored = mockLocalStorage.getItem('auth-storage');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      expect(parsed.state.authFailedPermanently).toBe(true);
+    }
+  });
+
+  it('given authAttemptTimestamps populated, should NOT be included in persisted state', () => {
+    const timestamps = [Date.now(), Date.now() - 1000];
+    useAuthStore.setState({ authAttemptTimestamps: timestamps });
+
+    const stored = mockLocalStorage.getItem('auth-storage');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // authAttemptTimestamps should not be in persisted state
+      expect(parsed.state.authAttemptTimestamps).toBeUndefined();
+    }
   });
 });

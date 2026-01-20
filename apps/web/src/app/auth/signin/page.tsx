@@ -91,13 +91,21 @@ function SignInForm() {
     setError(null);
 
     try {
-      // Detect if desktop and get deviceId
+      // Detect platform and get deviceId for ALL platforms
       const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-      let deviceId: string | undefined;
+      let deviceId: string;
+      let deviceName: string;
 
       if (isDesktop && window.electron) {
+        // Desktop: Get device info from Electron
         const deviceInfo = await window.electron.auth.getDeviceInfo();
         deviceId = deviceInfo.deviceId;
+        deviceName = deviceInfo.deviceName;
+      } else {
+        // Web browser: Use fingerprint utility for device identification
+        const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
+        deviceId = getOrCreateDeviceId();
+        deviceName = getDeviceName();
       }
 
       const response = await fetch('/api/auth/google/signin', {
@@ -107,7 +115,8 @@ function SignInForm() {
         },
         body: JSON.stringify({
           platform: isDesktop ? 'desktop' : 'web',
-          ...(deviceId && { deviceId }),
+          deviceId,
+          deviceName,
         }),
       });
 

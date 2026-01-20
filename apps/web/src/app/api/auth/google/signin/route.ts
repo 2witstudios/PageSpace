@@ -10,7 +10,8 @@ import { getClientIP } from '@/lib/auth';
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
   platform: z.enum(['web', 'desktop']).optional(),
-  deviceId: z.string().optional(), // For desktop platform
+  deviceId: z.string().optional(), // For device tracking on all platforms
+  deviceName: z.string().optional(), // Human-readable device name
 });
 
 export async function POST(req: Request) {
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { returnUrl, platform, deviceId } = validation.data;
+    const { returnUrl, platform, deviceId, deviceName } = validation.data;
 
     // Rate limiting by IP address
     const clientIP = getClientIP(req);
@@ -66,6 +67,7 @@ export async function POST(req: Request) {
       returnUrl: returnUrl || '/dashboard',
       platform: platform || 'web',
       ...(deviceId && { deviceId }),
+      ...(deviceName && { deviceName }),
     };
 
     // Sign state parameter with HMAC-SHA256 to prevent tampering
