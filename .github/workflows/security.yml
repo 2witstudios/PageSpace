@@ -125,7 +125,7 @@ jobs:
 
       - name: TruffleHog Secret Scan
         # Pinned to v3.92.4 (2025-12-19) for reproducibility; Dependabot updates this automatically
-        uses: trufflesecurity/trufflehog@v3.92.4
+        uses: trufflesecurity/trufflehog@v3.92.5
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
