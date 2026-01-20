@@ -466,6 +466,10 @@ export const agentCommunicationTools = {
           }]
         };
 
+        // Determine sourceAgentId - only set if the calling context is an AI_CHAT page
+        const callingPage = executionContext?.locationContext?.currentPage;
+        const sourceAgentId = callingPage?.type === 'AI_CHAT' ? callingPage.id : null;
+
         // Save user message to database
         await saveMessageToDatabase({
           messageId: userMessageId,
@@ -474,6 +478,7 @@ export const agentCommunicationTools = {
           userId: userId, // Track which user (via calling agent) asked the question
           role: 'user',
           content: userMessageContent,
+          sourceAgentId, // Track which AI agent sent this message (for agent-to-agent communication)
         });
 
         // Add user message to conversation
@@ -588,6 +593,7 @@ export const agentCommunicationTools = {
           userId: null, // Assistant message, not from a user
           role: 'assistant',
           content: agentResponse,
+          sourceAgentId: null, // Assistant responses are native to this agent, not forwarded
         });
 
         loggers.ai.debug('Saved ask_agent conversation:', {

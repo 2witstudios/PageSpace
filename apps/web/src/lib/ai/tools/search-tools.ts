@@ -1,22 +1,23 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
+import { db, pages, drives, chatMessages, eq, and, sql, inArray } from '@pagespace/db';
 import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/server';
 import { type ToolExecutionContext } from '../core';
 
 export const searchTools = {
   /**
-   * Search page content using regular expressions
+   * Search page content and conversations using regular expressions
    */
   regex_search: tool({
-    description: 'Search page content using regular expression patterns. Returns pages that match the pattern with their IDs, titles, and semantic paths for reference.',
+    description: 'Search page content and conversation messages using regular expression patterns. Searches both documents and conversations by default. Returns matches with IDs, titles, and context for reference.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to search in'),
       pattern: z.string().describe('Regular expression pattern to search for (e.g., "TODO.*urgent", "\\d{4}-\\d{2}-\\d{2}", "deprecated.*API")'),
       searchIn: z.enum(['content', 'title', 'both']).default('content').describe('Where to search: content only, title only, or both'),
       maxResults: z.number().optional().default(50).describe('Maximum number of results to return'),
+      contentTypes: z.array(z.enum(['documents', 'conversations'])).optional().default(['documents', 'conversations']).describe('What content to search: documents, conversations, or both'),
     }),
-    execute: async ({ driveId, pattern, searchIn, maxResults = 50 }, { experimental_context: context }) => {
+    execute: async ({ driveId, pattern, searchIn, maxResults = 50, contentTypes = ['documents', 'conversations'] }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -79,52 +80,171 @@ export const searchTools = {
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
         const pageMap = new Map(accessiblePages.map(p => [p.id, p]));
 
-        // Filter by permissions and build results
-        const results = [];
-        for (const page of matchingPages) {
-          // O(1) permission check using Set
-          if (accessiblePageIds.has(page.id)) {
-            // Build semantic path using in-memory page map
-            const pathParts = [drive.slug || driveId];
-            const parentChain = [];
+        const results: Array<{
+          pageId: string;
+          title: string;
+          type: string;
+          semanticPath: string;
+          matchingLines: Array<{ lineNumber: number; content: string }>;
+          totalMatches: number;
+          conversationId?: string;
+          suggestedLineRange?: { start: number; end: number };
+        }> = [];
 
-            // Build parent chain using in-memory map (no DB queries)
-            let currentPageId = page.parentId;
-            while (currentPageId) {
-              const parentPage = pageMap.get(currentPageId);
-              if (parentPage) {
-                parentChain.unshift(parentPage.title);
-                currentPageId = parentPage.parentId;
-              } else {
-                break;
-              }
-            }
+        // Search documents if requested
+        if (contentTypes.includes('documents')) {
+          for (const page of matchingPages) {
+            // O(1) permission check using Set
+            if (accessiblePageIds.has(page.id)) {
+              // Build semantic path using in-memory page map
+              const pathParts = [drive.slug || driveId];
+              const parentChain: string[] = [];
 
-            const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
-
-            // Extract matching lines if searching content
-            const matchingLines: Array<{ lineNumber: number; content: string }> = [];
-            if (searchIn !== 'title') {
-              const lines = page.content.split('\n');
-              const regex = new RegExp(pattern, 'g');
-              lines.forEach((line, index) => {
-                if (regex.test(line)) {
-                  matchingLines.push({
-                    lineNumber: index + 1,
-                    content: line.substring(0, 200), // Truncate long lines
-                  });
+              // Build parent chain using in-memory map (no DB queries)
+              let currentPageId = page.parentId;
+              while (currentPageId) {
+                const parentPage = pageMap.get(currentPageId);
+                if (parentPage) {
+                  parentChain.unshift(parentPage.title);
+                  currentPageId = parentPage.parentId;
+                } else {
+                  break;
                 }
+              }
+
+              const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
+
+              // Extract matching lines if searching content
+              const matchingLines: Array<{ lineNumber: number; content: string }> = [];
+              if (searchIn !== 'title') {
+                const lines = page.content.split('\n');
+                const regex = new RegExp(pattern, 'g');
+                lines.forEach((line, index) => {
+                  if (regex.test(line)) {
+                    matchingLines.push({
+                      lineNumber: index + 1,
+                      content: line.substring(0, 200), // Truncate long lines
+                    });
+                  }
+                });
+              }
+
+              results.push({
+                pageId: page.id,
+                title: page.title,
+                type: page.type,
+                semanticPath,
+                matchingLines: matchingLines.slice(0, 5), // Limit to first 5 matches
+                totalMatches: matchingLines.length,
+              });
+            }
+          }
+        }
+
+        // Search conversations if requested
+        if (contentTypes.includes('conversations')) {
+          // Get all AI_CHAT pages in the drive that user has access to
+          const aiChatPages = accessiblePages.filter(p => p.type === 'AI_CHAT');
+
+          if (aiChatPages.length > 0) {
+            const aiChatPageIds = aiChatPages.map(p => p.id);
+
+            // Search conversation messages
+            const conversationMatches = await db
+              .select({
+                id: chatMessages.id,
+                pageId: chatMessages.pageId,
+                conversationId: chatMessages.conversationId,
+                content: chatMessages.content,
+                createdAt: chatMessages.createdAt,
+              })
+              .from(chatMessages)
+              .where(and(
+                inArray(chatMessages.pageId, aiChatPageIds),
+                eq(chatMessages.isActive, true),
+                sql`${chatMessages.content} ~ ${pgPattern}`
+              ))
+              .limit(maxResults);
+
+            // Group by conversation and build results
+            const conversationResults = new Map<string, {
+              pageId: string;
+              conversationId: string;
+              matches: Array<{ lineNumber: number; content: string }>;
+            }>();
+
+            for (const msg of conversationMatches) {
+              const key = `${msg.pageId}:${msg.conversationId}`;
+              if (!conversationResults.has(key)) {
+                conversationResults.set(key, {
+                  pageId: msg.pageId,
+                  conversationId: msg.conversationId,
+                  matches: [],
+                });
+              }
+
+              // Get the line number (message index) in conversation
+              const convMessages = await db
+                .select({ id: chatMessages.id })
+                .from(chatMessages)
+                .where(and(
+                  eq(chatMessages.conversationId, msg.conversationId),
+                  eq(chatMessages.isActive, true),
+                  sql`${chatMessages.createdAt} <= ${msg.createdAt}`
+                ));
+
+              const lineNumber = convMessages.length;
+
+              // Extract text content
+              let textContent = '';
+              try {
+                const parsed = JSON.parse(msg.content);
+                textContent = parsed.textParts?.[0] || parsed.originalContent || msg.content;
+              } catch {
+                textContent = msg.content;
+              }
+
+              conversationResults.get(key)!.matches.push({
+                lineNumber,
+                content: textContent.substring(0, 200),
               });
             }
 
-            results.push({
-              pageId: page.id,
-              title: page.title,
-              type: page.type,
-              semanticPath,
-              matchingLines: matchingLines.slice(0, 5), // Limit to first 5 matches
-              totalMatches: matchingLines.length,
-            });
+            // Build final conversation results
+            for (const [, conv] of conversationResults) {
+              const page = pageMap.get(conv.pageId);
+              if (page) {
+                const pathParts = [drive.slug || driveId];
+                let currentPageId = page.parentId;
+                const parentChain: string[] = [];
+                while (currentPageId) {
+                  const parentPage = pageMap.get(currentPageId);
+                  if (parentPage) {
+                    parentChain.unshift(parentPage.title);
+                    currentPageId = parentPage.parentId;
+                  } else {
+                    break;
+                  }
+                }
+                const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
+
+                // Calculate suggested line range for context
+                const firstMatch = conv.matches[0]?.lineNumber || 1;
+                const suggestedStart = Math.max(1, firstMatch - 3);
+                const suggestedEnd = firstMatch + 3;
+
+                results.push({
+                  pageId: conv.pageId,
+                  title: page.title,
+                  type: 'AI_CHAT',
+                  semanticPath,
+                  conversationId: conv.conversationId,
+                  matchingLines: conv.matches.slice(0, 5),
+                  totalMatches: conv.matches.length,
+                  suggestedLineRange: { start: suggestedStart, end: suggestedEnd },
+                });
+              }
+            }
           }
         }
 
@@ -133,17 +253,20 @@ export const searchTools = {
           driveSlug: drive.slug,
           pattern,
           searchIn,
+          contentTypes,
           results,
           totalResults: results.length,
-          summary: `Found ${results.length} page${results.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
+          summary: `Found ${results.length} result${results.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
             pagesScanned: matchingPages.length,
             pagesWithAccess: results.length,
             documentTypes: [...new Set(results.map(r => r.type))],
+            searchedDocuments: contentTypes.includes('documents'),
+            searchedConversations: contentTypes.includes('conversations'),
           },
           nextSteps: results.length > 0 ? [
             'Use read_page with the pageId to examine full content',
-            'Use edit tools to modify matching pages',
+            'Use read_conversation with conversationId for chat context',
             'Refine your regex pattern for more specific results',
           ] : [
             'Try a different pattern or search in a different location',

@@ -274,6 +274,13 @@
       "when": 1768500960919,
       "tag": "0038_salty_phalanx",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1768927822609,
+      "tag": "0039_chubby_tusk",
+      "breakpoints": true
     }
   ]
 }
