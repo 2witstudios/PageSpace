@@ -721,11 +721,11 @@ export const pageReadTools = {
               prefix = '[user]';
             }
 
-            // Extract text content
+            // Extract text content - prefer originalContent to capture full message
             let textContent = '';
             try {
               const parsed = JSON.parse(msg.content);
-              textContent = parsed.textParts?.[0] || parsed.originalContent || msg.content;
+              textContent = parsed.originalContent || (parsed.textParts?.join('\n') ?? msg.content);
             } catch {
               textContent = msg.content;
             }
