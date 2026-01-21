@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
 import { UIMessage, DefaultChatTransport } from 'ai';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
@@ -94,6 +95,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     allServersEnabled,
     setAllServersEnabled,
   } = useMCPTools({ conversationId: currentConversationId });
+
+  // Get web search setting from global assistant settings store
+  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
 
   const {
     conversations,
@@ -272,6 +276,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           conversationId: currentConversationId,
           selectedProvider,
           selectedModel,
+          isReadOnly,
+          webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
           pageContext: {
             pageId: page.id,
@@ -302,6 +308,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     selectedProvider,
     selectedModel,
     mcpToolSchemas,
+    webSearchEnabled,
   ]);
 
   const handleUndoSuccess = useCallback(async () => {
