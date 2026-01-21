@@ -74,6 +74,10 @@ export function useAuth(): {
 
   // Login function
   const login = useCallback(async (email: string, password: string) => {
+    // CRITICAL: Clear permanent auth failure flag to allow retry
+    // This resets the loop detection state so users can attempt to log in again
+    useAuthStore.getState().setAuthFailedPermanently(false);
+
     setLoading(true);
     try {
       // Fetch login CSRF token first (prevents Login CSRF attacks)

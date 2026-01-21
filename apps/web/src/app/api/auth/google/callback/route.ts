@@ -1,5 +1,5 @@
 import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, or } from '@pagespace/db';
+import { db, eq, or, and } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import {
@@ -17,6 +17,26 @@ import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
 import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
+
+/**
+ * Validates that a return URL is a safe same-origin path.
+ * Defense-in-depth: validates again in callback even though signin validates.
+ * This protects against legacy states or any signin validation bypass.
+ */
+function isSafeReturnUrl(url: string | undefined): boolean {
+  if (!url) return true;
+  if (!url.startsWith('/')) return false;
+  if (url.startsWith('//') || url.startsWith('/\\')) return false;
+  if (/[a-z]+:/i.test(url)) return false;
+  try {
+    const decoded = decodeURIComponent(url);
+    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
+    if (/[a-z]+:/i.test(decoded)) return false;
+  } catch {
+    return false; // Invalid encoding
+  }
+  return true;
+}
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
@@ -61,6 +81,7 @@ export async function GET(req: Request) {
     // Parse and verify state parameter signature
     let platform: 'web' | 'desktop' = 'web';
     let deviceId: string | undefined;
+    let deviceName: string | undefined;
     let returnUrl = '/dashboard';
 
     if (stateParam) {
@@ -87,17 +108,30 @@ export async function GET(req: Request) {
           // Signature valid, trust the data
           platform = data.platform || 'web';
           deviceId = data.deviceId;
+          deviceName = data.deviceName;
           returnUrl = data.returnUrl || '/dashboard';
         } else {
           // Legacy format: unsigned state (backward compatibility)
           platform = stateWithSignature.platform || 'web';
           deviceId = stateWithSignature.deviceId;
+          deviceName = stateWithSignature.deviceName;
           returnUrl = stateWithSignature.returnUrl || '/dashboard';
         }
       } catch {
         // Legacy fallback: state might be just a return URL string
         returnUrl = stateParam;
       }
+    }
+
+    // SECURITY: Validate returnUrl to prevent open redirect attacks
+    // Defense-in-depth: signin validates, but callback re-validates in case of
+    // legacy states or bypass attempts. Unsafe URLs fall back to /dashboard.
+    if (!isSafeReturnUrl(returnUrl)) {
+      loggers.auth.warn('Unsafe returnUrl in OAuth callback - falling back to dashboard', {
+        returnUrl,
+        hasState: !!stateParam,
+      });
+      returnUrl = '/dashboard';
     }
 
     // Rate limiting by IP address
@@ -324,6 +358,48 @@ export async function GET(req: Request) {
 
     // Add a parameter to trigger auth state refresh after OAuth
     redirectUrl.searchParams.set('auth', 'success');
+
+    // Create device token for web platform (90-day persistence for "stay logged in")
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        const result = await validateOrCreateDeviceToken({
+          providedDeviceToken: undefined, // New token for OAuth
+          userId: user.id,
+          deviceId,
+          platform: 'web',
+          tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP,
+        });
+        deviceTokenValue = result.deviceToken;
+
+        // Link refresh token to device token for proper revocation
+        // This ensures revoking a device also revokes its refresh token
+        if (result.deviceTokenRecordId) {
+          await db.update(refreshTokens)
+            .set({ deviceTokenId: result.deviceTokenRecordId })
+            .where(
+              and(
+                eq(refreshTokens.userId, user.id),
+                eq(refreshTokens.tokenHash, refreshTokenHash)
+              )
+            );
+        }
+
+        // Pass device token to client via URL (client will store in localStorage)
+        redirectUrl.searchParams.set('deviceToken', deviceTokenValue);
+        loggers.auth.debug('Created device token for web OAuth', { userId: user.id, deviceId });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token for web OAuth', {
+          userId: user.id,
+          deviceId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Continue without device token - session will still work via cookies
+      }
+    }
 
     const accessTokenCookie = serialize('accessToken', accessToken, {
       httpOnly: true,

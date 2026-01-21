@@ -27,7 +27,10 @@ class AuthFetch {
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
   private jwtCache: { token: string | null; timestamp: number } | null = null;
-  private readonly JWT_CACHE_TTL = 30000; // 30 seconds - balance between IPC overhead and staleness
+  // Desktop JWT cache TTL reduced from 30s to 5s to minimize staleness risk
+  // This is critical for desktop where JWT rotation after refresh was causing
+  // stale token usage when the cache held old tokens
+  private readonly JWT_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
   private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
   private authClearedCleanup: (() => void) | null = null;
   private initialized = false;

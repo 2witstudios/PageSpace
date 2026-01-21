@@ -108,6 +108,7 @@ import {
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenMaxAge,
+  validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -410,6 +411,79 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
+    });
+  });
+
+  describe('web device token creation', () => {
+    beforeEach(() => {
+      (validateOrCreateDeviceToken as Mock).mockResolvedValue({
+        deviceToken: 'web-device-token-123',
+        deviceTokenRecordId: 'device-record-123',
+      });
+    });
+
+    it('given web platform with deviceId, should call validateOrCreateDeviceToken', async () => {
+      const request = createOneTapRequest({
+        credential: 'valid-google-id-token',
+        platform: 'web',
+        deviceId: 'web-device-id-123',
+        deviceName: 'Test Browser',
+      });
+      await POST(request);
+
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: mockNewUser.id,
+          deviceId: 'web-device-id-123',
+          platform: 'web',
+          deviceName: 'Test Browser',
+        })
+      );
+    });
+
+    it('given web platform with deviceId, should include deviceToken in response', async () => {
+      const request = createOneTapRequest({
+        credential: 'valid-google-id-token',
+        platform: 'web',
+        deviceId: 'web-device-id-456',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.deviceToken).toBe('web-device-token-123');
+    });
+
+    it('given device token creation fails, should still return success', async () => {
+      (validateOrCreateDeviceToken as Mock).mockRejectedValue(new Error('Device token error'));
+
+      const request = createOneTapRequest({
+        credential: 'valid-google-id-token',
+        platform: 'web',
+        deviceId: 'web-device-id-789',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      // deviceToken should not be present when creation fails
+      expect(body.deviceToken).toBeUndefined();
+    });
+
+    it('given web platform without deviceId, should not call validateOrCreateDeviceToken', async () => {
+      (validateOrCreateDeviceToken as Mock).mockClear();
+
+      const request = createOneTapRequest({
+        credential: 'valid-google-id-token',
+        platform: 'web',
+        // No deviceId provided
+      });
+      await POST(request);
+
+      // validateOrCreateDeviceToken should not be called for web without deviceId
+      expect(validateOrCreateDeviceToken).not.toHaveBeenCalled();
     });
   });
 });

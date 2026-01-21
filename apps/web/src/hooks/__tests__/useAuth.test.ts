@@ -24,9 +24,11 @@ type MockAuthStoreState = {
   isAuthenticated: boolean;
   isRefreshing: boolean;
   hasHydrated: boolean;
+  authFailedPermanently: boolean;
   setUser: ReturnType<typeof vi.fn<(user: AuthUser | null) => void>>;
   setLoading: ReturnType<typeof vi.fn<(loading: boolean) => void>>;
   setHydrated: ReturnType<typeof vi.fn<(hydrated: boolean) => void>>;
+  setAuthFailedPermanently: ReturnType<typeof vi.fn<(failed: boolean) => void>>;
   startSession: ReturnType<typeof vi.fn<() => void>>;
   endSession: ReturnType<typeof vi.fn<() => void>>;
 };
@@ -53,6 +55,7 @@ const {
     isAuthenticated: false,
     isRefreshing: false,
     hasHydrated: true,
+    authFailedPermanently: false,
     // Simulate actual state transitions
     setUser: vi.fn<(user: AuthUser | null) => void>((user) => {
       store.user = user;
@@ -63,6 +66,9 @@ const {
     }),
     setHydrated: vi.fn<(hydrated: boolean) => void>((hydrated) => {
       store.hasHydrated = hydrated;
+    }),
+    setAuthFailedPermanently: vi.fn<(failed: boolean) => void>((failed) => {
+      store.authFailedPermanently = failed;
     }),
     startSession: vi.fn<() => void>(),
     endSession: vi.fn<() => void>(() => {
@@ -173,6 +179,7 @@ describe('useAuth', () => {
     mockAuthStore.isAuthenticated = false;
     mockAuthStore.isRefreshing = false;
     mockAuthStore.hasHydrated = true;
+    mockAuthStore.authFailedPermanently = false;
 
     global.fetch = vi.fn();
   });

@@ -1,5 +1,5 @@
 import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, or } from '@pagespace/db';
+import { db, eq, or, and } from '@pagespace/db';
 import { z } from 'zod/v4';
 import {
   generateAccessToken,
@@ -306,6 +306,46 @@ export async function POST(req: Request) {
     // WEB PLATFORM: Set cookies and return success
     const isProduction = process.env.NODE_ENV === 'production';
 
+    // Create device token for web platform (90-day persistence for "stay logged in")
+    let deviceTokenValue: string | undefined;
+    if (deviceId) {
+      try {
+        const result = await validateOrCreateDeviceToken({
+          providedDeviceToken: undefined, // New token for One Tap
+          userId: user.id,
+          deviceId,
+          platform: 'web',
+          tokenVersion: user.tokenVersion,
+          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
+          userAgent: req.headers.get('user-agent') || undefined,
+          ipAddress: clientIP,
+        });
+        deviceTokenValue = result.deviceToken;
+
+        // Link refresh token to device token for proper revocation
+        // This ensures revoking a device also revokes its refresh token
+        if (result.deviceTokenRecordId) {
+          await db.update(refreshTokens)
+            .set({ deviceTokenId: result.deviceTokenRecordId })
+            .where(
+              and(
+                eq(refreshTokens.userId, user.id),
+                eq(refreshTokens.tokenHash, refreshTokenHash)
+              )
+            );
+        }
+
+        loggers.auth.debug('Created device token for web One Tap', { userId: user.id, deviceId });
+      } catch (error) {
+        loggers.auth.warn('Failed to create device token for web One Tap', {
+          userId: user.id,
+          deviceId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Continue without device token - session will still work via cookies
+      }
+    }
+
     const accessTokenCookie = serialize('accessToken', accessToken, {
       httpOnly: true,
       secure: isProduction,
@@ -338,6 +378,8 @@ export async function POST(req: Request) {
         },
         redirectTo,
         isNewUser,
+        // Include device token for client-side storage
+        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }
     );

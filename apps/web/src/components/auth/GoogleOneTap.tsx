@@ -42,15 +42,21 @@ export function GoogleOneTap({
       isLoadingRef.current = true;
 
       try {
-        // Get device info for desktop
+        // Get device info for ALL platforms (not just desktop)
         const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-        let deviceId: string | undefined;
-        let deviceName: string | undefined;
+        let deviceId: string;
+        let deviceName: string;
 
         if (isDesktop && window.electron) {
+          // Desktop: Get device info from Electron
           const deviceInfo = await window.electron.auth.getDeviceInfo();
           deviceId = deviceInfo.deviceId;
           deviceName = deviceInfo.deviceName;
+        } else {
+          // Web browser: Use fingerprint utility for device identification
+          const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
+          deviceId = getOrCreateDeviceId();
+          deviceName = getDeviceName();
         }
 
         // Send the credential to our backend for verification
@@ -63,8 +69,8 @@ export function GoogleOneTap({
           body: JSON.stringify({
             credential: response.credential,
             platform: isDesktop ? 'desktop' : 'web',
-            ...(deviceId && { deviceId }),
-            ...(deviceName && { deviceName }),
+            deviceId,
+            deviceName,
           }),
         });
 
@@ -77,14 +83,24 @@ export function GoogleOneTap({
             onSuccess(data.user);
           }
 
-          // Handle desktop platform tokens
+          // Handle platform-specific token storage
           if (isDesktop && window.electron && data.tokens) {
+            // Desktop: Store in Electron secure storage
             await window.electron.auth.storeSession({
               accessToken: data.tokens.accessToken,
               refreshToken: data.tokens.refreshToken,
               csrfToken: data.tokens.csrfToken,
               deviceToken: data.tokens.deviceToken,
             });
+          } else if (data.deviceToken) {
+            // Web: Store device token in localStorage for 90-day persistence
+            try {
+              localStorage.setItem('deviceToken', data.deviceToken);
+            } catch (storageError) {
+              // Storage may fail in private browsing or when quota exceeded
+              // Log but don't block the sign-in flow
+              console.warn('Failed to store device token:', storageError);
+            }
           }
 
           // Redirect to dashboard or specified URL with auth=success param
