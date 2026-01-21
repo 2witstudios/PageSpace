@@ -24,6 +24,20 @@ export const searchTools = {
       }
 
       try {
+        // Validate regex pattern to prevent ReDoS attacks
+        const MAX_PATTERN_LENGTH = 200;
+        if (pattern.length > MAX_PATTERN_LENGTH) {
+          throw new Error(`Pattern too long (max ${MAX_PATTERN_LENGTH} characters)`);
+        }
+
+        // Validate pattern is a valid regex (also catches syntax errors early)
+        let jsRegex: RegExp;
+        try {
+          jsRegex = new RegExp(pattern);
+        } catch (e) {
+          throw new Error(`Invalid regex pattern: ${(e as Error).message}`);
+        }
+
         // Check drive access
         const hasDriveAccess = await getUserDriveAccess(userId, driveId);
         if (!hasDriveAccess) {
@@ -118,9 +132,9 @@ export const searchTools = {
               const matchingLines: Array<{ lineNumber: number; content: string }> = [];
               if (searchIn !== 'title') {
                 const lines = page.content.split('\n');
-                const regex = new RegExp(pattern, 'g');
+                // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
                 lines.forEach((line, index) => {
-                  if (regex.test(line)) {
+                  if (jsRegex.test(line)) {
                     matchingLines.push({
                       lineNumber: index + 1,
                       content: line.substring(0, 200), // Truncate long lines
@@ -173,6 +187,28 @@ export const searchTools = {
               matches: Array<{ lineNumber: number; content: string }>;
             }>();
 
+            // Batch fetch line numbers for all matching messages to avoid N+1 queries
+            // Collect unique conversation IDs from matches
+            const matchingConversationIds = [...new Set(conversationMatches.map(m => m.conversationId))];
+
+            // Fetch all messages for matched conversations with row numbers in a single query
+            const allConvMessages = matchingConversationIds.length > 0
+              ? await db
+                  .select({
+                    id: chatMessages.id,
+                    conversationId: chatMessages.conversationId,
+                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${chatMessages.conversationId} ORDER BY ${chatMessages.createdAt})`.as('line_number'),
+                  })
+                  .from(chatMessages)
+                  .where(and(
+                    inArray(chatMessages.conversationId, matchingConversationIds),
+                    eq(chatMessages.isActive, true)
+                  ))
+              : [];
+
+            // Build lookup map: messageId -> lineNumber
+            const lineNumberMap = new Map(allConvMessages.map(m => [m.id, Number(m.lineNumber)]));
+
             for (const msg of conversationMatches) {
               const key = `${msg.pageId}:${msg.conversationId}`;
               if (!conversationResults.has(key)) {
@@ -183,17 +219,8 @@ export const searchTools = {
                 });
               }
 
-              // Get the line number (message index) in conversation
-              const convMessages = await db
-                .select({ id: chatMessages.id })
-                .from(chatMessages)
-                .where(and(
-                  eq(chatMessages.conversationId, msg.conversationId),
-                  eq(chatMessages.isActive, true),
-                  sql`${chatMessages.createdAt} <= ${msg.createdAt}`
-                ));
-
-              const lineNumber = convMessages.length;
+              // Get the line number from pre-computed map (O(1) lookup)
+              const lineNumber = lineNumberMap.get(msg.id) ?? 1;
 
               // Extract text content
               let textContent = '';

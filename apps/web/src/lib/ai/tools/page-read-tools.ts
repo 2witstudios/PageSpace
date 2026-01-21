@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, taskItems, taskLists, chatMessages, eq, and, asc, desc, isNotNull, sql, count, max, min } from '@pagespace/db';
+import { db, pages, taskItems, taskLists, chatMessages, eq, and, asc, isNotNull, count, max, min } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 
@@ -751,8 +751,8 @@ export const pageReadTools = {
           totalMessages,
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
           summary: isRangeRequest
-            ? `Read messages ${effectiveStart}-${effectiveEnd} of conversation (${selectedMessages.length} of ${totalMessages} messages)`
-            : `Read conversation with ${totalMessages} messages`,
+            ? `Read messages ${effectiveStart}-${effectiveEnd} of "${title}" conversation (${selectedMessages.length} of ${totalMessages} messages)`
+            : `Read "${title}" conversation with ${totalMessages} messages`,
         };
       } catch (error) {
         console.error('Error reading conversation:', error);
