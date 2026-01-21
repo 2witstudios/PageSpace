@@ -94,7 +94,13 @@ export function GoogleOneTap({
             });
           } else if (data.deviceToken) {
             // Web: Store device token in localStorage for 90-day persistence
-            localStorage.setItem('deviceToken', data.deviceToken);
+            try {
+              localStorage.setItem('deviceToken', data.deviceToken);
+            } catch (storageError) {
+              // Storage may fail in private browsing or when quota exceeded
+              // Log but don't block the sign-in flow
+              console.warn('Failed to store device token:', storageError);
+            }
           }
 
           // Redirect to dashboard or specified URL with auth=success param

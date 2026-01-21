@@ -18,6 +18,26 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { getClientIP } from '@/lib/auth';
 import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 
+/**
+ * Validates that a return URL is a safe same-origin path.
+ * Defense-in-depth: validates again in callback even though signin validates.
+ * This protects against legacy states or any signin validation bypass.
+ */
+function isSafeReturnUrl(url: string | undefined): boolean {
+  if (!url) return true;
+  if (!url.startsWith('/')) return false;
+  if (url.startsWith('//') || url.startsWith('/\\')) return false;
+  if (/[a-z]+:/i.test(url)) return false;
+  try {
+    const decoded = decodeURIComponent(url);
+    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
+    if (/[a-z]+:/i.test(decoded)) return false;
+  } catch {
+    return false; // Invalid encoding
+  }
+  return true;
+}
+
 const googleCallbackSchema = z.object({
   code: z.string().min(1, "Authorization code is required"),
   state: z.string().nullish().optional(),
@@ -101,6 +121,17 @@ export async function GET(req: Request) {
         // Legacy fallback: state might be just a return URL string
         returnUrl = stateParam;
       }
+    }
+
+    // SECURITY: Validate returnUrl to prevent open redirect attacks
+    // Defense-in-depth: signin validates, but callback re-validates in case of
+    // legacy states or bypass attempts. Unsafe URLs fall back to /dashboard.
+    if (!isSafeReturnUrl(returnUrl)) {
+      loggers.auth.warn('Unsafe returnUrl in OAuth callback - falling back to dashboard', {
+        returnUrl,
+        hasState: !!stateParam,
+      });
+      returnUrl = '/dashboard';
     }
 
     // Rate limiting by IP address
