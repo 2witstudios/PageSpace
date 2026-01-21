@@ -468,6 +468,29 @@ class AuthFetch {
           });
 
           if (response.ok) {
+            let refreshData: { deviceToken?: string; csrfToken?: string } | null = null;
+            try {
+              refreshData = await response.json();
+            } catch {
+              refreshData = null;
+            }
+
+            if (refreshData?.deviceToken && typeof localStorage !== 'undefined') {
+              try {
+                localStorage.setItem('deviceToken', refreshData.deviceToken);
+              } catch (storageError) {
+                this.logger.warn('Failed to persist refreshed device token', {
+                  error: storageError instanceof Error ? storageError.message : String(storageError),
+                });
+              }
+            }
+
+            if (refreshData?.csrfToken) {
+              this.csrfToken = refreshData.csrfToken;
+            } else {
+              this.clearCSRFToken();
+            }
+
             // Device token refresh succeeded
             this.logger.info('Session recovered via device token fallback');
             if (typeof window !== 'undefined' && window.dispatchEvent) {
