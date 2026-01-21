@@ -29,9 +29,13 @@ function isSafeReturnUrl(url: string | undefined): boolean {
 
   // Reject URLs with encoded characters that could bypass validation
   // %2f = /, %5c = \, %3a = :
-  const decoded = decodeURIComponent(url);
-  if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-  if (/[a-z]+:/i.test(decoded)) return false;
+  try {
+    const decoded = decodeURIComponent(url);
+    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
+    if (/[a-z]+:/i.test(decoded)) return false;
+  } catch {
+    return false; // Invalid encoding
+  }
 
   return true;
 }
