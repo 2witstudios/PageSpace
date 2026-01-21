@@ -525,9 +525,10 @@ export const pageReadTools = {
         // Get first message preview for each conversation
         const conversations = await Promise.all(
           conversationData.map(async (conv) => {
-            // Get first message for preview
+            // Get first message for preview - include pageId to use composite index
             const firstMessage = await db.query.chatMessages.findFirst({
               where: and(
+                eq(chatMessages.pageId, pageId),
                 eq(chatMessages.conversationId, conv.conversationId),
                 eq(chatMessages.isActive, true)
               ),
@@ -539,22 +540,23 @@ export const pageReadTools = {
               },
             });
 
-            // Get unique participants
+            // Get unique participants - include pageId to use composite index
             const participants = await db
               .selectDistinct({ userId: chatMessages.userId })
               .from(chatMessages)
               .where(and(
+                eq(chatMessages.pageId, pageId),
                 eq(chatMessages.conversationId, conv.conversationId),
                 eq(chatMessages.isActive, true),
                 isNotNull(chatMessages.userId)
               ));
 
-            // Extract preview text (truncate if needed)
+            // Extract preview text - prefer originalContent for full message capture
             let previewText = '';
             if (firstMessage?.content) {
               try {
                 const parsed = JSON.parse(firstMessage.content);
-                previewText = parsed.textParts?.[0] || parsed.originalContent || '';
+                previewText = parsed.originalContent || (parsed.textParts?.join('\n') ?? firstMessage.content);
               } catch {
                 previewText = firstMessage.content;
               }
