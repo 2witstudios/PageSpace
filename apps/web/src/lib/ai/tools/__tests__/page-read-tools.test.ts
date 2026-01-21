@@ -94,6 +94,14 @@ const createAuthContext = (userId = 'user-123') => ({
   experimental_context: { userId } as ToolExecutionContext,
 });
 
+// Helper for mock access levels - getUserAccessLevel returns an object with permission booleans
+const createMockAccessLevel = (level: 'viewer' | 'editor' | 'admin') => ({
+  canView: true,
+  canEdit: level === 'editor' || level === 'admin',
+  canShare: level === 'admin',
+  canDelete: level === 'admin',
+});
+
 describe('page-read-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -166,8 +174,8 @@ describe('page-read-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage(tenLineContent));
-        mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) };
-        mockGetUserAccessLevel.mockResolvedValue('editor');
+        mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       });
 
       it('returns full content when no line params provided', async () => {
@@ -394,7 +402,7 @@ describe('page-read-tools', () => {
 
     it('returns error when page is not AI_CHAT type', async () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('content', 'DOCUMENT'));
-      mockGetUserAccessLevel.mockResolvedValue('editor');
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
 
       const result = await pageReadTools.list_conversations.execute!(
         { pageId: 'page-1', title: 'Test Doc' },
@@ -435,7 +443,7 @@ describe('page-read-tools', () => {
 
     it('returns empty array when AI_CHAT has no conversations', async () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
-      mockGetUserAccessLevel.mockResolvedValue('editor');
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty conversations query
       (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
         from: vi.fn().mockReturnValue({
@@ -467,7 +475,7 @@ describe('page-read-tools', () => {
 
     it('returns conversation list with metadata', async () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
-      mockGetUserAccessLevel.mockResolvedValue('editor');
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
 
       // Mock the main select for conversation aggregation
       (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -496,7 +504,7 @@ describe('page-read-tools', () => {
           role: 'user',
           userId: 'user-1',
         }),
-      };
+      } as unknown as typeof mockDb.query.chatMessages;
 
       // Mock selectDistinct for participants
       (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -591,7 +599,7 @@ describe('page-read-tools', () => {
 
     it('returns error when conversation not found', async () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
-      mockGetUserAccessLevel.mockResolvedValue('editor');
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty messages for this conversation
       (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
         from: vi.fn().mockReturnValue({
@@ -632,7 +640,7 @@ describe('page-read-tools', () => {
         mockDb.query.pages.findFirst = vi.fn()
           .mockResolvedValueOnce(createMockPage('', 'AI_CHAT')) // Main page lookup
           .mockResolvedValue({ id: 'global-assistant-id', title: 'Global Assistant' }); // Source agent lookup
-        mockGetUserAccessLevel.mockResolvedValue('editor');
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
         (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
@@ -710,7 +718,7 @@ describe('page-read-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
-        mockGetUserAccessLevel.mockResolvedValue('editor');
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
         (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({

@@ -53,7 +53,7 @@ describe('search-tools', () => {
 
       await expect(
         searchTools.regex_search.execute!(
-          { driveId: 'drive-1', pattern: 'TODO.*', searchIn: 'both', maxResults: 10 },
+          { driveId: 'drive-1', pattern: 'TODO.*', searchIn: 'both', maxResults: 10, contentTypes: ['documents', 'conversations'] },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -69,7 +69,7 @@ describe('search-tools', () => {
 
       await expect(
         searchTools.regex_search.execute!(
-          { driveId: 'drive-1', pattern: 'TODO.*', searchIn: 'both', maxResults: 10 },
+          { driveId: 'drive-1', pattern: 'TODO.*', searchIn: 'both', maxResults: 10, contentTypes: ['documents', 'conversations'] },
           context
         )
       ).rejects.toThrow("You don't have access to this drive");
@@ -144,7 +144,7 @@ describe('search-tools', () => {
       assert({
         given: 'regex_search tool description',
         should: 'mention searching conversations',
-        actual: searchTools.regex_search.description.toLowerCase().includes('conversation'),
+        actual: searchTools.regex_search.description?.toLowerCase().includes('conversation') ?? false,
         expected: true,
       });
     });
@@ -158,7 +158,7 @@ describe('search-tools', () => {
       // that the tool accepts the call without contentTypes
       await expect(
         searchTools.regex_search.execute!(
-          { driveId: 'drive-1', pattern: 'test', searchIn: 'both', maxResults: 10 },
+          { driveId: 'drive-1', pattern: 'test', searchIn: 'both', maxResults: 10, contentTypes: ['documents', 'conversations'] },
           createAuthContext()
         )
       ).rejects.toThrow("You don't have access to this drive");
