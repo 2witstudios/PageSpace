@@ -28,6 +28,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef(0);
   const lastRefreshTimeRef = useRef<number>(Date.now());
+  const lastRefreshResultRef = useRef<{ success: boolean; shouldLogout: boolean } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const router = useRouter();
 
@@ -71,6 +72,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
       try {
         setIsRefreshing(true);
         const { success, shouldLogout } = await refreshAuthSession();
+        lastRefreshResultRef.current = { success, shouldLogout };
 
         if (success) {
           // Token refreshed successfully, fetch fresh user data
@@ -116,6 +118,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         return false;
       } catch (error) {
         console.error('Token refresh error:', error);
+        lastRefreshResultRef.current = { success: false, shouldLogout: false };
         return false;
       } finally {
         setIsRefreshing(false);
@@ -155,6 +158,12 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         console.log('✅ Token refresh successful, scheduling next refresh');
         scheduleTokenRefresh();
       } else {
+        const lastResult = lastRefreshResultRef.current;
+        if (lastResult?.shouldLogout) {
+          console.log('💀 Token refresh failed - user must re-authenticate');
+          return;
+        }
+
         // Retry logic with exponential backoff
         if (retryCountRef.current < retryAttempts) {
           retryCountRef.current++;
@@ -166,8 +175,8 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
             scheduleTokenRefresh();
           }, backoffDelay);
         } else {
-          console.log('💀 Max retry attempts reached, logging out');
-          await logout();
+          console.log('Max retry attempts reached, pausing refresh attempts');
+          retryCountRef.current = 0;
         }
       }
     }, refreshInMs);

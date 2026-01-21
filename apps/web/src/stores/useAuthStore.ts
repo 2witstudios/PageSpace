@@ -394,6 +394,36 @@ export const useAuthStore = create<AuthState>()(
                 return;
               }
 
+              if (!force) {
+                console.log('[AUTH_STORE] Web token validation failed, attempting token refresh');
+
+                try {
+                  const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+                  const refreshResult = await refreshAuthSession();
+
+                  if (refreshResult.success) {
+                    console.log('[AUTH_STORE] Token refresh succeeded, retrying session load');
+                    return get().loadSession(true);
+                  }
+
+                  if (!refreshResult.shouldLogout) {
+                    console.log('[AUTH_STORE] Token refresh failed but not fatal - will retry later');
+                    set({
+                      failedAuthAttempts: get().failedAuthAttempts + 1,
+                      lastFailedAuthCheck: Date.now(),
+                    });
+                    return;
+                  }
+                } catch (refreshError) {
+                  console.error('[AUTH_STORE] Web token refresh failed:', refreshError);
+                  set({
+                    failedAuthAttempts: get().failedAuthAttempts + 1,
+                    lastFailedAuthCheck: Date.now(),
+                  });
+                  return;
+                }
+              }
+
               // Unauthorized - clear user and record failure
               set({
                 user: null,

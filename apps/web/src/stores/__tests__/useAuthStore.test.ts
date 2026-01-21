@@ -22,7 +22,7 @@ Object.defineProperty(global, 'localStorage', { value: mockLocalStorage });
 // Mock auth-fetch module
 vi.mock('@/lib/auth/auth-fetch', () => ({
   clearCSRFToken: vi.fn(),
-  refreshAuthSession: vi.fn().mockResolvedValue({ success: false }),
+  refreshAuthSession: vi.fn().mockResolvedValue({ success: false, shouldLogout: true }),
   clearJWTCache: vi.fn(),
 }));
 
