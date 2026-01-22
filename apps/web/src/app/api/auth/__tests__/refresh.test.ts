@@ -121,7 +121,8 @@ describe('/api/auth/refresh', () => {
     role: 'user' as const,
   };
 
-  const mockRefreshToken = {
+  // Reference structure for refresh token (used by atomicTokenRefresh internally)
+  const _mockRefreshToken = {
     id: 'refresh-token-id',
     token: 'valid-refresh-token',
     userId: 'test-user-id',
