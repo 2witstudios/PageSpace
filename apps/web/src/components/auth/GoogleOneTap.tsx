@@ -147,6 +147,20 @@ export function GoogleOneTap({
       return;
     }
 
+    // Don't run on mobile browsers - Google One Tap (FedCM) has limited support
+    // on mobile and causes repeated prompts/re-renders leading to login loops
+    if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+      const userAgent = navigator.userAgent.toLowerCase();
+      const isMobileBrowser =
+        /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(
+          userAgent
+        );
+      if (isMobileBrowser) {
+        console.debug('Google One Tap: Skipping on mobile browser');
+        return;
+      }
+    }
+
     const clientId = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
     if (!clientId) {
       console.warn('Google One Tap: Missing NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID');
