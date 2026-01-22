@@ -403,12 +403,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
 
         if (existing && (!existing.expiresAt || new Date(existing.expiresAt) > new Date())) {
           // Valid token, update activity and return
-          await tx.execute(sql`
-            UPDATE device_tokens
-            SET "lastUsedAt" = NOW(),
-                "lastIpAddress" = COALESCE(${ipAddress}, "lastIpAddress")
-            WHERE id = ${existing.id}
-          `);
+          await tx.execute(sql`UPDATE device_tokens SET "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existing.id}`);
 
           return {
             deviceToken: providedDeviceToken,
