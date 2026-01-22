@@ -147,16 +147,28 @@ export function GoogleOneTap({
       return;
     }
 
-    // Don't run on mobile browsers - Google One Tap (FedCM) has limited support
-    // on mobile and causes repeated prompts/re-renders leading to login loops
+    // Don't run on mobile browsers or in-app browsers (social media webviews)
+    // Google One Tap (FedCM) has limited support and causes login loops
     if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
-      const userAgent = navigator.userAgent.toLowerCase();
+      const userAgent = navigator.userAgent;
+      // Standard mobile browsers
       const isMobileBrowser =
         /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(
           userAgent
         );
-      if (isMobileBrowser) {
-        console.debug('Google One Tap: Skipping on mobile browser');
+      // In-app browsers from social media apps (Facebook, Instagram, TikTok, etc.)
+      const isInAppBrowser =
+        /FBAN|FBAV|FB_IAB|Instagram|Twitter|TikTok|Snapchat|Pinterest|LinkedIn|Line\/|KAKAOTALK|MicroMessenger|WeChat|QQ\//i.test(
+          userAgent
+        );
+      // Generic WebView detection
+      const isWebView = /\bwv\b|WebView/i.test(userAgent);
+
+      if (isMobileBrowser || isInAppBrowser || isWebView) {
+        console.debug(
+          'Google One Tap: Skipping on mobile/in-app browser',
+          { isMobileBrowser, isInAppBrowser, isWebView }
+        );
         return;
       }
     }
