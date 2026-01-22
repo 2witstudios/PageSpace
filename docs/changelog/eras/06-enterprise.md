@@ -285,4 +285,40 @@ This era shows platform ambition:
 
 ---
 
+## What Didn't Work
+
+### Planning Documents
+**Files Discarded**: Multiple enterprise planning docs
+
+Several planning and backlog documents were created then removed:
+- `PR.md` - PR tracking document
+- `REFACTORING_BACKLOG.md` - Backlog that became outdated
+
+**Lesson**: Living documents need maintenance. Static planning docs quickly diverge from reality.
+
+## Evidence & Verification
+
+### Candid Developer Messages
+
+| Date | Message |
+|------|---------|
+| Nov 9 | "sidebar finally fixed" |
+| Nov 4 | "Correct GLM Web Search API endpoint" |
+
+### File Evolutions
+- [Auth Store Evolution](../evidence/files/apps-web-src-stores-auth-store.ts.md)
+- [Permissions Route](../evidence/files/apps-web-src-app-api-pages-_pageid_-permissions-route.ts.md)
+
+### Verification Commands
+
+```bash
+# View permission system commits
+git log --oneline --since="2025-11-01" --until="2025-11-15" --grep="permission\|access"
+
+# View mobile/iOS work
+git log --oneline --since="2025-11-01" --until="2025-11-15" --grep="mobile\|iOS"
+```
+
+---
+
 *Previous: [05-polish](./05-polish.md) | Next: [07-desktop](./07-desktop.md)*

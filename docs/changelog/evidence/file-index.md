@@ -1,0 +1,110 @@
+# File Evolution Index
+
+> Per-file commit histories for significant files
+
+Generated: 2026-01-22T14:52:08.229Z
+
+## Files
+
+| File | Commits | Status |
+|------|---------|--------|
+| [apps/web/src/app/api/ai/chat/route.ts](./files/apps-web-src-app-api-ai-chat-route.ts.md) | 61 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/page-views/dashboard/GlobalAssistantView.tsx](./files/apps-web-src-components-layout-middle-content-page-views-dashboard-globalassistantview.tsx.md) | 56 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/page-views/ai-page/AiChatView.tsx](./files/apps-web-src-components-layout-middle-content-page-views-ai-page-aichatview.tsx.md) | 48 | ✅ Active |
+| [apps/web/src/app/api/ai_conversations/[id]/messages/route.ts](./files/apps-web-src-app-api-ai_conversations-_id_-messages-route.ts.md) | 34 | ✅ Active |
+| [apps/desktop/src/main/index.ts](./files/apps-desktop-src-main-index.ts.md) | 31 | ✅ Active |
+| [apps/web/src/components/layout/right-sidebar/ai-assistant/AssistantChatTab.tsx](./files/apps-web-src-components-layout-right-sidebar-ai-assistant-assistantchattab.tsx.md) | 30 | ✅ Active |
+| [apps/web/src/app/api/auth/signup/route.ts](./files/apps-web-src-app-api-auth-signup-route.ts.md) | 27 | ✅ Active |
+| [packages/lib/src/index.ts](./files/packages-lib-src-index.ts.md) | 23 | ✅ Active |
+| [apps/web/src/app/api/pages/[pageId]/route.ts](./files/apps-web-src-app-api-pages-_pageid_-route.ts.md) | 23 | ✅ Active |
+| [packages/lib/src/server.ts](./files/packages-lib-src-server.ts.md) | 22 | ✅ Active |
+| [packages/db/src/schema/auth.ts](./files/packages-db-src-schema-auth.ts.md) | 21 | ✅ Active |
+| [docs/1.0-overview/changelog.md](./files/docs-1.0-overview-changelog.md.md) | 21 | ✅ Active |
+| [apps/web/src/components/layout/right-sidebar/ai-assistant/SidebarChatTab.tsx](./files/apps-web-src-components-layout-right-sidebar-ai-assistant-sidebarchattab.tsx.md) | 50 | ✅ Active |
+| [apps/web/src/contexts/GlobalChatContext.tsx](./files/apps-web-src-contexts-globalchatcontext.tsx.md) | 20 | ✅ Active |
+| [apps/web/src/components/layout/right-sidebar/ai-assistant/AssistantSettingsTab.tsx](./files/apps-web-src-components-layout-right-sidebar-ai-assistant-assistantsettingstab.tsx.md) | 21 | ✅ Active |
+| [apps/web/src/lib/ai/tools/page-write-tools.ts](./files/apps-web-src-lib-ai-tools-page-write-tools.ts.md) | 24 | ✅ Active |
+| [apps/web/src/lib/ai/tools/agent-communication-tools.ts](./files/apps-web-src-lib-ai-tools-agent-communication-tools.ts.md) | 19 | ✅ Active |
+| [apps/web/src/components/layout/right-sidebar/index.tsx](./files/apps-web-src-components-layout-right-sidebar-index.tsx.md) | 19 | ✅ Active |
+| [apps/web/src/app/api/upload/route.ts](./files/apps-web-src-app-api-upload-route.ts.md) | 19 | ✅ Active |
+| [apps/web/src/app/api/pages/route.ts](./files/apps-web-src-app-api-pages-route.ts.md) | 19 | ✅ Active |
+| [apps/web/src/app/api/auth/google/callback/route.ts](./files/apps-web-src-app-api-auth-google-callback-route.ts.md) | 19 | ✅ Active |
+| [packages/db/src/schema/core.ts](./files/packages-db-src-schema-core.ts.md) | 18 | ✅ Active |
+| [apps/web/src/lib/ai/tools/task-management-tools.ts](./files/apps-web-src-lib-ai-tools-task-management-tools.ts.md) | 18 | ✅ Active |
+| [apps/web/src/hooks/use-auth.ts](./files/apps-web-src-hooks-use-auth.ts.md) | 19 | ✅ Active |
+| [apps/web/src/app/api/ai/settings/route.ts](./files/apps-web-src-app-api-ai-settings-route.ts.md) | 18 | ✅ Active |
+| [apps/web/src/stores/auth-store.ts](./files/apps-web-src-stores-auth-store.ts.md) | 18 | ✅ Active |
+| [apps/web/src/lib/auth-fetch.ts](./files/apps-web-src-lib-auth-fetch.ts.md) | 18 | ✅ Active |
+| [apps/web/src/components/layout/Layout.tsx](./files/apps-web-src-components-layout-layout.tsx.md) | 17 | ✅ Active |
+| [apps/web/src/components/billing/UsageCounter.tsx](./files/apps-web-src-components-billing-usagecounter.tsx.md) | 17 | ✅ Active |
+| [apps/web/src/app/api/drives/[driveId]/members/[userId]/route.ts](./files/apps-web-src-app-api-drives-_driveid_-members-_userid_-route.ts.md) | 17 | ✅ Active |
+| [apps/web/src/lib/ai/tools/page-read-tools.ts](./files/apps-web-src-lib-ai-tools-page-read-tools.ts.md) | 16 | ✅ Active |
+| [apps/web/src/lib/ai/ai-providers-config.ts](./files/apps-web-src-lib-ai-ai-providers-config.ts.md) | 17 | ✅ Active |
+| [apps/web/src/components/layout/left-sidebar/index.tsx](./files/apps-web-src-components-layout-left-sidebar-index.tsx.md) | 16 | ✅ Active |
+| [apps/web/src/components/ai/shared/chat/tool-calls/GroupedToolCallsRenderer.tsx](./files/apps-web-src-components-ai-shared-chat-tool-calls-groupedtoolcallsrenderer.tsx.md) | 23 | ✅ Active |
+| [apps/web/src/app/api/pages/reorder/route.ts](./files/apps-web-src-app-api-pages-reorder-route.ts.md) | 16 | ✅ Active |
+| [apps/web/src/app/api/pages/[pageId]/agent-config/route.ts](./files/apps-web-src-app-api-pages-_pageid_-agent-config-route.ts.md) | 16 | ✅ Active |
+| [apps/web/src/app/api/drives/[driveId]/route.ts](./files/apps-web-src-app-api-drives-_driveid_-route.ts.md) | 16 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/content-header/index.tsx](./files/apps-web-src-components-layout-middle-content-content-header-index.tsx.md) | 15 | ✅ Active |
+| [apps/web/src/components/ai/shared/TasksDropdown.tsx](./files/apps-web-src-components-ai-shared-tasksdropdown.tsx.md) | 15 | ✅ Active |
+| [apps/web/src/components/ai/shared/chat/ChatMessagesArea.tsx](./files/apps-web-src-components-ai-shared-chat-chatmessagesarea.tsx.md) | 18 | ✅ Active |
+| [apps/web/src/app/page.tsx](./files/apps-web-src-app-page.tsx.md) | 15 | ✅ Active |
+| [apps/web/src/components/shared/UserDropdown.tsx](./files/apps-web-src-components-shared-userdropdown.tsx.md) | 14 | ✅ Active |
+| [apps/web/src/components/layout/right-sidebar/ai-assistant/AssistantHistoryTab.tsx](./files/apps-web-src-components-layout-right-sidebar-ai-assistant-assistanthistorytab.tsx.md) | 15 | ✅ Active |
+| [packages/lib/src/notifications.ts](./files/packages-lib-src-notifications.ts.md) | 14 | ✅ Active |
+| [docs/1.0-overview/1.5-functions-list.md](./files/docs-1.0-overview-1.5-functions-list.md.md) | 13 | ✅ Active |
+| [apps/web/src/stores/useLayoutStore.ts](./files/apps-web-src-stores-uselayoutstore.ts.md) | 13 | ✅ Active |
+| [apps/web/src/lib/ai/tools/drive-tools.ts](./files/apps-web-src-lib-ai-tools-drive-tools.ts.md) | 13 | ✅ Active |
+| [apps/web/src/components/notifications/NotificationDropdown.tsx](./files/apps-web-src-components-notifications-notificationdropdown.tsx.md) | 13 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/page-views/sheet/SheetView.tsx](./files/apps-web-src-components-layout-middle-content-page-views-sheet-sheetview.tsx.md) | 13 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/page-views/document/DocumentView.tsx](./files/apps-web-src-components-layout-middle-content-page-views-document-documentview.tsx.md) | 13 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/page-views/canvas/CanvasPageView.tsx](./files/apps-web-src-components-layout-middle-content-page-views-canvas-canvaspageview.tsx.md) | 13 | ✅ Active |
+| [apps/web/src/app/settings/billing/page.tsx](./files/apps-web-src-app-settings-billing-page.tsx.md) | 13 | ✅ Active |
+| [apps/web/src/app/api/drives/route.ts](./files/apps-web-src-app-api-drives-route.ts.md) | 13 | ✅ Active |
+| [apps/web/src/app/api/auth/login/route.ts](./files/apps-web-src-app-api-auth-login-route.ts.md) | 13 | ✅ Active |
+| [apps/web/src/lib/ai/tools/agent-tools.ts](./files/apps-web-src-lib-ai-tools-agent-tools.ts.md) | 12 | ✅ Active |
+| [apps/web/src/components/layout/left-sidebar/page-tree/PageTree.tsx](./files/apps-web-src-components-layout-left-sidebar-page-tree-pagetree.tsx.md) | 12 | ✅ Active |
+| [apps/web/src/app/globals.css](./files/apps-web-src-app-globals.css.md) | 12 | ✅ Active |
+| [apps/web/src/app/api/drives/[driveId]/members/invite/route.ts](./files/apps-web-src-app-api-drives-_driveid_-members-invite-route.ts.md) | 12 | ✅ Active |
+| [apps/web/src/app/api/auth/mobile/signup/route.ts](./files/apps-web-src-app-api-auth-mobile-signup-route.ts.md) | 25 | ✅ Active |
+| [apps/web/src/app/api/ai/global/[id]/messages/route.ts](./files/apps-web-src-app-api-ai-global-_id_-messages-route.ts.md) | 45 | ✅ Active |
+| [apps/desktop/src/preload/index.ts](./files/apps-desktop-src-preload-index.ts.md) | 12 | ✅ Active |
+| [README.md](./files/readme.md.md) | 11 | ✅ Active |
+| [packages/lib/src/device-auth-utils.ts](./files/packages-lib-src-device-auth-utils.ts.md) | 12 | ✅ Active |
+| [apps/web/vitest.config.ts](./files/apps-web-vitest.config.ts.md) | 11 | ✅ Active |
+| [apps/web/src/lib/ai/ai-tools.ts](./files/apps-web-src-lib-ai-ai-tools.ts.md) | 12 | ✅ Active |
+| [apps/web/src/hooks/usePageTree.ts](./files/apps-web-src-hooks-usepagetree.ts.md) | 11 | ✅ Active |
+| [apps/web/src/components/layout/middle-content/CenterPanel.tsx](./files/apps-web-src-components-layout-middle-content-centerpanel.tsx.md) | 11 | ✅ Active |
+| [apps/web/src/components/layout/left-sidebar/page-tree/TreeNode.tsx](./files/apps-web-src-components-layout-left-sidebar-page-tree-treenode.tsx.md) | 12 | ✅ Active |
+| [apps/web/src/components/layout/left-sidebar/DriveList.tsx](./files/apps-web-src-components-layout-left-sidebar-drivelist.tsx.md) | 11 | ✅ Active |
+| [apps/web/src/components/admin/UsersTable.tsx](./files/apps-web-src-components-admin-userstable.tsx.md) | 11 | ✅ Active |
+| [apps/web/src/app/settings/ai/page.tsx](./files/apps-web-src-app-settings-ai-page.tsx.md) | 11 | ✅ Active |
+| [apps/web/src/app/dashboard/[driveId]/members/[userId]/page.tsx](./files/apps-web-src-app-dashboard-_driveid_-members-_userid_-page.tsx.md) | 11 | ✅ Active |
+| [apps/web/src/app/api/pages/[pageId]/restore/route.ts](./files/apps-web-src-app-api-pages-_pageid_-restore-route.ts.md) | 11 | ✅ Active |
+| [apps/web/src/app/api/files/[id]/view/route.ts](./files/apps-web-src-app-api-files-_id_-view-route.ts.md) | 11 | ✅ Active |
+| [apps/web/src/app/api/files/[id]/convert-to-document/route.ts](./files/apps-web-src-app-api-files-_id_-convert-to-document-route.ts.md) | 11 | ✅ Active |
+| [apps/web/src/app/api/drives/[driveId]/restore/route.ts](./files/apps-web-src-app-api-drives-_driveid_-restore-route.ts.md) | 11 | ✅ Active |
+| [apps/web/src/app/api/ai/chat/messages/route.ts](./files/apps-web-src-app-api-ai-chat-messages-route.ts.md) | 11 | ✅ Active |
+| [apps/web/src/app/api/agents/consult/route.ts](./files/apps-web-src-app-api-agents-consult-route.ts.md) | 12 | ✅ Active |
+| [CLAUDE.md](./files/claude.md.md) | 10 | ✅ Active |
+| [apps/web/src/lib/socket-utils.ts](./files/apps-web-src-lib-socket-utils.ts.md) | 11 | ✅ Active |
+| [apps/web/src/lib/ai/tools/__tests__/page-write-tools.test.ts](./files/apps-web-src-lib-ai-tools-__tests__-page-write-tools.test.ts.md) | 10 | ✅ Active |
+| [apps/web/src/components/layout/right-sidebar/ai-assistant/SidebarSettingsTab.tsx](./files/apps-web-src-components-layout-right-sidebar-ai-assistant-sidebarsettingstab.tsx.md) | 30 | ✅ Active |
+| [apps/web/src/components/layout/main-header/index.tsx](./files/apps-web-src-components-layout-main-header-index.tsx.md) | 10 | ✅ Active |
+| [apps/web/src/components/editors/RichEditor.tsx](./files/apps-web-src-components-editors-richeditor.tsx.md) | 10 | ✅ Active |
+| [apps/web/src/components/ai/shared/chat/tool-calls/CompactToolCallRenderer.tsx](./files/apps-web-src-components-ai-shared-chat-tool-calls-compacttoolcallrenderer.tsx.md) | 25 | ✅ Active |
+| [apps/web/src/components/ai/shared/chat/CompactMessageRenderer.tsx](./files/apps-web-src-components-ai-shared-chat-compactmessagerenderer.tsx.md) | 23 | ✅ Active |
+| [apps/web/src/components/ai/MessageRenderer.tsx](./files/apps-web-src-components-ai-messagerenderer.tsx.md) | 11 | ✅ Active |
+| [apps/web/src/app/settings/plan/page.tsx](./files/apps-web-src-app-settings-plan-page.tsx.md) | 10 | ✅ Active |
+| [apps/web/src/app/settings/page.tsx](./files/apps-web-src-app-settings-page.tsx.md) | 10 | ✅ Active |
+| [apps/web/src/app/auth/signup/page.tsx](./files/apps-web-src-app-auth-signup-page.tsx.md) | 10 | ✅ Active |
+| [apps/web/src/app/api/pages/[pageId]/permissions/route.ts](./files/apps-web-src-app-api-pages-_pageid_-permissions-route.ts.md) | 10 | ✅ Active |
+| [apps/web/src/app/api/drives/[driveId]/pages/route.ts](./files/apps-web-src-app-api-drives-_driveid_-pages-route.ts.md) | 10 | ✅ Active |
+| [apps/web/src/app/api/auth/mobile/refresh/route.ts](./files/apps-web-src-app-api-auth-mobile-refresh-route.ts.md) | 10 | ✅ Active |
+| [apps/web/src/app/api/auth/__tests__/signup.test.ts](./files/apps-web-src-app-api-auth-__tests__-signup.test.ts.md) | 10 | ✅ Active |
+| [apps/web/src/app/api/admin/users/[userId]/subscription/route.ts](./files/apps-web-src-app-api-admin-users-_userid_-subscription-route.ts.md) | 10 | ✅ Active |
+| [apps/desktop/src/main/mcp-manager.ts](./files/apps-desktop-src-main-mcp-manager.ts.md) | 10 | ✅ Active |
+| [plan.md](./files/plan.md.md) | 9 | ✅ Active |
+| [packages/lib/src/monitoring/activity-logger.ts](./files/packages-lib-src-monitoring-activity-logger.ts.md) | 9 | ✅ Active |
+| [packages/db/src/schema.ts](./files/packages-db-src-schema.ts.md) | 9 | ✅ Active |
+| [docs/1.0-overview/1.4-api-routes-list.md](./files/docs-1.0-overview-1.4-api-routes-list.md.md) | 9 | ✅ Active |

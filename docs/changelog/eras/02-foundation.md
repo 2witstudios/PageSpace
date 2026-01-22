@@ -153,4 +153,29 @@ This era reveals the "figure it out" nature of early development:
 
 ---
 
+## What Didn't Work
+
+### Early Test Infrastructure
+Multiple test helper files were created during this era then later refactored:
+- Test utilities in `apps/web/src/test/`
+- Early patterns that evolved as the codebase matured
+
+## Evidence & Verification
+
+### File Evolutions
+- [Pages API Route](../evidence/files/apps-web-src-app-api-pages-_pageid_-route.ts.md)
+- [Upload Route](../evidence/files/apps-web-src-app-api-upload-route.ts.md)
+
+### Verification Commands
+
+```bash
+# View file processing commits
+git log --oneline --since="2025-09-01" --until="2025-09-18" --grep="upload\|file\|process"
+
+# View AI provider setup
+git log --oneline --since="2025-09-01" --until="2025-09-18" --grep="openai\|anthropic\|provider"
+```
+
+---
+
 *Previous: [01-genesis](./01-genesis.md) | Next: [03-ai-awakening](./03-ai-awakening.md)*

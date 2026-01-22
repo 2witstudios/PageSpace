@@ -43,6 +43,35 @@ These documents explain **why** PageSpace was built the way it was:
 | [auth-evolution](./architecture/auth-evolution.md) | JWT, sessions, device auth decisions |
 | [monorepo-why](./architecture/monorepo-why.md) | pnpm workspace, Turbo, package structure |
 
+## Evidence System
+
+This changelog is backed by an evidence-based verification system. Every claim can be traced to git history.
+
+### Quick Links
+- [AUDIT.md](./AUDIT.md) - How to verify any claim
+- [evidence/evidence-index.json](./evidence/evidence-index.json) - Machine-readable facts
+- [evidence/patterns/](./evidence/patterns/) - Pattern summaries
+- [evidence/files/](./evidence/files/) - Per-file evolution histories
+
+### Regenerating Evidence
+
+```bash
+pnpm changelog:generate
+```
+
+### What the Evidence Shows
+
+| Metric | Value |
+|--------|-------|
+| Abandoned Approaches | 334 files created then deleted |
+| Total Lines Discarded | ~94,000 lines |
+| Multiple Attempt Commits | 18 commits with retry patterns |
+| Candid Commit Messages | 21 commits with honest developer notes |
+
+See [patterns/abandoned-approaches.md](./evidence/patterns/abandoned-approaches.md) for details on experiments that didn't work out.
+
+---
+
 ## For AI Agents
 
 This changelog is designed for incremental processing. See `_state.json` for current progress.

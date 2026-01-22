@@ -91,4 +91,26 @@ The "again" in "fixed tool calling again" hints at the challenges of integrating
 
 ---
 
+## Evidence & Verification
+
+### Early Abandoned Files
+17 files were created and later deleted during this era, including:
+- Early migration files in `packages/db/drizzle/`
+- Debug utilities like `apps/web/debug-mcp.js`
+
+### Verification Commands
+
+```bash
+# View the first commits (genesis)
+git log --reverse --oneline | head -15
+
+# View MCP setup in this era
+git log --oneline --since="2025-08-21" --until="2025-08-31" --grep="MCP\|mcp"
+
+# View authentication setup
+git log --oneline --since="2025-08-21" --until="2025-08-31" --grep="auth\|JWT"
+```
+
+---
+
 *Previous: [00-pre-genesis](./00-pre-genesis.md) | Next: [02-foundation](./02-foundation.md)*

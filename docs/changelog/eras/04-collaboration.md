@@ -180,4 +180,41 @@ This era reveals the growing pains of a maturing product:
 
 ---
 
+## What Didn't Work
+
+### Documentation Planning Files
+**Dates**: Oct 1-14, 2025
+**Files Discarded**: 5+ planning documents
+
+Several planning and documentation files were created then removed as the actual implementation diverged:
+- `auth-enhancement-plan.md` (2,989 lines)
+- `CHANGELOG.md` (initial version)
+- Various debugging documents
+
+**Lesson**: Planning documents have limited shelf life. The code became the truth.
+
+### Global Assistant Architecture Docs
+**Date Created**: Oct 20, 2025
+**File**: `docs/3.0-guides-and-tools/global-assistant-architecture.md`
+
+Initial architecture documentation was created but later superseded as the assistant evolved.
+
+## Evidence & Verification
+
+### File Evolutions
+- [Layout Component Evolution](../evidence/files/apps-web-src-components-layout-layout.tsx.md)
+- [Global Chat Context Evolution](../evidence/files/apps-web-src-contexts-globalchatcontext.tsx.md)
+
+### Verification Commands
+
+```bash
+# View testing infrastructure commits
+git log --oneline --since="2025-10-01" --until="2025-10-06" --grep="test"
+
+# View email/notification commits
+git log --oneline --since="2025-10-01" --until="2025-10-15" --grep="email\|resend\|notification"
+```
+
+---
+
 *Previous: [03-ai-awakening](./03-ai-awakening.md) | Next: [05-polish](./05-polish.md)*

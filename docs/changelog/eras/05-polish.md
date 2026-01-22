@@ -229,4 +229,49 @@ This era shows the reality of desktop app development:
 
 ---
 
+## What Didn't Work
+
+### Debugging Session Documents
+**Dates**: Oct 20 - Nov 27, 2025
+**Files Discarded**: Multiple debugging docs (~3,000+ lines total)
+
+Detailed debugging session logs were created during development then removed:
+- `docs/debugging/global-assistant-streaming-issue.md` (2,899 lines)
+- Various other debugging artifacts
+
+**Why Removed**: These were point-in-time debugging artifacts. Once issues were fixed, the documents became historical noise.
+
+**Lesson**: Debug logs are valuable during development but should be cleaned up. The fix is what matters, not the journey.
+
+### Grouped Tool Calls UI
+**Date Created**: Nov 4, 2025
+**File**: `docs/3.0-guides-and-tools/grouped-tool-calls-ui.md`
+
+Documentation for grouped tool calls UI approach that was later superseded.
+
+## Evidence & Verification
+
+### Candid Developer Messages
+
+| Date | Message |
+|------|---------|
+| Oct 28 | "finally working but needs polish" |
+| Oct 20 | "fixed broken stream" |
+
+### File Evolutions
+- [Desktop Main Evolution](../evidence/files/apps-desktop-src-main-index.ts.md) - Core Electron development
+- [Desktop MCP Manager](../evidence/files/apps-desktop-src-main-mcp-manager.ts.md)
+
+### Verification Commands
+
+```bash
+# View Electron development commits
+git log --oneline --since="2025-10-16" --until="2025-10-31" --grep="electron\|desktop"
+
+# View notarization struggles
+git log --oneline --since="2025-10-16" --until="2025-10-20" --grep="notary\|sign"
+```
+
+---
+
 *Previous: [04-collaboration](./04-collaboration.md) | Next: [06-enterprise](./06-enterprise.md)*

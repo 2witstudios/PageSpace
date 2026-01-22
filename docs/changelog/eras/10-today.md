@@ -383,4 +383,58 @@ This era shows security becoming the dominant focus:
 
 ---
 
+## What Didn't Work
+
+### Auto-Claude Experiment
+**Dates**: Jan 1-14, 2026
+**Files Discarded**: 14 files including:
+- `.auto-claude/specs/*` - Auto-generated spec files
+- `.auto-claude-status` - Status tracking
+
+An experiment with automated Claude Code workflows was tried then cleaned up.
+
+**Lesson**: Automation experiments don't always pan out. Quick cleanup is better than lingering artifacts.
+
+### Ralph Loop Local Config
+**File**: `apps/web/.claude/ralph-loop.local.md`
+**Created**: Jan 10, 2026
+**Deleted**: Jan 16, 2026 (6 days)
+
+Local configuration for Ralph Loop agent experiment.
+
+## Evidence & Verification
+
+### Candid Developer Messages
+
+| Date | Message |
+|------|---------|
+| Jan 14 | "prevent idle logout and memory leak in auth system" |
+| Jan 10 | "prevent infinite save loop when AI edits canvas pages" |
+
+### Most Active Files This Era
+Based on evidence data, these files had significant activity:
+- `apps/web/src/app/api/ai/chat/route.ts` - Core AI endpoint
+- `apps/web/src/stores/auth-store.ts` - Auth state management
+- `packages/lib/src/device-auth-utils.ts` - Device auth utilities
+
+### File Evolutions
+- [AI Chat Route](../evidence/files/apps-web-src-app-api-ai-chat-route.ts.md)
+- [Auth Store](../evidence/files/apps-web-src-stores-auth-store.ts.md)
+- [Device Auth Utils](../evidence/files/packages-lib-src-device-auth-utils.ts.md)
+
+### Verification Commands
+
+```bash
+# View security hardening commits
+git log --oneline --since="2026-01-01" --grep="security\|auth\|csrf"
+
+# View task feature commits
+git log --oneline --since="2026-01-01" --grep="task"
+
+# View AI chat improvements
+git log --oneline --since="2026-01-01" --grep="ai\|chat"
+```
+
+---
+
 *Previous: [09-maturity](./09-maturity.md)*

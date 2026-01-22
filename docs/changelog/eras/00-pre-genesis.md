@@ -193,4 +193,23 @@ This contrasts with the conventional commits (`feat:`, `fix:`) that emerge by Er
 
 ---
 
+## Evidence & Verification
+
+The pre-genesis history exists across 4 separate repositories. Evidence from the current repo begins with Era 1.
+
+### Verification Commands
+
+```bash
+# View the first commit in the current repo (Era 1 begins)
+git log --reverse --oneline | head -1
+
+# These pre-genesis repos are documented but may not be accessible:
+# - daisy-samepage
+# - daisy-main
+# - samepage-team
+# - team-dev
+```
+
+---
+
 *Next: [01-genesis](./01-genesis.md) (August 21, 2025 - Current repo begins)*

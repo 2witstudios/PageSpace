@@ -318,4 +318,33 @@ This era shows maturation patterns:
 
 ---
 
+## What Didn't Work
+
+### Redo Route
+**File**: `apps/web/src/app/api/activities/[activityId]/redo/route.ts`
+**Created**: Dec 2025
+**Deleted**: After unification
+
+Separate redo endpoint was removed when rollback/redo was unified into a single undo mechanism.
+
+**Lesson**: Feature consolidation often means removing redundant code paths.
+
+## Evidence & Verification
+
+### File Evolutions
+- [AI Tools Evolution](../evidence/files/apps-web-src-lib-ai-ai-tools.ts.md)
+- [Task Management Tools](../evidence/files/apps-web-src-lib-ai-tools-task-management-tools.ts.md)
+
+### Verification Commands
+
+```bash
+# View AI component commits
+git log --oneline --since="2025-12-16" --until="2025-12-31" --grep="ai\|model"
+
+# View version history feature
+git log --oneline --since="2025-12-16" --until="2025-12-31" --grep="version\|history"
+```
+
+---
+
 *Previous: [08-refinement](./08-refinement.md) | Next: [10-today](./10-today.md)*

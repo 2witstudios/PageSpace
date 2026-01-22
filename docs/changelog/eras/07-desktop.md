@@ -358,4 +358,36 @@ This era shows security becoming a first-class concern:
 
 ---
 
+## What Didn't Work
+
+### Outdated Documentation Cleanup
+**Date**: Nov 27, 2025
+**Files Removed**: ~7,000 lines of obsolete docs
+
+A major cleanup removed debugging session logs and superseded planning documents:
+- `docs/debugging/` - Debug session logs (issues now fixed)
+- `prompt-construction.md` - Explicitly deprecated
+- `desktop-bearer-token-auth-plan.md` - Implementation complete
+- `global-assistant-architecture.md` - Design history (implemented)
+
+**Lesson**: Documentation debt accumulates. Periodic cleanup keeps the docs relevant.
+
+## Evidence & Verification
+
+### File Evolutions
+- [Desktop Main Index](../evidence/files/apps-desktop-src-main-index.ts.md)
+- [Device Auth Utils](../evidence/files/packages-lib-src-device-auth-utils.ts.md)
+
+### Verification Commands
+
+```bash
+# View documentation cleanup commit
+git show 4feca154 --stat
+
+# View desktop auth commits
+git log --oneline --since="2025-11-16" --until="2025-11-30" --grep="desktop\|electron"
+```
+
+---
+
 *Previous: [06-enterprise](./06-enterprise.md) | Next: [08-refinement](./08-refinement.md)*

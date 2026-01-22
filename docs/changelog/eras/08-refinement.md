@@ -350,4 +350,44 @@ This era shows refinement patterns:
 
 ---
 
+## What Didn't Work
+
+### Billing Flow Documentation
+**File**: `STRIPE-BILLING-FLOWS.md`
+**Created**: Dec 2025
+**Status**: Deleted after implementation
+
+Documentation for Stripe billing flows that became obsolete once the implementation was complete.
+
+### Cache Audit
+**File**: `CACHE-AUDIT.md`
+**Status**: Deleted after audit complete
+
+One-time audit document removed after findings were addressed.
+
+## Evidence & Verification
+
+### Candid Developer Messages
+
+| Date | Message |
+|------|---------|
+| Dec 28 | "ignore internal conflicts when undoing AI tool chains" |
+| Dec 28 | "Unify rollback/redo into single undo mechanism" |
+
+### File Evolutions
+- [AI Chat Route](../evidence/files/apps-web-src-app-api-ai-chat-route.ts.md) - Most modified file
+- [Billing Page](../evidence/files/apps-web-src-app-settings-billing-page.tsx.md)
+
+### Verification Commands
+
+```bash
+# View Stripe integration commits
+git log --oneline --since="2025-12-01" --until="2025-12-15" --grep="stripe\|billing\|payment"
+
+# View testing sprint commits
+git log --oneline --since="2025-12-01" --until="2025-12-15" --grep="test"
+```
+
+---
+
 *Previous: [07-desktop](./07-desktop.md) | Next: [09-maturity](./09-maturity.md)*
