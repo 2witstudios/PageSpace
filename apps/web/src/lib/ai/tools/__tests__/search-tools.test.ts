@@ -160,6 +160,7 @@ describe('search-tools', () => {
         searchTools.regex_search.execute!(
           // Type assertion needed: Zod's .default() provides runtime defaults not reflected in TS types
           // contentTypes is omitted to test the default behavior
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           { driveId: 'drive-1', pattern: 'test', searchIn: 'both', maxResults: 10 } as any,
           createAuthContext()
         )
