@@ -1,7 +1,6 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
 import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
-import { atomicValidateOrCreateDeviceToken as atomicValidateOrCreate } from '@pagespace/db/transactions/auth-transactions';
 import { hashToken, getTokenPrefix } from './token-utils';
 
 const JWT_ALGORITHM = 'HS256';
@@ -469,7 +468,9 @@ export async function validateOrCreateDeviceToken(params: {
 }> {
   // SECURITY: Delegate to atomic version with FOR UPDATE locking
   // This prevents TOCTOU race conditions in concurrent requests
-  return atomicValidateOrCreate(params, {
+  // Dynamic import to avoid module initialization order issues
+  const { atomicValidateOrCreateDeviceToken } = await import('@pagespace/db/transactions/auth-transactions');
+  return atomicValidateOrCreateDeviceToken(params, {
     hashToken,
     getTokenPrefix,
     generateDeviceToken,
