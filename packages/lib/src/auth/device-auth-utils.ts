@@ -1,6 +1,6 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
+import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or, atomicValidateOrCreateDeviceToken as atomicValidateOrCreate } from '@pagespace/db';
 import { hashToken, getTokenPrefix } from './token-utils';
 
 const JWT_ALGORITHM = 'HS256';
@@ -448,6 +448,9 @@ export async function cleanupExpiredDeviceTokens(): Promise<number> {
 /**
  * Validate existing device token or create a new one
  * This is a common pattern used across all mobile auth routes
+ *
+ * SECURITY: Uses atomic transaction with FOR UPDATE locking to prevent
+ * race conditions in concurrent login/signup/OAuth flows.
  */
 export async function validateOrCreateDeviceToken(params: {
   providedDeviceToken: string | null | undefined;
@@ -463,107 +466,12 @@ export async function validateOrCreateDeviceToken(params: {
   deviceTokenRecordId: string;
   isNew: boolean;
 }> {
-  const {
-    providedDeviceToken,
-    userId,
-    deviceId,
-    platform,
-    tokenVersion,
-    deviceName,
-    userAgent,
-    ipAddress,
-  } = params;
-
-  let deviceTokenValue = providedDeviceToken ?? null;
-  let deviceTokenRecordId: string | null = null;
-  let isNew = false;
-
-  // Try to validate existing device token
-  if (deviceTokenValue) {
-    const storedDeviceToken = await validateDeviceToken(deviceTokenValue);
-    if (
-      !storedDeviceToken ||
-      storedDeviceToken.userId !== userId ||
-      storedDeviceToken.deviceId !== deviceId ||
-      storedDeviceToken.platform !== platform
-    ) {
-      // Invalid or mismatched device token, will create new one
-      deviceTokenValue = null;
-    } else {
-      // Valid device token, update activity
-      deviceTokenRecordId = storedDeviceToken.id;
-      await updateDeviceTokenActivity(storedDeviceToken.id, ipAddress);
-    }
-  }
-
-  // Create new device token if needed
-  if (!deviceTokenValue) {
-    // SECURITY: Check if an active device token already exists for this user/device/platform
-    // This prevents unique constraint violations when users clear storage or reinstall the app
-    const existingActiveToken = await db.query.deviceTokens.findFirst({
-      where: and(
-        eq(deviceTokens.userId, userId),
-        eq(deviceTokens.deviceId, deviceId),
-        eq(deviceTokens.platform, platform),
-        isNull(deviceTokens.revokedAt),
-        gt(deviceTokens.expiresAt, new Date())  // Only reuse non-expired tokens
-      ),
-    });
-
-    if (existingActiveToken) {
-      // SECURITY: Regenerate JWT when reusing record (DB stores hash, not plaintext)
-      // This maintains the same record ID but issues a fresh JWT to the client
-      const regeneratedToken = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
-      const newTokenHash = hashToken(regeneratedToken);
-
-      // Update the record with the new token hash
-      await db.update(deviceTokens)
-        .set({
-          token: newTokenHash,
-          tokenHash: newTokenHash,
-          tokenPrefix: getTokenPrefix(regeneratedToken),
-          lastUsedAt: new Date(),
-          lastIpAddress: ipAddress || existingActiveToken.lastIpAddress,
-        })
-        .where(eq(deviceTokens.id, existingActiveToken.id));
-
-      deviceTokenValue = regeneratedToken;  // Return the JWT, not the hash
-      deviceTokenRecordId = existingActiveToken.id;
-      isNew = false;
-
-      console.info('Regenerated device token for existing record', {
-        userId,
-        deviceId,
-        platform,
-        tokenId: existingActiveToken.id,
-      });
-    } else {
-      // Revoke any expired tokens that would block creation
-      await revokeExpiredDeviceTokens(userId, deviceId, platform);
-
-      // No existing active token, safe to create a new one
-      const { id: newDeviceTokenId, token: newDeviceToken } = await createDeviceTokenRecord(
-        userId,
-        deviceId,
-        platform,
-        tokenVersion,
-        {
-          deviceName: deviceName || undefined,
-          userAgent: userAgent || undefined,
-          ipAddress: ipAddress === 'unknown' ? undefined : ipAddress,
-          location: undefined,
-        }
-      );
-
-      deviceTokenValue = newDeviceToken;
-      deviceTokenRecordId = newDeviceTokenId;
-      isNew = true;
-    }
-  }
-
-  return {
-    deviceToken: deviceTokenValue,
-    deviceTokenRecordId: deviceTokenRecordId!,
-    isNew,
-  };
+  // SECURITY: Delegate to atomic version with FOR UPDATE locking
+  // This prevents TOCTOU race conditions in concurrent requests
+  return atomicValidateOrCreate(params, {
+    hashToken,
+    getTokenPrefix,
+    generateDeviceToken,
+    validateDeviceTokenPayload: decodeDeviceToken,
+  });
 }

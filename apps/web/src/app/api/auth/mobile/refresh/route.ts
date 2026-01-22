@@ -1,11 +1,11 @@
-import { users } from '@pagespace/db';
+import { users, atomicDeviceTokenRotation } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import {
   decodeToken,
   generateAccessToken,
   validateDeviceToken,
-  rotateDeviceToken,
   updateDeviceTokenActivity,
+  generateDeviceToken,
   generateCSRFToken,
   getSessionIdFromJWT,
 } from '@pagespace/lib/server';
@@ -14,6 +14,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
@@ -92,18 +93,22 @@ export async function POST(req: Request) {
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
     if (deviceRecord.expiresAt && deviceRecord.expiresAt.getTime() - Date.now() < sevenDaysMs) {
-      const rotated = await rotateDeviceToken(
+      // SECURITY: Atomic device token rotation with FOR UPDATE locking
+      // Prevents race conditions in concurrent rotation attempts
+      const rotated = await atomicDeviceTokenRotation(
         deviceToken,
         {
           userAgent: req.headers.get('user-agent') ?? undefined,
           ipAddress: clientIP === 'unknown' ? undefined : clientIP,
         },
-        user.tokenVersion,
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken
       );
 
-      if (rotated) {
-        activeDeviceToken = rotated.token;
-        activeDeviceTokenId = rotated.deviceToken.id;
+      if (rotated.success && rotated.newToken) {
+        activeDeviceToken = rotated.newToken;
+        activeDeviceTokenId = rotated.deviceTokenId!;
       }
     }
 

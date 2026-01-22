@@ -24,12 +24,13 @@ vi.mock('@pagespace/db', () => ({
     }),
   },
   eq: vi.fn((field, value) => ({ field, value })),
+  atomicDeviceTokenRotation: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
   validateDeviceToken: vi.fn(),
-  rotateDeviceToken: vi.fn(),
   updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
+  generateDeviceToken: vi.fn().mockResolvedValue('mock-new-device-token'),
   generateAccessToken: vi.fn().mockResolvedValue('new-access-token'),
   generateRefreshToken: vi.fn().mockResolvedValue('new-refresh-token'),
   decodeToken: vi.fn().mockResolvedValue({
@@ -63,10 +64,14 @@ vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
 }));
 
-import { db } from '@pagespace/db';
+vi.mock('@pagespace/lib/auth', () => ({
+  hashToken: vi.fn().mockReturnValue('mock-token-hash'),
+  getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
+}));
+
+import { db, atomicDeviceTokenRotation } from '@pagespace/db';
 import {
   validateDeviceToken,
-  rotateDeviceToken,
   updateDeviceTokenActivity,
   generateAccessToken,
   generateRefreshToken,
@@ -107,7 +112,8 @@ describe('/api/auth/device/refresh', () => {
     // Default: valid device token flow
     (validateDeviceToken as Mock).mockResolvedValue(mockDeviceRecord);
     (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-    (rotateDeviceToken as Mock).mockResolvedValue(null); // No rotation needed
+    // Default: no rotation (token not near expiration)
+    (atomicDeviceTokenRotation as Mock).mockResolvedValue({ success: false });
   });
 
   describe('successful device refresh', () => {
@@ -241,9 +247,10 @@ describe('/api/auth/device/refresh', () => {
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       };
       (validateDeviceToken as Mock).mockResolvedValue(nearExpiryRecord);
-      (rotateDeviceToken as Mock).mockResolvedValue({
-        token: 'rotated-device-token',
-        deviceToken: { id: 'new-device-token-record-id' },
+      (atomicDeviceTokenRotation as Mock).mockResolvedValue({
+        success: true,
+        newToken: 'rotated-device-token',
+        deviceTokenId: 'new-device-token-record-id',
       });
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
@@ -257,7 +264,7 @@ describe('/api/auth/device/refresh', () => {
       const body = await response.json();
 
       // Assert
-      expect(rotateDeviceToken).toHaveBeenCalled();
+      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
       expect(body.deviceToken).toBe('rotated-device-token');
     });
 
@@ -279,7 +286,7 @@ describe('/api/auth/device/refresh', () => {
       await POST(request);
 
       // Assert
-      expect(rotateDeviceToken).not.toHaveBeenCalled();
+      expect(atomicDeviceTokenRotation).not.toHaveBeenCalled();
     });
   });
 

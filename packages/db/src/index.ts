@@ -57,3 +57,13 @@ export {
   retentionPolicies,
   subscriptionTierEnum,
 } from './schema/monitoring';
+
+// Auth transactions re-exports
+export {
+  atomicTokenRefresh,
+  atomicDeviceTokenRotation,
+  atomicValidateOrCreateDeviceToken,
+  type RefreshResult,
+  type DeviceRotationResult,
+  type AtomicDeviceTokenResult,
+} from './transactions/auth-transactions';
