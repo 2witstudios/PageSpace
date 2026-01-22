@@ -1,6 +1,7 @@
 import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or, atomicValidateOrCreateDeviceToken as atomicValidateOrCreate } from '@pagespace/db';
+import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
+import { atomicValidateOrCreateDeviceToken as atomicValidateOrCreate } from '@pagespace/db/transactions/auth-transactions';
 import { hashToken, getTokenPrefix } from './token-utils';
 
 const JWT_ALGORITHM = 'HS256';

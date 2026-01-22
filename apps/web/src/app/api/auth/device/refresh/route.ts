@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
-import { users, refreshTokens, deviceTokens, atomicDeviceTokenRotation } from '@pagespace/db';
-import { db, eq } from '@pagespace/db';
+import { users, refreshTokens, deviceTokens, db, eq } from '@pagespace/db';
+import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,

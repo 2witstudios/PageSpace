@@ -1,5 +1,5 @@
-import { refreshTokens, atomicTokenRefresh } from '@pagespace/db';
-import { db } from '@pagespace/db';
+import { refreshTokens, db } from '@pagespace/db';
+import { atomicTokenRefresh } from '@pagespace/db/transactions/auth-transactions';
 import { decodeToken, generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, loggers } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,

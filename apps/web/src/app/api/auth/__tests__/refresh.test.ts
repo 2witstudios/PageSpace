@@ -46,6 +46,9 @@ vi.mock('@pagespace/db', () => ({
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
   and: vi.fn((...conditions) => conditions),
   isNull: vi.fn((field) => ({ field, isNull: true })),
+}));
+
+vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicTokenRefresh: vi.fn(),
 }));
 
@@ -98,7 +101,8 @@ vi.mock('@pagespace/lib/auth', () => ({
   getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
 }));
 
-import { db, atomicTokenRefresh } from '@pagespace/db';
+import { db } from '@pagespace/db';
+import { atomicTokenRefresh } from '@pagespace/db/transactions/auth-transactions';
 import { parse } from 'cookie';
 import {
   decodeToken,

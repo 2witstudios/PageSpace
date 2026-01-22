@@ -58,12 +58,6 @@ export {
   subscriptionTierEnum,
 } from './schema/monitoring';
 
-// Auth transactions re-exports
-export {
-  atomicTokenRefresh,
-  atomicDeviceTokenRotation,
-  atomicValidateOrCreateDeviceToken,
-  type RefreshResult,
-  type DeviceRotationResult,
-  type AtomicDeviceTokenResult,
-} from './transactions/auth-transactions';
+// Note: Auth transaction functions are exported from '@pagespace/db/transactions/auth-transactions'
+// They are NOT re-exported here to avoid circular dependency issues
+// Import directly: import { atomicTokenRefresh, ... } from '@pagespace/db/transactions/auth-transactions';

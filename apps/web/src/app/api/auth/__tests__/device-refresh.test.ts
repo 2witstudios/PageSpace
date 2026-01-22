@@ -24,6 +24,9 @@ vi.mock('@pagespace/db', () => ({
     }),
   },
   eq: vi.fn((field, value) => ({ field, value })),
+}));
+
+vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn(),
 }));
 
@@ -69,7 +72,8 @@ vi.mock('@pagespace/lib/auth', () => ({
   getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
 }));
 
-import { db, atomicDeviceTokenRotation } from '@pagespace/db';
+import { db } from '@pagespace/db';
+import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,

@@ -1,5 +1,5 @@
-import { users, atomicDeviceTokenRotation } from '@pagespace/db';
-import { db, eq } from '@pagespace/db';
+import { users, db, eq } from '@pagespace/db';
+import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   decodeToken,
   generateAccessToken,
