@@ -451,7 +451,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
 
       await tx.execute(sql`
         UPDATE device_tokens
-        SET token = ${newTokenHash},
+        SET "token" = ${newTokenHash},
             "tokenHash" = ${newTokenHash},
             "tokenPrefix" = ${newTokenPrefix},
             "lastUsedAt" = NOW(),
