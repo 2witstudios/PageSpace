@@ -11,7 +11,7 @@ vi.mock('@pagespace/db', () => ({
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
     query: {
-      pages: { findFirst: vi.fn() },
+      pages: { findFirst: vi.fn(), findMany: vi.fn() },
       drives: { findFirst: vi.fn() },
       taskItems: { findFirst: vi.fn() },
       chatMessages: { findFirst: vi.fn() },
@@ -36,6 +36,7 @@ vi.mock('@pagespace/db', () => ({
   desc: vi.fn(),
   isNull: vi.fn(),
   isNotNull: vi.fn(),
+  inArray: vi.fn(),
   sql: vi.fn(),
   count: vi.fn(),
   max: vi.fn(),
