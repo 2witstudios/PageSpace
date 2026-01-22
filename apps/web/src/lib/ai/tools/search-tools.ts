@@ -318,7 +318,8 @@ export const searchTools = {
             : `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
             pagesScanned: matchingPages.length,
-            pagesWithAccess: truncatedResults.length,
+            documentsFound: truncatedResults.filter(r => r.type !== 'AI_CHAT').length,
+            conversationsFound: truncatedResults.filter(r => r.type === 'AI_CHAT').length,
             documentTypes: [...new Set(truncatedResults.map(r => r.type))],
             searchedDocuments: contentTypes.includes('documents'),
             searchedConversations: contentTypes.includes('conversations'),
