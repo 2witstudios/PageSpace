@@ -63,9 +63,14 @@ export async function POST(req: Request) {
     validatedDeviceTokenId = validDevice.id;
   }
 
+  // SECURITY: Decode JWT to get tokenVersion for validation
+  // This ensures tokens minted before "logout all devices" are rejected
+  const refreshPayloadCheck = await decodeToken(refreshTokenValue);
+  const jwtTokenVersion = refreshPayloadCheck?.tokenVersion;
+
   // SECURITY: Atomic token refresh with FOR UPDATE locking
   // Prevents race conditions and detects token reuse attacks
-  const result = await atomicTokenRefresh(refreshTokenValue, hashToken);
+  const result = await atomicTokenRefresh(refreshTokenValue, hashToken, jwtTokenVersion);
 
   if (!result.success) {
     // Token reuse detected - all sessions already invalidated by atomic function

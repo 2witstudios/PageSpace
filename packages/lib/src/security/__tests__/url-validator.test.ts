@@ -89,14 +89,27 @@ describe('URL Validator - SSRF Prevention', () => {
     });
 
     describe('IPv4-mapped IPv6', () => {
-      it('normalizes and blocks IPv4-mapped IPv6 addresses', () => {
+      it('normalizes and blocks IPv4-mapped IPv6 addresses (dotted form)', () => {
         expect(isBlockedIP('::ffff:127.0.0.1')).toBe(true);
         expect(isBlockedIP('::ffff:10.0.0.1')).toBe(true);
         expect(isBlockedIP('::ffff:192.168.1.1')).toBe(true);
       });
 
+      it('normalizes and blocks IPv4-mapped IPv6 addresses (hex form)', () => {
+        // ::ffff:7f00:1 = 127.0.0.1
+        expect(isBlockedIP('::ffff:7f00:1')).toBe(true);
+        // ::ffff:a00:1 = 10.0.0.1
+        expect(isBlockedIP('::ffff:a00:1')).toBe(true);
+        // ::ffff:c0a8:101 = 192.168.1.1
+        expect(isBlockedIP('::ffff:c0a8:101')).toBe(true);
+        // ::ffff:a9fe:a9fe = 169.254.169.254 (AWS metadata)
+        expect(isBlockedIP('::ffff:a9fe:a9fe')).toBe(true);
+      });
+
       it('allows public IPs in IPv4-mapped format', () => {
         expect(isBlockedIP('::ffff:8.8.8.8')).toBe(false);
+        // 8.8.8.8 in hex: 0808:0808
+        expect(isBlockedIP('::ffff:808:808')).toBe(false);
       });
     });
   });

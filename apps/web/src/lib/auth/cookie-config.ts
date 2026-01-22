@@ -31,10 +31,15 @@ export const COOKIE_CONFIG = {
     // maxAge is dynamic - use getRefreshTokenMaxAge()
   },
   /**
-   * Legacy path for migration: clear old cookies with path '/'
+   * Legacy paths for migration: clear old cookies from previous deployments
    * Required during transition from unscoped to scoped refresh token path
    */
   legacyRefreshTokenPath: '/',
+  /**
+   * Previous scoped path: /api/auth/refresh was used before /api/auth
+   * Clear this to handle any lingering cookies from intermediate rollouts
+   */
+  legacyRefreshTokenPathScoped: '/api/auth/refresh',
 } as const;
 
 /**
@@ -111,8 +116,8 @@ export function createClearRefreshTokenCookie(): string {
  * Create a cookie that clears the legacy refresh token (path '/')
  *
  * MIGRATION: This clears old refresh tokens that used path '/' instead of
- * the new scoped path '/api/auth/refresh'. During migration, both this and
- * createClearRefreshTokenCookie() should be used to ensure cleanup.
+ * the new scoped path '/api/auth'. During migration, this should be used
+ * to ensure cleanup.
  *
  * @returns Serialized cookie string that expires the legacy refresh token
  */
@@ -125,9 +130,25 @@ export function createClearLegacyRefreshTokenCookie(): string {
 }
 
 /**
+ * Create a cookie that clears the legacy scoped refresh token (path '/api/auth/refresh')
+ *
+ * MIGRATION: This clears refresh tokens from intermediate rollouts that used
+ * the narrower path '/api/auth/refresh' before we settled on '/api/auth'.
+ *
+ * @returns Serialized cookie string that expires the legacy scoped refresh token
+ */
+export function createClearLegacyScopedRefreshTokenCookie(): string {
+  return serialize(COOKIE_CONFIG.refreshToken.name, '', {
+    ...getCommonOptions(),
+    path: COOKIE_CONFIG.legacyRefreshTokenPathScoped,
+    expires: new Date(0),
+  });
+}
+
+/**
  * Get all clear cookies for logout
  *
- * Returns both current and legacy cookie clear strings.
+ * Returns current and all legacy cookie clear strings.
  * Use all of these during logout to ensure complete session termination.
  *
  * @returns Object with all clear cookie strings
@@ -136,11 +157,13 @@ export function createClearCookies(): {
   accessToken: string;
   refreshToken: string;
   legacyRefreshToken: string;
+  legacyScopedRefreshToken: string;
 } {
   return {
     accessToken: createClearAccessTokenCookie(),
     refreshToken: createClearRefreshTokenCookie(),
     legacyRefreshToken: createClearLegacyRefreshTokenCookie(),
+    legacyScopedRefreshToken: createClearLegacyScopedRefreshTokenCookie(),
   };
 }
 
@@ -161,8 +184,9 @@ export function appendAuthCookies(
 ): void {
   headers.append('Set-Cookie', createAccessTokenCookie(accessToken));
   headers.append('Set-Cookie', createRefreshTokenCookie(refreshToken));
-  // Clear any legacy refresh token cookie during migration
+  // Clear any legacy refresh token cookies during migration
   headers.append('Set-Cookie', createClearLegacyRefreshTokenCookie());
+  headers.append('Set-Cookie', createClearLegacyScopedRefreshTokenCookie());
 }
 
 /**
@@ -177,4 +201,5 @@ export function appendClearCookies(headers: Headers): void {
   headers.append('Set-Cookie', clearCookies.accessToken);
   headers.append('Set-Cookie', clearCookies.refreshToken);
   headers.append('Set-Cookie', clearCookies.legacyRefreshToken);
+  headers.append('Set-Cookie', clearCookies.legacyScopedRefreshToken);
 }

@@ -6,6 +6,7 @@ import {
   createClearAccessTokenCookie,
   createClearRefreshTokenCookie,
   createClearLegacyRefreshTokenCookie,
+  createClearLegacyScopedRefreshTokenCookie,
   createClearCookies,
   appendAuthCookies,
   appendClearCookies,
@@ -51,6 +52,10 @@ describe('cookie-config', () => {
 
     it('should have legacy path as "/" for migration', () => {
       expect(COOKIE_CONFIG.legacyRefreshTokenPath).toBe('/');
+    });
+
+    it('should have legacy scoped path as "/api/auth/refresh" for migration', () => {
+      expect(COOKIE_CONFIG.legacyRefreshTokenPathScoped).toBe('/api/auth/refresh');
     });
   });
 
@@ -149,33 +154,47 @@ describe('cookie-config', () => {
     });
   });
 
+  describe('createClearLegacyScopedRefreshTokenCookie', () => {
+    it('should create cookie that expires token with legacy scoped path /api/auth/refresh', () => {
+      const cookie = createClearLegacyScopedRefreshTokenCookie();
+      expect(cookie).toContain('refreshToken=;');
+      expect(cookie).toContain('Expires=Thu, 01 Jan 1970');
+      expect(cookie).toContain('Path=/api/auth/refresh');
+    });
+  });
+
   describe('createClearCookies', () => {
     it('should return all clear cookies', () => {
       const cookies = createClearCookies();
       expect(cookies.accessToken).toContain('accessToken=;');
       expect(cookies.refreshToken).toContain('refreshToken=;');
       expect(cookies.legacyRefreshToken).toContain('refreshToken=;');
+      expect(cookies.legacyScopedRefreshToken).toContain('refreshToken=;');
     });
 
     it('should have refresh and legacy cookies with different paths', () => {
       const cookies = createClearCookies();
-      expect(cookies.refreshToken).toContain('Path=/api/auth');
+      expect(cookies.refreshToken).toContain('Path=/api/auth;');
       expect(cookies.legacyRefreshToken).toContain('Path=/;');
+      expect(cookies.legacyScopedRefreshToken).toContain('Path=/api/auth/refresh');
     });
   });
 
   describe('appendAuthCookies', () => {
-    it('should append access, refresh, and legacy clear cookies', () => {
+    it('should append access, refresh, and all legacy clear cookies', () => {
       const headers = new Headers();
       appendAuthCookies(headers, 'access-token', 'refresh-token');
 
       const setCookieHeaders = headers.getSetCookie();
-      expect(setCookieHeaders).toHaveLength(3);
+      expect(setCookieHeaders).toHaveLength(4);
       expect(setCookieHeaders[0]).toContain('accessToken=access-token');
       expect(setCookieHeaders[1]).toContain('refreshToken=refresh-token');
-      // Third cookie clears legacy
+      // Third cookie clears legacy root path
       expect(setCookieHeaders[2]).toContain('refreshToken=;');
       expect(setCookieHeaders[2]).toContain('Path=/;');
+      // Fourth cookie clears legacy scoped path
+      expect(setCookieHeaders[3]).toContain('refreshToken=;');
+      expect(setCookieHeaders[3]).toContain('Path=/api/auth/refresh');
     });
   });
 
@@ -185,7 +204,7 @@ describe('cookie-config', () => {
       appendClearCookies(headers);
 
       const setCookieHeaders = headers.getSetCookie();
-      expect(setCookieHeaders).toHaveLength(3);
+      expect(setCookieHeaders).toHaveLength(4);
 
       // Verify all cookies are expired
       setCookieHeaders.forEach((cookie) => {

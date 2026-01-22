@@ -60,15 +60,18 @@ export interface AtomicDeviceTokenResult {
  * SECURITY FEATURES:
  * - FOR UPDATE lock prevents concurrent refresh attempts
  * - Token is marked as used atomically within the transaction
+ * - Validates JWT tokenVersion against user's current tokenVersion
  * - Detects token reuse attacks and invalidates all user sessions
  *
  * @param refreshTokenValue - The raw refresh token from the client
  * @param hashToken - Function to hash the token for lookup
+ * @param jwtTokenVersion - Optional tokenVersion from decoded JWT for validation
  * @returns RefreshResult with user info on success, error on failure
  */
 export async function atomicTokenRefresh(
   refreshTokenValue: string,
-  hashToken: (token: string) => string
+  hashToken: (token: string) => string,
+  jwtTokenVersion?: number
 ): Promise<RefreshResult> {
   const tokenHash = hashToken(refreshTokenValue);
 
@@ -138,9 +141,29 @@ export async function atomicTokenRefresh(
       return { success: false, error: 'Invalid refresh token' };
     }
 
-    // Check if token is revoked
+    // Check if token is revoked - treat as potential reuse attack
     if (row.revoked_at) {
-      return { success: false, error: 'Token has been revoked' };
+      // SECURITY: A revoked token being presented is a TOKEN REUSE ATTACK
+      // The token was already consumed, and attacker is trying to replay it
+      // Invalidate all user sessions to protect the account
+      await tx.execute(sql`
+        UPDATE users
+        SET token_version = token_version + 1
+        WHERE id = ${row.user_id}
+      `);
+
+      await tx.execute(sql`
+        UPDATE device_tokens
+        SET revoked_at = NOW(), revoked_reason = 'token_reuse_detected'
+        WHERE user_id = ${row.user_id}
+          AND revoked_at IS NULL
+      `);
+
+      return {
+        success: false,
+        error: 'Token reuse detected - all sessions invalidated',
+        tokenReuse: true,
+      };
     }
 
     // Check if token is expired
@@ -151,6 +174,12 @@ export async function atomicTokenRefresh(
     // Check if user is suspended
     if (row.suspended_at) {
       return { success: false, error: 'User account is suspended' };
+    }
+
+    // SECURITY: Validate JWT tokenVersion against user's current tokenVersion
+    // This ensures tokens minted before a "logout all devices" are rejected
+    if (jwtTokenVersion !== undefined && jwtTokenVersion !== row.token_version) {
+      return { success: false, error: 'Invalid refresh token version.' };
     }
 
     // Atomically mark token as used (revoke it)
@@ -388,8 +417,9 @@ export async function atomicValidateOrCreateDeviceToken(params: {
       if (payload &&
           payload.userId === userId &&
           payload.deviceId === deviceId &&
-          payload.platform === platform) {
-        // Token payload is valid, now check DB record with lock
+          payload.platform === platform &&
+          payload.tokenVersion === tokenVersion) { // SECURITY: Enforce tokenVersion
+        // Token payload is valid (including tokenVersion), now check DB record with lock
         const tokenHash = hashToken(providedDeviceToken);
 
         const existingResult = await tx.execute(sql`

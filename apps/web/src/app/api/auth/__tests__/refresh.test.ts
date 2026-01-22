@@ -185,9 +185,9 @@ describe('/api/auth/refresh', () => {
       const response = await POST(request);
 
       // Assert
-      // Expects 3 cookies: accessToken, refreshToken (scoped path), and legacy clear cookie
+      // Expects 4 cookies: accessToken, refreshToken (scoped path), and 2 legacy clear cookies
       const setCookieHeaders = response.headers.getSetCookie();
-      expect(setCookieHeaders.length).toBe(3);
+      expect(setCookieHeaders.length).toBe(4);
     });
 
     it('generates new access and refresh tokens', async () => {
@@ -228,7 +228,8 @@ describe('/api/auth/refresh', () => {
       await POST(request);
 
       // Assert - atomicTokenRefresh handles marking old token as used
-      expect(atomicTokenRefresh).toHaveBeenCalledWith('valid-refresh-token', expect.any(Function));
+      // Third param is jwtTokenVersion from decoded refresh token
+      expect(atomicTokenRefresh).toHaveBeenCalledWith('valid-refresh-token', expect.any(Function), 0);
     });
 
     it('stores new refresh token in database', async () => {

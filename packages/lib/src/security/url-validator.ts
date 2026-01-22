@@ -97,21 +97,36 @@ export function isBlockedIP(ip: string): boolean {
 }
 
 /**
- * Normalize an IP address (handle IPv4-mapped IPv6)
+ * Normalize an IP address (handle IPv4-mapped IPv6 in both dotted and hex formats)
  */
 function normalizeIP(ip: string): string {
-  // Handle IPv4-mapped IPv6 (::ffff:127.0.0.1)
-  const ipv4MappedMatch = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (ipv4MappedMatch) {
-    return ipv4MappedMatch[1];
+  // Handle bracketed IPv6 first ([::1] -> ::1)
+  let normalized = ip;
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    normalized = normalized.slice(1, -1);
   }
 
-  // Handle bracketed IPv6 ([::1])
-  if (ip.startsWith('[') && ip.endsWith(']')) {
-    return ip.slice(1, -1);
+  // Handle IPv4-mapped IPv6 in dotted form (::ffff:127.0.0.1)
+  const ipv4MappedDottedMatch = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (ipv4MappedDottedMatch) {
+    return ipv4MappedDottedMatch[1];
   }
 
-  return ip;
+  // Handle IPv4-mapped IPv6 in hex form (::ffff:7f00:1 -> 127.0.0.1)
+  // Format: ::ffff:XXXX:YYYY where XXXX:YYYY is the IPv4 in hex
+  const ipv4MappedHexMatch = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (ipv4MappedHexMatch) {
+    const high = parseInt(ipv4MappedHexMatch[1], 16);
+    const low = parseInt(ipv4MappedHexMatch[2], 16);
+    // Convert hex to dotted quad: XXXX -> a.b, YYYY -> c.d
+    const a = (high >> 8) & 0xff;
+    const b = high & 0xff;
+    const c = (low >> 8) & 0xff;
+    const d = low & 0xff;
+    return `${a}.${b}.${c}.${d}`;
+  }
+
+  return normalized;
 }
 
 /**
