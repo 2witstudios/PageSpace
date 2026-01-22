@@ -155,8 +155,8 @@ export const searchTools = {
           }
         }
 
-        // Search conversations if requested
-        if (contentTypes.includes('conversations')) {
+        // Search conversations if requested (skip when searchIn='title' since messages don't have titles)
+        if (contentTypes.includes('conversations') && searchIn !== 'title') {
           // Get all AI_CHAT pages in the drive that user has access to
           const aiChatPages = accessiblePages.filter(p => p.type === 'AI_CHAT');
 
