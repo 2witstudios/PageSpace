@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
+import { getUserFacingModelName, isPageSpaceProvider } from '@/lib/ai/core/ai-providers-config';
 
 interface AiUsageMonitorProps {
   conversationId?: string | null | undefined;
@@ -141,8 +141,8 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
             </TooltipContent>
           </Tooltip>
 
-          {/* Session Cost */}
-          {usage.billing.cost > 0 && (
+          {/* Session Cost - hidden for PageSpace provider (included in subscription) */}
+          {usage.billing.cost > 0 && !isPageSpaceProvider(usage.provider) && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center gap-1">
@@ -230,8 +230,8 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
             </Tooltip>
           </div>
 
-          {/* Cost (if applicable) */}
-          {usage.billing.cost > 0 && (
+          {/* Cost (if applicable) - hidden for PageSpace provider (included in subscription) */}
+          {usage.billing.cost > 0 && !isPageSpaceProvider(usage.provider) && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="flex items-center justify-between pt-1 text-xs">

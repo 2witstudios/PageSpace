@@ -30,6 +30,15 @@ export function isPageSpaceModelAlias(model: string): boolean {
   return model.toLowerCase() in PAGESPACE_MODEL_ALIASES;
 }
 
+/**
+ * Check if a provider is the PageSpace provider
+ * Used to hide pricing info for PageSpace models (included in subscription)
+ * while still showing prices for GLM Coder Plan (pay-per-use)
+ */
+export function isPageSpaceProvider(provider: string | null | undefined): boolean {
+  return provider === 'pagespace';
+}
+
 export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
