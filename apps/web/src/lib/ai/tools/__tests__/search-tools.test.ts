@@ -150,19 +150,21 @@ describe('search-tools', () => {
     });
 
     it('defaults contentTypes to documents and conversations', async () => {
-      // This test validates the default behavior - when no contentTypes specified,
-      // it should search both documents and conversations
+      // contentTypes is intentionally omitted to verify the schema default behavior
+      // When not specified, it should default to ['documents', 'conversations']
       mockGetUserDriveAccess.mockResolvedValue(false);
 
       // We can't fully test this without DB mocking, but we can validate
-      // that the tool accepts the call without contentTypes
+      // that the tool accepts the call without contentTypes and exercises defaulting
       await expect(
         searchTools.regex_search.execute!(
-          { driveId: 'drive-1', pattern: 'test', searchIn: 'both', maxResults: 10, contentTypes: ['documents', 'conversations'] },
+          // Type assertion needed: Zod's .default() provides runtime defaults not reflected in TS types
+          // contentTypes is omitted to test the default behavior
+          { driveId: 'drive-1', pattern: 'test', searchIn: 'both', maxResults: 10 } as any,
           createAuthContext()
         )
       ).rejects.toThrow("You don't have access to this drive");
-      // If it got to the access check, the schema validation passed
+      // If it got to the access check, the schema validation and defaulting passed
     });
 
     it('accepts contentTypes array parameter', async () => {

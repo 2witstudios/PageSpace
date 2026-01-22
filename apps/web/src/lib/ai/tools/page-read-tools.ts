@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, taskItems, taskLists, chatMessages, eq, and, asc, isNotNull, count, max, min } from '@pagespace/db';
+import { db, pages, taskItems, taskLists, chatMessages, eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 
@@ -551,12 +551,23 @@ export const pageReadTools = {
                 isNotNull(chatMessages.userId)
               ));
 
-            // Extract preview text - prefer originalContent for full message capture
+            // Extract preview text - prefer originalContent, then parts, then textParts
             let previewText = '';
             if (firstMessage?.content) {
               try {
                 const parsed = JSON.parse(firstMessage.content);
-                previewText = parsed.originalContent || (parsed.textParts?.join('\n') ?? firstMessage.content);
+                if (parsed.originalContent) {
+                  previewText = parsed.originalContent;
+                } else if (Array.isArray(parsed.parts)) {
+                  // Handle message parts structure: filter for text parts and join
+                  const textParts = parsed.parts
+                    .filter((p: { type?: string }) => p.type === 'text')
+                    .map((p: { text?: string }) => p.text)
+                    .filter(Boolean);
+                  previewText = textParts.join('\n') || firstMessage.content;
+                } else {
+                  previewText = parsed.textParts?.join('\n') ?? firstMessage.content;
+                }
               } catch {
                 previewText = firstMessage.content;
               }
@@ -702,44 +713,67 @@ export const pageReadTools = {
         // Extract messages in range (convert to 0-indexed for slice)
         const selectedMessages = messages.slice(effectiveStart - 1, effectiveEnd);
 
+        // Batch fetch all source agent names upfront to avoid N+1 queries
+        const uniqueSourceAgentIds = [...new Set(
+          selectedMessages
+            .map(m => m.sourceAgentId)
+            .filter((id): id is string => id !== null)
+        )];
+
+        const sourceAgentMap = new Map<string, string>();
+        if (uniqueSourceAgentIds.length > 0) {
+          const sourceAgents = await db.query.pages.findMany({
+            where: inArray(pages.id, uniqueSourceAgentIds),
+            columns: { id: true, title: true },
+          });
+          sourceAgents.forEach(agent => {
+            sourceAgentMap.set(agent.id, agent.title);
+          });
+        }
+
         // Format messages with attribution
-        const formattedLines = await Promise.all(
-          selectedMessages.map(async (msg, index) => {
-            const lineNumber = effectiveStart + index;
+        const formattedLines = selectedMessages.map((msg, index) => {
+          const lineNumber = effectiveStart + index;
 
-            // Determine attribution prefix
-            let prefix: string;
-            if (msg.role === 'assistant') {
-              prefix = '[assistant]';
-            } else if (msg.sourceAgentId) {
-              // Message was sent via another agent - look up the agent name
-              const sourceAgent = await db.query.pages.findFirst({
-                where: eq(pages.id, msg.sourceAgentId),
-                columns: { title: true },
-              });
-              const agentName = sourceAgent?.title ?? 'Unknown Agent';
-              prefix = `[user@${agentName}]`;
+          // Determine attribution prefix
+          let prefix: string;
+          if (msg.role === 'assistant') {
+            prefix = '[assistant]';
+          } else if (msg.sourceAgentId) {
+            // Message was sent via another agent - look up from pre-fetched map
+            const agentName = sourceAgentMap.get(msg.sourceAgentId) ?? 'Unknown Agent';
+            prefix = `[user@${agentName}]`;
+          } else {
+            prefix = '[user]';
+          }
+
+          // Extract text content - prefer originalContent, then parts, then textParts
+          let textContent = '';
+          try {
+            const parsed = JSON.parse(msg.content);
+            if (parsed.originalContent) {
+              textContent = parsed.originalContent;
+            } else if (Array.isArray(parsed.parts)) {
+              // Handle message parts structure: filter for text parts and join
+              const textParts = parsed.parts
+                .filter((p: { type?: string }) => p.type === 'text')
+                .map((p: { text?: string }) => p.text)
+                .filter(Boolean);
+              textContent = textParts.join('\n') || msg.content;
             } else {
-              prefix = '[user]';
+              textContent = parsed.textParts?.join('\n') ?? msg.content;
             }
+          } catch {
+            textContent = msg.content;
+          }
 
-            // Extract text content - prefer originalContent to capture full message
-            let textContent = '';
-            try {
-              const parsed = JSON.parse(msg.content);
-              textContent = parsed.originalContent || (parsed.textParts?.join('\n') ?? msg.content);
-            } catch {
-              textContent = msg.content;
-            }
+          // Truncate long messages for readability
+          const displayContent = textContent.length > 500
+            ? textContent.slice(0, 500) + '...'
+            : textContent;
 
-            // Truncate long messages for readability
-            const displayContent = textContent.length > 500
-              ? textContent.slice(0, 500) + '...'
-              : textContent;
-
-            return `${lineNumber}→${prefix} ${displayContent}`;
-          })
-        );
+          return `${lineNumber}→${prefix} ${displayContent}`;
+        });
 
         const content = formattedLines.join('\n');
         const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;

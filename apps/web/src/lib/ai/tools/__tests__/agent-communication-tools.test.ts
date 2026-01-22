@@ -555,12 +555,15 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        // Verify saveMessageToDatabase was called with sourceAgentId
-        expect(saveMessageToDatabase).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sourceAgentId: sourceAgentPageId,
-          })
+        // Verify saveMessageToDatabase was called with sourceAgentId for the user message
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          call => call[0].role === 'user'
         );
+        expect(userMessageCall).toBeDefined();
+        expect(userMessageCall![0]).toMatchObject({
+          sourceAgentId: sourceAgentPageId,
+          role: 'user',
+        });
       });
 
       it('should pass null sourceAgentId when called from non-AI_CHAT context', async () => {
@@ -585,12 +588,15 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        // Verify saveMessageToDatabase was called with null sourceAgentId
-        expect(saveMessageToDatabase).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sourceAgentId: null,
-          })
+        // Verify saveMessageToDatabase was called with null sourceAgentId for the user message
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          call => call[0].role === 'user'
         );
+        expect(userMessageCall).toBeDefined();
+        expect(userMessageCall![0]).toMatchObject({
+          sourceAgentId: null,
+          role: 'user',
+        });
       });
 
       it('should pass null sourceAgentId when no location context', async () => {
@@ -612,12 +618,15 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        // Verify saveMessageToDatabase was called with null sourceAgentId
-        expect(saveMessageToDatabase).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sourceAgentId: null,
-          })
+        // Verify saveMessageToDatabase was called with null sourceAgentId for the user message
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          call => call[0].role === 'user'
         );
+        expect(userMessageCall).toBeDefined();
+        expect(userMessageCall![0]).toMatchObject({
+          sourceAgentId: null,
+          role: 'user',
+        });
       });
     });
   });

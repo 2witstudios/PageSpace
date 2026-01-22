@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, drives, chatMessages, eq, and, sql, inArray } from '@pagespace/db';
+import { db, pages, drives, chatMessages, eq, and, sql, inArray, asc } from '@pagespace/db';
 import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/server';
 import { type ToolExecutionContext } from '../core';
 
@@ -178,6 +178,7 @@ export const searchTools = {
                 eq(chatMessages.isActive, true),
                 sql`${chatMessages.content} ~ ${pgPattern}`
               ))
+              .orderBy(asc(chatMessages.createdAt))
               .limit(maxResults);
 
             // Group by conversation and build results
@@ -188,19 +189,24 @@ export const searchTools = {
             }>();
 
             // Batch fetch line numbers for all matching messages to avoid N+1 queries
-            // Collect unique conversation IDs from matches
+            // Collect unique conversation IDs and page IDs from matches
             const matchingConversationIds = [...new Set(conversationMatches.map(m => m.conversationId))];
+            const matchingPageIds = [...new Set(conversationMatches.map(m => m.pageId))];
 
             // Fetch all messages for matched conversations with row numbers in a single query
+            // Partition by BOTH pageId and conversationId to ensure line numbers are scoped correctly
+            // (conversationId could theoretically be reused across different pages)
             const allConvMessages = matchingConversationIds.length > 0
               ? await db
                   .select({
                     id: chatMessages.id,
+                    pageId: chatMessages.pageId,
                     conversationId: chatMessages.conversationId,
-                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${chatMessages.conversationId} ORDER BY ${chatMessages.createdAt})`.as('line_number'),
+                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${chatMessages.pageId}, ${chatMessages.conversationId} ORDER BY ${chatMessages.createdAt})`.as('line_number'),
                   })
                   .from(chatMessages)
                   .where(and(
+                    inArray(chatMessages.pageId, matchingPageIds),
                     inArray(chatMessages.conversationId, matchingConversationIds),
                     eq(chatMessages.isActive, true)
                   ))
@@ -226,7 +232,19 @@ export const searchTools = {
               let textContent = '';
               try {
                 const parsed = JSON.parse(msg.content);
-                textContent = parsed.textParts?.[0] || parsed.originalContent || msg.content;
+                // Prefer originalContent, then parts, then textParts (legacy)
+                if (parsed.originalContent) {
+                  textContent = parsed.originalContent;
+                } else if (parsed.parts && Array.isArray(parsed.parts)) {
+                  textContent = parsed.parts
+                    .map((p: { type?: string; text?: string } | string) =>
+                      typeof p === 'string' ? p : p.text || ''
+                    )
+                    .filter(Boolean)
+                    .join('\n');
+                } else {
+                  textContent = parsed.textParts?.[0] || msg.content;
+                }
               } catch {
                 textContent = msg.content;
               }
@@ -255,6 +273,9 @@ export const searchTools = {
                 }
                 const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
 
+                // Sort matches by lineNumber for deterministic results
+                conv.matches.sort((a, b) => a.lineNumber - b.lineNumber);
+
                 // Calculate suggested line range for context
                 const firstMatch = conv.matches[0]?.lineNumber || 1;
                 const suggestedStart = Math.max(1, firstMatch - 3);
@@ -275,23 +296,34 @@ export const searchTools = {
           }
         }
 
+        // Enforce maxResults on combined results (documents + conversations)
+        const totalBeforeTruncation = results.length;
+        const truncatedResults = results.slice(0, maxResults);
+        const wasTruncated = totalBeforeTruncation > maxResults;
+
         return {
           success: true,
           driveSlug: drive.slug,
           pattern,
           searchIn,
           contentTypes,
-          results,
-          totalResults: results.length,
-          summary: `Found ${results.length} result${results.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
+          results: truncatedResults,
+          totalResults: truncatedResults.length,
+          ...(wasTruncated && {
+            truncated: true,
+            totalBeforeTruncation,
+          }),
+          summary: wasTruncated
+            ? `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}" (truncated from ${totalBeforeTruncation})`
+            : `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
             pagesScanned: matchingPages.length,
-            pagesWithAccess: results.length,
-            documentTypes: [...new Set(results.map(r => r.type))],
+            pagesWithAccess: truncatedResults.length,
+            documentTypes: [...new Set(truncatedResults.map(r => r.type))],
             searchedDocuments: contentTypes.includes('documents'),
             searchedConversations: contentTypes.includes('conversations'),
           },
-          nextSteps: results.length > 0 ? [
+          nextSteps: truncatedResults.length > 0 ? [
             'Use read_page with the pageId to examine full content',
             'Use read_conversation with conversationId for chat context',
             'Refine your regex pattern for more specific results',
