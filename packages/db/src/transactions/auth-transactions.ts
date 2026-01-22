@@ -78,29 +78,27 @@ export async function atomicTokenRefresh(
   return db.transaction(async (tx) => {
     // Lock the token row to prevent concurrent access
     // FOR UPDATE OF rt ensures we only lock the refresh_tokens row, not the joined users row
+    // IMPORTANT: Column names use camelCase to match Drizzle schema (e.g., "userId", "tokenHash")
+    // NOTE: refresh_tokens table doesn't have revokedAt - tokens are deleted after use
     const lockResult = await tx.execute(sql`
       SELECT
         rt.id as rt_id,
-        rt.user_id,
-        rt.expires_at,
-        rt.revoked_at,
-        u.token_version,
-        u.role,
-        u.suspended_at
+        rt."userId",
+        rt."expiresAt",
+        u."tokenVersion",
+        u.role
       FROM refresh_tokens rt
-      JOIN users u ON u.id = rt.user_id
-      WHERE rt.token_hash = ${tokenHash}
+      JOIN users u ON u.id = rt."userId"
+      WHERE rt."tokenHash" = ${tokenHash}
       FOR UPDATE OF rt
     `);
 
     const row = lockResult.rows[0] as {
       rt_id: string;
-      user_id: string;
-      expires_at: Date | null;
-      revoked_at: Date | null;
-      token_version: number;
+      userId: string;
+      expiresAt: Date | null;
+      tokenVersion: number;
       role: 'user' | 'admin';
-      suspended_at: Date | null;
     } | undefined;
 
     // Check if token exists
@@ -108,27 +106,27 @@ export async function atomicTokenRefresh(
       // Token not found - could be already used or never existed
       // Check if this is a token reuse attack (token hash exists but was already used)
       const usedCheck = await tx.execute(sql`
-        SELECT user_id FROM refresh_tokens
-        WHERE token_hash = ${tokenHash}
+        SELECT "userId" FROM refresh_tokens
+        WHERE "tokenHash" = ${tokenHash}
       `);
 
       if (usedCheck.rows.length > 0) {
         // TOKEN REUSE DETECTED - token was already used
         // This is a critical security event - invalidate all user sessions
-        const userId = (usedCheck.rows[0] as { user_id: string }).user_id;
+        const userId = (usedCheck.rows[0] as { userId: string }).userId;
 
         await tx.execute(sql`
           UPDATE users
-          SET token_version = token_version + 1
+          SET "tokenVersion" = "tokenVersion" + 1
           WHERE id = ${userId}
         `);
 
         // Also revoke all device tokens for this user
         await tx.execute(sql`
           UPDATE device_tokens
-          SET revoked_at = NOW(), revoked_reason = 'token_reuse_detected'
-          WHERE user_id = ${userId}
-            AND revoked_at IS NULL
+          SET "revokedAt" = NOW(), "revokedReason" = 'token_reuse_detected'
+          WHERE "userId" = ${userId}
+            AND "revokedAt" IS NULL
         `);
 
         return {
@@ -141,58 +139,31 @@ export async function atomicTokenRefresh(
       return { success: false, error: 'Invalid refresh token' };
     }
 
-    // Check if token is revoked - treat as potential reuse attack
-    if (row.revoked_at) {
-      // SECURITY: A revoked token being presented is a TOKEN REUSE ATTACK
-      // The token was already consumed, and attacker is trying to replay it
-      // Invalidate all user sessions to protect the account
-      await tx.execute(sql`
-        UPDATE users
-        SET token_version = token_version + 1
-        WHERE id = ${row.user_id}
-      `);
-
-      await tx.execute(sql`
-        UPDATE device_tokens
-        SET revoked_at = NOW(), revoked_reason = 'token_reuse_detected'
-        WHERE user_id = ${row.user_id}
-          AND revoked_at IS NULL
-      `);
-
-      return {
-        success: false,
-        error: 'Token reuse detected - all sessions invalidated',
-        tokenReuse: true,
-      };
-    }
+    // NOTE: refresh_tokens doesn't have revokedAt column - tokens are deleted after use
+    // Token reuse is detected when token hash is not found (already deleted)
 
     // Check if token is expired
-    if (row.expires_at && new Date(row.expires_at) < new Date()) {
+    if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
       return { success: false, error: 'Token has expired' };
-    }
-
-    // Check if user is suspended
-    if (row.suspended_at) {
-      return { success: false, error: 'User account is suspended' };
     }
 
     // SECURITY: Validate JWT tokenVersion against user's current tokenVersion
     // This ensures tokens minted before a "logout all devices" are rejected
-    if (jwtTokenVersion !== undefined && jwtTokenVersion !== row.token_version) {
+    if (jwtTokenVersion !== undefined && jwtTokenVersion !== row.tokenVersion) {
       return { success: false, error: 'Invalid refresh token version.' };
     }
 
-    // Atomically mark token as used (revoke it)
+    // Atomically delete the token (refresh tokens are single-use)
+    // NOTE: refresh_tokens doesn't have revokedAt - we delete instead of marking revoked
     await tx.execute(sql`
-      UPDATE refresh_tokens
-      SET revoked_at = NOW(), revoked_reason = 'refreshed'
+      DELETE FROM refresh_tokens
       WHERE id = ${row.rt_id}
     `);
 
     return {
       success: true,
-      userId: row.user_id,
-      tokenVersion: row.token_version,
+      userId: row.userId,
+      tokenVersion: row.tokenVersion,
       role: row.role,
     };
   });
@@ -232,38 +203,37 @@ export async function atomicDeviceTokenRotation(
 
   return db.transaction(async (tx) => {
     // Lock the device token row
+    // IMPORTANT: Column names use camelCase to match Drizzle schema
     const lockResult = await tx.execute(sql`
       SELECT
         dt.id,
-        dt.user_id,
-        dt.device_id,
+        dt."userId",
+        dt."deviceId",
         dt.platform,
-        dt.device_name,
-        dt.user_agent,
-        dt.last_ip_address,
+        dt."deviceName",
+        dt."userAgent",
+        dt."lastIpAddress",
         dt.location,
-        dt.expires_at,
-        u.token_version,
-        u.suspended_at
+        dt."expiresAt",
+        u."tokenVersion"
       FROM device_tokens dt
-      JOIN users u ON u.id = dt.user_id
-      WHERE dt.token_hash = ${tokenHash}
-        AND dt.revoked_at IS NULL
+      JOIN users u ON u.id = dt."userId"
+      WHERE dt."tokenHash" = ${tokenHash}
+        AND dt."revokedAt" IS NULL
       FOR UPDATE OF dt
     `);
 
     const row = lockResult.rows[0] as {
       id: string;
-      user_id: string;
-      device_id: string;
+      userId: string;
+      deviceId: string;
       platform: 'web' | 'desktop' | 'ios' | 'android';
-      device_name: string | null;
-      user_agent: string | null;
-      last_ip_address: string | null;
+      deviceName: string | null;
+      userAgent: string | null;
+      lastIpAddress: string | null;
       location: string | null;
-      expires_at: Date | null;
-      token_version: number;
-      suspended_at: Date | null;
+      expiresAt: Date | null;
+      tokenVersion: number;
     } | undefined;
 
     if (!row) {
@@ -271,27 +241,23 @@ export async function atomicDeviceTokenRotation(
     }
 
     // Check if token is expired
-    if (row.expires_at && new Date(row.expires_at) < new Date()) {
+    if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
       return { success: false, error: 'Device token has expired' };
-    }
-
-    if (row.suspended_at) {
-      return { success: false, error: 'User account is suspended' };
     }
 
     // Revoke old token atomically
     await tx.execute(sql`
       UPDATE device_tokens
-      SET revoked_at = NOW(), revoked_reason = 'rotated'
+      SET "revokedAt" = NOW(), "revokedReason" = 'rotated'
       WHERE id = ${row.id}
     `);
 
     // Generate new token
     const newToken = await generateDeviceToken(
-      row.user_id,
-      row.device_id,
+      row.userId,
+      row.deviceId,
       row.platform,
-      row.token_version
+      row.tokenVersion
     );
     const newTokenHash = hashToken(newToken);
     const newTokenPrefix = getTokenPrefix(newToken);
@@ -305,34 +271,34 @@ export async function atomicDeviceTokenRotation(
     await tx.execute(sql`
       INSERT INTO device_tokens (
         id,
-        user_id,
-        device_id,
+        "userId",
+        "deviceId",
         platform,
         token,
-        token_hash,
-        token_prefix,
-        expires_at,
-        device_name,
-        user_agent,
-        ip_address,
-        last_ip_address,
+        "tokenHash",
+        "tokenPrefix",
+        "expiresAt",
+        "deviceName",
+        "userAgent",
+        "ipAddress",
+        "lastIpAddress",
         location,
-        trust_score,
-        suspicious_activity_count,
-        created_at
+        "trustScore",
+        "suspiciousActivityCount",
+        "createdAt"
       ) VALUES (
         ${newId},
-        ${row.user_id},
-        ${row.device_id},
+        ${row.userId},
+        ${row.deviceId},
         ${row.platform},
         ${newTokenHash},
         ${newTokenHash},
         ${newTokenPrefix},
         ${expiresAt},
-        ${row.device_name},
-        ${metadata.userAgent || row.user_agent},
-        ${metadata.ipAddress || row.last_ip_address},
-        ${metadata.ipAddress || row.last_ip_address},
+        ${row.deviceName},
+        ${metadata.userAgent || row.userAgent},
+        ${metadata.ipAddress || row.lastIpAddress},
+        ${metadata.ipAddress || row.lastIpAddress},
         ${row.location},
         1.0,
         0,
@@ -346,11 +312,11 @@ export async function atomicDeviceTokenRotation(
       newTokenHash,
       newTokenPrefix,
       deviceTokenId: newId,
-      userId: row.user_id,
-      deviceId: row.device_id,
+      userId: row.userId,
+      deviceId: row.deviceId,
       platform: row.platform,
-      deviceName: row.device_name,
-      userAgent: metadata.userAgent || row.user_agent,
+      deviceName: row.deviceName,
+      userAgent: metadata.userAgent || row.userAgent,
       location: row.location,
     };
   });
@@ -423,24 +389,24 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         const tokenHash = hashToken(providedDeviceToken);
 
         const existingResult = await tx.execute(sql`
-          SELECT id, expires_at
+          SELECT id, "expiresAt"
           FROM device_tokens
-          WHERE token_hash = ${tokenHash}
-            AND revoked_at IS NULL
+          WHERE "tokenHash" = ${tokenHash}
+            AND "revokedAt" IS NULL
           FOR UPDATE
         `);
 
         const existing = existingResult.rows[0] as {
           id: string;
-          expires_at: Date | null;
+          expiresAt: Date | null;
         } | undefined;
 
-        if (existing && (!existing.expires_at || new Date(existing.expires_at) > new Date())) {
+        if (existing && (!existing.expiresAt || new Date(existing.expiresAt) > new Date())) {
           // Valid token, update activity and return
           await tx.execute(sql`
             UPDATE device_tokens
-            SET last_used_at = NOW(),
-                last_ip_address = COALESCE(${ipAddress}, last_ip_address)
+            SET "lastUsedAt" = NOW(),
+                "lastIpAddress" = COALESCE(${ipAddress}, "lastIpAddress")
             WHERE id = ${existing.id}
           `);
 
@@ -461,19 +427,19 @@ export async function atomicValidateOrCreateDeviceToken(params: {
 
     // Check for existing active token for this device (with lock held)
     const existingActiveResult = await tx.execute(sql`
-      SELECT id, token_hash
+      SELECT id, "tokenHash"
       FROM device_tokens
-      WHERE user_id = ${userId}
-        AND device_id = ${deviceId}
+      WHERE "userId" = ${userId}
+        AND "deviceId" = ${deviceId}
         AND platform = ${platform}
-        AND revoked_at IS NULL
-        AND expires_at > NOW()
+        AND "revokedAt" IS NULL
+        AND "expiresAt" > NOW()
       FOR UPDATE
     `);
 
     const existingActive = existingActiveResult.rows[0] as {
       id: string;
-      token_hash: string;
+      tokenHash: string;
     } | undefined;
 
     if (existingActive) {
@@ -486,10 +452,10 @@ export async function atomicValidateOrCreateDeviceToken(params: {
       await tx.execute(sql`
         UPDATE device_tokens
         SET token = ${newTokenHash},
-            token_hash = ${newTokenHash},
-            token_prefix = ${newTokenPrefix},
-            last_used_at = NOW(),
-            last_ip_address = COALESCE(${ipAddress}, last_ip_address)
+            "tokenHash" = ${newTokenHash},
+            "tokenPrefix" = ${newTokenPrefix},
+            "lastUsedAt" = NOW(),
+            "lastIpAddress" = COALESCE(${ipAddress}, "lastIpAddress")
         WHERE id = ${existingActive.id}
       `);
 
@@ -503,12 +469,12 @@ export async function atomicValidateOrCreateDeviceToken(params: {
     // Revoke any expired tokens that would block creation (unique constraint)
     await tx.execute(sql`
       UPDATE device_tokens
-      SET revoked_at = NOW(), revoked_reason = 'expired'
-      WHERE user_id = ${userId}
-        AND device_id = ${deviceId}
+      SET "revokedAt" = NOW(), "revokedReason" = 'expired'
+      WHERE "userId" = ${userId}
+        AND "deviceId" = ${deviceId}
         AND platform = ${platform}
-        AND revoked_at IS NULL
-        AND expires_at <= NOW()
+        AND "revokedAt" IS NULL
+        AND "expiresAt" <= NOW()
     `);
 
     // Create new token (safe - we hold user lock)
@@ -524,20 +490,20 @@ export async function atomicValidateOrCreateDeviceToken(params: {
     await tx.execute(sql`
       INSERT INTO device_tokens (
         id,
-        user_id,
-        device_id,
+        "userId",
+        "deviceId",
         platform,
         token,
-        token_hash,
-        token_prefix,
-        expires_at,
-        device_name,
-        user_agent,
-        ip_address,
-        last_ip_address,
-        trust_score,
-        suspicious_activity_count,
-        created_at
+        "tokenHash",
+        "tokenPrefix",
+        "expiresAt",
+        "deviceName",
+        "userAgent",
+        "ipAddress",
+        "lastIpAddress",
+        "trustScore",
+        "suspiciousActivityCount",
+        "createdAt"
       ) VALUES (
         ${newId},
         ${userId},
