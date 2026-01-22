@@ -498,5 +498,136 @@ describe('agent-communication-tools', () => {
         );
       });
     });
+
+    describe('sourceAgentId tracking', () => {
+      const mockAgent = {
+        id: 'target-agent-1',
+        title: 'Target Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
+        mockCanUserViewPage.mockResolvedValue(true);
+        (mockDb.select as Mock).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        });
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+        } as Awaited<ReturnType<typeof createAIProvider>>);
+        vi.mocked(generateText).mockResolvedValue({
+          text: 'Agent response',
+          steps: [],
+        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
+        vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
+      });
+
+      it('should pass sourceAgentId when called from an AI_CHAT page', async () => {
+        const sourceAgentPageId = 'global-assistant-page-id';
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            locationContext: {
+              currentPage: { id: sourceAgentPageId, title: 'Global Assistant', type: 'AI_CHAT' },
+              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
+            },
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'target-agent-1',
+            question: 'Test question from another agent',
+          },
+          context
+        );
+
+        // Verify saveMessageToDatabase was called with sourceAgentId for the user message
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          call => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        expect(userMessageCall![0]).toMatchObject({
+          sourceAgentId: sourceAgentPageId,
+          role: 'user',
+        });
+      });
+
+      it('should pass null sourceAgentId when called from non-AI_CHAT context', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            locationContext: {
+              currentPage: { id: 'doc-page-id', title: 'Some Document', type: 'DOCUMENT' },
+              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
+            },
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'target-agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        // Verify saveMessageToDatabase was called with null sourceAgentId for the user message
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          call => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        expect(userMessageCall![0]).toMatchObject({
+          sourceAgentId: null,
+          role: 'user',
+        });
+      });
+
+      it('should pass null sourceAgentId when no location context', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            // No locationContext
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'target-agent-1',
+            question: 'Test question',
+          },
+          context
+        );
+
+        // Verify saveMessageToDatabase was called with null sourceAgentId for the user message
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          call => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        expect(userMessageCall![0]).toMatchObject({
+          sourceAgentId: null,
+          role: 'user',
+        });
+      });
+    });
   });
 });

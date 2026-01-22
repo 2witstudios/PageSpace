@@ -79,6 +79,7 @@ export const chatMessages = pgTable('chat_messages', {
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
   userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
+  sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
   messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
 }, (table) => {
     return {
@@ -207,6 +208,11 @@ export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
     user: one(users, {
         fields: [chatMessages.userId],
         references: [users.id],
+    }),
+    sourceAgent: one(pages, {
+        fields: [chatMessages.sourceAgentId],
+        references: [pages.id],
+        relationName: 'sourceAgent',
     }),
 }));
 

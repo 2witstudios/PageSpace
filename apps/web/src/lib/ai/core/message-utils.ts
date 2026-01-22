@@ -299,6 +299,7 @@ export async function saveMessageToDatabase({
   toolCalls,
   toolResults,
   uiMessage,
+  sourceAgentId,
 }: {
   messageId: string;
   pageId: string;
@@ -309,6 +310,7 @@ export async function saveMessageToDatabase({
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
+  sourceAgentId?: string | null; // ID of the AI agent that sent this message (for agent-to-agent communication)
 }) {
   try {
     let structuredContent = content;
@@ -351,6 +353,7 @@ export async function saveMessageToDatabase({
         toolResults: toolResults ? JSON.stringify(toolResults) : null,
         createdAt: new Date(),
         isActive: true,
+        sourceAgentId: sourceAgentId ?? null, // Track which AI agent sent this message
       })
       .onConflictDoUpdate({
         target: chatMessages.id,
@@ -359,6 +362,7 @@ export async function saveMessageToDatabase({
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
           conversationId, // Update conversationId if message is reprocessed
+          sourceAgentId: sourceAgentId ?? null,
         }
       });
   } catch (error) {
