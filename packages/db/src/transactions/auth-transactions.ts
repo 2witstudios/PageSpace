@@ -449,15 +449,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
       const newTokenHash = hashToken(regeneratedToken);
       const newTokenPrefix = getTokenPrefix(regeneratedToken);
 
-      await tx.execute(sql`
-        UPDATE device_tokens
-        SET "token" = ${newTokenHash},
-            "tokenHash" = ${newTokenHash},
-            "tokenPrefix" = ${newTokenPrefix},
-            "lastUsedAt" = NOW(),
-            "lastIpAddress" = COALESCE(${ipAddress}, "lastIpAddress")
-        WHERE id = ${existingActive.id}
-      `);
+      await tx.execute(sql`UPDATE device_tokens SET "token" = ${newTokenHash}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
 
       return {
         deviceToken: regeneratedToken,
