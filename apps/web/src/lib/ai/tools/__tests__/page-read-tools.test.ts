@@ -639,8 +639,10 @@ describe('page-read-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn()
-          .mockResolvedValueOnce(createMockPage('', 'AI_CHAT')) // Main page lookup
-          .mockResolvedValue({ id: 'global-assistant-id', title: 'Global Assistant' }); // Source agent lookup
+          .mockResolvedValue(createMockPage('', 'AI_CHAT')); // Main page lookup
+        // Mock findMany for batched source agent lookups
+        mockDb.query.pages.findMany = vi.fn()
+          .mockResolvedValue([{ id: 'global-assistant-id', title: 'Global Assistant' }]);
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
         (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
           from: vi.fn().mockReturnValue({
