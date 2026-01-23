@@ -397,7 +397,8 @@ describe('auth-transactions', () => {
         const tokenId = createId();
         const newTokenId = createId();
 
-        // Create the original token
+        // Create the original token (already revoked 31 seconds ago - outside grace period)
+        const revokedAt = new Date(Date.now() - 31000);
         await db.insert(deviceTokens).values({
           id: tokenId,
           userId: testUserId,
@@ -409,9 +410,12 @@ describe('auth-transactions', () => {
           expiresAt: new Date(Date.now() + 86400000),
           trustScore: 1.0,
           suspiciousActivityCount: 0,
+          revokedAt,
+          revokedReason: 'rotated',
+          replacedByTokenId: newTokenId,
         });
 
-        // Create the replacement token
+        // Create the replacement token (this is the active one)
         const newToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
         const newTokenHash = hashToken(newToken);
         await db.insert(deviceTokens).values({
@@ -426,12 +430,6 @@ describe('auth-transactions', () => {
           trustScore: 1.0,
           suspiciousActivityCount: 0,
         });
-
-        // Manually revoke the token with a timestamp 31 seconds ago (outside grace period)
-        const revokedAt = new Date(Date.now() - 31000);
-        await db.update(deviceTokens)
-          .set({ revokedAt, revokedReason: 'rotated', replacedByTokenId: newTokenId })
-          .where(eq(deviceTokens.id, tokenId));
 
         // Retry should fail - outside grace period
         const result = await atomicDeviceTokenRotation(
