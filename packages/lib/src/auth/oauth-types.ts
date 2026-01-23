@@ -57,8 +57,8 @@ export interface MobileOAuthResponse {
   };
   /** JWT access token (15 minute expiry) */
   token: string;
-  /** JWT refresh token (7 day expiry) */
-  refreshToken: string;
+  /** JWT refresh token (deprecated - mobile now uses device tokens for refresh) */
+  refreshToken?: string;
   /** CSRF token for additional security */
   csrfToken: string;
   /** Device token for 90-day persistent authentication */

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getUserLMStudioSettings } from '@/lib/ai/core';
+import { validateExternalURL } from '@pagespace/lib/security';
 
 /**
  * GET /api/ai/lmstudio/models
@@ -20,6 +21,22 @@ export async function GET(request: Request) {
       return NextResponse.json({
         success: false,
         error: 'LM Studio not configured. Please configure your LM Studio base URL first.',
+        models: {}
+      }, { status: 400 });
+    }
+
+    // SECURITY: Validate URL to prevent SSRF attacks
+    try {
+      await validateExternalURL(lmstudioSettings.baseUrl);
+    } catch (error) {
+      loggers.ai.warn('SSRF protection: blocked LM Studio URL', {
+        userId,
+        baseUrl: lmstudioSettings.baseUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
         models: {}
       }, { status: 400 });
     }

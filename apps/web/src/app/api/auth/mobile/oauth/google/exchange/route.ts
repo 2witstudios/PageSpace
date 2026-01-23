@@ -49,8 +49,6 @@
 import { z } from 'zod/v4';
 import {
   generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
   decodeToken,
   generateCSRFToken,
   getSessionIdFromJWT,
@@ -63,7 +61,7 @@ import {
 } from '@pagespace/lib/security';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { verifyOAuthIdToken, createOrLinkOAuthUser, saveRefreshToken, OAuthProvider } from '@pagespace/lib/server';
+import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
 
@@ -225,25 +223,15 @@ export async function POST(req: Request) {
       provider: user.provider,
     });
 
-    // Generate JWT tokens
+    // Generate JWT access token (mobile uses device tokens for refresh, not refresh tokens)
     const accessToken = await generateAccessToken(
       user.id,
       user.tokenVersion,
       user.role
     );
-    const refreshToken = await generateRefreshToken(
-      user.id,
-      user.tokenVersion,
-      user.role
-    );
 
-    // Save refresh token to database
-    const refreshTokenPayload = await decodeToken(refreshToken);
-    const refreshTokenExpiresAt = refreshTokenPayload?.exp
-      ? new Date(refreshTokenPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+    // Create or validate device token for the mobile device
+    const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
       providedDeviceToken,
       userId: user.id,
       deviceId,
@@ -252,16 +240,6 @@ export async function POST(req: Request) {
       deviceName: deviceName || undefined,
       userAgent: req.headers.get('user-agent') || undefined,
       ipAddress: clientIP,
-    });
-
-    await saveRefreshToken(refreshToken, user.id, {
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      platform,
-      deviceTokenId: deviceTokenRecordId,
-      expiresAt: refreshTokenExpiresAt,
-      lastUsedAt: new Date(),
     });
 
     // Reset rate limits on successful authentication (graceful - failures don't affect successful auth)
@@ -311,6 +289,7 @@ export async function POST(req: Request) {
     const csrfToken = generateCSRFToken(sessionId);
 
     // Return tokens in JSON response for mobile client
+    // Note: No refreshToken - mobile uses device tokens for refresh
     const response: MobileOAuthResponse = {
       user: {
         id: user.id,
@@ -321,7 +300,6 @@ export async function POST(req: Request) {
         role: user.role,
       },
       token: accessToken,
-      refreshToken: refreshToken,
       csrfToken: csrfToken,
       deviceToken: deviceTokenValue,
     };

@@ -5,7 +5,6 @@ import { decodeToken } from '@pagespace/lib/server';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db, eq, gt, and, users, dmConversations, socketTokens } from '@pagespace/db';
-import { parse } from 'cookie';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
 
@@ -350,33 +349,12 @@ io.use(async (socket: AuthSocket, next) => {
     userAgent: socket.handshake.headers['user-agent']?.substring(0, 50)
   });
 
-  // Try to get token from auth field first
-  let token = socket.handshake.auth.token;
-  
-  // If no token in auth field, try to get it from cookies (for httpOnly cookies)
-  if (!token && socket.handshake.headers.cookie) {
-    try {
-      const cookies = parse(socket.handshake.headers.cookie);
-      
-      loggers.realtime.debug('Socket.IO: Parsed cookies', {
-        cookieKeys: Object.keys(cookies),
-        hasAccessToken: !!cookies.accessToken,
-        accessTokenLength: cookies.accessToken?.length || 0
-      });
-      
-      token = cookies.accessToken;
-      if (token) {
-        loggers.realtime.debug('Socket.IO: Using accessToken from httpOnly cookie');
-      }
-    } catch (error) {
-      loggers.realtime.error('Failed to parse cookies', error as Error);
-    }
-  }
+  // Get token from auth field (socket token from /api/auth/socket-token or JWT from desktop app)
+  const token = socket.handshake.auth.token;
 
   if (!token) {
-    loggers.realtime.warn('Socket.IO: No token found in auth field or cookies', {
+    loggers.realtime.warn('Socket.IO: No token found in auth field', {
       authFieldEmpty: !socket.handshake.auth.token,
-      cookieHeaderMissing: !socket.handshake.headers.cookie
     });
     return next(new Error('Authentication error: No token provided.'));
   }

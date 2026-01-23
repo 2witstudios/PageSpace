@@ -22,20 +22,22 @@ export interface ElectronAPI {
      */
     getJWT: () => Promise<string | null>;
     /**
-     * Retrieves the full stored session, including refresh and device tokens.
+     * Retrieves the full stored session, including device tokens.
+     * Note: refreshToken is deprecated - desktop uses device tokens for refresh.
      */
     getSession: () => Promise<{
       accessToken: string;
-      refreshToken: string;
+      refreshToken?: string; // Deprecated - may exist from old sessions
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
     /**
      * Persists the current authentication session in the native secure storage.
+     * Note: refreshToken is deprecated - desktop uses device tokens for refresh.
      */
     storeSession: (session: {
       accessToken: string;
-      refreshToken: string;
+      refreshToken?: string; // Deprecated - no longer used
       csrfToken?: string | null;
       deviceToken?: string | null;
     }) => Promise<{ success: boolean }>;

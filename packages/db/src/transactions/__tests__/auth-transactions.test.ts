@@ -4,12 +4,11 @@
  * These tests verify the atomic token operations with PostgreSQL FOR UPDATE locking.
  * Requires a running test database.
  */
-import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
-import { db, refreshTokens, deviceTokens, users, eq } from '../../index';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { db, deviceTokens, users, eq } from '../../index';
 import { createHash } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import {
-  atomicTokenRefresh,
   atomicDeviceTokenRotation,
   atomicValidateOrCreateDeviceToken,
 } from '../auth-transactions';
@@ -67,195 +66,8 @@ describe('auth-transactions', () => {
 
   // Clean up after each test
   afterEach(async () => {
-    await db.delete(refreshTokens).where(eq(refreshTokens.userId, testUserId));
     await db.delete(deviceTokens).where(eq(deviceTokens.userId, testUserId));
     await db.delete(users).where(eq(users.id, testUserId));
-  });
-
-  describe('atomicTokenRefresh', () => {
-    it('should return success with user info for valid token', async () => {
-      // Create a valid refresh token
-      const rawToken = `ps_refresh_${createId()}`;
-      const tokenHash = hashToken(rawToken);
-      const expiresAt = new Date(Date.now() + 86400000); // 1 day from now
-
-      await db.insert(refreshTokens).values({
-        id: createId(),
-        userId: testUserId,
-        token: tokenHash,
-        tokenHash,
-        tokenPrefix: getTokenPrefix(rawToken),
-        expiresAt,
-      });
-
-      const result = await atomicTokenRefresh(rawToken, hashToken);
-
-      expect(result.success).toBe(true);
-      expect(result.userId).toBe(testUserId);
-      expect(result.tokenVersion).toBe(1);
-      expect(result.role).toBe('user');
-    });
-
-    it('should return error for non-existent token', async () => {
-      const result = await atomicTokenRefresh('invalid-token', hashToken);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Invalid refresh token');
-    });
-
-    it('should revoke token after use but allow grace period retry', async () => {
-      const rawToken = `ps_refresh_${createId()}`;
-      const tokenHash = hashToken(rawToken);
-
-      await db.insert(refreshTokens).values({
-        id: createId(),
-        userId: testUserId,
-        token: tokenHash,
-        tokenHash,
-        tokenPrefix: getTokenPrefix(rawToken),
-        expiresAt: new Date(Date.now() + 86400000),
-      });
-
-      // First refresh should succeed (not a grace period retry)
-      const result1 = await atomicTokenRefresh(rawToken, hashToken);
-      expect(result1.success).toBe(true);
-      expect(result1.gracePeriodRetry).toBeFalsy();
-
-      // Immediate retry should succeed (within 30s grace period)
-      const result2 = await atomicTokenRefresh(rawToken, hashToken);
-      expect(result2.success).toBe(true);
-      expect(result2.gracePeriodRetry).toBe(true);
-      expect(result2.userId).toBe(testUserId);
-    });
-
-    it('should return error for expired token', async () => {
-      const rawToken = `ps_refresh_${createId()}`;
-      const tokenHash = hashToken(rawToken);
-
-      await db.insert(refreshTokens).values({
-        id: createId(),
-        userId: testUserId,
-        token: tokenHash,
-        tokenHash,
-        tokenPrefix: getTokenPrefix(rawToken),
-        expiresAt: new Date(Date.now() - 86400000), // Expired 1 day ago
-      });
-
-      const result = await atomicTokenRefresh(rawToken, hashToken);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Token has expired');
-    });
-
-    it('should atomically prevent concurrent refresh attempts', async () => {
-      // Create a valid refresh token
-      const rawToken = `ps_refresh_${createId()}`;
-      const tokenHash = hashToken(rawToken);
-
-      await db.insert(refreshTokens).values({
-        id: createId(),
-        userId: testUserId,
-        token: tokenHash,
-        tokenHash,
-        tokenPrefix: getTokenPrefix(rawToken),
-        expiresAt: new Date(Date.now() + 86400000),
-      });
-
-      // Simulate concurrent refresh attempts
-      const results = await Promise.all([
-        atomicTokenRefresh(rawToken, hashToken),
-        atomicTokenRefresh(rawToken, hashToken),
-        atomicTokenRefresh(rawToken, hashToken),
-      ]);
-
-      // All should succeed due to grace period
-      const successes = results.filter((r) => r.success);
-      expect(successes.length).toBeGreaterThanOrEqual(1);
-
-      // At least one should be a first use, others may be grace period retries
-      const firstUse = successes.filter((r) => !r.gracePeriodRetry);
-      const gracePeriodRetries = successes.filter((r) => r.gracePeriodRetry);
-      expect(firstUse).toHaveLength(1);
-      // Remaining successes should be grace period retries
-      expect(gracePeriodRetries.length).toBe(successes.length - 1);
-    });
-
-    describe('grace period handling', () => {
-      it('should allow retry within 30 second grace period', async () => {
-        const rawToken = `ps_refresh_${createId()}`;
-        const tokenHash = hashToken(rawToken);
-
-        await db.insert(refreshTokens).values({
-          id: createId(),
-          userId: testUserId,
-          token: tokenHash,
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          expiresAt: new Date(Date.now() + 86400000),
-        });
-
-        // First refresh - succeeds, revokes token
-        const result1 = await atomicTokenRefresh(rawToken, hashToken);
-        expect(result1.success).toBe(true);
-        expect(result1.gracePeriodRetry).toBeFalsy();
-
-        // Immediate retry - should succeed (within grace period)
-        const result2 = await atomicTokenRefresh(rawToken, hashToken);
-        expect(result2.success).toBe(true);
-        expect(result2.gracePeriodRetry).toBe(true);
-        expect(result2.userId).toBe(testUserId);
-      });
-
-      it('should reject retry after grace period expires', async () => {
-        const rawToken = `ps_refresh_${createId()}`;
-        const tokenHash = hashToken(rawToken);
-        const tokenId = createId();
-
-        await db.insert(refreshTokens).values({
-          id: tokenId,
-          userId: testUserId,
-          token: tokenHash,
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          expiresAt: new Date(Date.now() + 86400000),
-        });
-
-        // Manually revoke the token with a timestamp 31 seconds ago (outside grace period)
-        const revokedAt = new Date(Date.now() - 31000);
-        await db.update(refreshTokens)
-          .set({ revokedAt, revokedReason: 'refreshed' })
-          .where(eq(refreshTokens.id, tokenId));
-
-        // Retry should fail - outside grace period
-        const result = await atomicTokenRefresh(rawToken, hashToken);
-        expect(result.success).toBe(false);
-        expect(result.error).toBe('Token already used');
-      });
-
-      it('should only grant grace period for "refreshed" reason', async () => {
-        const rawToken = `ps_refresh_${createId()}`;
-        const tokenHash = hashToken(rawToken);
-        const tokenId = createId();
-
-        await db.insert(refreshTokens).values({
-          id: tokenId,
-          userId: testUserId,
-          token: tokenHash,
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          expiresAt: new Date(Date.now() + 86400000),
-        });
-
-        // Token revoked for logout - no grace period
-        await db.update(refreshTokens)
-          .set({ revokedAt: new Date(), revokedReason: 'logout' })
-          .where(eq(refreshTokens.id, tokenId));
-
-        const result = await atomicTokenRefresh(rawToken, hashToken);
-        expect(result.success).toBe(false);
-        expect(result.error).toBe('Token already used');
-      });
-    });
   });
 
   describe('atomicDeviceTokenRotation', () => {
@@ -397,8 +209,8 @@ describe('auth-transactions', () => {
         const tokenId = createId();
         const newTokenId = createId();
 
-        // Create the original token (already revoked 31 seconds ago - outside grace period)
-        const revokedAt = new Date(Date.now() - 31000);
+        // Create the original token (already revoked 60 seconds ago - well outside 30s grace period)
+        const revokedAt = new Date(Date.now() - 60000);
         await db.insert(deviceTokens).values({
           id: tokenId,
           userId: testUserId,

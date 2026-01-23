@@ -11,29 +11,15 @@
  * @module @pagespace/db/transactions/auth-transactions
  */
 
-import { db, refreshTokens, deviceTokens, users, eq, sql, and, isNull, gt } from '../index';
+import { db, deviceTokens, users, eq, sql } from '../index';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
- * Grace period for token refresh race conditions (Okta-style)
+ * Grace period for device token rotation race conditions (Okta-style)
  * During this window after a token is revoked, concurrent requests using the same
  * token will succeed and receive new tokens (different but functionally equivalent)
  */
-const REFRESH_TOKEN_GRACE_PERIOD_MS = 30 * 1000; // 30 seconds (Okta default)
 const DEVICE_TOKEN_GRACE_PERIOD_MS = 30 * 1000; // 30 seconds
-
-/**
- * Result of atomic refresh token validation
- */
-export interface RefreshResult {
-  success: boolean;
-  userId?: string;
-  tokenVersion?: number;
-  role?: 'user' | 'admin';
-  error?: string;
-  /** True if this was a grace period retry (token already used but within 30s window) */
-  gracePeriodRetry?: boolean;
-}
 
 /**
  * Result of atomic device token rotation
@@ -62,112 +48,6 @@ export interface AtomicDeviceTokenResult {
   deviceToken: string;
   deviceTokenRecordId: string;
   isNew: boolean;
-}
-
-/**
- * Atomically validate and consume a refresh token.
- *
- * SECURITY FEATURES:
- * - FOR UPDATE lock prevents concurrent refresh attempts
- * - Token is marked as used atomically within the transaction
- * - Validates JWT tokenVersion against user's current tokenVersion
- * - Detects token reuse attacks and invalidates all user sessions
- *
- * @param refreshTokenValue - The raw refresh token from the client
- * @param hashToken - Function to hash the token for lookup
- * @param jwtTokenVersion - Optional tokenVersion from decoded JWT for validation
- * @returns RefreshResult with user info on success, error on failure
- */
-export async function atomicTokenRefresh(
-  refreshTokenValue: string,
-  hashToken: (token: string) => string,
-  jwtTokenVersion?: number
-): Promise<RefreshResult> {
-  const tokenHash = hashToken(refreshTokenValue);
-
-  return db.transaction(async (tx) => {
-    // Lock the token row to prevent concurrent access
-    // FOR UPDATE OF rt ensures we only lock the refresh_tokens row, not the joined users row
-    // IMPORTANT: Column names use camelCase to match Drizzle schema (e.g., "userId", "tokenHash")
-    const lockResult = await tx.execute(sql`
-      SELECT
-        rt.id as rt_id,
-        rt."userId",
-        rt."expiresAt",
-        rt."revokedAt",
-        rt."revokedReason",
-        u."tokenVersion",
-        u.role
-      FROM refresh_tokens rt
-      JOIN users u ON u.id = rt."userId"
-      WHERE rt."tokenHash" = ${tokenHash}
-      FOR UPDATE OF rt
-    `);
-
-    const row = lockResult.rows[0] as {
-      rt_id: string;
-      userId: string;
-      expiresAt: Date | null;
-      revokedAt: Date | null;
-      revokedReason: string | null;
-      tokenVersion: number;
-      role: 'user' | 'admin';
-    } | undefined;
-
-    // Check if token exists
-    if (!row) {
-      return { success: false, error: 'Invalid refresh token' };
-    }
-
-    // Check if token is revoked
-    if (row.revokedAt) {
-      const timeSinceRevoked = Date.now() - new Date(row.revokedAt).getTime();
-      const isWithinGracePeriod =
-        row.revokedReason === 'refreshed' &&
-        timeSinceRevoked < REFRESH_TOKEN_GRACE_PERIOD_MS;
-
-      if (isWithinGracePeriod) {
-        // GRACE PERIOD: Allow retry - return success without re-revoking
-        // Route will issue new tokens (different but functionally equivalent)
-        return {
-          success: true,
-          userId: row.userId,
-          tokenVersion: row.tokenVersion,
-          role: row.role,
-          gracePeriodRetry: true,
-        };
-      }
-
-      // Outside grace period - reject
-      return { success: false, error: 'Token already used' };
-    }
-
-    // Check if token is expired
-    if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
-      return { success: false, error: 'Token has expired' };
-    }
-
-    // SECURITY: Validate JWT tokenVersion against user's current tokenVersion
-    // This ensures tokens minted before a "logout all devices" are rejected
-    if (jwtTokenVersion !== undefined && jwtTokenVersion !== row.tokenVersion) {
-      return { success: false, error: 'Invalid refresh token version.' };
-    }
-
-    // Atomically mark the token as revoked (refresh tokens are single-use)
-    // We mark as revoked instead of deleting to enable token reuse detection
-    await tx.execute(sql`
-      UPDATE refresh_tokens
-      SET "revokedAt" = NOW(), "revokedReason" = 'refreshed'
-      WHERE id = ${row.rt_id}
-    `);
-
-    return {
-      success: true,
-      userId: row.userId,
-      tokenVersion: row.tokenVersion,
-      role: row.role,
-    };
-  });
 }
 
 /**
@@ -249,7 +129,12 @@ export async function atomicDeviceTokenRotation(
 
     // Check if already rotated (revoked with reason 'rotated')
     if (row.revokedAt && row.revokedReason === 'rotated') {
-      const timeSinceRevoked = Date.now() - new Date(row.revokedAt).getTime();
+      // PostgreSQL returns timestamps without timezone suffix, so we need to
+      // handle both Date objects (from Drizzle ORM) and strings (from raw SQL).
+      const revokedAtDate = row.revokedAt instanceof Date
+        ? row.revokedAt
+        : new Date(String(row.revokedAt).replace(' ', 'T') + 'Z');
+      const timeSinceRevoked = Date.now() - revokedAtDate.getTime();
 
       if (timeSinceRevoked < DEVICE_TOKEN_GRACE_PERIOD_MS && row.replacedByTokenId) {
         // GRACE PERIOD: Look up the replacement token

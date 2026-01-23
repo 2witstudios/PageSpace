@@ -53,7 +53,7 @@ contextBridge.exposeInMainWorld('electron', {
     getSession: () => ipcRenderer.invoke('auth:get-session'),
     storeSession: (session: {
       accessToken: string;
-      refreshToken: string;
+      refreshToken?: string; // Deprecated - desktop uses device tokens for refresh
       csrfToken?: string | null;
       deviceToken?: string | null;
     }) => ipcRenderer.invoke('auth:store-session', session),
@@ -135,13 +135,13 @@ export interface ElectronAPI {
     getJWT: () => Promise<string | null>;
     getSession: () => Promise<{
       accessToken: string;
-      refreshToken: string;
+      refreshToken?: string; // Deprecated - may exist from old sessions
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
     storeSession: (session: {
       accessToken: string;
-      refreshToken: string;
+      refreshToken?: string; // Deprecated - desktop uses device tokens for refresh
       csrfToken?: string | null;
       deviceToken?: string | null;
     }) => Promise<{ success: boolean }>;

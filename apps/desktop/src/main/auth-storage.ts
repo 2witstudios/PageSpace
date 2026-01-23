@@ -6,7 +6,8 @@ import { logger } from './logger';
 
 export interface StoredAuthSession {
   accessToken: string;
-  refreshToken: string;
+  /** @deprecated Desktop uses device tokens for refresh, not refresh tokens */
+  refreshToken?: string;
   csrfToken?: string | null;
   deviceToken?: string | null;
 }

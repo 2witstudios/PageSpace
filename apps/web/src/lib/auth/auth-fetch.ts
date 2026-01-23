@@ -527,7 +527,6 @@ class AuthFetch {
       const session = await window.electron.auth.getSession();
       const deviceInfo = await window.electron.auth.getDeviceInfo();
 
-      const refreshToken = session?.refreshToken;
       const deviceToken = session?.deviceToken;
 
       // Desktop REQUIRES a device token for long-lived sessions
@@ -537,9 +536,9 @@ class AuthFetch {
         return { success: false, shouldLogout: true };
       }
 
-      let response: Response | null = null;
+      let response: Response;
 
-      // PRIORITY 1: Try device token refresh (90-day validity)
+      // Device token refresh (90-day validity)
       // This is the PRIMARY auth mechanism for desktop - designed for long-lived sessions
       try {
         response = await fetch('/api/auth/device/refresh', {
@@ -564,43 +563,10 @@ class AuthFetch {
         return { success: false, shouldLogout: false };
       }
 
-      // PRIORITY 2: Fall back to refresh token ONLY if available
-      // This is optional - desktop can work with device token alone
-      if (response?.status === 401 && refreshToken) {
-        this.logger.debug('Desktop: Device token rejected, trying refresh token fallback');
-
-        try {
-          response = await fetch('/api/auth/mobile/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              refreshToken,
-              deviceToken,
-              deviceId: deviceInfo.deviceId,
-              platform: 'desktop',
-            }),
-          });
-        } catch (networkError) {
-          this.logger.warn('Desktop: Refresh token fallback network error', {
-            error: networkError instanceof Error ? networkError.message : String(networkError),
-          });
-          return { success: false, shouldLogout: false };
-        }
-      }
-
-      // Handle final response
-      if (!response) {
-        this.logger.error('Desktop: No response from token refresh');
-        return { success: false, shouldLogout: false };
-      }
-
       if (response.status === 401) {
-        // 401 = token is genuinely invalid (expired or revoked)
+        // 401 = device token is genuinely invalid (expired or revoked)
         // User must re-authenticate
-        this.logger.warn('Desktop: Authentication token rejected - user must re-authenticate', {
-          hadRefreshToken: !!refreshToken,
-        });
+        this.logger.warn('Desktop: Device token rejected - user must re-authenticate');
         return { success: false, shouldLogout: true };
       }
 
@@ -627,7 +593,6 @@ class AuthFetch {
 
       await window.electron.auth.storeSession({
         accessToken: data.token,
-        refreshToken: data.refreshToken,
         csrfToken: data.csrfToken,
         deviceToken: data.deviceToken,
       });

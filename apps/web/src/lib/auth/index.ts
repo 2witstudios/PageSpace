@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
-import { hashToken, sessionService, type SessionClaims } from '@pagespace/lib/auth';
+import { db, mcpTokens, users, eq, and, isNull } from '@pagespace/db';
+import { hashToken, sessionService, type SessionClaims, decodeToken, getSessionIdFromJWT } from '@pagespace/lib/auth';
 import { getSessionFromCookies } from './cookie-config';
 
 const BEARER_PREFIX = 'Bearer ';
 const MCP_TOKEN_PREFIX = 'mcp_';
 
-export type TokenType = 'mcp' | 'session';
+export type TokenType = 'mcp' | 'session' | 'jwt';
 
 interface BaseAuthDetails {
   userId: string;
@@ -27,7 +27,12 @@ export interface SessionAuthResult extends BaseAuthDetails {
   sessionId: string;
 }
 
-export type AuthResult = MCPAuthResult | SessionAuthResult;
+export interface JWTAuthResult extends BaseAuthDetails {
+  tokenType: 'jwt';
+  sessionId: string;
+}
+
+export type AuthResult = MCPAuthResult | SessionAuthResult | JWTAuthResult;
 
 export interface AuthError {
   error: NextResponse;
@@ -114,6 +119,58 @@ export async function validateSessionToken(token: string): Promise<SessionClaims
   }
 }
 
+interface JWTValidationResult {
+  userId: string;
+  role: 'user' | 'admin';
+  tokenVersion: number;
+  sessionId: string;
+}
+
+export async function validateAccessToken(token: string): Promise<JWTValidationResult | null> {
+  try {
+    if (!token) {
+      return null;
+    }
+
+    const decoded = await decodeToken(token);
+    if (!decoded) {
+      return null;
+    }
+
+    // Verify tokenVersion against DB
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, decoded.userId),
+      columns: {
+        id: true,
+        tokenVersion: true,
+      },
+    });
+
+    if (!user || user.tokenVersion !== decoded.tokenVersion) {
+      return null;
+    }
+
+    // Generate session ID from JWT claims
+    const sessionId = decoded.iat
+      ? getSessionIdFromJWT({
+          userId: decoded.userId,
+          tokenVersion: decoded.tokenVersion,
+          iat: decoded.iat,
+        })
+      : `jwt-${decoded.userId}-${Date.now()}`;
+
+    return {
+      userId: decoded.userId,
+      role: decoded.role,
+      tokenVersion: decoded.tokenVersion,
+      sessionId,
+    };
+  } catch (error) {
+    console.error('validateAccessToken error', error);
+    return null;
+  }
+}
+
 export async function authenticateMCPRequest(request: Request): Promise<AuthenticationResult> {
   const token = getBearerToken(request);
 
@@ -137,14 +194,34 @@ export async function authenticateMCPRequest(request: Request): Promise<Authenti
 }
 
 export async function authenticateSessionRequest(request: Request): Promise<AuthenticationResult> {
+  // Check for bearer token first (desktop/mobile clients)
   const bearerToken = getBearerToken(request);
 
-  if (bearerToken?.startsWith(MCP_TOKEN_PREFIX)) {
-    return {
-      error: unauthorized('MCP tokens are not permitted for this endpoint'),
-    };
+  if (bearerToken) {
+    // Reject MCP tokens - wrong endpoint
+    if (bearerToken.startsWith(MCP_TOKEN_PREFIX)) {
+      return {
+        error: unauthorized('MCP tokens are not permitted for this endpoint'),
+      };
+    }
+
+    // Validate JWT bearer token (desktop/mobile clients)
+    const jwtResult = await validateAccessToken(bearerToken);
+    if (jwtResult) {
+      return {
+        userId: jwtResult.userId,
+        role: jwtResult.role,
+        tokenVersion: jwtResult.tokenVersion,
+        sessionId: jwtResult.sessionId,
+        tokenType: 'jwt',
+      } satisfies JWTAuthResult;
+    }
+
+    // Invalid bearer token - don't fall through to cookies
+    return { error: unauthorized('Invalid or expired token') };
   }
 
+  // No bearer token - try session cookie (web browsers)
   const cookieHeader = request.headers.get('cookie');
   const sessionToken = getSessionFromCookies(cookieHeader);
 

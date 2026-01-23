@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getUserOllamaSettings } from '@/lib/ai/core';
+import { validateExternalURL } from '@pagespace/lib/security';
 
 /**
  * GET /api/ai/ollama/models
@@ -21,6 +22,22 @@ export async function GET(request: Request) {
         success: false,
         error: 'Ollama not configured. Please configure your Ollama base URL first.',
         models: []
+      }, { status: 400 });
+    }
+
+    // SECURITY: Validate URL to prevent SSRF attacks
+    try {
+      await validateExternalURL(ollamaSettings.baseUrl);
+    } catch (error) {
+      loggers.ai.warn('SSRF protection: blocked Ollama URL', {
+        userId,
+        baseUrl: ollamaSettings.baseUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
+        models: {}
       }, { status: 400 });
     }
 
