@@ -85,6 +85,12 @@ contextBridge.exposeInMainWorld('electron', {
     getStatus: () => ipcRenderer.invoke('ws:get-status'),
   },
 
+  // Window controls
+  window: {
+    toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+    isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  },
+
   // Power state management (for handling sleep/wake auth coordination)
   power: {
     getState: () => ipcRenderer.invoke('power:get-state'),
@@ -165,6 +171,10 @@ export interface ElectronAPI {
       connected: boolean;
       reconnectAttempts: number;
     }>;
+  };
+  window: {
+    toggleMaximize: () => Promise<void>;
+    isMaximized: () => Promise<boolean>;
   };
   power: {
     getState: () => Promise<{
