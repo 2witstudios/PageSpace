@@ -310,8 +310,16 @@ export async function atomicDeviceTokenRotation(
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 90);
 
-    // Create new token in same transaction
+    // IMPORTANT: Revoke old token FIRST to clear the unique constraint
+    // (device_tokens_active_device_idx prevents multiple active tokens per device)
     const newId = createId();
+    await tx.execute(sql`
+      UPDATE device_tokens
+      SET "revokedAt" = NOW(), "revokedReason" = 'rotated', "replacedByTokenId" = ${newId}
+      WHERE id = ${row.id}
+    `);
+
+    // Then insert new token (now safe - old token is revoked)
     await tx.execute(sql`
       INSERT INTO device_tokens (
         id,
@@ -348,13 +356,6 @@ export async function atomicDeviceTokenRotation(
         0,
         NOW()
       )
-    `);
-
-    // Revoke old token and link to replacement
-    await tx.execute(sql`
-      UPDATE device_tokens
-      SET "revokedAt" = NOW(), "revokedReason" = 'rotated', "replacedByTokenId" = ${newId}
-      WHERE id = ${row.id}
     `);
 
     return {

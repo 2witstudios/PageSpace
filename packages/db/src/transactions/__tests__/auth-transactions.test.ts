@@ -103,7 +103,7 @@ describe('auth-transactions', () => {
       expect(result.error).toBe('Invalid refresh token');
     });
 
-    it('should prevent token reuse by revoking after use', async () => {
+    it('should revoke token after use but allow grace period retry', async () => {
       const rawToken = `ps_refresh_${createId()}`;
       const tokenHash = hashToken(rawToken);
 
@@ -116,14 +116,16 @@ describe('auth-transactions', () => {
         expiresAt: new Date(Date.now() + 86400000),
       });
 
-      // First refresh should succeed
+      // First refresh should succeed (not a grace period retry)
       const result1 = await atomicTokenRefresh(rawToken, hashToken);
       expect(result1.success).toBe(true);
+      expect(result1.gracePeriodRetry).toBeFalsy();
 
-      // Token is revoked after use, second attempt should fail
+      // Immediate retry should succeed (within 30s grace period)
       const result2 = await atomicTokenRefresh(rawToken, hashToken);
-      expect(result2.success).toBe(false);
-      expect(result2.error).toBe('Token already used');
+      expect(result2.success).toBe(true);
+      expect(result2.gracePeriodRetry).toBe(true);
+      expect(result2.userId).toBe(testUserId);
     });
 
     it('should return error for expired token', async () => {
