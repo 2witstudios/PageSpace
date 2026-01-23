@@ -21,7 +21,7 @@ interface StoreSchema {
 
 const store = new Store<StoreSchema>({
   defaults: {
-    windowBounds: { width: 1100, height: 700 },
+    windowBounds: { width: 1024, height: 700 },
     minimizeToTray: true,
   },
 }) as any; // Type assertion to work around electron-store v10 type definitions
@@ -119,16 +119,65 @@ function injectDesktopStyles(): void {
   mainWindow.webContents.insertCSS(css);
 }
 
+// Inject JavaScript for double-click to toggle maximize on title bar area
+function injectDoubleClickHandler(): void {
+  if (!mainWindow) return;
+
+  const script = `
+    (function() {
+      // Avoid adding multiple listeners if page reloads
+      if (window.__pagespaceDoubleClickHandlerInstalled) return;
+      window.__pagespaceDoubleClickHandlerInstalled = true;
+
+      // Draggable selectors (same as CSS)
+      const draggableSelectors = [
+        'header:not(aside *):not([class*="sidebar"]):not([class*="breadcrumb"])',
+        'nav:not(aside *):not([class*="sidebar"]):not([class*="breadcrumb"])',
+        '[role="banner"]:not(aside *):not([class*="sidebar"]):not([class*="breadcrumb"])',
+        '.navbar:not([class*="sidebar"]):not([class*="breadcrumb"])',
+        '.header:not([class*="sidebar"]):not([class*="breadcrumb"])'
+      ];
+
+      // Check if element or ancestor is draggable
+      function isDraggableArea(element) {
+        // First check if it's an interactive element (should not trigger maximize)
+        const interactiveElements = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'];
+        if (interactiveElements.includes(element.tagName)) return false;
+        if (element.hasAttribute('role') && element.getAttribute('role') === 'button') return false;
+
+        // Check if element or ancestor matches draggable selectors
+        for (const selector of draggableSelectors) {
+          try {
+            if (element.matches(selector) || element.closest(selector)) {
+              return true;
+            }
+          } catch (e) {
+            // Ignore invalid selector errors
+          }
+        }
+        return false;
+      }
+
+      document.addEventListener('dblclick', function(e) {
+        if (isDraggableArea(e.target) && window.electron && window.electron.window) {
+          window.electron.window.toggleMaximize();
+        }
+      });
+    })();
+  `;
+
+  mainWindow.webContents.executeJavaScript(script);
+}
+
 function createWindow(): void {
   // Get saved window bounds
-  const windowBounds = store.get('windowBounds') || { width: 1100, height: 700 };
+  const windowBounds = store.get('windowBounds') || { width: 1024, height: 700 };
 
   // Create the browser window
-  mainWindow = new BrowserWindow({
+  // Center window if no saved position exists
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: windowBounds.width,
     height: windowBounds.height,
-    x: windowBounds.x,
-    y: windowBounds.y,
     minWidth: 800,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
@@ -140,15 +189,26 @@ function createWindow(): void {
       sandbox: true,
     },
     show: false, // Don't show until ready
-  });
+  };
+
+  // Only set position if saved bounds exist (otherwise let Electron center it)
+  if (windowBounds.x !== undefined && windowBounds.y !== undefined) {
+    windowOptions.x = windowBounds.x;
+    windowOptions.y = windowBounds.y;
+  } else {
+    windowOptions.center = true;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   // Load the app URL
   const appUrl = getAppUrl();
   mainWindow.loadURL(appUrl);
 
-  // Inject desktop-specific CSS when page loads
+  // Inject desktop-specific CSS and JavaScript when page loads
   mainWindow.webContents.on('did-finish-load', () => {
     injectDesktopStyles();
+    injectDoubleClickHandler();
   });
 
   // Handle page load failures (e.g., offline, DNS errors)
@@ -474,6 +534,20 @@ ipcMain.handle('retry-connection', () => {
     const appUrl = getAppUrl();
     mainWindow.loadURL(appUrl);
   }
+});
+
+// Window control IPC handlers
+ipcMain.handle('window:toggle-maximize', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow.maximize();
+  }
+});
+
+ipcMain.handle('window:is-maximized', () => {
+  return mainWindow?.isMaximized() ?? false;
 });
 
 // Auth IPC handlers
