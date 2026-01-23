@@ -443,8 +443,11 @@ export async function atomicValidateOrCreateDeviceToken(params: {
       const regeneratedToken = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
       const newTokenHash = hashToken(regeneratedToken);
       const newTokenPrefix = getTokenPrefix(regeneratedToken);
+      // Refresh expiresAt to match new JWT (90 days from now)
+      const refreshedExpiresAt = new Date();
+      refreshedExpiresAt.setDate(refreshedExpiresAt.getDate() + 90);
 
-      await tx.execute(sql`UPDATE device_tokens SET "token" = ${newTokenHash}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
+      await tx.execute(sql`UPDATE device_tokens SET "token" = ${newTokenHash}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
 
       return {
         deviceToken: regeneratedToken,

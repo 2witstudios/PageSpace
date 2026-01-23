@@ -146,9 +146,9 @@ export async function POST(req: Request) {
         generateDeviceToken
       );
 
-      if (rotated.success && rotated.newToken) {
+      if (rotated.success && rotated.newToken && rotated.deviceTokenId) {
         activeDeviceToken = rotated.newToken;
-        activeDeviceTokenId = rotated.deviceTokenId!;
+        activeDeviceTokenId = rotated.deviceTokenId;
       } else {
         // Rotation failed - continue with old token (resilient fallback)
         // This can happen if token was already rotated by concurrent request

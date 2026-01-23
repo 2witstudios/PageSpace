@@ -8,7 +8,7 @@
  * - httpOnly: Prevents XSS attacks from accessing tokens via JavaScript
  * - secure: Ensures cookies are only sent over HTTPS in production
  * - sameSite: strict - Prevents CSRF attacks by not sending cookies with cross-site requests
- * - path scoping: Refresh token limited to /api/auth/refresh endpoint
+ * - path scoping: Refresh token limited to /api/auth endpoints (refresh, logout)
  *
  * @module @pagespace/web/lib/auth/cookie-config
  */
