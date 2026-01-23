@@ -79,12 +79,12 @@ export async function atomicTokenRefresh(
     // Lock the token row to prevent concurrent access
     // FOR UPDATE OF rt ensures we only lock the refresh_tokens row, not the joined users row
     // IMPORTANT: Column names use camelCase to match Drizzle schema (e.g., "userId", "tokenHash")
-    // NOTE: refresh_tokens table doesn't have revokedAt - tokens are deleted after use
     const lockResult = await tx.execute(sql`
       SELECT
         rt.id as rt_id,
         rt."userId",
         rt."expiresAt",
+        rt."revokedAt",
         u."tokenVersion",
         u.role
       FROM refresh_tokens rt
@@ -97,50 +97,48 @@ export async function atomicTokenRefresh(
       rt_id: string;
       userId: string;
       expiresAt: Date | null;
+      revokedAt: Date | null;
       tokenVersion: number;
       role: 'user' | 'admin';
     } | undefined;
 
     // Check if token exists
     if (!row) {
-      // Token not found - could be already used or never existed
-      // Check if this is a token reuse attack (token hash exists but was already used)
-      const usedCheck = await tx.execute(sql`
-        SELECT "userId" FROM refresh_tokens
-        WHERE "tokenHash" = ${tokenHash}
-      `);
-
-      if (usedCheck.rows.length > 0) {
-        // TOKEN REUSE DETECTED - token was already used
-        // This is a critical security event - invalidate all user sessions
-        const userId = (usedCheck.rows[0] as { userId: string }).userId;
-
-        await tx.execute(sql`
-          UPDATE users
-          SET "tokenVersion" = "tokenVersion" + 1
-          WHERE id = ${userId}
-        `);
-
-        // Also revoke all device tokens for this user
-        await tx.execute(sql`
-          UPDATE device_tokens
-          SET "revokedAt" = NOW(), "revokedReason" = 'token_reuse_detected'
-          WHERE "userId" = ${userId}
-            AND "revokedAt" IS NULL
-        `);
-
-        return {
-          success: false,
-          error: 'Token reuse detected - all sessions invalidated',
-          tokenReuse: true,
-        };
-      }
-
       return { success: false, error: 'Invalid refresh token' };
     }
 
-    // NOTE: refresh_tokens doesn't have revokedAt column - tokens are deleted after use
-    // Token reuse is detected when token hash is not found (already deleted)
+    // TOKEN REUSE DETECTION: If token is already revoked, this is a reuse attack
+    if (row.revokedAt) {
+      // TOKEN REUSE DETECTED - token was already used
+      // This is a critical security event - invalidate all user sessions
+      await tx.execute(sql`
+        UPDATE users
+        SET "tokenVersion" = "tokenVersion" + 1
+        WHERE id = ${row.userId}
+      `);
+
+      // Also revoke all device tokens for this user
+      await tx.execute(sql`
+        UPDATE device_tokens
+        SET "revokedAt" = NOW(), "revokedReason" = 'token_reuse_detected'
+        WHERE "userId" = ${row.userId}
+          AND "revokedAt" IS NULL
+      `);
+
+      // Revoke all remaining refresh tokens for this user
+      await tx.execute(sql`
+        UPDATE refresh_tokens
+        SET "revokedAt" = NOW(), "revokedReason" = 'token_reuse_detected'
+        WHERE "userId" = ${row.userId}
+          AND "revokedAt" IS NULL
+      `);
+
+      return {
+        success: false,
+        error: 'Token reuse detected - all sessions invalidated',
+        tokenReuse: true,
+      };
+    }
 
     // Check if token is expired
     if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
@@ -153,10 +151,11 @@ export async function atomicTokenRefresh(
       return { success: false, error: 'Invalid refresh token version.' };
     }
 
-    // Atomically delete the token (refresh tokens are single-use)
-    // NOTE: refresh_tokens doesn't have revokedAt - we delete instead of marking revoked
+    // Atomically mark the token as revoked (refresh tokens are single-use)
+    // We mark as revoked instead of deleting to enable token reuse detection
     await tx.execute(sql`
-      DELETE FROM refresh_tokens
+      UPDATE refresh_tokens
+      SET "revokedAt" = NOW(), "revokedReason" = 'refreshed'
       WHERE id = ${row.rt_id}
     `);
 

@@ -67,6 +67,8 @@ describe('Token Lookup - Hash Only', () => {
           lastUsedAt: new Date(),
           platform: 'web' as const,
           deviceTokenId: null,
+          revokedAt: null,
+          revokedReason: null,
         };
 
         vi.mocked(db.query.refreshTokens.findFirst).mockResolvedValue(mockRecord);

@@ -106,17 +106,23 @@ export async function POST(req: Request) {
         generateDeviceToken
       );
 
-      if (rotated.success && rotated.newToken && rotated.deviceTokenId) {
-        activeDeviceToken = rotated.newToken;
-        activeDeviceTokenId = rotated.deviceTokenId;
-      } else {
-        // Rotation failed - continue with old token (resilient fallback)
-        // This can happen if token was already rotated by concurrent request
-        loggers.auth.warn('Mobile device token rotation failed, using original token', {
+      if (!rotated.success) {
+        // SECURITY: Rotation failed - do not continue with potentially revoked token
+        // Token may have been revoked, expired, or already rotated by concurrent request
+        loggers.auth.warn('Mobile device token rotation failed - aborting refresh', {
           userId: deviceRecord.userId,
           deviceId: deviceRecord.deviceId,
           error: rotated.error,
         });
+        return Response.json(
+          { error: rotated.error ?? 'Device token rotation failed. Please re-authenticate.' },
+          { status: 401 }
+        );
+      }
+
+      if (rotated.newToken && rotated.deviceTokenId) {
+        activeDeviceToken = rotated.newToken;
+        activeDeviceTokenId = rotated.deviceTokenId;
       }
     }
 

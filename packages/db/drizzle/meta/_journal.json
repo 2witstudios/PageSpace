@@ -281,6 +281,13 @@
       "when": 1768927822609,
       "tag": "0039_chubby_tusk",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1769130730037,
+      "tag": "0040_worthless_midnight",
+      "breakpoints": true
     }
   ]
 }
