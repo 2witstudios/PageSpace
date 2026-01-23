@@ -26,12 +26,12 @@ class AuthFetch {
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
-  private jwtCache: { token: string | null; timestamp: number } | null = null;
-  // Desktop JWT cache TTL reduced from 30s to 5s to minimize staleness risk
-  // This is critical for desktop where JWT rotation after refresh was causing
+  private sessionCache: { token: string | null; timestamp: number } | null = null;
+  // Desktop session cache TTL reduced from 30s to 5s to minimize staleness risk
+  // This is critical for desktop where token rotation after refresh was causing
   // stale token usage when the cache held old tokens
-  private readonly JWT_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
-  private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
+  private readonly SESSION_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
+  private readonly SESSION_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
   private authClearedCleanup: (() => void) | null = null;
   private initialized = false;
 
@@ -64,8 +64,8 @@ class AuthFetch {
       }
 
       const cleanup = window.electron.on?.('auth:cleared', () => {
-        this.logger.info('Desktop auth cleared event received, clearing JWT cache');
-        this.clearJWTCache();
+        this.logger.info('Desktop auth cleared event received, clearing session cache');
+        this.clearSessionCache();
         this.csrfToken = null;
       });
 
@@ -115,8 +115,8 @@ class AuthFetch {
         forceRefresh,
       });
 
-      // Clear JWT cache on wake to ensure fresh token retrieval
-      this.clearJWTCache();
+      // Clear session cache on wake to ensure fresh token retrieval
+      this.clearSessionCache();
 
       // Dispatch event for other components (like useTokenRefresh) to resume
       if (typeof window !== 'undefined') {
@@ -132,8 +132,8 @@ class AuthFetch {
       this.logger.debug('[Power] Screen unlocked', { shouldRefresh });
 
       if (shouldRefresh) {
-        // Clear JWT cache to ensure fresh auth state
-        this.clearJWTCache();
+        // Clear session cache to ensure fresh auth state
+        this.clearSessionCache();
 
         // Dispatch event for soft refresh
         if (typeof window !== 'undefined') {
@@ -177,19 +177,19 @@ class AuthFetch {
     if (isDesktop) {
       // Desktop: Use Bearer token authentication (CSRF-exempt)
       try {
-        // Get JWT from Electron's secure storage (cached for performance)
-        const jwt = await this.getJWTFromElectron();
-        if (jwt) {
+        // Get session token from Electron's secure storage (cached for performance)
+        const sessionToken = await this.getSessionFromElectron();
+        if (sessionToken) {
           headers = {
             ...headers,
-            'Authorization': `Bearer ${jwt}`,
+            'Authorization': `Bearer ${sessionToken}`,
           };
           this.logger.debug('Desktop: Using Bearer token authentication', { url });
         } else {
-          this.logger.warn('Desktop: No JWT available for Bearer token', { url });
+          this.logger.warn('Desktop: No session token available for Bearer token', { url });
         }
       } catch (error) {
-        this.logger.error('Desktop: Failed to get JWT for Bearer token', {
+        this.logger.error('Desktop: Failed to get session token for Bearer token', {
           url,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -251,18 +251,18 @@ class AuthFetch {
         if (isDesktop) {
           // Desktop: Get fresh Bearer token (cache was already cleared in refreshToken())
           try {
-            const freshJwt = await this.getJWTFromElectron();
-            if (freshJwt) {
+            const freshSession = await this.getSessionFromElectron();
+            if (freshSession) {
               headers = {
                 ...headers,
-                'Authorization': `Bearer ${freshJwt}`,
+                'Authorization': `Bearer ${freshSession}`,
               };
               this.logger.debug('Desktop: Updated Bearer token after refresh', { url });
             } else {
-              this.logger.warn('Desktop: No fresh JWT available after refresh', { url });
+              this.logger.warn('Desktop: No fresh session token available after refresh', { url });
             }
           } catch (error) {
-            this.logger.error('Desktop: Failed to get fresh JWT after refresh', {
+            this.logger.error('Desktop: Failed to get fresh session token after refresh', {
               url,
               error: error instanceof Error ? error.message : String(error),
             });
@@ -344,15 +344,15 @@ class AuthFetch {
       return result.success;
     }
 
-    // CRITICAL FIX: Clear JWT cache IMMEDIATELY before refresh starts
+    // CRITICAL FIX: Clear session cache IMMEDIATELY before refresh starts
     // This prevents the race condition where:
-    // 1. doRefresh() completes and stores new JWT
-    // 2. Original request retries with getJWTFromElectron()
-    // 3. Cache still contains OLD JWT (60s TTL)
-    // 4. Retry uses stale JWT → 401 → infinite loop
-    // By clearing cache here, retry will read fresh JWT from storage
-    this.clearJWTCache();
-    this.logger.debug('JWT cache cleared BEFORE token refresh to prevent stale retry');
+    // 1. doRefresh() completes and stores new session
+    // 2. Original request retries with getSessionFromElectron()
+    // 3. Cache still contains OLD session token (5s TTL)
+    // 4. Retry uses stale token → 401 → infinite loop
+    // By clearing cache here, retry will read fresh session from storage
+    this.clearSessionCache();
+    this.logger.debug('Session cache cleared BEFORE token refresh to prevent stale retry');
 
     // Set flags and promise IMMEDIATELY (atomic operation)
     this.isRefreshing = true;
@@ -369,10 +369,10 @@ class AuthFetch {
         // Track successful refresh for cooldown (prevents delayed callbacks from re-refreshing)
         this.lastSuccessfulRefresh = Date.now();
 
-        // Defensive: Clear JWT cache again for queued requests
+        // Defensive: Clear session cache again for queued requests
         // (Already cleared before doRefresh, but clear again in case queue accumulated during refresh)
-        this.clearJWTCache();
-        this.logger.debug('JWT cache cleared after successful token refresh (for queued requests)');
+        this.clearSessionCache();
+        this.logger.debug('Session cache cleared after successful token refresh (for queued requests)');
 
         // Retry all queued requests using this.fetch to preserve auth logic
         this.logger.info('Token refresh successful, retrying queued requests', {
@@ -592,12 +592,12 @@ class AuthFetch {
       const data = await response.json();
 
       await window.electron.auth.storeSession({
-        accessToken: data.token,
+        sessionToken: data.sessionToken,
         csrfToken: data.csrfToken,
         deviceToken: data.deviceToken,
       });
 
-      this.clearJWTCache();
+      this.clearSessionCache();
       this.logger.info('Desktop: Session refreshed successfully via secure storage');
       if (typeof window !== 'undefined' && window.dispatchEvent) {
         window.dispatchEvent(new CustomEvent('auth:refreshed'));
@@ -635,8 +635,8 @@ class AuthFetch {
       return { success: true, shouldLogout: false };
     }
 
-    // Clear JWT cache before refresh to prevent stale token usage
-    this.clearJWTCache();
+    // Clear session cache before refresh to prevent stale token usage
+    this.clearSessionCache();
 
     // Set the shared promise
     this.isRefreshing = true;
@@ -653,8 +653,8 @@ class AuthFetch {
         // Track successful refresh for cooldown
         this.lastSuccessfulRefresh = Date.now();
 
-        // Clear JWT cache for queued requests to get fresh token
-        this.clearJWTCache();
+        // Clear session cache for queued requests to get fresh token
+        this.clearSessionCache();
 
         // Retry all queued requests
         this.logger.info('refreshAuthSession: Retrying queued requests', {
@@ -754,44 +754,44 @@ class AuthFetch {
   }
 
   /**
-   * Gets JWT token from Electron with caching to avoid excessive IPC calls.
+   * Gets session token from Electron with caching to avoid excessive IPC calls.
    * Cache is valid for 5 seconds to balance performance and freshness.
-   * @returns JWT string or null if not authenticated
+   * @returns Session token string or null if not authenticated
    */
-  private async getJWTFromElectron(): Promise<string | null> {
+  private async getSessionFromElectron(): Promise<string | null> {
     const now = Date.now();
 
     // Return cached token if still valid
-    if (this.jwtCache && (now - this.jwtCache.timestamp) < this.JWT_CACHE_TTL) {
-      return this.jwtCache.token;
+    if (this.sessionCache && (now - this.sessionCache.timestamp) < this.SESSION_CACHE_TTL) {
+      return this.sessionCache.token;
     }
 
     if (!window.electron) return null;
 
     // Fetch fresh token from Electron
-    let token = await window.electron.auth.getJWT();
+    let token = await window.electron.auth.getSessionToken();
 
     // DEFENSIVE FIX: If null, retry once after brief delay
     // This handles async timing issues where storage hasn't completed yet
     if (!token) {
-      await new Promise(resolve => setTimeout(resolve, this.JWT_RETRY_DELAY_MS));
-      token = await window.electron.auth.getJWT();
+      await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
+      token = await window.electron.auth.getSessionToken();
 
       if (token) {
-        this.logger.info(`JWT retrieval succeeded on retry after ${this.JWT_RETRY_DELAY_MS}ms delay`);
+        this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
       }
     }
 
-    this.jwtCache = { token, timestamp: now };
+    this.sessionCache = { token, timestamp: now };
     return token;
   }
 
   /**
-   * Clears the cached JWT token.
+   * Clears the cached session token.
    * Should be called when user logs out or when token needs to be refreshed.
    */
-  clearJWTCache(): void {
-    this.jwtCache = null;
+  clearSessionCache(): void {
+    this.sessionCache = null;
   }
 
   /**
@@ -934,8 +934,12 @@ export const patch = <T = unknown>(url: string, body?: unknown, options?: FetchO
 export const clearCSRFToken = () =>
   getAuthFetch().clearCSRFToken();
 
+export const clearSessionCache = () =>
+  getAuthFetch().clearSessionCache();
+
+/** @deprecated Use clearSessionCache instead */
 export const clearJWTCache = () =>
-  getAuthFetch().clearJWTCache();
+  getAuthFetch().clearSessionCache();
 
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();

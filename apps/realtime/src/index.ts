@@ -1,10 +1,10 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
-import { decodeToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, users, dmConversations, socketTokens } from '@pagespace/db';
+import { db, eq, gt, and, dmConversations, socketTokens } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
 
@@ -371,33 +371,27 @@ io.use(async (socket: AuthSocket, next) => {
     return next(new Error('Authentication error: Invalid or expired socket token.'));
   }
 
-  // Fall back to JWT validation for backward compatibility (desktop app, etc.)
-  const decoded = await decodeToken(token);
-  if (!decoded) {
-    loggers.realtime.warn('Socket.IO: Token validation failed');
-    return next(new Error('Authentication error: Invalid token.'));
-  }
+  // Check for session token (ps_sess_*) - used by mobile/desktop clients
+  if (token.startsWith('ps_sess_')) {
+    try {
+      const sessionClaims = await sessionService.validateSession(token);
+      if (!sessionClaims) {
+        loggers.realtime.warn('Socket.IO: Session token validation failed');
+        return next(new Error('Authentication error: Invalid or expired session.'));
+      }
 
-  try {
-    const user = await db.query.users.findFirst({
-        where: eq(users.id, decoded.userId),
-        columns: {
-            id: true,
-            tokenVersion: true,
-        },
-    });
-
-    if (!user || user.tokenVersion !== decoded.tokenVersion) {
-      return next(new Error('Authentication error: Invalid token version.'));
+      socket.data.user = { id: sessionClaims.userId };
+      loggers.realtime.info('Socket.IO: User authenticated via session token', { userId: sessionClaims.userId });
+      return next();
+    } catch (error) {
+      loggers.realtime.error('Error validating session token', error as Error);
+      return next(new Error('Authentication error: Server failed.'));
     }
-
-    socket.data.user = { id: user.id };
-    loggers.realtime.info('Socket.IO: User authenticated successfully', { userId: user.id });
-    next();
-  } catch (error) {
-    loggers.realtime.error('Error during authentication', error as Error);
-    return next(new Error('Authentication error: Server failed.'));
   }
+
+  // Unknown token format
+  loggers.realtime.warn('Socket.IO: Unknown token format', { tokenPrefix: token.substring(0, 8) });
+  return next(new Error('Authentication error: Invalid token format.'));
 });
 
 io.on('connection', (socket: AuthSocket) => {

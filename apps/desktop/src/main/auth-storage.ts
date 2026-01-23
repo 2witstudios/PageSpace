@@ -1,13 +1,11 @@
 import { app, safeStorage } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'path';
-import { decodeJwt } from 'jose';
 import { logger } from './logger';
 
 export interface StoredAuthSession {
-  accessToken: string;
-  /** @deprecated Desktop uses device tokens for refresh, not refresh tokens */
-  refreshToken?: string;
+  /** Opaque session token (ps_sess_*) for authentication */
+  sessionToken: string;
   csrfToken?: string | null;
   deviceToken?: string | null;
 }
@@ -110,23 +108,10 @@ export async function loadAuthSession(): Promise<StoredAuthSession | null> {
       }
     }
 
-    // Validate token expiry before returning
-    if (session.accessToken) {
-      try {
-        const payload = decodeJwt(session.accessToken);
-        const now = Math.floor(Date.now() / 1000);
-
-        // Check if access token is expired (with 30 second buffer)
-        if (payload.exp && payload.exp < now + 30) {
-          logger.info('[Auth] Access token expired or expiring soon, session will auto-refresh');
-          // Don't return null - let the app load and auto-refresh will handle it
-          // This prevents unnecessary logouts when tokens just need refreshing
-        }
-      } catch (error) {
-        logger.warn('[Auth] Failed to decode access token', { error });
-        // Token might be malformed, but let the app try to use it
-        // The server will reject it if invalid, triggering refresh
-      }
+    // Session tokens are opaque - server validates them
+    // No local expiry check needed; rely on server 401 responses for refresh
+    if (session.sessionToken) {
+      logger.debug('[Auth] Session token loaded successfully');
     }
 
     return session;

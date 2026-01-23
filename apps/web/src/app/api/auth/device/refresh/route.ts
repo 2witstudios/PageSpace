@@ -4,11 +4,8 @@ import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-trans
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,
-  generateAccessToken,
   generateDeviceToken,
-  decodeToken,
   generateCSRFToken,
-  getSessionIdFromJWT,
 } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -210,24 +207,26 @@ export async function POST(req: Request) {
       }, { headers });
     }
 
-    // Mobile/desktop: Return JWT access token in JSON (no refresh token - devices use device tokens)
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
+    // Mobile/desktop: Return session token in JSON (no refresh token - devices use device tokens)
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile/desktop
+      createdByService: 'device-refresh',
+      createdByIp: normalizedIP,
+    });
 
-    const decodedAccess = await decodeToken(accessToken);
-    if (!decodedAccess?.iat) {
-      loggers.auth.error('Failed to decode access token for CSRF generation during device refresh');
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session during device refresh');
       return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
     }
 
-    const sessionId = getSessionIdFromJWT({
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-      iat: decodedAccess.iat,
-    });
-    const csrfToken = generateCSRFToken(sessionId);
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     return Response.json({
-      token: accessToken,
+      sessionToken,
       csrfToken,
       deviceToken: activeDeviceToken,
       // Note: No refreshToken - mobile/desktop use device tokens for refresh

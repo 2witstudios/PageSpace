@@ -21,16 +21,10 @@ vi.mock('bcryptjs', () => ({
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn().mockResolvedValue('mock-access-token'),
-  decodeToken: vi.fn().mockResolvedValue({
-    userId: 'test-user-id',
-    iat: Math.floor(Date.now() / 1000),
-  }),
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'mock-device-token',
   }),
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  getSessionIdFromJWT: vi.fn().mockReturnValue('session-id-123'),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -40,6 +34,21 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock-session-token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'session-id-123',
+      userId: 'test-user-id',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
@@ -73,6 +82,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { sessionService } from '@pagespace/lib/auth';
 
 describe('/api/auth/mobile/login', () => {
   const mockUser = {
@@ -120,7 +130,7 @@ describe('/api/auth/mobile/login', () => {
       expect(body.user.id).toBe(mockUser.id);
       expect(body.user.email).toBe(mockUser.email);
       expect(body.user.name).toBe(mockUser.name);
-      expect(body.token).toBe('mock-access-token');
+      expect(body.sessionToken).toBe('ps_sess_mock-session-token');
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('mock-device-token');
     });

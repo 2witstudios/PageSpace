@@ -1,26 +1,5 @@
 import { randomBytes, createHmac, timingSafeEqual } from 'crypto';
 
-// JWT payload interface for mobile/device token auth
-interface JWTPayload {
-  userId: string;
-  tokenVersion: number;
-  iat?: number;
-}
-
-/**
- * Derives a deterministic session ID from JWT claims.
- * Used for mobile/device token authentication which still uses JWTs.
- * Web platform uses opaque session tokens from sessionService.
- */
-export function getSessionIdFromJWT(payload: JWTPayload): string {
-  const { userId, tokenVersion, iat = 0 } = payload;
-  const hash = createHmac('sha256', getCSRFSecret())
-    .update(`${userId}:${tokenVersion}:${iat}`)
-    .digest('hex')
-    .slice(0, 16);
-  return hash;
-}
-
 function getCSRFSecret(): string {
   const CSRF_SECRET = process.env.CSRF_SECRET;
   if (!CSRF_SECRET) {

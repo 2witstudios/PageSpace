@@ -552,12 +552,12 @@ ipcMain.handle('window:is-maximized', () => {
 
 // Auth IPC handlers
 /**
- * Retrieves the current access token from secure storage.
- * @returns JWT string or null if not authenticated
+ * Retrieves the current session token from secure storage.
+ * @returns Session token string (ps_sess_*) or null if not authenticated
  */
-ipcMain.handle('auth:get-jwt', async () => {
+ipcMain.handle('auth:get-session-token', async () => {
   const storedSession = await loadAuthSession();
-  return storedSession?.accessToken ?? null;
+  return storedSession?.sessionToken ?? null;
 });
 
 ipcMain.handle('auth:get-session', async () => {
@@ -580,7 +580,7 @@ ipcMain.handle('auth:clear-auth', async () => {
       storages: ['cookies'],
     });
 
-    // Notify renderer to clear JWT cache and auth state
+    // Notify renderer to clear session cache and auth state
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('auth:cleared');
     }

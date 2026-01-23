@@ -306,9 +306,9 @@ export const useAuthStore = create<AuthState>()(
             const headers: Record<string, string> = {};
 
             if (isDesktop && window.electron) {
-              const jwt = await window.electron.auth.getJWT();
-              if (jwt) {
-                headers['Authorization'] = `Bearer ${jwt}`;
+              const sessionToken = await window.electron.auth.getSessionToken();
+              if (sessionToken) {
+                headers['Authorization'] = `Bearer ${sessionToken}`;
               }
             }
 

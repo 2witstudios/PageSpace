@@ -3,9 +3,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import {
   slugify,
-  generateAccessToken,
   createNotification,
-  decodeToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import {
@@ -13,7 +11,8 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { generateCSRFToken, getSessionIdFromJWT } from '@pagespace/lib/server';
+import { generateCSRFToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -216,8 +215,22 @@ export async function POST(req: Request) {
       loggers.auth.error('Failed to send verification email', error as Error, { userId: user.id });
     }
 
-    // Generate JWT tokens for automatic authentication
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
+    // Create session token (opaque, stored in DB)
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      createdByService: 'mobile-signup',
+      createdByIp: clientIP,
+    });
+
+    // Get session claims for CSRF generation
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session');
+      return Response.json({ error: 'Failed to generate session' }, { status: 500 });
+    }
 
     // Device token only - no refresh token needed for mobile (90-day sessions)
     const { deviceToken } = await validateOrCreateDeviceToken({
@@ -231,22 +244,10 @@ export async function POST(req: Request) {
       ipAddress: clientIP,
     });
 
-    // Generate CSRF token for mobile client
-    // Decode the access token to get its actual iat claim
-    const decoded = await decodeToken(accessToken);
-    if (!decoded?.iat) {
-      loggers.auth.error('Failed to decode access token for CSRF generation');
-      return Response.json({ error: 'Failed to generate session' }, { status: 500 });
-    }
+    // Generate CSRF token using session ID
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    const sessionId = getSessionIdFromJWT({
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-      iat: decoded.iat
-    });
-    const csrfToken = generateCSRFToken(sessionId);
-
-    // Return tokens in JSON body for mobile clients (device-token-only pattern)
+    // Return tokens in JSON body for mobile clients
     return Response.json({
       user: {
         id: user.id,
@@ -254,8 +255,8 @@ export async function POST(req: Request) {
         name: user.name,
         image: user.image,
       },
-      token: accessToken,
-      csrfToken: csrfToken,
+      sessionToken,
+      csrfToken,
       deviceToken,
     }, { status: 201 });
   } catch (error) {

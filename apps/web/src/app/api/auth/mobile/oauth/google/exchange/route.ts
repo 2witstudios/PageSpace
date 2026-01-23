@@ -48,10 +48,7 @@
 
 import { z } from 'zod/v4';
 import {
-  generateAccessToken,
-  decodeToken,
   generateCSRFToken,
-  getSessionIdFromJWT,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import {
@@ -59,6 +56,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
@@ -223,12 +221,25 @@ export async function POST(req: Request) {
       provider: user.provider,
     });
 
-    // Generate JWT access token (mobile uses device tokens for refresh, not refresh tokens)
-    const accessToken = await generateAccessToken(
-      user.id,
-      user.tokenVersion,
-      user.role
-    );
+    // Create session token (opaque, stored in DB)
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      createdByService: 'mobile-oauth-google',
+      createdByIp: clientIP,
+    });
+
+    // Get session claims for CSRF generation
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session');
+      return Response.json(
+        { error: 'Failed to generate session' },
+        { status: 500 }
+      );
+    }
 
     // Create or validate device token for the mobile device
     const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
@@ -271,22 +282,8 @@ export async function POST(req: Request) {
       appVersion,
     });
 
-    // Generate CSRF token for mobile client
-    const decoded = await decodeToken(accessToken);
-    if (!decoded?.iat) {
-      loggers.auth.error('Failed to decode access token for CSRF generation');
-      return Response.json(
-        { error: 'Failed to generate session' },
-        { status: 500 }
-      );
-    }
-
-    const sessionId = getSessionIdFromJWT({
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-      iat: decoded.iat,
-    });
-    const csrfToken = generateCSRFToken(sessionId);
+    // Generate CSRF token using session ID
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     // Return tokens in JSON response for mobile client
     // Note: No refreshToken - mobile uses device tokens for refresh
@@ -299,8 +296,8 @@ export async function POST(req: Request) {
         provider: user.provider,
         role: user.role,
       },
-      token: accessToken,
-      csrfToken: csrfToken,
+      sessionToken,
+      csrfToken,
       deviceToken: deviceTokenValue,
     };
 
