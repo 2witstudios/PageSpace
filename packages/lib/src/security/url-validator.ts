@@ -15,6 +15,7 @@
  */
 
 import { promises as dns } from 'dns';
+import { isIP } from 'node:net';
 
 // Blocked IP addresses (cloud metadata endpoints)
 const BLOCKED_IPS = [
@@ -210,16 +211,21 @@ export async function validateExternalURL(
     return { valid: false, error: `Hostname blocked: ${url.hostname}` };
   }
 
-  // Check if hostname is an IP address
-  const isIPAddress = /^[\d.:[\]]+$/.test(url.hostname) ||
-    url.hostname.includes(':'); // IPv6
+  // Check if hostname is an IP address using Node's strict parser
+  // NOTE: JavaScript's URL constructor normalizes numeric IP forms to dotted-quad:
+  //   - new URL('http://2130706433/') → hostname = "127.0.0.1"
+  //   - new URL('http://127.1/') → hostname = "127.0.0.1"
+  //   - new URL('http://0x7f000001/') → hostname = "127.0.0.1"
+  // This means bypass attempts are automatically normalized and caught by isBlockedIP
+  const normalizedHostname = normalizeIP(url.hostname);
+  const ipVersion = isIP(normalizedHostname);
 
-  if (isIPAddress) {
-    const ip = normalizeIP(url.hostname);
-    if (!allowPrivateIPs && isBlockedIP(ip)) {
-      return { valid: false, error: `IP address blocked: ${ip}` };
+  if (ipVersion !== 0) {
+    // Valid IP address (strict format only)
+    if (!allowPrivateIPs && isBlockedIP(normalizedHostname)) {
+      return { valid: false, error: `IP address blocked: ${normalizedHostname}` };
     }
-    return { valid: true, url, resolvedIPs: [ip] };
+    return { valid: true, url, resolvedIPs: [normalizedHostname] };
   }
 
   // Skip DNS resolution if requested

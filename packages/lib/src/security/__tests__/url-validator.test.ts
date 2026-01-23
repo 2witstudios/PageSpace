@@ -215,6 +215,55 @@ describe('URL Validator - SSRF Prevention', () => {
       });
     });
 
+    describe('SSRF bypass prevention - numeric/abbreviated IP forms', () => {
+      // JavaScript's URL constructor normalizes these to dotted-quad format,
+      // so they are caught by isBlockedIP after normalization
+
+      it('blocks decimal IP form (2130706433 = 127.0.0.1)', async () => {
+        const result = await validateExternalURL('http://2130706433/api');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('IP address blocked');
+        expect(result.error).toContain('127.0.0.1'); // URL constructor normalizes this
+      });
+
+      it('blocks abbreviated IP form (127.1 = 127.0.0.1)', async () => {
+        const result = await validateExternalURL('http://127.1/api');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('IP address blocked');
+      });
+
+      it('blocks two-octet abbreviated IP (10.1 = 10.0.0.1)', async () => {
+        const result = await validateExternalURL('http://10.1/api');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('IP address blocked');
+      });
+
+      it('blocks three-octet abbreviated IP (192.168.1 = 192.168.0.1)', async () => {
+        const result = await validateExternalURL('http://192.168.1/api');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('IP address blocked');
+      });
+
+      it('blocks hex IP form (0x7f000001 = 127.0.0.1)', async () => {
+        const result = await validateExternalURL('http://0x7f000001/api');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('IP address blocked');
+      });
+
+      it('allows valid public dotted-quad IP', async () => {
+        const result = await validateExternalURL('http://8.8.8.8/api');
+        expect(result.valid).toBe(true);
+      });
+
+      it('allows valid hostname that looks numeric-ish but is valid domain', async () => {
+        (dns.resolve4 as ReturnType<typeof vi.fn>).mockResolvedValue(['93.184.216.34']);
+        (dns.resolve6 as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+        const result = await validateExternalURL('http://123abc.example.com/api');
+        expect(result.valid).toBe(true);
+      });
+    });
+
     describe('DNS resolution validation', () => {
       it('resolves and validates all DNS results', async () => {
         (dns.resolve4 as ReturnType<typeof vi.fn>).mockResolvedValue(['93.184.216.34']);

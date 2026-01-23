@@ -166,16 +166,92 @@ describe('auth-transactions', () => {
         atomicTokenRefresh(rawToken, hashToken),
       ]);
 
-      // Only one should succeed
+      // All should succeed due to grace period
       const successes = results.filter((r) => r.success);
-      const failures = results.filter((r) => !r.success);
+      expect(successes.length).toBeGreaterThanOrEqual(1);
 
-      expect(successes).toHaveLength(1);
-      expect(failures).toHaveLength(2);
+      // At least one should be a first use, others may be grace period retries
+      const firstUse = successes.filter((r) => !r.gracePeriodRetry);
+      const gracePeriodRetries = successes.filter((r) => r.gracePeriodRetry);
+      expect(firstUse).toHaveLength(1);
+      // Remaining successes should be grace period retries
+      expect(gracePeriodRetries.length).toBe(successes.length - 1);
+    });
 
-      // The failures should fail with "Invalid refresh token" (token was deleted)
-      failures.forEach((f) => {
-        expect(f.error).toBe('Invalid refresh token');
+    describe('grace period handling', () => {
+      it('should allow retry within 30 second grace period', async () => {
+        const rawToken = `ps_refresh_${createId()}`;
+        const tokenHash = hashToken(rawToken);
+
+        await db.insert(refreshTokens).values({
+          id: createId(),
+          userId: testUserId,
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          expiresAt: new Date(Date.now() + 86400000),
+        });
+
+        // First refresh - succeeds, revokes token
+        const result1 = await atomicTokenRefresh(rawToken, hashToken);
+        expect(result1.success).toBe(true);
+        expect(result1.gracePeriodRetry).toBeFalsy();
+
+        // Immediate retry - should succeed (within grace period)
+        const result2 = await atomicTokenRefresh(rawToken, hashToken);
+        expect(result2.success).toBe(true);
+        expect(result2.gracePeriodRetry).toBe(true);
+        expect(result2.userId).toBe(testUserId);
+      });
+
+      it('should reject retry after grace period expires', async () => {
+        const rawToken = `ps_refresh_${createId()}`;
+        const tokenHash = hashToken(rawToken);
+        const tokenId = createId();
+
+        await db.insert(refreshTokens).values({
+          id: tokenId,
+          userId: testUserId,
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          expiresAt: new Date(Date.now() + 86400000),
+        });
+
+        // Manually revoke the token with a timestamp 31 seconds ago (outside grace period)
+        const revokedAt = new Date(Date.now() - 31000);
+        await db.update(refreshTokens)
+          .set({ revokedAt, revokedReason: 'refreshed' })
+          .where(eq(refreshTokens.id, tokenId));
+
+        // Retry should fail - outside grace period
+        const result = await atomicTokenRefresh(rawToken, hashToken);
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Token already used');
+      });
+
+      it('should only grant grace period for "refreshed" reason', async () => {
+        const rawToken = `ps_refresh_${createId()}`;
+        const tokenHash = hashToken(rawToken);
+        const tokenId = createId();
+
+        await db.insert(refreshTokens).values({
+          id: tokenId,
+          userId: testUserId,
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          expiresAt: new Date(Date.now() + 86400000),
+        });
+
+        // Token revoked for logout - no grace period
+        await db.update(refreshTokens)
+          .set({ revokedAt: new Date(), revokedReason: 'logout' })
+          .where(eq(refreshTokens.id, tokenId));
+
+        const result = await atomicTokenRefresh(rawToken, hashToken);
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Token already used');
       });
     });
   });
@@ -252,9 +328,154 @@ describe('auth-transactions', () => {
         atomicDeviceTokenRotation(rawToken, {}, hashToken, getTokenPrefix, generateDeviceToken),
       ]);
 
-      // Only one should succeed
+      // All should succeed due to grace period
       const successes = results.filter((r) => r.success);
-      expect(successes).toHaveLength(1);
+      expect(successes.length).toBeGreaterThanOrEqual(1);
+
+      // First use gets a new token, grace period retries don't
+      const firstUse = successes.filter((r) => !r.gracePeriodRetry && r.newToken);
+      const gracePeriodRetries = successes.filter((r) => r.gracePeriodRetry);
+      expect(firstUse).toHaveLength(1);
+      // Grace period retries should not have a new token
+      gracePeriodRetries.forEach((r) => {
+        expect(r.newToken).toBeUndefined();
+        expect(r.gracePeriodRetry).toBe(true);
+      });
+    });
+
+    describe('grace period handling', () => {
+      it('should allow retry within 30 second grace period', async () => {
+        const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const tokenHash = hashToken(rawToken);
+
+        await db.insert(deviceTokens).values({
+          id: createId(),
+          userId: testUserId,
+          deviceId: 'device-1',
+          platform: 'web',
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          expiresAt: new Date(Date.now() + 86400000),
+          deviceName: 'Test Device',
+          trustScore: 1.0,
+          suspiciousActivityCount: 0,
+        });
+
+        // First rotation - succeeds, revokes token
+        const result1 = await atomicDeviceTokenRotation(
+          rawToken,
+          { userAgent: 'Test Agent' },
+          hashToken,
+          getTokenPrefix,
+          generateDeviceToken
+        );
+        expect(result1.success).toBe(true);
+        expect(result1.newToken).toBeDefined();
+        expect(result1.gracePeriodRetry).toBeFalsy();
+
+        // Immediate retry - should succeed (within grace period)
+        const result2 = await atomicDeviceTokenRotation(
+          rawToken,
+          { userAgent: 'Test Agent' },
+          hashToken,
+          getTokenPrefix,
+          generateDeviceToken
+        );
+        expect(result2.success).toBe(true);
+        expect(result2.gracePeriodRetry).toBe(true);
+        expect(result2.newToken).toBeUndefined(); // Client already has token from first request
+        expect(result2.userId).toBe(testUserId);
+        expect(result2.deviceId).toBe('device-1');
+      });
+
+      it('should reject retry after grace period expires', async () => {
+        const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const tokenHash = hashToken(rawToken);
+        const tokenId = createId();
+        const newTokenId = createId();
+
+        // Create the original token
+        await db.insert(deviceTokens).values({
+          id: tokenId,
+          userId: testUserId,
+          deviceId: 'device-1',
+          platform: 'web',
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          expiresAt: new Date(Date.now() + 86400000),
+          trustScore: 1.0,
+          suspiciousActivityCount: 0,
+        });
+
+        // Create the replacement token
+        const newToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const newTokenHash = hashToken(newToken);
+        await db.insert(deviceTokens).values({
+          id: newTokenId,
+          userId: testUserId,
+          deviceId: 'device-1',
+          platform: 'web',
+          token: newTokenHash,
+          tokenHash: newTokenHash,
+          tokenPrefix: getTokenPrefix(newToken),
+          expiresAt: new Date(Date.now() + 86400000),
+          trustScore: 1.0,
+          suspiciousActivityCount: 0,
+        });
+
+        // Manually revoke the token with a timestamp 31 seconds ago (outside grace period)
+        const revokedAt = new Date(Date.now() - 31000);
+        await db.update(deviceTokens)
+          .set({ revokedAt, revokedReason: 'rotated', replacedByTokenId: newTokenId })
+          .where(eq(deviceTokens.id, tokenId));
+
+        // Retry should fail - outside grace period
+        const result = await atomicDeviceTokenRotation(
+          rawToken,
+          {},
+          hashToken,
+          getTokenPrefix,
+          generateDeviceToken
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Device token already rotated');
+      });
+
+      it('should reject retry when revoked for other reasons', async () => {
+        const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const tokenHash = hashToken(rawToken);
+        const tokenId = createId();
+
+        await db.insert(deviceTokens).values({
+          id: tokenId,
+          userId: testUserId,
+          deviceId: 'device-1',
+          platform: 'web',
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          expiresAt: new Date(Date.now() + 86400000),
+          trustScore: 1.0,
+          suspiciousActivityCount: 0,
+        });
+
+        // Token revoked for logout - no grace period
+        await db.update(deviceTokens)
+          .set({ revokedAt: new Date(), revokedReason: 'logout' })
+          .where(eq(deviceTokens.id, tokenId));
+
+        const result = await atomicDeviceTokenRotation(
+          rawToken,
+          {},
+          hashToken,
+          getTokenPrefix,
+          generateDeviceToken
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Device token has been revoked');
+      });
     });
   });
 

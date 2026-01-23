@@ -288,6 +288,13 @@
       "when": 1769130730037,
       "tag": "0040_worthless_midnight",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1769132645445,
+      "tag": "0041_known_sally_floyd",
+      "breakpoints": true
     }
   ]
 }

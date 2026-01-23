@@ -90,6 +90,8 @@ export const deviceTokens = pgTable('device_tokens', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   revokedAt: timestamp('revokedAt', { mode: 'date' }),
   revokedReason: text('revokedReason'),
+  // For grace period handling: links to the new token that replaced this one
+  replacedByTokenId: text('replacedByTokenId'),
 }, (table) => {
   return {
     userIdx: index('device_tokens_user_id_idx').on(table.userId),

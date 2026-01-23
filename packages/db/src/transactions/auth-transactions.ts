@@ -15,6 +15,14 @@ import { db, refreshTokens, deviceTokens, users, eq, sql, and, isNull, gt } from
 import { createId } from '@paralleldrive/cuid2';
 
 /**
+ * Grace period for token refresh race conditions (Okta-style)
+ * During this window after a token is revoked, concurrent requests using the same
+ * token will succeed and receive new tokens (different but functionally equivalent)
+ */
+const REFRESH_TOKEN_GRACE_PERIOD_MS = 30 * 1000; // 30 seconds (Okta default)
+const DEVICE_TOKEN_GRACE_PERIOD_MS = 30 * 1000; // 30 seconds
+
+/**
  * Result of atomic refresh token validation
  */
 export interface RefreshResult {
@@ -23,6 +31,8 @@ export interface RefreshResult {
   tokenVersion?: number;
   role?: 'user' | 'admin';
   error?: string;
+  /** True if this was a grace period retry (token already used but within 30s window) */
+  gracePeriodRetry?: boolean;
 }
 
 /**
@@ -41,6 +51,8 @@ export interface DeviceRotationResult {
   userAgent?: string | null;
   location?: string | null;
   error?: string;
+  /** True if this was a grace period retry (token already rotated but within 30s window) */
+  gracePeriodRetry?: boolean;
 }
 
 /**
@@ -83,6 +95,7 @@ export async function atomicTokenRefresh(
         rt."userId",
         rt."expiresAt",
         rt."revokedAt",
+        rt."revokedReason",
         u."tokenVersion",
         u.role
       FROM refresh_tokens rt
@@ -96,6 +109,7 @@ export async function atomicTokenRefresh(
       userId: string;
       expiresAt: Date | null;
       revokedAt: Date | null;
+      revokedReason: string | null;
       tokenVersion: number;
       role: 'user' | 'admin';
     } | undefined;
@@ -105,10 +119,26 @@ export async function atomicTokenRefresh(
       return { success: false, error: 'Invalid refresh token' };
     }
 
-    // Token already revoked - reject but don't nuke all sessions
-    // This handles legitimate scenarios like network retries, app restarts,
-    // multiple tabs, etc. The token is already invalid - just reject it.
+    // Check if token is revoked
     if (row.revokedAt) {
+      const timeSinceRevoked = Date.now() - new Date(row.revokedAt).getTime();
+      const isWithinGracePeriod =
+        row.revokedReason === 'refreshed' &&
+        timeSinceRevoked < REFRESH_TOKEN_GRACE_PERIOD_MS;
+
+      if (isWithinGracePeriod) {
+        // GRACE PERIOD: Allow retry - return success without re-revoking
+        // Route will issue new tokens (different but functionally equivalent)
+        return {
+          success: true,
+          userId: row.userId,
+          tokenVersion: row.tokenVersion,
+          role: row.role,
+          gracePeriodRetry: true,
+        };
+      }
+
+      // Outside grace period - reject
       return { success: false, error: 'Token already used' };
     }
 
@@ -147,6 +177,7 @@ export async function atomicTokenRefresh(
  * - FOR UPDATE lock prevents concurrent rotation attempts
  * - Old token is revoked and new token created atomically
  * - Validates tokenVersion to ensure device token is still valid
+ * - Grace period (30s) allows retry for concurrent requests
  *
  * @param oldTokenValue - The current device token
  * @param metadata - Updated metadata for the new token
@@ -173,7 +204,7 @@ export async function atomicDeviceTokenRotation(
   const tokenHash = hashToken(oldTokenValue);
 
   return db.transaction(async (tx) => {
-    // Lock the device token row
+    // Lock the device token row (includes revoked tokens for grace period check)
     // IMPORTANT: Column names use camelCase to match Drizzle schema
     const lockResult = await tx.execute(sql`
       SELECT
@@ -186,11 +217,13 @@ export async function atomicDeviceTokenRotation(
         dt."lastIpAddress",
         dt.location,
         dt."expiresAt",
+        dt."revokedAt",
+        dt."revokedReason",
+        dt."replacedByTokenId",
         u."tokenVersion"
       FROM device_tokens dt
       JOIN users u ON u.id = dt."userId"
       WHERE dt."tokenHash" = ${tokenHash}
-        AND dt."revokedAt" IS NULL
       FOR UPDATE OF dt
     `);
 
@@ -204,6 +237,9 @@ export async function atomicDeviceTokenRotation(
       lastIpAddress: string | null;
       location: string | null;
       expiresAt: Date | null;
+      revokedAt: Date | null;
+      revokedReason: string | null;
+      replacedByTokenId: string | null;
       tokenVersion: number;
     } | undefined;
 
@@ -211,17 +247,54 @@ export async function atomicDeviceTokenRotation(
       return { success: false, error: 'Invalid or expired device token' };
     }
 
+    // Check if already rotated (revoked with reason 'rotated')
+    if (row.revokedAt && row.revokedReason === 'rotated') {
+      const timeSinceRevoked = Date.now() - new Date(row.revokedAt).getTime();
+
+      if (timeSinceRevoked < DEVICE_TOKEN_GRACE_PERIOD_MS && row.replacedByTokenId) {
+        // GRACE PERIOD: Look up the replacement token
+        const replacementResult = await tx.execute(sql`
+          SELECT id, "deviceName", "userAgent", location
+          FROM device_tokens
+          WHERE id = ${row.replacedByTokenId}
+            AND "revokedAt" IS NULL
+        `);
+
+        const replacement = replacementResult.rows[0] as {
+          id: string;
+          deviceName: string | null;
+          userAgent: string | null;
+          location: string | null;
+        } | undefined;
+
+        if (replacement) {
+          // Return success but without a new token (client already has it from first request)
+          return {
+            success: true,
+            deviceTokenId: replacement.id,
+            userId: row.userId,
+            deviceId: row.deviceId,
+            platform: row.platform,
+            deviceName: replacement.deviceName,
+            userAgent: replacement.userAgent,
+            location: replacement.location,
+            gracePeriodRetry: true,
+          };
+        }
+      }
+
+      return { success: false, error: 'Device token already rotated' };
+    }
+
+    // Check if revoked for other reasons
+    if (row.revokedAt) {
+      return { success: false, error: 'Device token has been revoked' };
+    }
+
     // Check if token is expired
     if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
       return { success: false, error: 'Device token has expired' };
     }
-
-    // Revoke old token atomically
-    await tx.execute(sql`
-      UPDATE device_tokens
-      SET "revokedAt" = NOW(), "revokedReason" = 'rotated'
-      WHERE id = ${row.id}
-    `);
 
     // Generate new token
     const newToken = await generateDeviceToken(
@@ -275,6 +348,13 @@ export async function atomicDeviceTokenRotation(
         0,
         NOW()
       )
+    `);
+
+    // Revoke old token and link to replacement
+    await tx.execute(sql`
+      UPDATE device_tokens
+      SET "revokedAt" = NOW(), "revokedReason" = 'rotated', "replacedByTokenId" = ${newId}
+      WHERE id = ${row.id}
     `);
 
     return {
