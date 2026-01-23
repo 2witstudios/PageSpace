@@ -266,10 +266,17 @@ export async function authenticateRequestWithOptions(
   }
 
   if (requireCSRF && isSessionAuth) {
-    const { validateCSRF } = await import('./csrf-validation');
-    const csrfError = await validateCSRF(request);
-    if (csrfError) {
-      return { error: csrfError };
+    // Skip CSRF for Bearer token auth - not vulnerable to CSRF attacks.
+    // CSRF attacks exploit that browsers automatically send cookies with requests.
+    // Bearer tokens must be explicitly set in JavaScript headers, so they can't
+    // be exploited by malicious sites tricking users into making requests.
+    const hasBearerAuth = !!getBearerToken(request);
+    if (!hasBearerAuth) {
+      const { validateCSRF } = await import('./csrf-validation');
+      const csrfError = await validateCSRF(request);
+      if (csrfError) {
+        return { error: csrfError };
+      }
     }
   }
 

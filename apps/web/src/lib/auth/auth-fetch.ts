@@ -438,9 +438,17 @@ class AuthFetch {
         : null;
 
       if (!deviceToken) {
-        // No device token - session expired, must re-authenticate
-        this.logger.warn('Web: Session expired and no device token available');
-        return { success: false, shouldLogout: true };
+        // Web sessions use sliding-window cookies (7-day expiry, extended on each request).
+        // No device token means we can't do proactive session recovery, but that's OK:
+        // - If session cookie is still valid, requests will continue to work
+        // - If session cookie expired, next request gets 401 which triggers this path again
+        // Scheduled refresh should skip web entirely (handled in useTokenRefresh).
+        // This path only runs for 401 recovery, where we need device token to recover.
+        // Without device token, user must re-authenticate on actual session expiry.
+        this.logger.debug('Web: No device token available for session recovery');
+        // Return success=false but shouldLogout=false - session may still be valid
+        // Let the next actual request determine if session is truly expired
+        return { success: false, shouldLogout: false };
       }
 
       // Try device token recovery

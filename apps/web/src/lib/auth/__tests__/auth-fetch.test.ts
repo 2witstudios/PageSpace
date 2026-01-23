@@ -267,4 +267,124 @@ describe('AuthFetch', () => {
       expect(refreshCallCount).toBe(1);
     });
   });
+
+  describe('web refresh without device token', () => {
+    let mockFetch: ReturnType<typeof vi.fn>;
+    let originalFetch: typeof global.fetch;
+    let originalWindow: typeof global.window;
+    let originalLocalStorage: typeof global.localStorage;
+
+    beforeEach(() => {
+      // Save originals before modifying
+      originalFetch = global.fetch;
+      originalWindow = global.window;
+      originalLocalStorage = global.localStorage;
+      // Setup global fetch mock
+      mockFetch = vi.fn();
+      global.fetch = mockFetch;
+
+      // Mock window (non-desktop)
+      Object.defineProperty(global, 'window', {
+        value: {
+          dispatchEvent: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          // No electron property - this simulates web browser
+        },
+        writable: true,
+      });
+
+      // Clear any existing singleton
+      const globalObj = globalThis as typeof globalThis & { [key: symbol]: unknown };
+      const AUTHFETCH_KEY = Symbol.for('pagespace.authfetch.singleton');
+      delete globalObj[AUTHFETCH_KEY];
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      global.fetch = originalFetch;
+      Object.defineProperty(global, 'window', {
+        value: originalWindow,
+        writable: true,
+      });
+      Object.defineProperty(global, 'localStorage', {
+        value: originalLocalStorage,
+        writable: true,
+      });
+    });
+
+    it('should not force logout when no device token (web uses sliding-window cookies)', async () => {
+      // Arrange - Mock localStorage with NO device token (simulates web login)
+      Object.defineProperty(global, 'localStorage', {
+        value: {
+          getItem: vi.fn().mockReturnValue(null), // No device token
+          setItem: vi.fn(),
+          removeItem: vi.fn(),
+        },
+        writable: true,
+      });
+
+      // Import fresh module
+      const { AuthFetch } = await import('../auth-fetch');
+      const authFetch = new AuthFetch();
+
+      // Act - Call refreshAuthSession
+      const result = await authFetch.refreshAuthSession();
+
+      // Assert - Should NOT force logout
+      // Web sessions use sliding-window cookies that are automatically extended.
+      // Missing device token doesn't mean session is invalid - it just means
+      // we can't do proactive device token recovery.
+      expect(result.success).toBe(false); // No refresh was possible
+      expect(result.shouldLogout).toBe(false); // But DON'T force logout!
+
+      // Assert - No network call should be made (can't refresh without device token)
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should attempt device token recovery when device token exists', async () => {
+      // Arrange - Mock localStorage WITH device token
+      Object.defineProperty(global, 'localStorage', {
+        value: {
+          getItem: vi.fn().mockImplementation((key: string) => {
+            if (key === 'deviceToken') return 'mock-device-token-abc123';
+            return null;
+          }),
+          setItem: vi.fn(),
+          removeItem: vi.fn(),
+        },
+        writable: true,
+      });
+
+      // Setup: Device token refresh succeeds
+      mockFetch.mockImplementation(async (url: string) => {
+        if (url === '/api/auth/device/refresh') {
+          return new Response(JSON.stringify({
+            deviceToken: 'new-device-token',
+            csrfToken: 'new-csrf-token'
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: 'test' }), { status: 200 });
+      });
+
+      // Import fresh module
+      const { AuthFetch } = await import('../auth-fetch');
+      const authFetch = new AuthFetch();
+
+      // Act - Call refreshAuthSession
+      const result = await authFetch.refreshAuthSession();
+
+      // Assert - Recovery should succeed
+      expect(result.success).toBe(true);
+      expect(result.shouldLogout).toBe(false);
+
+      // Assert - Device refresh endpoint was called
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/auth/device/refresh',
+        expect.objectContaining({
+          method: 'POST',
+        })
+      );
+    });
+  });
 });

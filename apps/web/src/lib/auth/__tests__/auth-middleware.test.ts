@@ -513,6 +513,35 @@ describe('Auth Middleware', () => {
           expect(result.error.status).toBe(403);
         }
       });
+
+      it('skips CSRF validation for Bearer token auth (not vulnerable to CSRF)', async () => {
+        // Arrange - Bearer token session auth (desktop/mobile)
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ps_sess_valid',
+          },
+        });
+
+        // Act
+        const result = await authenticateRequestWithOptions(request, {
+          allow: ['session'],
+          requireCSRF: true,
+        });
+
+        // Assert - authentication passes
+        expect(isAuthError(result)).toBe(false);
+        if (!isAuthError(result)) {
+          expect(result.userId).toBe(mockSessionClaims.userId);
+          expect(result.tokenType).toBe('session');
+        }
+
+        // Assert - CSRF validation was NOT called because Bearer auth is CSRF-safe
+        // CSRF attacks exploit browser-sent cookies; Bearer tokens must be explicitly set
+        expect(validateCSRF).not.toHaveBeenCalled();
+      });
     });
 
     describe('Origin validation (defense-in-depth)', () => {
