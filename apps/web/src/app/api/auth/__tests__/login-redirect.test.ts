@@ -1,18 +1,14 @@
+/**
+ * Tests for login redirect functionality to Getting Started drive
+ */
+
 import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
 import { POST } from '../login/route';
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', email: 'email' },
-  refreshTokens: { id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByEmail: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -21,12 +17,32 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
+// Mock session service from @pagespace/lib/auth
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'user-123',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn(),
-  generateRefreshToken: vi.fn(),
-  getRefreshTokenMaxAge: vi.fn(),
-  decodeToken: vi.fn(),
-  validateOrCreateDeviceToken: vi.fn(),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -66,6 +82,12 @@ vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
 }));
 
+// Mock client IP extraction
+vi.mock('@/lib/auth', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
+  getClientIP: vi.fn().mockReturnValue('unknown'),
+}));
+
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id'),
 }));
@@ -74,14 +96,8 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn(),
 }));
 
-import { db, refreshTokens } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
-import {
-  decodeToken,
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-} from '@pagespace/lib/server';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
@@ -91,35 +107,31 @@ describe('/api/auth/login redirect', () => {
 
     (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     (bcrypt.compare as Mock).mockResolvedValue(true);
-    (generateAccessToken as Mock).mockResolvedValue('access-token');
-    (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
-    (decodeToken as Mock).mockResolvedValue({
-      exp: Math.floor(Date.now() / 1000) + 60,
-    });
-    (getRefreshTokenMaxAge as Mock).mockReturnValue(60);
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
       driveId: 'drive-123',
     });
 
-    (db.query.users.findFirst as Mock).mockResolvedValue({
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
       id: 'user-123',
       name: 'Test User',
       email: 'test@example.com',
-      password: 'hashed-password',
+      password: '$2a$12$hashedpassword',
       tokenVersion: 0,
       role: 'user',
-    });
-
-    (db.insert as Mock).mockImplementation((table: unknown) => {
-      if (table === refreshTokens) {
-        return {
-          values: vi.fn(() => Promise.resolve(undefined)),
-        };
-      }
-
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      provider: 'email',
+      image: null,
+      googleId: null,
+      emailVerified: null,
+      currentAiProvider: 'pagespace',
+      currentAiModel: 'glm-4.5-air',
+      storageUsedBytes: 0,
+      activeUploads: 0,
+      lastStorageCalculated: null,
+      stripeCustomerId: null,
+      subscriptionTier: 'free',
+      tosAcceptedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
   });
 

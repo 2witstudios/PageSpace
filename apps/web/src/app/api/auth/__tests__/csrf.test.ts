@@ -7,27 +7,27 @@ import { GET } from '../csrf/route';
  * This endpoint generates CSRF tokens for authenticated users.
  *
  * Contract:
- *   Request: GET with valid JWT (via Cookie or Bearer token)
+ *   Request: GET with valid session cookie
  *   Response:
- *     200: { csrfToken: string } - Token bound to JWT session
- *     401: { error: string } - Authentication required or invalid JWT
+ *     200: { csrfToken: string } - Token bound to session
+ *     401: { error: string } - Authentication required or invalid session
  *     500: { error: string } - Internal error during token generation
  *
  * Security Properties:
  *   - Does NOT require CSRF itself (chicken-egg problem)
- *   - Only accepts JWT authentication (no MCP tokens)
- *   - Token is bound to session via: JWT claims -> sessionId -> HMAC signature
+ *   - Uses session-based authentication (opaque tokens, server-validated)
+ *   - Token is bound to session via sessionId
  */
 
 // Mock dependencies at system boundaries
-vi.mock('cookie', () => ({
-  parse: vi.fn().mockReturnValue({ accessToken: 'valid-access-token' }),
+vi.mock('@pagespace/lib/auth', () => ({
+  generateCSRFToken: vi.fn().mockReturnValue('generated-csrf-token'),
+  sessionService: {
+    validateSession: vi.fn(),
+  },
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  generateCSRFToken: vi.fn().mockReturnValue('generated-csrf-token'),
-  getSessionIdFromJWT: vi.fn().mockReturnValue('session-id-123'),
-  decodeToken: vi.fn(),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -38,48 +38,35 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
+vi.mock('@/lib/auth/cookie-config', () => ({
+  getSessionFromCookies: vi.fn(),
 }));
 
-import { parse } from 'cookie';
-import { generateCSRFToken, getSessionIdFromJWT, decodeToken } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { generateCSRFToken, sessionService } from '@pagespace/lib/auth';
+import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 describe('/api/auth/csrf', () => {
-  const mockDecodedToken = {
+  const mockSessionClaims = {
     userId: 'test-user-id',
-    tokenVersion: 0,
-    role: 'user' as const,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 900, // 15 minutes
+    sessionId: 'test-session-id',
+    userRole: 'user' as const,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default: authenticated user via cookie
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
-      userId: 'test-user-id',
-      role: 'user',
-      tokenVersion: 0,
-      tokenType: 'session',
-  sessionId: 'test-session-id',
-      
-    });
-    (isAuthError as unknown as Mock).mockReturnValue(false);
-    (decodeToken as unknown as Mock).mockResolvedValue(mockDecodedToken);
-    (parse as unknown as Mock).mockReturnValue({ accessToken: 'valid-access-token' });
+    // Default: valid session
+    (getSessionFromCookies as unknown as Mock).mockReturnValue('valid-session-token');
+    (sessionService.validateSession as unknown as Mock).mockResolvedValue(mockSessionClaims);
   });
 
   describe('successful CSRF token generation', () => {
-    it('GET_withValidCookieAuth_returns200WithCSRFToken', async () => {
+    it('GET_withValidSession_returns200WithCSRFToken', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'accessToken=valid-access-token',
+          Cookie: 'session=valid-session-token',
         },
       });
 
@@ -92,101 +79,28 @@ describe('/api/auth/csrf', () => {
       expect(body).toEqual({ csrfToken: 'generated-csrf-token' });
     });
 
-    it('GET_withValidAuth_bindsTokenToSessionViaJWTClaims', async () => {
+    it('GET_withValidSession_bindsTokenToSessionId', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'accessToken=valid-access-token',
+          Cookie: 'session=valid-session-token',
         },
       });
 
       // Act
       await GET(request);
 
-      // Assert: Session binding flow - JWT claims -> sessionId -> token generation
-      expect(getSessionIdFromJWT).toHaveBeenCalledWith({
-        userId: 'test-user-id',
-        tokenVersion: 0,
-        iat: mockDecodedToken.iat,
-      });
-      expect(generateCSRFToken).toHaveBeenCalledWith('session-id-123');
-    });
-
-    it('GET_withBearerToken_extractsTokenFromAuthorizationHeader', async () => {
-      // Arrange: Configure for Bearer token authentication
-      vi.clearAllMocks();
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
-        userId: 'test-user-id',
-        role: 'user',
-        tokenVersion: 0,
-        tokenType: 'session',
-  sessionId: 'test-session-id',
-        source: 'bearer',
-      });
-      (isAuthError as unknown as Mock).mockReturnValue(false);
-      (decodeToken as unknown as Mock).mockResolvedValue(mockDecodedToken);
-
-      const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET',
-        headers: {
-          Authorization: 'Bearer valid-access-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
-      const body = await response.json();
-
-      // Assert: Response is successful
-      expect(response.status).toBe(200);
-      expect(body.csrfToken).toBe('generated-csrf-token');
-
-      // Assert: Bearer token takes precedence over cookies
-      expect(decodeToken).toHaveBeenCalledWith('valid-access-token');
-      expect(parse).not.toHaveBeenCalled();
-    });
-
-    it('GET_withCookieAuth_extractsTokenFromAccessTokenCookie', async () => {
-      // Arrange
-      (parse as unknown as Mock).mockReturnValue({ accessToken: 'cookie-access-token' });
-
-      const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=cookie-access-token',
-        },
-      });
-
-      // Act
-      const response = await GET(request);
-
-      // Assert
-      expect(response.status).toBe(200);
+      // Assert: CSRF token is generated using the session ID
+      expect(sessionService.validateSession).toHaveBeenCalledWith('valid-session-token');
+      expect(generateCSRFToken).toHaveBeenCalledWith('test-session-id');
     });
   });
 
   describe('authentication errors (401)', () => {
-    it('GET_withNoAuth_returns401', async () => {
-      // Arrange: Authentication middleware returns error
-      const mockError = { error: Response.json({ error: 'Authentication required' }, { status: 401 }) };
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockError);
-      (isAuthError as unknown as Mock).mockReturnValue(true);
-
-      const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET',
-      });
-
-      // Act
-      const response = await GET(request);
-
-      // Assert
-      expect(response.status).toBe(401);
-    });
-
-    it('GET_withoutAccessTokenCookie_returns401', async () => {
-      // Arrange: No accessToken in cookies
-      (parse as Mock).mockReturnValue({});
+    it('GET_withNoSessionCookie_returns401', async () => {
+      // Arrange: No session cookie
+      (getSessionFromCookies as unknown as Mock).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -198,23 +112,17 @@ describe('/api/auth/csrf', () => {
 
       // Assert
       expect(response.status).toBe(401);
-      expect(body.error).toBe('No JWT token found');
+      expect(body.error).toBe('No session found');
     });
 
-    it('GET_withJWTMissingIatClaim_returns401', async () => {
-      // REVIEW: iat (issued at) is required for session binding.
-      // This ensures tokens from different sessions are distinguishable.
-      (decodeToken as unknown as Mock).mockResolvedValue({
-        userId: 'test-user-id',
-        tokenVersion: 0,
-        role: 'user',
-        // iat intentionally missing
-      });
+    it('GET_withInvalidSession_returns401', async () => {
+      // Arrange: Session validation fails
+      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'accessToken=valid-access-token',
+          Cookie: 'session=invalid-session-token',
         },
       });
 
@@ -224,17 +132,17 @@ describe('/api/auth/csrf', () => {
 
       // Assert
       expect(response.status).toBe(401);
-      expect(body.error).toBe('Invalid JWT token');
+      expect(body.error).toBe('Invalid or expired session');
     });
 
-    it('GET_withInvalidJWT_returns401', async () => {
-      // Arrange: JWT decoding fails
-      (decodeToken as Mock).mockResolvedValue(null);
+    it('GET_withExpiredSession_returns401', async () => {
+      // Arrange: Session has expired
+      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'accessToken=invalid-token',
+          Cookie: 'session=expired-session-token',
         },
       });
 
@@ -244,52 +152,7 @@ describe('/api/auth/csrf', () => {
 
       // Assert
       expect(response.status).toBe(401);
-      expect(body.error).toBe('Invalid JWT token');
-    });
-  });
-
-  describe('security configuration', () => {
-    it('GET_csrfEndpoint_doesNotRequireCSRF', async () => {
-      // This is the chicken-egg problem: you can't require CSRF to get a CSRF token
-      const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-access-token',
-        },
-      });
-
-      // Act
-      await GET(request);
-
-      // Assert: requireCSRF must be false
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          requireCSRF: false,
-        })
-      );
-    });
-
-    it('GET_csrfEndpoint_onlyAllowsJWTAuth', async () => {
-      // MCP tokens should not be able to generate CSRF tokens
-      // (CSRF is for browser-based web sessions only)
-      const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=valid-access-token',
-        },
-      });
-
-      // Act
-      await GET(request);
-
-      // Assert: Only JWT auth allowed, not MCP
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          allow: ['session'],
-        })
-      );
+      expect(body.error).toBe('Invalid or expired session');
     });
   });
 
@@ -303,7 +166,7 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'accessToken=valid-access-token',
+          Cookie: 'session=valid-session-token',
         },
       });
 
@@ -312,6 +175,28 @@ describe('/api/auth/csrf', () => {
       const body = await response.json();
 
       // Assert: 500 with generic error (don't leak implementation details)
+      expect(response.status).toBe(500);
+      expect(body.error).toBe('Failed to generate CSRF token');
+    });
+
+    it('GET_whenSessionValidationThrows_returns500', async () => {
+      // Arrange: Session validation throws an error
+      (sessionService.validateSession as unknown as Mock).mockRejectedValue(
+        new Error('Database connection failed')
+      );
+
+      const request = new Request('http://localhost/api/auth/csrf', {
+        method: 'GET',
+        headers: {
+          Cookie: 'session=valid-session-token',
+        },
+      });
+
+      // Act
+      const response = await GET(request);
+      const body = await response.json();
+
+      // Assert
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to generate CSRF token');
     });

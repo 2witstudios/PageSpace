@@ -141,8 +141,10 @@ describe('/api/auth/device/refresh', () => {
       expect(body.deviceToken).toBe('valid-device-token');
     });
 
-    it('returns cookies for web platform', async () => {
-      // Arrange
+    it('returns tokens in body for all platforms (web should use session auth instead)', async () => {
+      // Note: Web platform now uses sessions, not device tokens for refresh
+      // This endpoint is primarily for mobile/desktop
+      // If a web device token exists from legacy auth, it still gets JSON response
       const webDeviceRecord = { ...mockDeviceRecord, platform: 'web' };
       (validateDeviceToken as Mock).mockResolvedValue(webDeviceRecord);
 
@@ -156,13 +158,12 @@ describe('/api/auth/device/refresh', () => {
       const response = await POST(request);
       const body = await response.json();
 
-      // Assert
+      // Assert - same response as mobile/desktop
       expect(response.status).toBe(200);
-      expect(body.message).toBe('Session refreshed successfully');
+      expect(body.token).toBe('new-access-token');
+      expect(body.refreshToken).toBe('new-refresh-token');
       expect(body.csrfToken).toBe('mock-csrf-token');
-      // Use standard header check for cross-runtime compatibility
-      const setCookie = response.headers.get('set-cookie');
-      expect(setCookie).toBeTruthy();
+      expect(body.deviceToken).toBe('valid-device-token');
     });
 
     it('generates new access and refresh tokens', async () => {

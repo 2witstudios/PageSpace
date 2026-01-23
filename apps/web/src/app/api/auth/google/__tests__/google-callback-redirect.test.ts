@@ -1,8 +1,8 @@
 /**
  * Contract tests for GET /api/auth/google/callback
  *
- * These tests verify the web device token creation in OAuth callback flow.
- * Focus: Device token integration for web platform persistence.
+ * These tests verify session-based authentication in OAuth callback flow.
+ * Uses session-based auth with opaque tokens for web platform.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
@@ -45,14 +45,32 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
+// Mock session service from @pagespace/lib/auth
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'existing-user-456',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn(),
-  generateRefreshToken: vi.fn(),
-  getRefreshTokenMaxAge: vi.fn(),
-  decodeToken: vi.fn(),
-  generateCSRFToken: vi.fn(),
-  getSessionIdFromJWT: vi.fn(),
-  validateOrCreateDeviceToken: vi.fn(),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -79,15 +97,6 @@ vi.mock('@pagespace/lib/security', () => ({
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
-}));
-
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn(() => 'hashed-token'),
-  getTokenPrefix: vi.fn(() => 'tok_'),
-}));
-
-vi.mock('cookie', () => ({
-  serialize: vi.fn(() => 'mock-cookie'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -117,14 +126,9 @@ vi.mock('crypto', async () => {
   };
 });
 
-import { db, refreshTokens } from '@pagespace/db';
-import {
-  decodeToken,
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-  validateOrCreateDeviceToken,
-} from '@pagespace/lib/server';
+import { db } from '@pagespace/db';
+import { sessionService } from '@pagespace/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
@@ -173,34 +177,16 @@ describe('GET /api/auth/google/callback', () => {
 
     // Default mocks for successful flow
     (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (generateAccessToken as Mock).mockResolvedValue('access-token');
-    (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
-    (decodeToken as Mock).mockResolvedValue({
-      exp: Math.floor(Date.now() / 1000) + 60,
-      iat: Math.floor(Date.now() / 1000),
-    });
-    (getRefreshTokenMaxAge as Mock).mockReturnValue(60);
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
-    (validateOrCreateDeviceToken as Mock).mockResolvedValue({
-      deviceToken: 'web-device-token-callback',
-      deviceTokenRecordId: 'device-record-callback',
-    });
 
     // Default to existing user
     (db.query.users.findFirst as Mock).mockResolvedValue(mockExistingUser);
 
-    (db.insert as Mock).mockImplementation((table: unknown) => {
-      if (table === refreshTokens) {
-        return {
-          values: vi.fn(() => Promise.resolve(undefined)),
-        };
-      }
-      return {
-        values: vi.fn(() => ({
-          returning: vi.fn(() => Promise.resolve([mockExistingUser])),
-        })),
-      };
-    });
+    (db.insert as Mock).mockImplementation(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn(() => Promise.resolve([mockExistingUser])),
+      })),
+    }));
 
     (db.update as Mock).mockReturnValue({
       set: vi.fn().mockReturnValue({
@@ -213,35 +199,10 @@ describe('GET /api/auth/google/callback', () => {
     process.env = { ...originalEnv };
   });
 
-  describe('web device token creation', () => {
-    it('given web platform with deviceId in state, should create device token', async () => {
+  describe('session-based authentication', () => {
+    it('given successful OAuth, should create session and redirect with CSRF token', async () => {
       const state = createSignedState({
         platform: 'web',
-        deviceId: 'web-device-id-callback',
-        deviceName: 'Test Browser',
-        returnUrl: '/dashboard',
-      });
-
-      const request = createCallbackRequest({
-        code: 'valid-auth-code',
-        state,
-      });
-
-      await GET(request);
-
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockExistingUser.id,
-          deviceId: 'web-device-id-callback',
-          platform: 'web',
-        })
-      );
-    });
-
-    it('given device token created, should include deviceToken in redirect URL', async () => {
-      const state = createSignedState({
-        platform: 'web',
-        deviceId: 'web-device-id-callback',
         returnUrl: '/dashboard',
       });
 
@@ -251,48 +212,31 @@ describe('GET /api/auth/google/callback', () => {
       });
 
       const response = await GET(request);
+
+      // Verify session creation
+      expect(sessionService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: mockExistingUser.id,
+          type: 'user',
+          scopes: ['*'],
+        })
+      );
+
+      // Verify session cookie is set
+      expect(appendSessionCookie).toHaveBeenCalled();
 
       // Response should be a redirect
       expect(response.status).toBe(307);
 
       const location = response.headers.get('location');
       expect(location).toBeTruthy();
-      expect(location).toContain('deviceToken=web-device-token-callback');
-    });
-
-    it('given device token creation fails, should still redirect successfully', async () => {
-      (validateOrCreateDeviceToken as Mock).mockRejectedValue(new Error('Device token error'));
-
-      const state = createSignedState({
-        platform: 'web',
-        deviceId: 'web-device-id-failing',
-        returnUrl: '/dashboard',
-      });
-
-      const request = createCallbackRequest({
-        code: 'valid-auth-code',
-        state,
-      });
-
-      const response = await GET(request);
-
-      // Should still redirect (not error out)
-      expect(response.status).toBe(307);
-
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
-      // deviceToken should NOT be in URL when creation fails
-      expect(location).not.toContain('deviceToken=');
-      // But auth=success should still be there
+      expect(location).toContain('csrfToken=mock-csrf-token');
       expect(location).toContain('auth=success');
     });
 
-    it('given web platform without deviceId, should not create device token', async () => {
-      (validateOrCreateDeviceToken as Mock).mockClear();
-
+    it('should revoke existing sessions on login (session fixation prevention)', async () => {
       const state = createSignedState({
         platform: 'web',
-        // No deviceId
         returnUrl: '/dashboard',
       });
 
@@ -303,8 +247,91 @@ describe('GET /api/auth/google/callback', () => {
 
       await GET(request);
 
-      // validateOrCreateDeviceToken should not be called for web without deviceId
-      expect(validateOrCreateDeviceToken).not.toHaveBeenCalled();
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+        mockExistingUser.id,
+        'new_login'
+      );
+    });
+
+    it('given provisioned drive, should redirect to that drive', async () => {
+      (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
+        driveId: 'new-drive-123',
+      });
+
+      const state = createSignedState({
+        platform: 'web',
+        returnUrl: '/dashboard',
+      });
+
+      const request = createCallbackRequest({
+        code: 'valid-auth-code',
+        state,
+      });
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('location');
+      expect(location).toContain('/dashboard/new-drive-123');
+    });
+
+    it('given custom returnUrl, should redirect to that path', async () => {
+      const state = createSignedState({
+        platform: 'web',
+        returnUrl: '/dashboard/my-drive',
+      });
+
+      const request = createCallbackRequest({
+        code: 'valid-auth-code',
+        state,
+      });
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('location');
+      expect(location).toBeTruthy();
+      expect(location).toContain('/dashboard/my-drive');
+    });
+  });
+
+  describe('error handling', () => {
+    it('given OAuth error, should redirect to signin with error', async () => {
+      const request = createCallbackRequest({
+        error: 'access_denied',
+      });
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('location');
+      expect(location).toContain('/auth/signin');
+      expect(location).toContain('error=access_denied');
+    });
+
+    it('given rate limited IP, should redirect to signin with error', async () => {
+      (checkDistributedRateLimit as Mock).mockResolvedValue({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 900,
+      });
+
+      const state = createSignedState({
+        platform: 'web',
+        returnUrl: '/dashboard',
+      });
+
+      const request = createCallbackRequest({
+        code: 'valid-auth-code',
+        state,
+      });
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('location');
+      expect(location).toContain('/auth/signin');
+      expect(location).toContain('error=rate_limit');
     });
   });
 });

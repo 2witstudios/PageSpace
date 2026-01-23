@@ -1,3 +1,7 @@
+/**
+ * Tests for Google OAuth callback redirect to Getting Started drive
+ */
+
 import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
 import { GET } from '../google/callback/route';
 
@@ -36,14 +40,32 @@ vi.mock('@pagespace/db', () => ({
   or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
+// Mock session service from @pagespace/lib/auth
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'user-123',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn(),
-  generateRefreshToken: vi.fn(),
-  getRefreshTokenMaxAge: vi.fn(),
-  decodeToken: vi.fn(),
-  generateCSRFToken: vi.fn(),
-  getSessionIdFromJWT: vi.fn(),
-  validateOrCreateDeviceToken: vi.fn(),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -72,10 +94,6 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('cookie', () => ({
-  serialize: vi.fn(() => 'mock-cookie'),
-}));
-
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id'),
 }));
@@ -84,13 +102,11 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn(),
 }));
 
-import { db, users, refreshTokens } from '@pagespace/db';
-import {
-  decodeToken,
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-} from '@pagespace/lib/server';
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+
+import { db, users } from '@pagespace/db';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
@@ -99,13 +115,6 @@ describe('/api/auth/google/callback redirect', () => {
     vi.clearAllMocks();
 
     (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (generateAccessToken as Mock).mockResolvedValue('access-token');
-    (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
-    (decodeToken as Mock).mockResolvedValue({
-      exp: Math.floor(Date.now() / 1000) + 60,
-      iat: Math.floor(Date.now() / 1000),
-    });
-    (getRefreshTokenMaxAge as Mock).mockReturnValue(60);
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
       driveId: 'drive-123',
     });
@@ -132,12 +141,6 @@ describe('/api/auth/google/callback redirect', () => {
         };
       }
 
-      if (table === refreshTokens) {
-        return {
-          values: vi.fn(() => Promise.resolve(undefined)),
-        };
-      }
-
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
       };
@@ -151,16 +154,13 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given new user, should redirect to Getting Started drive', async () => {
-    // Arrange
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',
       { method: 'GET' }
     );
 
-    // Act
     const response = await GET(request);
 
-    // Assert
     expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-123');
     expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(307);
@@ -169,7 +169,6 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given existing user with drives, should redirect to default dashboard', async () => {
-    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
     (db.query.users.findFirst as Mock).mockResolvedValue({
       id: 'user-123',
@@ -185,16 +184,13 @@ describe('/api/auth/google/callback redirect', () => {
       { method: 'GET' }
     );
 
-    // Act
     const response = await GET(request);
 
-    // Assert
     expect(response.headers.get('Location')).toContain('/dashboard');
     expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
-    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(new Error('DB error'));
 
     const request = new Request(
@@ -202,10 +198,8 @@ describe('/api/auth/google/callback redirect', () => {
       { method: 'GET' }
     );
 
-    // Act
     const response = await GET(request);
 
-    // Assert
     expect(response.status).toBe(307);
     expect(response.headers.get('Location')).toContain('/dashboard');
   });

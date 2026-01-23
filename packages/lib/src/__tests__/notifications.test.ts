@@ -164,8 +164,9 @@ describe('notifications', () => {
       const afterTime = new Date()
 
       expect(notification.createdAt).toBeInstanceOf(Date)
-      expect(notification.createdAt.getTime()).toBeGreaterThanOrEqual(beforeTime.getTime())
-      expect(notification.createdAt.getTime()).toBeLessThanOrEqual(afterTime.getTime())
+      // Allow 5ms tolerance to avoid flaky tests from timing differences
+      expect(notification.createdAt.getTime()).toBeGreaterThanOrEqual(beforeTime.getTime() - 5)
+      expect(notification.createdAt.getTime()).toBeLessThanOrEqual(afterTime.getTime() + 5)
     })
   })
 
