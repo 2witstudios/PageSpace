@@ -1,11 +1,11 @@
 import { refreshTokens } from '@pagespace/db';
 import { db, eq } from '@pagespace/db';
 import { hashToken } from '@pagespace/lib/auth';
-import { parse, serialize } from 'cookie';
+import { parse } from 'cookie';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { revokeDeviceTokenByValue, revokeDeviceTokensByDevice } from '@pagespace/lib/device-auth-utils';
-import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getClientIP, appendClearCookies } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
 
@@ -86,29 +86,8 @@ export async function POST(req: Request) {
     userAgent: req.headers.get('user-agent')
   });
 
-  const isProduction = process.env.NODE_ENV === 'production';
-
-  const accessTokenCookie = serialize('accessToken', '', {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: 'strict',
-    path: '/',
-    expires: new Date(0),
-    ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-  });
-
-  const refreshTokenCookie = serialize('refreshToken', '', {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: 'strict',
-    path: '/',
-    expires: new Date(0),
-    ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-  });
-
   const headers = new Headers();
-  headers.append('Set-Cookie', accessTokenCookie);
-  headers.append('Set-Cookie', refreshTokenCookie);
+  appendClearCookies(headers);
 
   return Response.json({ message: 'Logged out successfully' }, { status: 200, headers });
 }

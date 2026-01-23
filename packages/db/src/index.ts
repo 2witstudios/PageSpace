@@ -57,3 +57,7 @@ export {
   retentionPolicies,
   subscriptionTierEnum,
 } from './schema/monitoring';
+
+// Note: Auth transaction functions are exported from '@pagespace/db/transactions/auth-transactions'
+// They are NOT re-exported here to avoid circular dependency issues
+// Import directly: import { atomicTokenRefresh, ... } from '@pagespace/db/transactions/auth-transactions';

@@ -1,12 +1,12 @@
 import { z } from 'zod/v4';
-import { users, refreshTokens, deviceTokens } from '@pagespace/db';
-import { db, eq } from '@pagespace/db';
+import { users, refreshTokens, deviceTokens, db, eq } from '@pagespace/db';
+import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
-  rotateDeviceToken,
   updateDeviceTokenActivity,
   generateAccessToken,
   generateRefreshToken,
+  generateDeviceToken,
   decodeToken,
   getRefreshTokenMaxAge,
   generateCSRFToken,
@@ -21,8 +21,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { serialize } from 'cookie';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, appendAuthCookies } from '@/lib/auth';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -134,18 +133,36 @@ export async function POST(req: Request) {
     const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
 
     if (deviceRecord.expiresAt && deviceRecord.expiresAt.getTime() - Date.now() < sixtyDaysMs) {
-      const rotated = await rotateDeviceToken(
+      // SECURITY: Atomic device token rotation with FOR UPDATE locking
+      // Prevents race conditions in concurrent rotation attempts
+      const rotated = await atomicDeviceTokenRotation(
         deviceToken,
         {
           userAgent: userAgent ?? req.headers.get('user-agent') ?? undefined,
           ipAddress: clientIP === 'unknown' ? undefined : clientIP,
         },
-        user.tokenVersion,
+        hashToken,
+        getTokenPrefix,
+        generateDeviceToken
       );
 
-      if (rotated) {
-        activeDeviceToken = rotated.token;
-        activeDeviceTokenId = rotated.deviceToken.id;
+      if (!rotated.success) {
+        // SECURITY: Rotation failed - do not continue with potentially revoked token
+        // Token may have been revoked, expired, or already rotated by concurrent request
+        loggers.auth.warn('Device token rotation failed - aborting refresh', {
+          userId: deviceRecord.userId,
+          deviceId: deviceRecord.deviceId,
+          error: rotated.error,
+        });
+        return Response.json(
+          { error: rotated.error ?? 'Device token rotation failed. Please re-authenticate.' },
+          { status: 401 }
+        );
+      }
+
+      if (rotated.newToken && rotated.deviceTokenId) {
+        activeDeviceToken = rotated.newToken;
+        activeDeviceTokenId = rotated.deviceTokenId;
       }
     }
 
@@ -213,29 +230,8 @@ export async function POST(req: Request) {
     const isWebPlatform = deviceRecord.platform === 'web';
 
     if (isWebPlatform) {
-      const isProduction = process.env.NODE_ENV === 'production';
-
-      const accessTokenCookie = serialize('accessToken', accessToken, {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: 'strict',
-        path: '/',
-        maxAge: 15 * 60, // 15 minutes
-        ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-      });
-
-      const refreshTokenCookie = serialize('refreshToken', refreshToken, {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: 'strict',
-        path: '/',
-        maxAge: getRefreshTokenMaxAge(),
-        ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-      });
-
       const headers = new Headers();
-      headers.append('Set-Cookie', accessTokenCookie);
-      headers.append('Set-Cookie', refreshTokenCookie);
+      appendAuthCookies(headers, accessToken, refreshToken);
       headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
       headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 

@@ -12,6 +12,10 @@
     "./test/factories": {
       "types": "./dist/test/factories.d.ts",
       "default": "./dist/test/factories.js"
+    },
+    "./transactions/auth-transactions": {
+      "types": "./dist/transactions/auth-transactions.d.ts",
+      "default": "./dist/transactions/auth-transactions.js"
     }
   },
   "scripts": {

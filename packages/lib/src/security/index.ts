@@ -5,7 +5,7 @@
  * - Distributed rate limiting
  * - JTI (JWT ID) tracking and revocation
  * - Session management
- * - SSRF prevention (coming soon)
+ * - SSRF prevention (URL validation)
  * - Path traversal prevention (coming soon)
  */
 
@@ -37,3 +37,11 @@ export {
   type RateLimitConfig,
   type RateLimitResult,
 } from './distributed-rate-limit';
+
+// SSRF prevention (URL validation)
+export {
+  validateExternalURL,
+  safeFetch,
+  isBlockedIP,
+  type URLValidationResult,
+} from './url-validator';

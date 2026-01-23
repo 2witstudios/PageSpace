@@ -48,6 +48,10 @@ vi.mock('@pagespace/db', () => ({
   isNull: vi.fn((field) => ({ field, isNull: true })),
 }));
 
+vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
+  atomicTokenRefresh: vi.fn(),
+}));
+
 vi.mock('cookie', () => ({
   parse: vi.fn().mockReturnValue({ refreshToken: 'valid-refresh-token' }),
   serialize: vi.fn().mockReturnValue('mock-cookie'),
@@ -58,6 +62,14 @@ vi.mock('@pagespace/lib/server', () => ({
   generateAccessToken: vi.fn().mockResolvedValue('new-access-token'),
   generateRefreshToken: vi.fn().mockResolvedValue('new-refresh-token'),
   getRefreshTokenMaxAge: vi.fn().mockReturnValue(2592000),
+  loggers: {
+    auth: {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    },
+  },
 }));
 
 vi.mock('@pagespace/lib/device-auth-utils', () => ({
@@ -83,7 +95,14 @@ vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('mock-cuid'),
 }));
 
+vi.mock('@pagespace/lib/auth', () => ({
+  validateDeviceToken: vi.fn().mockResolvedValue({ id: 'device-token-id' }),
+  hashToken: vi.fn().mockReturnValue('mock-token-hash'),
+  getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
+}));
+
 import { db } from '@pagespace/db';
+import { atomicTokenRefresh } from '@pagespace/db/transactions/auth-transactions';
 import { parse } from 'cookie';
 import {
   decodeToken,
@@ -95,7 +114,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateDeviceToken } from '@pagespace/lib/device-auth-utils';
+import { validateDeviceToken } from '@pagespace/lib/auth';
 
 describe('/api/auth/refresh', () => {
   const mockUser = {
@@ -106,7 +125,8 @@ describe('/api/auth/refresh', () => {
     role: 'user' as const,
   };
 
-  const mockRefreshToken = {
+  // Reference structure for refresh token (used by atomicTokenRefresh internally)
+  const _mockRefreshToken = {
     id: 'refresh-token-id',
     token: 'valid-refresh-token',
     userId: 'test-user-id',
@@ -120,24 +140,12 @@ describe('/api/auth/refresh', () => {
     // Default: valid refresh token flow
     (parse as Mock).mockReturnValue({ refreshToken: 'valid-refresh-token' });
 
-    // Mock transaction to return valid token
-    (db.transaction as Mock).mockImplementation(async (cb) => {
-      const trx = {
-        query: {
-          refreshTokens: {
-            findFirst: vi.fn().mockResolvedValue(mockRefreshToken),
-          },
-        },
-        delete: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(undefined),
-        }),
-        update: vi.fn().mockReturnValue({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
-          }),
-        }),
-      };
-      return cb(trx);
+    // Mock atomicTokenRefresh to return success
+    (atomicTokenRefresh as Mock).mockResolvedValue({
+      success: true,
+      userId: mockUser.id,
+      tokenVersion: mockUser.tokenVersion,
+      role: mockUser.role,
     });
 
     (decodeToken as Mock).mockResolvedValue({
@@ -181,8 +189,9 @@ describe('/api/auth/refresh', () => {
       const response = await POST(request);
 
       // Assert
+      // Expects 4 cookies: accessToken, refreshToken (scoped path), and 2 legacy clear cookies
       const setCookieHeaders = response.headers.getSetCookie();
-      expect(setCookieHeaders.length).toBe(2);
+      expect(setCookieHeaders.length).toBe(4);
     });
 
     it('generates new access and refresh tokens', async () => {
@@ -210,31 +219,8 @@ describe('/api/auth/refresh', () => {
       );
     });
 
-    it('deletes old refresh token to prevent reuse', async () => {
+    it('atomically refreshes token (marks old token as used)', async () => {
       // Arrange
-      let deleteWasCalled = false;
-      (db.transaction as Mock).mockImplementation(async (cb) => {
-        const trx = {
-          query: {
-            refreshTokens: {
-              findFirst: vi.fn().mockResolvedValue(mockRefreshToken),
-            },
-          },
-          delete: vi.fn().mockImplementation(() => {
-            deleteWasCalled = true;
-            return {
-              where: vi.fn().mockResolvedValue(undefined),
-            };
-          }),
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
-        return cb(trx);
-      });
-
       const request = new Request('http://localhost/api/auth/refresh', {
         method: 'POST',
         headers: {
@@ -245,8 +231,9 @@ describe('/api/auth/refresh', () => {
       // Act
       await POST(request);
 
-      // Assert
-      expect(deleteWasCalled).toBe(true);
+      // Assert - atomicTokenRefresh handles marking old token as used
+      // Third param is jwtTokenVersion from decoded refresh token
+      expect(atomicTokenRefresh).toHaveBeenCalledWith('valid-refresh-token', expect.any(Function), 0);
     });
 
     it('stores new refresh token in database', async () => {
@@ -286,28 +273,11 @@ describe('/api/auth/refresh', () => {
     });
 
     it('returns 401 when refresh token is not found in database', async () => {
-      // Arrange - use callback-shaped mock to exercise real control flow
-      (db.transaction as Mock).mockImplementation(async (cb) => {
-        const trx = {
-          query: {
-            refreshTokens: {
-              findFirst: vi.fn().mockResolvedValue(null), // Token not found
-            },
-          },
-          delete: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
-          }),
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
-        return cb(trx);
+      // Arrange - atomicTokenRefresh returns failure
+      (atomicTokenRefresh as Mock).mockResolvedValue({
+        success: false,
+        error: 'Invalid or expired token',
       });
-
-      // Token decodes to null (invalid signature), so no user invalidation occurs
-      (decodeToken as Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/refresh', {
         method: 'POST',
@@ -322,44 +292,15 @@ describe('/api/auth/refresh', () => {
 
       // Assert
       expect(response.status).toBe(401);
-      expect(body.error).toBe('Invalid refresh token.');
-      // Verify transaction callback was actually executed
-      expect(db.transaction).toHaveBeenCalled();
+      expect(body.error).toBe('Invalid or expired token');
+      expect(atomicTokenRefresh).toHaveBeenCalled();
     });
 
     it('returns 401 when token version does not match', async () => {
-      // Arrange - user's tokenVersion has been incremented (logged out elsewhere)
-      // The user in DB now has tokenVersion: 1
-      const updatedMockRefreshToken = {
-        ...mockRefreshToken,
-        user: { ...mockUser, tokenVersion: 1 },
-      };
-
-      // Use callback-shaped mock to exercise real control flow
-      (db.transaction as Mock).mockImplementation(async (cb) => {
-        const trx = {
-          query: {
-            refreshTokens: {
-              findFirst: vi.fn().mockResolvedValue(updatedMockRefreshToken),
-            },
-          },
-          delete: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
-          }),
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
-        return cb(trx);
-      });
-
-      // Token was issued with old tokenVersion: 0
-      (decodeToken as Mock).mockResolvedValue({
-        userId: 'test-user-id',
-        tokenVersion: 0, // old version - doesn't match user's current tokenVersion: 1
-        role: 'user',
+      // Arrange - atomicTokenRefresh detects version mismatch
+      (atomicTokenRefresh as Mock).mockResolvedValue({
+        success: false,
+        error: 'Invalid refresh token version.',
       });
 
       const request = new Request('http://localhost/api/auth/refresh', {
@@ -376,55 +317,22 @@ describe('/api/auth/refresh', () => {
       // Assert
       expect(response.status).toBe(401);
       expect(body.error).toBe('Invalid refresh token version.');
-      // Verify transaction callback was actually executed
-      expect(db.transaction).toHaveBeenCalled();
+      expect(atomicTokenRefresh).toHaveBeenCalled();
     });
   });
 
-  describe('token reuse detection (stolen token scenario)', () => {
-    it('invalidates all sessions when already-used token is reused', async () => {
-      // Arrange - token not in DB but valid signature (stolen and already used)
-      let tokenVersionBumped = false;
-      let deviceTokensRevoked = false;
-
-      (db.transaction as Mock).mockImplementation(async (cb) => {
-        const trx = {
-          query: {
-            refreshTokens: {
-              findFirst: vi.fn().mockResolvedValue(null), // Token already deleted
-            },
-          },
-          delete: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
-          }),
-          update: vi.fn().mockImplementation(() => {
-            return {
-              set: vi.fn().mockImplementation(() => {
-                return {
-                  where: vi.fn().mockImplementation(() => {
-                    tokenVersionBumped = true;
-                    deviceTokensRevoked = true;
-                    return Promise.resolve(undefined);
-                  }),
-                };
-              }),
-            };
-          }),
-        };
-        return cb(trx);
-      });
-
-      // Token is valid (not expired, correct signature) but not in DB
-      (decodeToken as Mock).mockResolvedValue({
-        userId: 'test-user-id',
-        tokenVersion: 0,
-        role: 'user',
+  describe('token reuse detection', () => {
+    it('rejects already-used refresh tokens', async () => {
+      // Arrange - atomicTokenRefresh detects the token was already used
+      (atomicTokenRefresh as Mock).mockResolvedValue({
+        success: false,
+        error: 'Token already used',
       });
 
       const request = new Request('http://localhost/api/auth/refresh', {
         method: 'POST',
         headers: {
-          Cookie: 'refreshToken=stolen-token',
+          Cookie: 'refreshToken=already-used-token',
         },
       });
 
@@ -434,9 +342,8 @@ describe('/api/auth/refresh', () => {
 
       // Assert
       expect(response.status).toBe(401);
-      expect(body.error).toBe('Invalid refresh token.');
-      expect(tokenVersionBumped).toBe(true);
-      expect(deviceTokensRevoked).toBe(true);
+      expect(body.error).toBe('Token already used');
+      expect(atomicTokenRefresh).toHaveBeenCalled();
     });
   });
 

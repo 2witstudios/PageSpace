@@ -558,29 +558,104 @@ async function migrateWithMetrics() {
 
 ## Priority Matrix
 
-| Gap | Severity | Effort | Priority | Implementation Notes |
-|-----|----------|--------|----------|---------------------|
-| Race Conditions | Critical | Medium | 1 | Requires DB transaction isolation testing |
-| SSRF Prevention | Critical | Low | 2 | Single-service change (processor) |
-| Distributed Rate Limit | Critical | Medium → High | 3 | Cross-service: web, processor, realtime; Redis coordination |
-| Session Fixation | High | Low | 4 | Web service only |
-| Cookie Security | High | Low | 5 | Configuration changes |
-| CSP Headers | High | Low | 6 | Middleware addition |
-| Token Hashing Migration | High | Medium | 7 | Affects refresh_tokens + mcp_tokens; audit schema first |
-| Path Traversal Advanced | Medium | Low | 8 | Processor service only |
-| Timing Attacks | Medium | Low | 9 | Multiple endpoints; consider shared utility |
-| Password Reset | Medium | Medium | 10 | Requires email service integration |
-| WebSocket Replay | Medium | Medium | 11 | Realtime service + broadcast protocol change |
-| SQL Injection Edge | Medium | Low | 12 | Code review task |
-| Infrastructure | Medium | Medium → High | 13 | Docker/K8s config; may require deployment changes |
-| Dependency Audit | Low | Low | 14 | CI/CD integration |
-| Secret Scanning | Low | Low | 15 | One-time setup + CI hook |
+| Gap | Severity | Effort | Priority | Status | Implementation Notes |
+|-----|----------|--------|----------|--------|---------------------|
+| Race Conditions | Critical | Medium | 1 | 🟡 IN PROGRESS | DB layer complete, route integration pending |
+| SSRF Prevention | Critical | Low | 2 | ⏳ Pending | Single-service change (processor) |
+| Distributed Rate Limit | Critical | Medium → High | 3 | ✅ COMPLETE | Redis-based rate limiting implemented |
+| Session Fixation | High | Low | 4 | ✅ COMPLETE | Session ID includes iat timestamp |
+| Cookie Security | High | Low | 5 | ✅ COMPLETE | Centralized config in cookie-config.ts |
+| CSP Headers | High | Low | 6 | ⏳ Pending | Middleware addition |
+| Token Hashing Migration | High | Medium | 7 | ✅ COMPLETE | tokenHash columns in use |
+| Path Traversal Advanced | Medium | Low | 8 | ⏳ Pending | Processor service only |
+| Timing Attacks | Medium | Low | 9 | ⏳ Pending | Multiple endpoints; consider shared utility |
+| Password Reset | Medium | Medium | 10 | ⏳ Pending | Requires email service integration |
+| WebSocket Replay | Medium | Medium | 11 | ✅ COMPLETE | HMAC signatures + 5-min window |
+| SQL Injection Edge | Medium | Low | 12 | ⏳ Pending | Code review task |
+| Infrastructure | Medium | Medium → High | 13 | ⏳ Pending | Docker/K8s config; may require deployment changes |
+| Dependency Audit | Low | Low | 14 | ⏳ Pending | CI/CD integration |
+| Secret Scanning | Low | Low | 15 | ⏳ Pending | One-time setup + CI hook |
+
+---
+
+## Phase 3 Implementation Progress
+
+### P3-T4: Cookie Security Centralization ✅ COMPLETE
+
+**Files Created:**
+- `apps/web/src/lib/auth/cookie-config.ts` - Centralized cookie configuration
+- `apps/web/src/lib/auth/__tests__/cookie-config.test.ts` - 22 tests
+
+**Key Features:**
+- httpOnly, secure (production), sameSite=strict
+- Refresh token path scoped to `/api/auth` (covers both refresh and logout)
+- Legacy cookie migration (clears old path `/` cookies)
+- Helper functions: `appendAuthCookies()`, `appendClearCookies()`
+
+**Routes Updated:**
+- `apps/web/src/app/api/auth/login/route.ts`
+- `apps/web/src/app/api/auth/refresh/route.ts`
+- `apps/web/src/app/api/auth/logout/route.ts`
+- `apps/web/src/app/api/auth/device/refresh/route.ts`
+
+### P3-T2: Race Condition Prevention 🟡 IN PROGRESS
+
+**Files Created:**
+- `packages/db/src/transactions/auth-transactions.ts` - 3 atomic functions
+- `packages/db/src/transactions/__tests__/auth-transactions.test.ts` - Integration tests
+
+**Atomic Functions Implemented:**
+
+1. **`atomicTokenRefresh()`** - FOR UPDATE locking for refresh tokens
+   - Token reuse detection → invalidates ALL user sessions
+   - Bumps tokenVersion and revokes all device tokens on reuse
+
+2. **`atomicDeviceTokenRotation()`** - FOR UPDATE locking for device rotation
+   - Validates device token, revokes old, creates new atomically
+   - Updates metadata (userAgent, ipAddress)
+
+3. **`atomicValidateOrCreateDeviceToken()`** - FOR UPDATE locking for device creation
+   - Locks user row to serialize device token creation
+   - Prevents duplicate tokens on concurrent logins
+
+**Pending Route Integration:**
+- [ ] Web refresh route → `atomicTokenRefresh()`
+- [ ] Device/mobile refresh routes → `atomicDeviceTokenRotation()`
+- [ ] device-auth-utils.ts → atomic `validateOrCreateDeviceToken`
+- [ ] OAuth callback routes → atomic device token creation
+- [ ] Login/signup routes → atomic device token creation
+
+### P3-T1: SSRF Prevention ⏳ PENDING
+
+URL validator utility not yet implemented.
+
+### P3-T3: Session Fixation ✅ COMPLETE (Pre-existing)
+
+Session fixation already prevented by architecture:
+- `getSessionIdFromJWT()` in `packages/lib/src/auth/csrf-utils.ts:89-95`
+- Session ID = HMAC(userId + tokenVersion + iat)
+- New `iat` on every login = new session ID
+
+### P3-T5: WebSocket Replay Prevention ✅ COMPLETE (Pre-existing)
+
+Location: `packages/lib/src/auth/broadcast-auth.ts`
+- HMAC-SHA256 signatures (lines 26-34)
+- 5-minute timestamp window (line 18)
+- Timing-safe comparison (lines 95-103)
 
 ---
 
 ## Test File Structure
 
 ```text
+# ✅ IMPLEMENTED
+packages/db/src/transactions/__tests__/
+└── auth-transactions.test.ts         # Integration tests for atomic token ops
+
+apps/web/src/lib/auth/__tests__/
+└── cookie-config.test.ts             # Cookie configuration tests (22 tests)
+
+# ⏳ PLANNED
 packages/lib/src/__tests__/
 ├── security-invariants.test.ts       # Core security invariants
 ├── race-conditions.test.ts           # Concurrency tests
@@ -593,7 +668,6 @@ packages/lib/src/__tests__/
 apps/web/src/app/api/auth/__tests__/
 ├── refresh-race-condition.test.ts    # Token refresh races
 ├── session-fixation.test.ts          # Session security
-├── cookie-attributes.test.ts         # Cookie configuration
 ├── password-reset-security.test.ts   # Reset flow
 └── device-token-security.test.ts     # Device management
 

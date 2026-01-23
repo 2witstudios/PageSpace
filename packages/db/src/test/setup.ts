@@ -1,6 +1,4 @@
-import { beforeAll, afterAll, afterEach } from 'vitest'
-import { sql } from 'drizzle-orm'
-import { db } from '../index'
+import { beforeAll, afterAll } from 'vitest'
 
 // Encryption environment variables
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'test-encryption-key-32-chars-minimum-required-length'
@@ -10,10 +8,11 @@ beforeAll(async () => {
   console.log('Test database ready')
 })
 
-afterEach(async () => {
-  // Clean up test data after each test
-  await db.execute(sql`TRUNCATE TABLE chat_messages, page_permissions, pages, drives, users CASCADE`)
-})
+// NOTE: Global afterEach cleanup removed intentionally.
+// Each test file has its own cleanup in afterEach to properly handle its specific data.
+// A global truncate was causing FK constraint failures in @pagespace/lib tests
+// because Turbo runs tests for different packages in parallel, and the global
+// truncate was deleting users that lib tests had just created.
 
 afterAll(async () => {
   // Close database connection

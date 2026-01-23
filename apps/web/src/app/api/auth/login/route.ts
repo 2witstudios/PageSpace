@@ -12,11 +12,11 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { serialize, parse } from 'cookie';
+import { parse } from 'cookie';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, appendAuthCookies } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
 const loginSchema = z.object({
@@ -210,29 +210,8 @@ export async function POST(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
-    const isProduction = process.env.NODE_ENV === 'production';
-    
-    const accessTokenCookie = serialize('accessToken', accessToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 15 * 60, // 15 minutes
-      ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-    });
-
-    const refreshTokenCookie = serialize('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
-      ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-    });
-
     const headers = new Headers();
-    headers.append('Set-Cookie', accessTokenCookie);
-    headers.append('Set-Cookie', refreshTokenCookie);
+    appendAuthCookies(headers, accessToken, refreshToken);
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
     // After successful login and rate limit reset, remaining attempts are back to max
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));

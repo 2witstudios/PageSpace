@@ -46,12 +46,17 @@ export const refreshTokens = pgTable('refresh_tokens', {
   platform: platformType('platform'),
   deviceTokenId: text('deviceTokenId'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  // Token revocation tracking for token reuse detection
+  revokedAt: timestamp('revokedAt', { mode: 'date' }),
+  revokedReason: text('revokedReason'), // 'refreshed', 'logout', 'token_reuse_detected'
 }, (table) => {
   return {
     userIdx: index('refresh_tokens_user_id_idx').on(table.userId),
     tokenHashPartialIdx: uniqueIndex('refresh_tokens_token_hash_partial_idx')
       .on(table.tokenHash)
       .where(sql`${table.tokenHash} IS NOT NULL`),
+    // Index for efficient token reuse detection queries
+    revokedTokensIdx: index('refresh_tokens_revoked_idx').on(table.tokenHash, table.revokedAt),
   };
 });
 
@@ -85,6 +90,8 @@ export const deviceTokens = pgTable('device_tokens', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   revokedAt: timestamp('revokedAt', { mode: 'date' }),
   revokedReason: text('revokedReason'),
+  // For grace period handling: links to the new token that replaced this one
+  replacedByTokenId: text('replacedByTokenId'),
 }, (table) => {
   return {
     userIdx: index('device_tokens_user_id_idx').on(table.userId),

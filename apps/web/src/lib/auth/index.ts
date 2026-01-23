@@ -303,3 +303,14 @@ export {
 } from './origin-validation';
 export { getClientIP } from './auth-helpers';
 export { validateLoginCSRFToken } from './login-csrf-utils';
+export {
+  COOKIE_CONFIG,
+  createAccessTokenCookie,
+  createRefreshTokenCookie,
+  createClearAccessTokenCookie,
+  createClearRefreshTokenCookie,
+  createClearLegacyRefreshTokenCookie,
+  createClearCookies,
+  appendAuthCookies,
+  appendClearCookies,
+} from './cookie-config';
