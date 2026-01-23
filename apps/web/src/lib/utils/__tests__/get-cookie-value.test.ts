@@ -38,20 +38,20 @@ describe('get-cookie-value', () => {
     });
 
     it('extracts simple cookie value', () => {
-      document.cookie = 'accessToken=abc123';
-      expect(getCookieValue('accessToken')).toBe('abc123');
+      document.cookie = 'ps_session=abc123';
+      expect(getCookieValue('ps_session')).toBe('abc123');
     });
 
     it('extracts cookie from multiple cookies', () => {
-      document.cookie = 'first=one; accessToken=myToken; last=three';
-      expect(getCookieValue('accessToken')).toBe('myToken');
+      document.cookie = 'first=one; ps_session=myToken; last=three';
+      expect(getCookieValue('ps_session')).toBe('myToken');
     });
 
     it('handles cookies with = in the value (JWT tokens)', () => {
       // JWT tokens often contain = characters in their base64 encoding
       const jwtWithEquals = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0=';
-      document.cookie = `accessToken=${jwtWithEquals}`;
-      expect(getCookieValue('accessToken')).toBe(jwtWithEquals);
+      document.cookie = `ps_session=${jwtWithEquals}`;
+      expect(getCookieValue('ps_session')).toBe(jwtWithEquals);
     });
 
     it('handles URL-encoded values', () => {
@@ -60,8 +60,8 @@ describe('get-cookie-value', () => {
     });
 
     it('handles cookies with spaces around semicolons', () => {
-      document.cookie = 'first=one;   accessToken=token  ; last=three';
-      expect(getCookieValue('accessToken')).toBe('token  ');
+      document.cookie = 'first=one;   ps_session=token  ; last=three';
+      expect(getCookieValue('ps_session')).toBe('token  ');
     });
 
     it('returns null and does not throw on malformed cookies', () => {
@@ -75,30 +75,30 @@ describe('get-cookie-value', () => {
 
   describe('getCookieValueFromHeader (server-side)', () => {
     it('returns null when cookieHeader is null', () => {
-      expect(getCookieValueFromHeader(null, 'accessToken')).toBeNull();
+      expect(getCookieValueFromHeader(null, 'ps_session')).toBeNull();
     });
 
     it('returns null when cookieHeader is empty string', () => {
-      expect(getCookieValueFromHeader('', 'accessToken')).toBeNull();
+      expect(getCookieValueFromHeader('', 'ps_session')).toBeNull();
     });
 
     it('returns null when cookie is not found', () => {
-      expect(getCookieValueFromHeader('other=value', 'accessToken')).toBeNull();
+      expect(getCookieValueFromHeader('other=value', 'ps_session')).toBeNull();
     });
 
     it('extracts simple cookie value', () => {
-      expect(getCookieValueFromHeader('accessToken=abc123', 'accessToken')).toBe('abc123');
+      expect(getCookieValueFromHeader('ps_session=abc123', 'ps_session')).toBe('abc123');
     });
 
     it('extracts cookie from multiple cookies', () => {
-      const header = 'first=one; accessToken=myToken; last=three';
-      expect(getCookieValueFromHeader(header, 'accessToken')).toBe('myToken');
+      const header = 'first=one; ps_session=myToken; last=three';
+      expect(getCookieValueFromHeader(header, 'ps_session')).toBe('myToken');
     });
 
     it('handles cookies with = in the value (JWT tokens)', () => {
       const jwtWithEquals = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0=';
-      const header = `accessToken=${jwtWithEquals}`;
-      expect(getCookieValueFromHeader(header, 'accessToken')).toBe(jwtWithEquals);
+      const header = `ps_session=${jwtWithEquals}`;
+      expect(getCookieValueFromHeader(header, 'ps_session')).toBe(jwtWithEquals);
     });
 
     it('handles multiple = characters in value', () => {
@@ -113,14 +113,14 @@ describe('get-cookie-value', () => {
     });
 
     it('handles cookies with leading/trailing spaces', () => {
-      const header = '  accessToken=token  ';
-      expect(getCookieValueFromHeader(header, 'accessToken')).toBe('token  ');
+      const header = '  ps_session=token  ';
+      expect(getCookieValueFromHeader(header, 'ps_session')).toBe('token  ');
     });
 
     it('does not match partial cookie names', () => {
-      // 'accessToken' should not match 'myAccessToken'
-      const header = 'myAccessToken=wrong; accessToken=correct';
-      expect(getCookieValueFromHeader(header, 'accessToken')).toBe('correct');
+      // 'ps_session' should not match 'myAccessToken'
+      const header = 'myAccessToken=wrong; ps_session=correct';
+      expect(getCookieValueFromHeader(header, 'ps_session')).toBe('correct');
     });
 
     it('handles empty value correctly', () => {

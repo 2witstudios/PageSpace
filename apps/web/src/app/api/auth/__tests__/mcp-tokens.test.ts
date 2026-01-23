@@ -108,7 +108,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({ name: 'My API Token' }),
@@ -160,7 +160,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({ name: 'My Token' }),
@@ -193,7 +193,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({ name: 'My Token' }),
@@ -215,7 +215,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({}),
@@ -236,7 +236,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({ name: '' }),
@@ -258,7 +258,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({ name: longName }),
@@ -304,7 +304,7 @@ describe('/api/auth/mcp-tokens', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
           body: JSON.stringify({ name: 'My Token' }),
@@ -348,7 +348,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
           },
         });
 
@@ -367,7 +367,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
           },
         });
 
@@ -390,7 +390,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
           },
         });
 
@@ -412,7 +412,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
           },
         });
 
@@ -432,7 +432,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'accessToken=valid-token',
+            Cookie: 'ps_session=valid-token',
           },
         });
 
@@ -459,7 +459,7 @@ describe('/api/auth/mcp-tokens', () => {
           {
             method: 'DELETE',
             headers: {
-              Cookie: 'accessToken=valid-token',
+              Cookie: 'ps_session=valid-token',
               'X-CSRF-Token': 'valid-csrf-token',
             },
           }
@@ -507,7 +507,7 @@ describe('/api/auth/mcp-tokens', () => {
           {
             method: 'DELETE',
             headers: {
-              Cookie: 'accessToken=valid-token',
+              Cookie: 'ps_session=valid-token',
               'X-CSRF-Token': 'valid-csrf-token',
             },
           }
@@ -535,7 +535,7 @@ describe('/api/auth/mcp-tokens', () => {
           {
             method: 'DELETE',
             headers: {
-              Cookie: 'accessToken=valid-token',
+              Cookie: 'ps_session=valid-token',
               'X-CSRF-Token': 'valid-csrf-token',
             },
           }
@@ -558,7 +558,7 @@ describe('/api/auth/mcp-tokens', () => {
           {
             method: 'DELETE',
             headers: {
-              Cookie: 'accessToken=valid-token',
+              Cookie: 'ps_session=valid-token',
               'X-CSRF-Token': 'valid-csrf-token',
             },
           }
@@ -581,7 +581,7 @@ describe('/api/auth/mcp-tokens', () => {
           {
             method: 'DELETE',
             headers: {
-              Cookie: 'accessToken=valid-token',
+              Cookie: 'ps_session=valid-token',
               'X-CSRF-Token': 'valid-csrf-token',
             },
           }

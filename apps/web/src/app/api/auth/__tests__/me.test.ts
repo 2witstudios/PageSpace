@@ -67,7 +67,7 @@ const createRequest = () => {
   return new Request('http://localhost/api/auth/me', {
     method: 'GET',
     headers: {
-      Cookie: 'accessToken=valid-token',
+      Cookie: 'ps_session=valid-token',
     },
   });
 };
