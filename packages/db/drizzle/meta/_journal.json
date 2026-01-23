@@ -295,6 +295,13 @@
       "when": 1769132645445,
       "tag": "0041_known_sally_floyd",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1769196745850,
+      "tag": "0042_conscious_tombstone",
+      "breakpoints": true
     }
   ]
 }

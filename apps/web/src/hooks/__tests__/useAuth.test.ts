@@ -105,7 +105,7 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   post: (...args: unknown[]) => mockPost(...args),
-  clearJWTCache: () => mockClearJWTCache(),
+  clearSessionCache: () => mockClearJWTCache(),
 }));
 
 vi.mock('@/lib/analytics', () => ({

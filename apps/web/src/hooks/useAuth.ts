@@ -4,7 +4,7 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
 import { useTokenRefresh } from './useTokenRefresh';
-import { post, clearJWTCache } from '@/lib/auth/auth-fetch';
+import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
 import { z } from 'zod/v4';
 
@@ -138,7 +138,7 @@ export function useAuth(): {
             deviceToken: userData.deviceToken,
           });
 
-          clearJWTCache();
+          clearSessionCache();
 
           // CRITICAL FIX: Verify token is actually retrievable before proceeding
           // This prevents race condition where loadSession is triggered before storage completes
@@ -228,7 +228,7 @@ export function useAuth(): {
         } catch (err) {
           console.error('Failed to clear desktop auth session', err);
         }
-        clearJWTCache();
+        clearSessionCache();
       }
 
       // Clear device token from localStorage (web platform)
@@ -350,7 +350,7 @@ export function useAuth(): {
             localStorage.setItem('deviceToken', tokensData.deviceToken);
           }
 
-          clearJWTCache();
+          clearSessionCache();
 
           // Verify token is retrievable
           const storedSession = await window.electron.auth.getSessionToken();

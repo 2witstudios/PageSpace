@@ -7,7 +7,6 @@
 import {
   db,
   users,
-  refreshTokens,
   deviceTokens,
   eq,
   and,
@@ -15,26 +14,9 @@ import {
   sql,
   type InferSelectModel,
 } from '@pagespace/db';
-import { createId } from '@paralleldrive/cuid2';
-import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 
 // Types derived from Drizzle schema - ensures type safety without manual definitions
 export type User = InferSelectModel<typeof users>;
-export type RefreshToken = InferSelectModel<typeof refreshTokens>;
-export type RefreshTokenWithUser = RefreshToken & { user: User };
-
-export type PlatformType = 'web' | 'desktop' | 'ios' | 'android';
-
-export interface CreateRefreshTokenInput {
-  token: string;
-  userId: string;
-  device?: string | null;
-  userAgent?: string | null;
-  ip?: string;
-  expiresAt: Date;
-  deviceTokenId?: string;
-  platform?: PlatformType;
-}
 
 export const authRepository = {
   /**
@@ -55,64 +37,6 @@ export const authRepository = {
       where: eq(users.id, userId),
     });
     return user ?? null;
-  },
-
-  /**
-   * Store a new refresh token in the database
-   * SECURITY: Only hash stored, never plaintext - hash computed here from raw token
-   */
-  async createRefreshToken(input: CreateRefreshTokenInput): Promise<void> {
-    const tokenHash = hashToken(input.token);
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: tokenHash, // Store hash, NOT plaintext
-      tokenHash: tokenHash,
-      tokenPrefix: getTokenPrefix(input.token),
-      userId: input.userId,
-      device: input.device,
-      userAgent: input.userAgent,
-      ip: input.ip,
-      lastUsedAt: new Date(),
-      platform: input.platform ?? 'web',
-      expiresAt: input.expiresAt,
-      deviceTokenId: input.deviceTokenId,
-    });
-  },
-
-  /**
-   * Find a refresh token with its associated user (for refresh flow)
-   * Uses hash-only lookup (no plaintext fallback)
-   */
-  async findRefreshTokenWithUser(
-    token: string
-  ): Promise<RefreshTokenWithUser | null> {
-    const tokenHash = hashToken(token);
-
-    const record = await db.query.refreshTokens.findFirst({
-      where: eq(refreshTokens.tokenHash, tokenHash),
-      with: {
-        user: true,
-      },
-    });
-
-    return record ?? null;
-  },
-
-  /**
-   * Delete a refresh token by its value (for token rotation)
-   * Uses hash-only lookup (no plaintext fallback)
-   */
-  async deleteRefreshToken(token: string): Promise<void> {
-    const tokenHash = hashToken(token);
-
-    await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
-  },
-
-  /**
-   * Delete all refresh tokens for a user (for logout all devices)
-   */
-  async deleteAllUserRefreshTokens(userId: string): Promise<void> {
-    await db.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
   },
 
   /**

@@ -34,17 +34,6 @@ describe('cookie-config', () => {
       expect(COOKIE_CONFIG.session.maxAge).toBe(7 * 24 * 60 * 60); // 7 days
       expect(COOKIE_CONFIG.session.path).toBe('/');
     });
-
-    it('should have legacy cookie names for migration', () => {
-      expect(COOKIE_CONFIG.legacy.accessToken).toBe('accessToken');
-      expect(COOKIE_CONFIG.legacy.refreshToken).toBe('refreshToken');
-    });
-
-    it('should have legacy paths for clearing old cookies', () => {
-      expect(COOKIE_CONFIG.legacy.legacyPaths).toContain('/');
-      expect(COOKIE_CONFIG.legacy.legacyPaths).toContain('/api/auth');
-      expect(COOKIE_CONFIG.legacy.legacyPaths).toContain('/api/auth/refresh');
-    });
   });
 
   describe('createSessionCookie', () => {
@@ -123,28 +112,13 @@ describe('cookie-config', () => {
       expect(sessionCookie).toContain('session=ps_sess_test123');
     });
 
-    it('should clear legacy accessToken cookies at all paths', () => {
+    it('should set only the session cookie', () => {
       const headers = new Headers();
       appendSessionCookie(headers, 'ps_sess_test123');
 
       const setCookieHeaders = headers.getSetCookie();
-      const accessTokenClearCookies = setCookieHeaders.filter(
-        (c) => c.startsWith('accessToken=;')
-      );
-      // Should clear accessToken at 3 legacy paths
-      expect(accessTokenClearCookies.length).toBe(3);
-    });
-
-    it('should clear legacy refreshToken cookies at all paths', () => {
-      const headers = new Headers();
-      appendSessionCookie(headers, 'ps_sess_test123');
-
-      const setCookieHeaders = headers.getSetCookie();
-      const refreshTokenClearCookies = setCookieHeaders.filter(
-        (c) => c.startsWith('refreshToken=;')
-      );
-      // Should clear refreshToken at 3 legacy paths
-      expect(refreshTokenClearCookies.length).toBe(3);
+      // Should only set the session cookie
+      expect(setCookieHeaders.length).toBe(1);
     });
   });
 
@@ -159,16 +133,16 @@ describe('cookie-config', () => {
       expect(sessionClearCookie).toContain('Expires=Thu, 01 Jan 1970');
     });
 
-    it('should clear all legacy cookies', () => {
+    it('should set only the session clear cookie', () => {
       const headers = new Headers();
       appendClearCookies(headers);
 
       const setCookieHeaders = headers.getSetCookie();
-      // 1 session + 3 accessToken paths + 3 refreshToken paths = 7 cookies
-      expect(setCookieHeaders.length).toBe(7);
+      // Should only clear the session cookie
+      expect(setCookieHeaders.length).toBe(1);
     });
 
-    it('should expire all cookies', () => {
+    it('should expire the session cookie', () => {
       const headers = new Headers();
       appendClearCookies(headers);
 

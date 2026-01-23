@@ -4,7 +4,6 @@ import { POST } from '../device/refresh/route';
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id' },
-  refreshTokens: {},
   deviceTokens: { id: 'id', deviceId: 'deviceId' },
   db: {
     query: {

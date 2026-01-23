@@ -12,9 +12,6 @@ import { hashToken } from '../auth/token-utils';
 vi.mock('@pagespace/db', () => {
   const mockDb = {
     query: {
-      refreshTokens: {
-        findFirst: vi.fn(),
-      },
       mcpTokens: {
         findFirst: vi.fn(),
       },
@@ -22,7 +19,6 @@ vi.mock('@pagespace/db', () => {
   };
   return {
     db: mockDb,
-    refreshTokens: { tokenHash: 'tokenHash', token: 'token' },
     mcpTokens: { tokenHash: 'tokenHash', token: 'token' },
     eq: vi.fn((field, value) => ({ field, value, op: 'eq' })),
     and: vi.fn((...conditions) => ({ conditions, op: 'and' })),
@@ -33,7 +29,6 @@ vi.mock('@pagespace/db', () => {
 // Import after mocking
 import { db } from '@pagespace/db';
 import {
-  findRefreshTokenByValue,
   findMCPTokenByValue,
 } from '../auth/token-lookup';
 
@@ -44,85 +39,6 @@ describe('Token Lookup - Hash Only', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  describe('findRefreshTokenByValue', () => {
-    const mockToken = 'ps_refresh_abc123xyz456789012345678901234567890';
-    const mockTokenHash = hashToken(mockToken);
-
-    describe('given a token that exists with hash in database', () => {
-      it('should find by hash lookup and return the token record', async () => {
-        const mockRecord = {
-          id: 'token-id-1',
-          userId: 'user-id-1',
-          tokenHash: mockTokenHash,
-          tokenPrefix: 'ps_refresh_ab',
-          token: mockToken,
-          user: { id: 'user-id-1', tokenVersion: 1, role: 'user' },
-          createdAt: new Date(),
-          device: null,
-          ip: null,
-          userAgent: null,
-          expiresAt: new Date(),
-          lastUsedAt: new Date(),
-          platform: 'web' as const,
-          deviceTokenId: null,
-          revokedAt: null,
-          revokedReason: null,
-        };
-
-        vi.mocked(db.query.refreshTokens.findFirst).mockResolvedValue(mockRecord);
-
-        const result = await findRefreshTokenByValue(mockToken);
-
-        expect(result).toEqual(mockRecord);
-        expect(db.query.refreshTokens.findFirst).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    describe('given a non-existent token', () => {
-      it('should return null after hash lookup fails', async () => {
-        vi.mocked(db.query.refreshTokens.findFirst).mockResolvedValue(undefined);
-
-        const result = await findRefreshTokenByValue('nonexistent_token');
-
-        expect(result).toBeNull();
-        expect(db.query.refreshTokens.findFirst).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    describe('given an empty token', () => {
-      it('should return null without database queries', async () => {
-        const result = await findRefreshTokenByValue('');
-
-        expect(result).toBeNull();
-        expect(db.query.refreshTokens.findFirst).not.toHaveBeenCalled();
-      });
-    });
-
-    describe('given undefined token', () => {
-      it('should return null without database queries', async () => {
-        const result = await findRefreshTokenByValue(undefined as unknown as string);
-
-        expect(result).toBeNull();
-        expect(db.query.refreshTokens.findFirst).not.toHaveBeenCalled();
-      });
-    });
-
-    describe('given a legacy token without hash (migration complete)', () => {
-      it('should return null - no plaintext fallback', async () => {
-        const legacyToken = 'legacy_token_without_hash';
-
-        // Hash lookup returns nothing - no fallback to plaintext
-        vi.mocked(db.query.refreshTokens.findFirst).mockResolvedValue(undefined);
-
-        const result = await findRefreshTokenByValue(legacyToken);
-
-        // Legacy tokens are no longer valid - users must re-login
-        expect(result).toBeNull();
-        expect(db.query.refreshTokens.findFirst).toHaveBeenCalledTimes(1);
-      });
-    });
   });
 
   describe('findMCPTokenByValue', () => {

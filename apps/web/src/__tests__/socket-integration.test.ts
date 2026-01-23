@@ -17,7 +17,7 @@ const mockRefreshAuthSession = vi.fn();
 const mockClearJWTCache = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
   refreshAuthSession: () => mockRefreshAuthSession(),
-  clearJWTCache: () => mockClearJWTCache(),
+  clearSessionCache: () => mockClearJWTCache(),
 }));
 
 vi.mock('@pagespace/lib/broadcast-auth', () => ({

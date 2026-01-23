@@ -937,10 +937,6 @@ export const clearCSRFToken = () =>
 export const clearSessionCache = () =>
   getAuthFetch().clearSessionCache();
 
-/** @deprecated Use clearSessionCache instead */
-export const clearJWTCache = () =>
-  getAuthFetch().clearSessionCache();
-
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();
 

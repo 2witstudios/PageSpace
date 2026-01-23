@@ -29,14 +29,6 @@ export const COOKIE_CONFIG = {
     maxAge: SESSION_MAX_AGE,
     path: '/',
   },
-  /**
-   * Legacy cookie names to clear during migration from JWT to session tokens
-   */
-  legacy: {
-    accessToken: 'accessToken',
-    refreshToken: 'refreshToken',
-    legacyPaths: ['/', '/api/auth', '/api/auth/refresh'],
-  },
 } as const;
 
 /**
@@ -80,60 +72,22 @@ export function createClearSessionCookie(): string {
 }
 
 /**
- * Create cookies that clear legacy JWT tokens
- * Used during migration from JWT to session tokens
- */
-function createClearLegacyCookies(): string[] {
-  const common = getCommonOptions();
-  const cookies: string[] = [];
-
-  // Clear accessToken from all paths
-  for (const path of COOKIE_CONFIG.legacy.legacyPaths) {
-    cookies.push(serialize(COOKIE_CONFIG.legacy.accessToken, '', {
-      ...common,
-      path,
-      expires: new Date(0),
-    }));
-  }
-
-  // Clear refreshToken from all paths
-  for (const path of COOKIE_CONFIG.legacy.legacyPaths) {
-    cookies.push(serialize(COOKIE_CONFIG.legacy.refreshToken, '', {
-      ...common,
-      path,
-      expires: new Date(0),
-    }));
-  }
-
-  return cookies;
-}
-
-/**
  * Append session cookie to headers for login responses
- * Also clears any legacy JWT cookies
  *
  * @param headers - Headers object to append cookies to
  * @param sessionToken - The opaque session token
  */
 export function appendSessionCookie(headers: Headers, sessionToken: string): void {
   headers.append('Set-Cookie', createSessionCookie(sessionToken));
-  // Clear legacy JWT cookies during migration
-  for (const cookie of createClearLegacyCookies()) {
-    headers.append('Set-Cookie', cookie);
-  }
 }
 
 /**
  * Append clear cookies to headers for logout responses
- * Clears session cookie and all legacy JWT cookies
  *
  * @param headers - Headers object to append cookies to
  */
 export function appendClearCookies(headers: Headers): void {
   headers.append('Set-Cookie', createClearSessionCookie());
-  for (const cookie of createClearLegacyCookies()) {
-    headers.append('Set-Cookie', cookie);
-  }
 }
 
 /**

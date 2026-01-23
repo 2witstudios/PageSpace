@@ -19,7 +19,6 @@ vi.mock('@pagespace/db', () => ({
   users: { email: 'email', id: 'id' },
   drives: {},
   userAiSettings: {},
-  refreshTokens: {},
   db: {
     query: {
       users: {

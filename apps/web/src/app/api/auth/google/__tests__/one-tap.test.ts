@@ -31,7 +31,6 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
-  refreshTokens: { id: 'id' },
   db: {
     query: {
       users: {

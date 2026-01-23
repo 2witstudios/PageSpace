@@ -361,12 +361,12 @@ export const useAuthStore = create<AuthState>()(
                 console.log('[AUTH_STORE] Desktop token validation failed, attempting token refresh');
 
                 // Use the unified refresh flow - it handles device token, rate limiting, etc.
-                const { refreshAuthSession, clearJWTCache } = await import('@/lib/auth/auth-fetch');
+                const { refreshAuthSession, clearSessionCache } = await import('@/lib/auth/auth-fetch');
                 const refreshResult = await refreshAuthSession();
 
                 if (refreshResult.success) {
                   console.log('[AUTH_STORE] Token refresh succeeded, retrying session load');
-                  clearJWTCache();
+                  clearSessionCache();
                   return get().loadSession(true);
                 }
 
@@ -638,8 +638,8 @@ export const authStoreHelpers = {
         }
 
         try {
-          const { clearJWTCache } = await import('@/lib/auth/auth-fetch');
-          clearJWTCache();
+          const { clearSessionCache } = await import('@/lib/auth/auth-fetch');
+          clearSessionCache();
         } catch (error) {
           console.error('[AUTH_STORE] Failed to clear JWT cache on expiry', error);
         }

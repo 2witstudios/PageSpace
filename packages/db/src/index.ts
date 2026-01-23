@@ -26,8 +26,6 @@ export * from './schema';
 export {
   users,
   usersRelations,
-  refreshTokens,
-  refreshTokensRelations,
   deviceTokens,
   deviceTokensRelations,
   mcpTokens,

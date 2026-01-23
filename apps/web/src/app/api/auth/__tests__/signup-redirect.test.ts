@@ -8,7 +8,6 @@ import { POST } from '../signup/route';
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', email: 'email', tokenVersion: 'tokenVersion', role: 'role' },
   userAiSettings: { userId: 'userId' },
-  refreshTokens: { id: 'id' },
   db: {
     query: {
       users: {

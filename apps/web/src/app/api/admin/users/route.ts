@@ -5,7 +5,6 @@ import {
   pages,
   chatMessages,
   messages,
-  refreshTokens,
   userAiSettings,
   subscriptions,
   eq,
@@ -66,7 +65,6 @@ export async function GET(request: Request) {
           pagesCount,
           chatMessagesCount,
           globalMessagesCount,
-          refreshTokensCount,
           aiSettingsCount
         ] = await Promise.all([
           // Count drives owned by user
@@ -80,8 +78,6 @@ export async function GET(request: Request) {
           db.select({ count: count() }).from(chatMessages).where(eq(chatMessages.userId, user.id)),
           // Count global messages (conversations)
           db.select({ count: count() }).from(messages).where(eq(messages.userId, user.id)),
-          // Count refresh tokens
-          db.select({ count: count() }).from(refreshTokens).where(eq(refreshTokens.userId, user.id)),
           // Count AI settings
           db.select({ count: count() }).from(userAiSettings).where(eq(userAiSettings.userId, user.id))
         ]);
@@ -92,7 +88,6 @@ export async function GET(request: Request) {
           pagesCount: pagesCount[0]?.count || 0,
           chatMessagesCount: chatMessagesCount[0]?.count || 0,
           globalMessagesCount: globalMessagesCount[0]?.count || 0,
-          refreshTokensCount: refreshTokensCount[0]?.count || 0,
           aiSettingsCount: aiSettingsCount[0]?.count || 0,
         };
       })
@@ -108,18 +103,6 @@ export async function GET(request: Request) {
         updatedAt: userAiSettings.updatedAt
       })
       .from(userAiSettings);
-
-    // Get recent refresh tokens for each user
-    const recentTokens = await db
-      .select({
-        userId: refreshTokens.userId,
-        device: refreshTokens.device,
-        ip: refreshTokens.ip,
-        userAgent: refreshTokens.userAgent,
-        createdAt: refreshTokens.createdAt
-      })
-      .from(refreshTokens)
-      .orderBy(refreshTokens.createdAt);
 
     // Fetch Stripe subscription details to check if gifted
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
@@ -152,7 +135,6 @@ export async function GET(request: Request) {
     // Combine the data
     const enrichedUsers = usersWithStats.map(user => {
       const userAiSettings = allAiSettings.filter(setting => setting.userId === user.id);
-      const userTokens = recentTokens.filter(token => token.userId === user.id);
       const subscription = subscriptionsByUserId.get(user.id);
       const stripeDetails = stripeSubscriptionDetails.get(user.id);
 
@@ -163,12 +145,10 @@ export async function GET(request: Request) {
           pages: user.pagesCount,
           chatMessages: user.chatMessagesCount,
           globalMessages: user.globalMessagesCount,
-          refreshTokens: user.refreshTokensCount,
           aiSettings: user.aiSettingsCount,
           totalMessages: user.chatMessagesCount + user.globalMessagesCount
         },
         aiSettings: userAiSettings,
-        recentTokens: userTokens.slice(-3), // Last 3 tokens
         subscription: subscription ? {
           id: subscription.id,
           stripeSubscriptionId: subscription.stripeSubscriptionId,
@@ -193,8 +173,6 @@ export async function GET(request: Request) {
         chatMessagesCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         globalMessagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        refreshTokensCount,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         aiSettingsCount,
         ...user
