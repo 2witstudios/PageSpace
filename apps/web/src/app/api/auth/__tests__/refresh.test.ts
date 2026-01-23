@@ -321,20 +321,18 @@ describe('/api/auth/refresh', () => {
     });
   });
 
-  describe('token reuse detection (stolen token scenario)', () => {
-    it('invalidates all sessions when already-used token is reused', async () => {
-      // Arrange - atomicTokenRefresh detects token reuse (stolen and already used)
-      // The atomic function handles invalidating all sessions internally
+  describe('token reuse detection', () => {
+    it('rejects already-used refresh tokens', async () => {
+      // Arrange - atomicTokenRefresh detects the token was already used
       (atomicTokenRefresh as Mock).mockResolvedValue({
         success: false,
-        tokenReuse: true,
-        error: 'Token reuse detected - all sessions invalidated',
+        error: 'Token already used',
       });
 
       const request = new Request('http://localhost/api/auth/refresh', {
         method: 'POST',
         headers: {
-          Cookie: 'refreshToken=stolen-token',
+          Cookie: 'refreshToken=already-used-token',
         },
       });
 
@@ -344,7 +342,7 @@ describe('/api/auth/refresh', () => {
 
       // Assert
       expect(response.status).toBe(401);
-      expect(body.error).toBe('Token reuse detected - all sessions invalidated');
+      expect(body.error).toBe('Token already used');
       expect(atomicTokenRefresh).toHaveBeenCalled();
     });
   });

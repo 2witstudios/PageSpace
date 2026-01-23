@@ -101,13 +101,9 @@ describe('auth-transactions', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Invalid refresh token');
-      expect(result.tokenReuse).toBeUndefined();
     });
 
-    it('should prevent token reuse by deleting after use', async () => {
-      // NOTE: refresh_tokens table doesn't have revokedAt column.
-      // Tokens are deleted after successful use, so reuse attempts
-      // will just fail to find the token (returned as "Invalid refresh token")
+    it('should prevent token reuse by revoking after use', async () => {
       const rawToken = `ps_refresh_${createId()}`;
       const tokenHash = hashToken(rawToken);
 
@@ -124,13 +120,10 @@ describe('auth-transactions', () => {
       const result1 = await atomicTokenRefresh(rawToken, hashToken);
       expect(result1.success).toBe(true);
 
-      // Token should be deleted after use
-      // Second refresh attempt should fail (token not found)
+      // Token is revoked after use, second attempt should fail
       const result2 = await atomicTokenRefresh(rawToken, hashToken);
       expect(result2.success).toBe(false);
-      expect(result2.error).toBe('Invalid refresh token');
-      // Note: tokenReuse flag is not set because we can't distinguish
-      // between "never existed" and "already used" without revokedAt column
+      expect(result2.error).toBe('Token already used');
     });
 
     it('should return error for expired token', async () => {

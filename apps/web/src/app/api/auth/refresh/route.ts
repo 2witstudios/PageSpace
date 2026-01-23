@@ -77,13 +77,6 @@ export async function POST(req: Request) {
   const result = await atomicTokenRefresh(refreshTokenValue, hashToken, jwtTokenVersion);
 
   if (!result.success) {
-    // Token reuse detected - all sessions already invalidated by atomic function
-    if (result.tokenReuse) {
-      loggers.auth.warn('Token reuse attack detected', {
-        ip: clientIP,
-        error: result.error,
-      });
-    }
     return Response.json({ error: result.error || 'Invalid refresh token.' }, { status: 401 });
   }
 

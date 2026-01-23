@@ -23,8 +23,6 @@ export interface RefreshResult {
   tokenVersion?: number;
   role?: 'user' | 'admin';
   error?: string;
-  /** True if this appears to be a token reuse attack */
-  tokenReuse?: boolean;
 }
 
 /**
@@ -107,37 +105,11 @@ export async function atomicTokenRefresh(
       return { success: false, error: 'Invalid refresh token' };
     }
 
-    // TOKEN REUSE DETECTION: If token is already revoked, this is a reuse attack
+    // Token already revoked - reject but don't nuke all sessions
+    // This handles legitimate scenarios like network retries, app restarts,
+    // multiple tabs, etc. The token is already invalid - just reject it.
     if (row.revokedAt) {
-      // TOKEN REUSE DETECTED - token was already used
-      // This is a critical security event - invalidate all user sessions
-      await tx.execute(sql`
-        UPDATE users
-        SET "tokenVersion" = "tokenVersion" + 1
-        WHERE id = ${row.userId}
-      `);
-
-      // Also revoke all device tokens for this user
-      await tx.execute(sql`
-        UPDATE device_tokens
-        SET "revokedAt" = NOW(), "revokedReason" = 'token_reuse_detected'
-        WHERE "userId" = ${row.userId}
-          AND "revokedAt" IS NULL
-      `);
-
-      // Revoke all remaining refresh tokens for this user
-      await tx.execute(sql`
-        UPDATE refresh_tokens
-        SET "revokedAt" = NOW(), "revokedReason" = 'token_reuse_detected'
-        WHERE "userId" = ${row.userId}
-          AND "revokedAt" IS NULL
-      `);
-
-      return {
-        success: false,
-        error: 'Token reuse detected - all sessions invalidated',
-        tokenReuse: true,
-      };
+      return { success: false, error: 'Token already used' };
     }
 
     // Check if token is expired
