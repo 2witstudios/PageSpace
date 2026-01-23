@@ -135,7 +135,7 @@ describe('useSocketStore', () => {
   });
 
   describe('desktop token retrieval', () => {
-    it('given Electron environment with stored JWT, should retrieve token from secure storage', async () => {
+    it('given Electron environment with stored session token, should retrieve token from secure storage', async () => {
       const mockToken = 'desktop-test-token';
       const mockElectron = createMockElectron();
       mockElectron.auth.getSessionToken.mockResolvedValue(mockToken);
@@ -283,7 +283,7 @@ describe('useSocketStore', () => {
 
       // Verify unified refresh was called
       expect(mockRefreshAuthSession).toHaveBeenCalled();
-      // Verify JWT cache was cleared
+      // Verify session cache was cleared
       expect(mockClearSessionCache).toHaveBeenCalled();
       // Verify socket gets new token and reconnects
       expect(mockSocket.auth).toEqual({ token: newToken });

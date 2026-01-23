@@ -37,7 +37,7 @@ type MockAuthStoreState = {
 const {
   mockPush,
   mockPost,
-  mockClearJWTCache,
+  mockClearSessionCache,
   mockGetOrCreateDeviceId,
   mockGetDeviceName,
   mockRefreshToken,
@@ -80,7 +80,7 @@ const {
   return {
     mockPush: vi.fn(),
     mockPost: vi.fn(),
-    mockClearJWTCache: vi.fn(),
+    mockClearSessionCache: vi.fn(),
     mockGetOrCreateDeviceId: vi.fn(() => 'device-123'),
     mockGetDeviceName: vi.fn(() => 'Test Device'),
     mockRefreshToken: vi.fn(),
@@ -105,7 +105,7 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   post: (...args: unknown[]) => mockPost(...args),
-  clearSessionCache: () => mockClearJWTCache(),
+  clearSessionCache: () => mockClearSessionCache(),
 }));
 
 vi.mock('@/lib/analytics', () => ({

@@ -641,7 +641,7 @@ export const authStoreHelpers = {
           const { clearSessionCache } = await import('@/lib/auth/auth-fetch');
           clearSessionCache();
         } catch (error) {
-          console.error('[AUTH_STORE] Failed to clear JWT cache on expiry', error);
+          console.error('[AUTH_STORE] Failed to clear session cache on expiry', error);
         }
       }
 

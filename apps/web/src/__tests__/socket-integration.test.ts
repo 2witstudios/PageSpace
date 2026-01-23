@@ -124,7 +124,7 @@ describe('Socket.IO Integration', () => {
 
   describe('connect → auth → rooms lifecycle', () => {
     it('given authenticated user, should connect, authenticate via token, and be ready for room joins', async () => {
-      const mockToken = 'ps_sock_valid-jwt-token';
+      const mockToken = 'ps_sock_valid-session-token';
       global.fetch = createMockFetch(mockToken);
 
       // Step 1: Connect
@@ -227,7 +227,7 @@ describe('Socket.IO Integration', () => {
       // Verify unified token refresh was attempted (not direct fetch)
       expect(mockRefreshAuthSession).toHaveBeenCalled();
 
-      // Verify JWT cache was cleared after successful refresh
+      // Verify session cache was cleared after successful refresh
       expect(mockClearSessionCache).toHaveBeenCalled();
 
       // Verify socket reconnected with new token

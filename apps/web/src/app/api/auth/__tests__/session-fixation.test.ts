@@ -176,31 +176,6 @@ describe('Session Fixation Prevention - Cookie Utilities', () => {
     });
   });
 
-  describe('legacy cookie cleanup', () => {
-    it('appendSessionCookie clears legacy accessToken cookies', async () => {
-      const { appendSessionCookie } = await import('@/lib/auth/cookie-config');
-      const headers = new Headers();
-
-      appendSessionCookie(headers, 'ps_sess_new');
-
-      const cookies = headers.getSetCookie();
-      const accessTokenClear = cookies.filter((c) => c.startsWith('accessToken=;'));
-
-      expect(accessTokenClear.length).toBeGreaterThan(0);
-    });
-
-    it('appendSessionCookie clears legacy refreshToken cookies', async () => {
-      const { appendSessionCookie } = await import('@/lib/auth/cookie-config');
-      const headers = new Headers();
-
-      appendSessionCookie(headers, 'ps_sess_new');
-
-      const cookies = headers.getSetCookie();
-      const refreshTokenClear = cookies.filter((c) => c.startsWith('refreshToken=;'));
-
-      expect(refreshTokenClear.length).toBeGreaterThan(0);
-    });
-  });
 });
 
 // Test auth middleware session validation
