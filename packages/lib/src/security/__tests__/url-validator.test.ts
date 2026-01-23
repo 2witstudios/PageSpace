@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { isBlockedIP, validateExternalURL, safeFetch } from '../url-validator';
 
 // Mock DNS resolution
@@ -66,6 +66,10 @@ describe('URL Validator - SSRF Prevention', () => {
       it('blocks Alibaba Cloud metadata IP', () => {
         expect(isBlockedIP('100.100.100.200')).toBe(true);
       });
+
+      it('blocks Azure wireserver IP', () => {
+        expect(isBlockedIP('168.63.129.16')).toBe(true);
+      });
     });
 
     describe('IPv6 addresses', () => {
@@ -77,9 +81,14 @@ describe('URL Validator - SSRF Prevention', () => {
         expect(isBlockedIP('::')).toBe(true);
       });
 
-      it('blocks link-local (fe80::/10)', () => {
+      it('blocks link-local (fe80::/10) including full range', () => {
         expect(isBlockedIP('fe80::1')).toBe(true);
         expect(isBlockedIP('fe80:0000:0000:0000:0000:0000:0000:0001')).toBe(true);
+        // Full fe80::/10 range spans fe80:: through febf::
+        expect(isBlockedIP('fe90::1')).toBe(true);
+        expect(isBlockedIP('fea0::1')).toBe(true);
+        expect(isBlockedIP('feb0::1')).toBe(true);
+        expect(isBlockedIP('febf::1')).toBe(true);
       });
 
       it('blocks unique local (fc00::/7)', () => {
@@ -170,6 +179,19 @@ describe('URL Validator - SSRF Prevention', () => {
         expect(result.valid).toBe(false);
         expect(result.error).toContain('Hostname blocked');
       });
+
+      it('blocks hostnames with trailing dots (FQDN notation)', async () => {
+        // DNS treats localhost. identically to localhost
+        const result = await validateExternalURL('http://localhost./api');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('Hostname blocked');
+      });
+
+      it('blocks .internal with trailing dot', async () => {
+        const result = await validateExternalURL('http://metadata.google.internal.');
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('Hostname blocked');
+      });
     });
 
     describe('IP address validation', () => {
@@ -241,16 +263,23 @@ describe('URL Validator - SSRF Prevention', () => {
   });
 
   describe('safeFetch', () => {
+    let mockFetch: ReturnType<typeof vi.fn>;
+
     beforeEach(() => {
-      // Mock global fetch
-      global.fetch = vi.fn();
+      // Use vi.stubGlobal for proper cleanup
+      mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
     });
 
     it('throws on blocked URL', async () => {
       await expect(safeFetch('http://127.0.0.1/api')).rejects.toThrow(
         'SSRF protection'
       );
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('validates redirects', async () => {
@@ -258,7 +287,7 @@ describe('URL Validator - SSRF Prevention', () => {
       (dns.resolve6 as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       // First request returns redirect to localhost
-      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce({
         status: 302,
         headers: new Headers({ location: 'http://127.0.0.1/internal' }),
       });
@@ -273,14 +302,52 @@ describe('URL Validator - SSRF Prevention', () => {
       (dns.resolve6 as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       const mockResponse = new Response('OK', { status: 200 });
-      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse);
+      mockFetch.mockResolvedValue(mockResponse);
 
       const result = await safeFetch('https://example.com/api');
       expect(result.status).toBe(200);
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(mockFetch).toHaveBeenCalledWith(
         'https://example.com/api',
         expect.objectContaining({ redirect: 'manual' })
       );
+    });
+
+    it('throws on too many redirects', async () => {
+      (dns.resolve4 as ReturnType<typeof vi.fn>).mockResolvedValue(['93.184.216.34']);
+      (dns.resolve6 as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      // Create a chain of redirects that exceeds the limit
+      mockFetch.mockImplementation(() => Promise.resolve({
+        status: 302,
+        headers: new Headers({ location: 'https://example.com/redirect' }),
+      }));
+
+      await expect(safeFetch('https://example.com/start', { maxRedirects: 3 })).rejects.toThrow(
+        'SSRF protection: Too many redirects'
+      );
+    });
+
+    it('follows valid redirects up to limit', async () => {
+      (dns.resolve4 as ReturnType<typeof vi.fn>).mockResolvedValue(['93.184.216.34']);
+      (dns.resolve6 as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      // First redirect
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Headers({ location: 'https://example.com/step2' }),
+      });
+      // Second redirect
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Headers({ location: 'https://example.com/final' }),
+      });
+      // Final response
+      const mockResponse = new Response('OK', { status: 200 });
+      mockFetch.mockResolvedValueOnce(mockResponse);
+
+      const result = await safeFetch('https://example.com/start');
+      expect(result.status).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
   });
 });

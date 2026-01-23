@@ -21,6 +21,7 @@ const BLOCKED_IPS = [
   '169.254.169.254', // AWS/GCP metadata
   '100.100.100.200', // Alibaba Cloud metadata
   'fd00:ec2::254',   // AWS IMDSv2 IPv6
+  '168.63.129.16',   // Azure wireserver
 ];
 
 // Blocked hostnames (cloud metadata)
@@ -86,8 +87,8 @@ export function isBlockedIP(ip: string): boolean {
     // Unspecified (::)
     if (lowerIP === '::') return true;
 
-    // Link-local (fe80::/10)
-    if (lowerIP.startsWith('fe80:')) return true;
+    // Link-local (fe80::/10) - covers fe80:: through febf::
+    if (/^fe[89ab][0-9a-f]?:/i.test(lowerIP)) return true;
 
     // Unique local (fc00::/7)
     if (lowerIP.startsWith('fc') || lowerIP.startsWith('fd')) return true;
@@ -133,25 +134,29 @@ function normalizeIP(ip: string): string {
  * Check if a hostname is blocked
  */
 function isBlockedHostname(hostname: string): boolean {
-  const lowerHostname = hostname.toLowerCase();
+  // Normalize: lowercase and strip trailing dot (FQDN indicator)
+  let normalizedHostname = hostname.toLowerCase();
+  if (normalizedHostname.endsWith('.')) {
+    normalizedHostname = normalizedHostname.slice(0, -1);
+  }
 
   // Check explicit block list
-  if (BLOCKED_HOSTNAMES.includes(lowerHostname)) {
+  if (BLOCKED_HOSTNAMES.includes(normalizedHostname)) {
     return true;
   }
 
   // Block localhost variants
-  if (lowerHostname === 'localhost' || lowerHostname.endsWith('.localhost')) {
+  if (normalizedHostname === 'localhost' || normalizedHostname.endsWith('.localhost')) {
     return true;
   }
 
   // Block .local domains
-  if (lowerHostname.endsWith('.local')) {
+  if (normalizedHostname.endsWith('.local')) {
     return true;
   }
 
   // Block .internal domains
-  if (lowerHostname.endsWith('.internal')) {
+  if (normalizedHostname.endsWith('.internal')) {
     return true;
   }
 
@@ -222,11 +227,13 @@ export async function validateExternalURL(
     return { valid: true, url, resolvedIPs: [] };
   }
 
-  // Resolve DNS and check ALL IPs
+  // Resolve DNS and check ALL IPs (parallel for efficiency)
   try {
-    const resolvedIPs = await dns.resolve4(url.hostname).catch(() => [] as string[]);
-    const resolvedIPv6 = await dns.resolve6(url.hostname).catch(() => [] as string[]);
-    const allIPs = [...resolvedIPs, ...resolvedIPv6];
+    const [resolvedIPv4, resolvedIPv6] = await Promise.all([
+      dns.resolve4(url.hostname).catch(() => [] as string[]),
+      dns.resolve6(url.hostname).catch(() => [] as string[]),
+    ]);
+    const allIPs = [...resolvedIPv4, ...resolvedIPv6];
 
     if (allIPs.length === 0) {
       return { valid: false, error: 'Could not resolve hostname' };
@@ -258,18 +265,19 @@ export async function validateExternalURL(
  * Safe fetch wrapper that validates URLs before making requests
  *
  * @param url - The URL to fetch
- * @param options - Fetch options
+ * @param options - Fetch options (including maxRedirects to prevent infinite loops)
  * @returns Response from fetch
- * @throws Error if URL validation fails
+ * @throws Error if URL validation fails or too many redirects
  */
 export async function safeFetch(
   url: string,
   options?: RequestInit & {
     allowPrivateIPs?: boolean;
     skipDNSCheck?: boolean;
+    maxRedirects?: number;
   }
 ): Promise<Response> {
-  const { allowPrivateIPs, skipDNSCheck, ...fetchOptions } = options || {};
+  const { allowPrivateIPs, skipDNSCheck, maxRedirects = 10, ...fetchOptions } = options || {};
 
   const validation = await validateExternalURL(url, {
     allowPrivateIPs,
@@ -280,7 +288,13 @@ export async function safeFetch(
     throw new Error(`SSRF protection: ${validation.error}`);
   }
 
-  // Perform the fetch
+  // NOTE: There is a residual TOCTOU (Time-of-Check-Time-of-Use) risk with DNS rebinding.
+  // An attacker could return a safe IP during our DNS validation above, then return a
+  // private IP when fetch() does its own DNS resolution. Full mitigation requires either:
+  // - Connecting to the validated IP directly with a Host header
+  // - Using a specialized library like ssrf-req-filter
+  // - Server-side network policies (firewall rules)
+  // For high-security contexts, consider additional protections.
   const response = await fetch(url, {
     ...fetchOptions,
     // Prevent automatic redirects to validate each URL
@@ -289,6 +303,10 @@ export async function safeFetch(
 
   // If redirect, validate the new URL
   if (response.status >= 300 && response.status < 400) {
+    if (maxRedirects <= 0) {
+      throw new Error('SSRF protection: Too many redirects');
+    }
+
     const location = response.headers.get('location');
     if (location) {
       // Resolve relative URLs
@@ -302,8 +320,13 @@ export async function safeFetch(
         throw new Error(`SSRF protection: Redirect to blocked URL: ${redirectValidation.error}`);
       }
 
-      // Follow the redirect manually
-      return safeFetch(redirectUrl, options);
+      // Follow the redirect manually with decremented counter
+      return safeFetch(redirectUrl, {
+        ...fetchOptions,
+        allowPrivateIPs,
+        skipDNSCheck,
+        maxRedirects: maxRedirects - 1,
+      });
     }
   }
 
