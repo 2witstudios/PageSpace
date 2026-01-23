@@ -66,7 +66,11 @@ export async function POST(req: Request) {
   // SECURITY: Decode JWT to get tokenVersion for validation
   // This ensures tokens minted before "logout all devices" are rejected
   const refreshPayloadCheck = await decodeToken(refreshTokenValue);
-  const jwtTokenVersion = refreshPayloadCheck?.tokenVersion;
+  if (!refreshPayloadCheck) {
+    // JWT is malformed or expired - cannot proceed
+    return Response.json({ error: 'Invalid refresh token format.' }, { status: 401 });
+  }
+  const jwtTokenVersion = refreshPayloadCheck.tokenVersion;
 
   // SECURITY: Atomic token refresh with FOR UPDATE locking
   // Prevents race conditions and detects token reuse attacks

@@ -149,6 +149,14 @@ export async function POST(req: Request) {
       if (rotated.success && rotated.newToken) {
         activeDeviceToken = rotated.newToken;
         activeDeviceTokenId = rotated.deviceTokenId!;
+      } else {
+        // Rotation failed - continue with old token (resilient fallback)
+        // This can happen if token was already rotated by concurrent request
+        loggers.auth.warn('Device token rotation failed, using original token', {
+          userId: deviceRecord.userId,
+          deviceId: deviceRecord.deviceId,
+          error: rotated.error,
+        });
       }
     }
 
