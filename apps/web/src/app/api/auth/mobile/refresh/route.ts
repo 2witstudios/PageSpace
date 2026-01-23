@@ -20,8 +20,8 @@ import { loggers } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
 
 const refreshSchema = z.object({
-  deviceToken: z.string().min(1, { message: 'Device token is required' }),
-  deviceId: z.string().min(1, { message: 'Device identifier is required' }),
+  deviceToken: z.string().min(1, 'Device token is required'),
+  deviceId: z.string().min(1, 'Device identifier is required'),
   platform: z.enum(['ios', 'android', 'desktop']).default('ios'),
 });
 
@@ -120,7 +120,12 @@ export async function POST(req: Request) {
         );
       }
 
-      if (rotated.newToken && rotated.deviceTokenId) {
+      if (rotated.gracePeriodRetry && rotated.deviceTokenId) {
+        // Grace period retry - use replacement token ID for activity tracking
+        // Client should already have the new token from the first successful request
+        activeDeviceTokenId = rotated.deviceTokenId;
+        // Keep activeDeviceToken as original - return same token to client
+      } else if (rotated.newToken && rotated.deviceTokenId) {
         activeDeviceToken = rotated.newToken;
         activeDeviceTokenId = rotated.deviceTokenId;
       }
