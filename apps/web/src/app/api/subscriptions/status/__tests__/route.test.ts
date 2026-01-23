@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { WebAuthResult } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth';
 
 // Mock database
 const mockSelectWhere = vi.fn();
@@ -35,12 +35,13 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string): WebAuthResult => ({
+// Helper to create mock SessionAuthResult
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

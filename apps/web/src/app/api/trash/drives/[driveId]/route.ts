@@ -4,7 +4,7 @@ import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * DELETE /api/trash/drives/[driveId]

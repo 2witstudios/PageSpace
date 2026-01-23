@@ -6,7 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { revokeDeviceToken } from '@pagespace/lib/device-auth-utils';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 export async function DELETE(
   req: Request,

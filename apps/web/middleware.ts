@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { sessionService } from '@pagespace/lib/auth';
 import { monitoringMiddleware } from '@/middleware/monitoring';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import {
@@ -8,6 +7,7 @@ import {
   validateOriginForMiddleware,
   isOriginValidationBlocking,
 } from '@/lib/auth';
+import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 const MCP_BEARER_PREFIX = 'Bearer mcp_';
 
@@ -20,15 +20,11 @@ export async function middleware(req: NextRequest) {
       'unknown';
 
     // Origin validation for API routes (defense-in-depth)
-    // This provides application-wide origin checking as an additional security layer
-    // By default operates in warning-only mode; set ORIGIN_VALIDATION_MODE=block to reject
     if (pathname.startsWith('/api')) {
       const originResult = validateOriginForMiddleware(req);
 
       if (!originResult.valid && !originResult.skipped) {
-        // Origin validation failed
         if (isOriginValidationBlocking()) {
-          // Block mode: reject the request
           logSecurityEvent('origin_validation_failed', {
             pathname,
             origin: originResult.origin,
@@ -47,7 +43,6 @@ export async function middleware(req: NextRequest) {
             }
           );
         }
-        // Warn mode: log warning but allow request to continue
         logSecurityEvent('origin_validation_warning', {
           pathname,
           origin: originResult.origin,
@@ -58,6 +53,7 @@ export async function middleware(req: NextRequest) {
       }
     }
 
+    // MCP token authentication
     const authHeader = req.headers.get('authorization');
     if (authHeader?.startsWith(MCP_BEARER_PREFIX)) {
       const mcpToken = authHeader.substring('Bearer '.length);
@@ -90,10 +86,10 @@ export async function middleware(req: NextRequest) {
       }
     }
 
+    // Public routes that don't require authentication
     if (
       pathname.startsWith('/api/auth/login') ||
       pathname.startsWith('/api/auth/signup') ||
-      pathname.startsWith('/api/auth/refresh') ||
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/google') ||
       pathname.startsWith('/api/mcp/') ||
@@ -102,14 +98,14 @@ export async function middleware(req: NextRequest) {
       return NextResponse.next();
     }
 
+    // Session-based authentication
     const cookieHeader = req.headers.get('cookie');
-    const cookies = parse(cookieHeader || '');
-    const accessToken = cookies.accessToken;
+    const sessionToken = getSessionFromCookies(cookieHeader);
 
-    if (!accessToken) {
+    if (!sessionToken) {
       logSecurityEvent('unauthorized', {
         pathname,
-        reason: 'No access token',
+        reason: 'No session token',
         ip,
       });
 
@@ -120,50 +116,31 @@ export async function middleware(req: NextRequest) {
       return NextResponse.redirect(new URL('/auth/signin', req.url));
     }
 
-    const decoded = await decodeToken(accessToken);
+    // Validate session with server
+    const sessionClaims = await sessionService.validateSession(sessionToken);
 
-    if (!decoded) {
-      const refreshToken = cookies.refreshToken;
-
-      if (refreshToken && pathname.startsWith('/api/auth/refresh')) {
-        return NextResponse.next();
-      }
-
-      if (refreshToken) {
-        if (pathname.startsWith('/api')) {
-          return new NextResponse('Token expired', {
-            status: 401,
-            headers: {
-              'X-Auth-Error': 'token-expired',
-            },
-          });
-        }
-
-        const response = NextResponse.next();
-        response.headers.set('X-Auth-Error', 'token-expired');
-        return response;
-      }
-
+    if (!sessionClaims) {
       logSecurityEvent('invalid_token', {
-        type: 'jwt',
+        type: 'session',
         pathname,
         ip,
       });
 
       if (pathname.startsWith('/api')) {
-        return new NextResponse('Invalid token', { status: 401 });
+        return new NextResponse('Invalid or expired session', { status: 401 });
       }
 
       return NextResponse.redirect(new URL('/auth/signin', req.url));
     }
 
+    // Admin route protection
     if (pathname.startsWith('/admin')) {
-      if (decoded.role !== 'admin') {
+      if (sessionClaims.userRole !== 'admin') {
         logSecurityEvent('unauthorized', {
           pathname,
           reason: 'Admin access required',
-          userId: decoded.userId,
-          userRole: decoded.role,
+          userId: sessionClaims.userId,
+          userRole: sessionClaims.userRole,
           ip,
         });
 
@@ -175,9 +152,11 @@ export async function middleware(req: NextRequest) {
       }
     }
 
+    // Set request headers with session claims
     const requestHeaders = new Headers(req.headers);
-    requestHeaders.set('x-user-id', decoded.userId);
-    requestHeaders.set('x-user-role', decoded.role);
+    requestHeaders.set('x-user-id', sessionClaims.userId);
+    requestHeaders.set('x-user-role', sessionClaims.userRole);
+    requestHeaders.set('x-session-id', sessionClaims.sessionId);
 
     const response = NextResponse.next({
       request: {
@@ -185,11 +164,11 @@ export async function middleware(req: NextRequest) {
       },
     });
 
-    // Add security headers
+    // Security headers
     response.headers.set(
       'Content-Security-Policy',
       "default-src 'self'; " +
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " + // TipTap/Monaco require unsafe-eval
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
       "style-src 'self' 'unsafe-inline'; " +
       "img-src 'self' data: blob: https:; " +
       "connect-src 'self' ws: wss: https:; " +
@@ -201,7 +180,6 @@ export async function middleware(req: NextRequest) {
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     response.headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
 
-    // Add HSTS in production
     if (process.env.NODE_ENV === 'production') {
       response.headers.set(
         'Strict-Transport-Security',

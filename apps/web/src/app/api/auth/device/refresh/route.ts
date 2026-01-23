@@ -21,7 +21,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { getClientIP, appendAuthCookies } from '@/lib/auth';
+import { getClientIP } from '@/lib/auth';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -225,25 +225,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // For web platform, set httpOnly cookies instead of returning tokens in JSON
-    // Detect web by platform === 'web' in device record
-    const isWebPlatform = deviceRecord.platform === 'web';
-
-    if (isWebPlatform) {
-      const headers = new Headers();
-      appendAuthCookies(headers, accessToken, refreshToken);
-      headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
-      headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
-
-      return Response.json(
-        {
-          message: 'Session refreshed successfully',
-          csrfToken,
-          deviceToken: activeDeviceToken,
-        },
-        { status: 200, headers }
-      );
-    }
+    // Web platform now uses sessions, not device tokens for refresh
+    // This endpoint is primarily for mobile/desktop device token refresh
+    // Web users should use session-based auth through the middleware
 
     // For mobile/desktop, return tokens in JSON (existing behavior)
     return Response.json({

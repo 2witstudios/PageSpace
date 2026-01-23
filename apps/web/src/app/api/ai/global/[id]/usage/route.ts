@@ -7,7 +7,7 @@ import {
   calculateUsageSummary,
 } from '@/lib/repositories/global-conversation-repository';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const };
+const AUTH_OPTIONS = { allow: ['session'] as const };
 
 /**
  * GET - Get AI usage statistics for a specific conversation

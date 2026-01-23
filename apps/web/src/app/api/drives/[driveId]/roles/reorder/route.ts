@@ -7,7 +7,7 @@ import {
 import { db, driveRoles, eq, asc } from '@pagespace/db';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // PATCH /api/drives/[driveId]/roles/reorder - Reorder roles
 export async function PATCH(

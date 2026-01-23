@@ -59,7 +59,8 @@ const mockAuthSuccess = {
   userId: 'test-user-id',
   role: 'user',
   tokenVersion: 0,
-  tokenType: 'jwt',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
 };
 
 const createRequest = () => {

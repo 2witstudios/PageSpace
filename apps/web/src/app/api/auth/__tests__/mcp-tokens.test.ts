@@ -77,8 +77,9 @@ describe('/api/auth/mcp-tokens', () => {
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
-      tokenType: 'jwt',
-      source: 'cookie',
+      tokenType: 'session',
+  sessionId: 'test-session-id',
+      
     });
     (isAuthError as unknown as Mock).mockReturnValue(false);
   });

@@ -5,7 +5,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 export async function POST(
   request: Request,

@@ -3,13 +3,13 @@ import { verifyAuth, verifyAdminAuth } from '../auth';
 
 // Mock the auth index module
 vi.mock('../index', () => ({
-  authenticateWebRequest: vi.fn(),
+  authenticateSessionRequest: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
-import { authenticateWebRequest } from '../index';
+import { authenticateSessionRequest } from '../index';
 
-const mockAuthenticateWebRequest = vi.mocked(authenticateWebRequest);
+const mockAuthenticateWebRequest = vi.mocked(authenticateSessionRequest);
 
 describe('auth', () => {
   beforeEach(() => {
@@ -22,8 +22,8 @@ describe('auth', () => {
         userId: 'user-123',
         role: 'user' as const,
         tokenVersion: 1,
-        tokenType: 'jwt' as const,
-        source: 'cookie' as const,
+        tokenType: 'session' as const,
+        sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
 
@@ -43,8 +43,8 @@ describe('auth', () => {
         userId: 'admin-123',
         role: 'admin' as const,
         tokenVersion: 2,
-        tokenType: 'jwt' as const,
-        source: 'header' as const,
+        tokenType: 'session' as const,
+        sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
 
@@ -75,8 +75,8 @@ describe('auth', () => {
         userId: 'user-456',
         role: 'user' as const,
         tokenVersion: 42,
-        tokenType: 'jwt' as const,
-        source: 'cookie' as const,
+        tokenType: 'session' as const,
+        sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
 
@@ -93,8 +93,8 @@ describe('auth', () => {
         userId: 'admin-123',
         role: 'admin' as const,
         tokenVersion: 1,
-        tokenType: 'jwt' as const,
-        source: 'cookie' as const,
+        tokenType: 'session' as const,
+        sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
 
@@ -113,8 +113,8 @@ describe('auth', () => {
         userId: 'user-123',
         role: 'user' as const,
         tokenVersion: 1,
-        tokenType: 'jwt' as const,
-        source: 'cookie' as const,
+        tokenType: 'session' as const,
+        sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
 

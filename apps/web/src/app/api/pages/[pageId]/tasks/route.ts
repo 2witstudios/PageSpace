@@ -6,8 +6,8 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getDefaultContent, PageType } from '@pagespace/lib';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * Get or create task list for a page

@@ -15,8 +15,8 @@ import {
   createDriveEventPayload,
 } from '@/lib/websocket';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const bodySchema = z.object({
   context: z.enum(['page', 'drive', 'user_dashboard']),

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
@@ -55,12 +55,13 @@ import { generateCSV, sanitizeFilename } from '@pagespace/lib';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string): WebAuthResult => ({
+// Helper to create mock SessionAuthResult
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

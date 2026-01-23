@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
 type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccessForSearch>>>;
 type GlobSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/server').globSearchPages>>;
@@ -37,11 +37,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 // Test Fixtures
 // ============================================================================
 
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -119,7 +120,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt', 'mcp'] }
+        { allow: ['session', 'mcp'] }
       );
     });
 
@@ -127,7 +128,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockWebAuth(mockUserId),
         tokenType: 'mcp',
-      } as unknown as WebAuthResult);
+      } as unknown as SessionAuthResult);
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
 

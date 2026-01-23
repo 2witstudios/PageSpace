@@ -1,90 +1,44 @@
-import { refreshTokens } from '@pagespace/db';
-import { db, eq } from '@pagespace/db';
-import { hashToken } from '@pagespace/lib/auth';
-import { parse } from 'cookie';
+import { sessionService } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { revokeDeviceTokenByValue, revokeDeviceTokensByDevice } from '@pagespace/lib/device-auth-utils';
-import { authenticateRequestWithOptions, isAuthError, getClientIP, appendClearCookies } from '@/lib/auth';
-
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+import { getClientIP } from '@/lib/auth';
+import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
 
 export async function POST(req: Request) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
-  if (isAuthError(auth)) return auth.error;
-  const userId = auth.userId;
-  const cookieHeader = req.headers.get('cookie');
-  const cookies = parse(cookieHeader || '');
-  const refreshTokenValue = cookies.refreshToken;
-
   const clientIP = getClientIP(req);
+  const cookieHeader = req.headers.get('cookie');
+  const sessionToken = getSessionFromCookies(cookieHeader);
 
-  // Revoke device token to ensure proper device separation
-  // This prevents token reuse when logging back in on different devices
-  const deviceTokenHeader = req.headers.get('X-Device-Token');
-  let body: { deviceId?: string; platform?: 'desktop' | 'web' } | null = null;
+  if (!sessionToken) {
+    // No session to logout from
+    const headers = new Headers();
+    appendClearCookies(headers);
+    return Response.json({ message: 'Logged out successfully' }, { status: 200, headers });
+  }
 
+  // Validate session to get user ID for logging
+  const sessionClaims = await sessionService.validateSession(sessionToken);
+  const userId = sessionClaims?.userId;
+
+  // Revoke the session
   try {
-    body = await req.clone().json();
-  } catch {
-    // No body provided, that's fine
+    await sessionService.revokeSession(sessionToken, 'logout');
+    loggers.auth.debug('Session revoked on logout', { userId });
+  } catch (error) {
+    loggers.auth.error('Failed to revoke session on logout', {
+      error: error instanceof Error ? error.message : String(error),
+      userId,
+    });
   }
 
-  if (deviceTokenHeader) {
-    // Web: Revoke by token value from header
-    try {
-      const revoked = await revokeDeviceTokenByValue(deviceTokenHeader, 'logout');
-      if (revoked) {
-        loggers.auth.debug('Device token revoked on logout', { userId, source: 'header' });
-      }
-    } catch (error) {
-      loggers.auth.error('Failed to revoke device token on logout', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-      });
-    }
-  } else if (body?.deviceId && body?.platform) {
-    // Desktop: Revoke by deviceId and platform
-    try {
-      const count = await revokeDeviceTokensByDevice(userId, body.deviceId, body.platform, 'logout');
-      if (count > 0) {
-        loggers.auth.debug('Device tokens revoked on logout', {
-          userId,
-          deviceId: body.deviceId,
-          platform: body.platform,
-          count,
-        });
-      }
-    } catch (error) {
-      loggers.auth.error('Failed to revoke device tokens on logout', {
-        error: error instanceof Error ? error.message : String(error),
-        userId,
-        deviceId: body.deviceId,
-      });
-    }
-  }
-
-  // Revoke refresh token - hash-only deletion (no plaintext fallback)
-  if (refreshTokenValue) {
-    try {
-      const tokenHash = hashToken(refreshTokenValue);
-      await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
-    } catch (error) {
-      // If the token is not found, we can ignore the error and proceed with clearing cookies.
-      loggers.auth.debug('Refresh token not found in DB during logout', {
-        error: (error as Error).message
-      });
-    }
-  }
-  
   // Log the logout event
-  logAuthEvent('logout', userId, undefined, clientIP);
-  
-  // Track logout event
-  trackAuthEvent(userId, 'logout', {
-    ip: clientIP,
-    userAgent: req.headers.get('user-agent')
-  });
+  if (userId) {
+    logAuthEvent('logout', userId, undefined, clientIP);
+    trackAuthEvent(userId, 'logout', {
+      ip: clientIP,
+      userAgent: req.headers.get('user-agent')
+    });
+  }
 
   const headers = new Headers();
   appendClearCookies(headers);

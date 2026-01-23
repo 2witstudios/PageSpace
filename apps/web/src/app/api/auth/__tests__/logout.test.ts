@@ -57,8 +57,9 @@ vi.mock('@/lib/auth', async (importOriginal) => {
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
-      tokenType: 'jwt',
-      source: 'cookie',
+      tokenType: 'session',
+  sessionId: 'test-session-id',
+      
     }),
     isAuthError: vi.fn().mockReturnValue(false),
   };
@@ -83,8 +84,9 @@ describe('/api/auth/logout', () => {
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
-      tokenType: 'jwt',
-      source: 'cookie',
+      tokenType: 'session',
+  sessionId: 'test-session-id',
+      
     });
     (isAuthError as unknown as Mock).mockReturnValue(false);
     (parse as unknown as Mock).mockReturnValue({ refreshToken: 'mock-refresh-token' });

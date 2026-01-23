@@ -6,7 +6,7 @@ import {
   loggers,
 } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
 /**
  * GET /api/drives/[driveId]/search/regex

@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { users, db, eq } from '@pagespace/db';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
 export async function GET(request: Request) {
   // Support both Bearer tokens (desktop) and cookies (web)

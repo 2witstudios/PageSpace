@@ -2,7 +2,7 @@ import { db, eq, and, sql, drives, driveMembers, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);

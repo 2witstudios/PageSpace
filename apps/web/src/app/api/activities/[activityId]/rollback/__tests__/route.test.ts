@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
-import type { WebAuthResult, AuthError } from '../../../../../../lib/auth';
+import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
 import type { ActivityActionPreview } from '../../../../../../types/activity-actions';
 
 // Mock service boundary
@@ -91,11 +91,12 @@ const createMockPreview = (overrides: Partial<ActivityActionPreview> = {}): Acti
   ...overrides,
 });
 
-const mockWebAuth = (userId: string): WebAuthResult => ({
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

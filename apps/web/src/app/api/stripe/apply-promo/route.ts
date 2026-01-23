@@ -5,7 +5,7 @@ import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 interface ApplyPromoRequest {
   subscriptionId: string;

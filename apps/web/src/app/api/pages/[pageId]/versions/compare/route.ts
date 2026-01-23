@@ -13,7 +13,7 @@ import {
 } from '@pagespace/lib/content';
 import { maskIdentifier } from '@/lib/logging/mask';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   v1: z.string().min(1, 'Version 1 ID is required'),

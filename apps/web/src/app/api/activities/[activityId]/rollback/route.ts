@@ -8,7 +8,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload, broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { db } from '@pagespace/db';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 const bodySchema = z.object({
   context: z.enum(['page', 'drive', 'ai_tool', 'user_dashboard']),

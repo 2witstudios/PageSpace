@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
 vi.mock('@pagespace/lib/server', () => ({
@@ -16,7 +16,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  authenticateWebRequest: vi.fn(),
+  authenticateSessionRequest: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
@@ -25,15 +25,16 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 import { loggers } from '@pagespace/lib/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { getUserLMStudioSettings } from '@/lib/ai/core';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Helper to create mock SessionAuthResult
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -50,7 +51,7 @@ describe('GET /api/ai/lmstudio/models', () => {
     vi.clearAllMocks();
 
     // Default auth success
-    vi.mocked(authenticateWebRequest).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateSessionRequest).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: no settings configured
@@ -60,7 +61,7 @@ describe('GET /api/ai/lmstudio/models', () => {
   describe('authentication', () => {
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
-      vi.mocked(authenticateWebRequest).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateSessionRequest).mockResolvedValue(mockAuthError(401));
 
       const request = new Request('https://example.com/api/ai/lmstudio/models', {
         method: 'GET',

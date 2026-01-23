@@ -6,7 +6,7 @@ import {
   loggers,
 } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
 const VALID_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET'] as const;
 type PageType = (typeof VALID_PAGE_TYPES)[number];

@@ -5,8 +5,8 @@ import { secureCompare } from '@pagespace/lib/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 interface DeviceResponse {
   id: string;

@@ -7,7 +7,7 @@ import { loggers } from '@pagespace/lib/server';
 import { db, users, eq } from '@pagespace/db';
 import React from 'react';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 export async function POST(request: Request) {
   try {

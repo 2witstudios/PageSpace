@@ -34,8 +34,8 @@ import {
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * GET /api/ai/settings

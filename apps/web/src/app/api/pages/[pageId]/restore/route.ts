@@ -7,7 +7,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 async function recursivelyRestore(
   pageId: string,

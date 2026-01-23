@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
@@ -50,12 +50,13 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Helper to create mock SessionAuthResult
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

@@ -7,8 +7,8 @@ import { logPermissionActivity } from '@pagespace/lib';
 import { permissionManagementService } from '@/services/api';
 import { db, pages, pagePermissions, eq, and } from '@pagespace/db';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);

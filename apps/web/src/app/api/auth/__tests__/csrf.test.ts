@@ -64,8 +64,9 @@ describe('/api/auth/csrf', () => {
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
-      tokenType: 'jwt',
-      source: 'cookie',
+      tokenType: 'session',
+  sessionId: 'test-session-id',
+      
     });
     (isAuthError as unknown as Mock).mockReturnValue(false);
     (decodeToken as unknown as Mock).mockResolvedValue(mockDecodedToken);
@@ -119,7 +120,8 @@ describe('/api/auth/csrf', () => {
         userId: 'test-user-id',
         role: 'user',
         tokenVersion: 0,
-        tokenType: 'jwt',
+        tokenType: 'session',
+  sessionId: 'test-session-id',
         source: 'bearer',
       });
       (isAuthError as unknown as Mock).mockReturnValue(false);
@@ -285,7 +287,7 @@ describe('/api/auth/csrf', () => {
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
         expect.objectContaining({
-          allow: ['jwt'],
+          allow: ['session'],
         })
       );
     });

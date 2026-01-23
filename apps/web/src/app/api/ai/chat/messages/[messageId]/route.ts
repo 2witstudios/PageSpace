@@ -10,7 +10,7 @@ import {
 import { db, pages, eq } from '@pagespace/db';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * Helper to get driveId from a page for activity logging

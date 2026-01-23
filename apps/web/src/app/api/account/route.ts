@@ -5,8 +5,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);

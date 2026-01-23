@@ -1,32 +1,28 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import {
-  authenticateWebRequest,
+  authenticateSessionRequest,
   authenticateMCPRequest,
   authenticateHybridRequest,
   authenticateRequestWithOptions,
   validateMCPToken,
-  validateJWTToken,
+  validateSessionToken,
   isAuthError,
   isMCPAuthResult,
-  isWebAuthResult,
+  isSessionAuthResult,
 } from '../index';
 
 // Mock dependencies
-vi.mock('cookie', () => ({
-  parse: vi.fn().mockReturnValue({}),
-}));
-
-vi.mock('@pagespace/lib/server', () => ({
-  decodeToken: vi.fn(),
+vi.mock('@pagespace/lib/auth', () => ({
+  hashToken: vi.fn().mockReturnValue('mocked-hash'),
+  sessionService: {
+    validateSession: vi.fn(),
+  },
 }));
 
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       mcpTokens: {
-        findFirst: vi.fn(),
-      },
-      users: {
         findFirst: vi.fn(),
       },
     },
@@ -37,7 +33,6 @@ vi.mock('@pagespace/db', () => ({
     }),
   },
   mcpTokens: {},
-  users: {},
   eq: vi.fn((field, value) => ({ field, value })),
   and: vi.fn((...conditions) => conditions),
   isNull: vi.fn((field) => ({ field, isNull: true })),
@@ -51,111 +46,77 @@ vi.mock('../origin-validation', () => ({
   validateOrigin: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn().mockReturnValue('mocked-hash'),
+vi.mock('../cookie-config', () => ({
+  getSessionFromCookies: vi.fn(),
 }));
 
-import { parse } from 'cookie';
-import { decodeToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
 import { db } from '@pagespace/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';
+import { getSessionFromCookies } from '../cookie-config';
 
 describe('Auth Middleware', () => {
-  const mockUser = {
-    id: 'test-user-id',
-    role: 'user' as const,
-    tokenVersion: 0,
-  };
-
-  const mockDecodedToken = {
+  const mockSessionClaims = {
+    sessionId: 'test-session-id',
     userId: 'test-user-id',
+    userRole: 'user' as const,
     tokenVersion: 0,
-    role: 'user' as const,
+    type: 'user' as const,
+    scopes: ['*'],
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (parse as Mock).mockReturnValue({});
-    (decodeToken as Mock).mockResolvedValue(null);
-    (db.query.users.findFirst as Mock).mockResolvedValue(null);
+    (sessionService.validateSession as Mock).mockResolvedValue(null);
     (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(null);
     (validateCSRF as Mock).mockResolvedValue(null);
     (validateOrigin as Mock).mockReturnValue(null);
+    (getSessionFromCookies as Mock).mockReturnValue(null);
   });
 
-  describe('validateJWTToken', () => {
+  describe('validateSessionToken', () => {
     it('returns null for empty token', async () => {
       // Act
-      const result = await validateJWTToken('');
+      const result = await validateSessionToken('');
 
       // Assert
       expect(result).toBeNull();
     });
 
-    it('returns null when token decoding fails', async () => {
+    it('returns null when session validation fails', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue(null);
+      (sessionService.validateSession as Mock).mockResolvedValue(null);
 
       // Act
-      const result = await validateJWTToken('invalid-token');
+      const result = await validateSessionToken('ps_sess_invalid');
 
       // Assert
       expect(result).toBeNull();
     });
 
-    it('returns null when user not found', async () => {
+    it('returns session claims for valid token', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockResolvedValue(null);
+      (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
       // Act
-      const result = await validateJWTToken('valid-token');
+      const result = await validateSessionToken('ps_sess_valid');
 
       // Assert
-      expect(result).toBeNull();
+      expect(result).toEqual(mockSessionClaims);
     });
 
-    it('returns null when tokenVersion mismatch', async () => {
+    it('returns null when sessionService throws error', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockResolvedValue({
-        ...mockUser,
-        tokenVersion: 1, // Different version
-      });
+      (sessionService.validateSession as Mock).mockRejectedValue(
+        new Error('Session service unavailable')
+      );
 
       // Act
-      const result = await validateJWTToken('valid-token');
+      const result = await validateSessionToken('ps_sess_test');
 
-      // Assert
-      expect(result).toBeNull();
-    });
-
-    it('returns auth details for valid token', async () => {
-      // Arrange
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-
-      // Act
-      const result = await validateJWTToken('valid-token');
-
-      // Assert
-      expect(result).toEqual({
-        userId: mockUser.id,
-        role: mockUser.role,
-        tokenVersion: mockUser.tokenVersion,
-      });
-    });
-
-    it('returns null when database query throws error', async () => {
-      // Arrange
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockRejectedValue(new Error('Database connection failed'));
-
-      // Act
-      const result = await validateJWTToken('valid-token');
-
-      // Assert - verify graceful degradation under database failures
+      // Assert - verify graceful degradation
       expect(result).toBeNull();
     });
   });
@@ -247,15 +208,17 @@ describe('Auth Middleware', () => {
     });
   });
 
-  describe('authenticateWebRequest', () => {
-    it('returns error when no token provided', async () => {
+  describe('authenticateSessionRequest', () => {
+    it('returns error when no session cookie', async () => {
       // Arrange
+      (getSessionFromCookies as Mock).mockReturnValue(null);
+
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
       });
 
       // Act
-      const result = await authenticateWebRequest(request);
+      const result = await authenticateSessionRequest(request);
 
       // Assert
       expect(isAuthError(result)).toBe(true);
@@ -274,7 +237,7 @@ describe('Auth Middleware', () => {
       });
 
       // Act
-      const result = await authenticateWebRequest(request);
+      const result = await authenticateSessionRequest(request);
 
       // Assert
       expect(isAuthError(result)).toBe(true);
@@ -285,68 +248,44 @@ describe('Auth Middleware', () => {
       }
     });
 
-    it('authenticates with Bearer token', async () => {
+    it('authenticates with valid session cookie', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+      (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+      (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer valid-jwt-token',
+          Cookie: 'session=ps_sess_valid',
         },
       });
 
       // Act
-      const result = await authenticateWebRequest(request);
+      const result = await authenticateSessionRequest(request);
 
       // Assert
       expect(isAuthError(result)).toBe(false);
-      if (isWebAuthResult(result)) {
-        expect(result.source).toBe('header');
-        expect(result.tokenType).toBe('jwt');
-        expect(result.userId).toBe(mockUser.id);
-      }
-    });
-
-    it('authenticates with cookie token', async () => {
-      // Arrange
-      (parse as Mock).mockReturnValue({ accessToken: 'cookie-jwt-token' });
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-
-      const request = new Request('http://localhost/api/test', {
-        method: 'GET',
-        headers: {
-          Cookie: 'accessToken=cookie-jwt-token',
-        },
-      });
-
-      // Act
-      const result = await authenticateWebRequest(request);
-
-      // Assert
-      expect(isAuthError(result)).toBe(false);
-      if (isWebAuthResult(result)) {
-        expect(result.source).toBe('cookie');
-        expect(result.tokenType).toBe('jwt');
+      if (isSessionAuthResult(result)) {
+        expect(result.tokenType).toBe('session');
+        expect(result.userId).toBe(mockSessionClaims.userId);
+        expect(result.sessionId).toBe(mockSessionClaims.sessionId);
       }
     });
 
     it('returns error for invalid session', async () => {
       // Arrange
-      (parse as Mock).mockReturnValue({ accessToken: 'invalid-token' });
-      (decodeToken as Mock).mockResolvedValue(null);
+      (getSessionFromCookies as Mock).mockReturnValue('ps_sess_invalid');
+      (sessionService.validateSession as Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Cookie: 'accessToken=invalid-token',
+          Cookie: 'session=ps_sess_invalid',
         },
       });
 
       // Act
-      const result = await authenticateWebRequest(request);
+      const result = await authenticateSessionRequest(request);
 
       // Assert
       expect(isAuthError(result)).toBe(true);
@@ -380,7 +319,7 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer jwt-token',
+          Authorization: 'Bearer regular-token',
         },
       });
 
@@ -470,7 +409,7 @@ describe('Auth Middleware', () => {
         }
       });
 
-      it('rejects MCP token when only JWT allowed', async () => {
+      it('rejects MCP token when only session allowed', async () => {
         // Arrange
         const request = new Request('http://localhost/api/test', {
           method: 'GET',
@@ -481,7 +420,7 @@ describe('Auth Middleware', () => {
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
         });
 
         // Assert
@@ -514,7 +453,7 @@ describe('Auth Middleware', () => {
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['mcp', 'jwt'],
+          allow: ['mcp', 'session'],
         });
 
         // Assert
@@ -524,23 +463,22 @@ describe('Auth Middleware', () => {
     });
 
     describe('CSRF validation', () => {
-      it('validates CSRF for cookie-based JWT when required', async () => {
+      it('validates CSRF for session auth when required', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
           },
         });
 
         // Act
         await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireCSRF: true,
         });
 
@@ -548,33 +486,10 @@ describe('Auth Middleware', () => {
         expect(validateCSRF).toHaveBeenCalledWith(request);
       });
 
-      it('skips CSRF for Bearer token auth', async () => {
-        // Arrange
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-
-        const request = new Request('http://localhost/api/test', {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer jwt-token',
-          },
-        });
-
-        // Act
-        await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
-          requireCSRF: true,
-        });
-
-        // Assert - CSRF not validated for header-based auth
-        expect(validateCSRF).not.toHaveBeenCalled();
-      });
-
       it('returns CSRF error when validation fails', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
         (validateCSRF as Mock).mockResolvedValue(
           Response.json({ error: 'Invalid CSRF token' }, { status: 403 })
         );
@@ -582,13 +497,13 @@ describe('Auth Middleware', () => {
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
           },
         });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireCSRF: true,
         });
 
@@ -601,16 +516,15 @@ describe('Auth Middleware', () => {
     });
 
     describe('Origin validation (defense-in-depth)', () => {
-      it('validates origin when requireCSRF is true for cookie-based auth', async () => {
+      it('validates origin when requireCSRF is true for session auth', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
             Origin: 'http://localhost',
           },
@@ -618,31 +532,30 @@ describe('Auth Middleware', () => {
 
         // Act
         await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireCSRF: true,
         });
 
-        // Assert - origin validation is called for cookie-based auth when requireCSRF is true
+        // Assert - origin validation is called for session auth when requireCSRF is true
         expect(validateOrigin).toHaveBeenCalledWith(request);
       });
 
       it('validates origin when requireOriginValidation is explicitly true', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
             Origin: 'http://localhost',
           },
         });
 
         // Act
         await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireOriginValidation: true,
         });
 
@@ -652,9 +565,8 @@ describe('Auth Middleware', () => {
 
       it('returns 403 when origin validation fails before CSRF check', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
         // Origin validation fails
         (validateOrigin as Mock).mockReturnValue(
           Response.json(
@@ -666,7 +578,7 @@ describe('Auth Middleware', () => {
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
             Origin: 'https://evil.example.com',
           },
@@ -674,7 +586,7 @@ describe('Auth Middleware', () => {
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireCSRF: true,
         });
 
@@ -692,16 +604,15 @@ describe('Auth Middleware', () => {
 
       it('passes authentication with valid origin and valid CSRF', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
         (validateOrigin as Mock).mockReturnValue(null);
         (validateCSRF as Mock).mockResolvedValue(null);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
             Origin: 'http://localhost',
           },
@@ -709,43 +620,20 @@ describe('Auth Middleware', () => {
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireCSRF: true,
         });
 
         // Assert - authentication passes
         expect(isAuthError(result)).toBe(false);
         if (!isAuthError(result)) {
-          expect(result.userId).toBe(mockUser.id);
-          expect(result.tokenType).toBe('jwt');
+          expect(result.userId).toBe(mockSessionClaims.userId);
+          expect(result.tokenType).toBe('session');
         }
 
         // Assert - both validations were called
         expect(validateOrigin).toHaveBeenCalledWith(request);
         expect(validateCSRF).toHaveBeenCalledWith(request);
-      });
-
-      it('skips origin validation for Bearer token auth (non-browser)', async () => {
-        // Arrange
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-
-        const request = new Request('http://localhost/api/test', {
-          method: 'POST',
-          headers: {
-            Authorization: 'Bearer jwt-token',
-          },
-        });
-
-        // Act
-        await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
-          requireCSRF: true,
-          requireOriginValidation: true,
-        });
-
-        // Assert - origin validation not called for header-based auth
-        expect(validateOrigin).not.toHaveBeenCalled();
       });
 
       it('skips origin validation for MCP token auth', async () => {
@@ -770,7 +658,7 @@ describe('Auth Middleware', () => {
 
         // Act
         await authenticateRequestWithOptions(request, {
-          allow: ['mcp', 'jwt'],
+          allow: ['mcp', 'session'],
           requireCSRF: true,
           requireOriginValidation: true,
         });
@@ -781,21 +669,20 @@ describe('Auth Middleware', () => {
 
       it('allows disabling origin validation even when requireCSRF is true', async () => {
         // Arrange
-        (parse as Mock).mockReturnValue({ accessToken: 'cookie-token' });
-        (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-        (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'accessToken=cookie-token',
+            Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
           },
         });
 
         // Act
         await authenticateRequestWithOptions(request, {
-          allow: ['jwt'],
+          allow: ['session'],
           requireCSRF: true,
           requireOriginValidation: false, // explicitly disabled
         });
@@ -809,15 +696,15 @@ describe('Auth Middleware', () => {
   });
 
   describe('authenticateHybridRequest', () => {
-    it('accepts JWT tokens', async () => {
+    it('accepts session tokens', async () => {
       // Arrange
-      (decodeToken as Mock).mockResolvedValue(mockDecodedToken);
-      (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
+      (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
+      (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer jwt-token',
+          Cookie: 'session=ps_sess_valid',
         },
       });
 
@@ -827,7 +714,7 @@ describe('Auth Middleware', () => {
       // Assert
       expect(isAuthError(result)).toBe(false);
       if (!isAuthError(result)) {
-        expect(result.tokenType).toBe('jwt');
+        expect(result.tokenType).toBe('session');
       }
     });
 
@@ -878,8 +765,8 @@ describe('Auth Middleware', () => {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
-          tokenType: 'jwt' as const,
-          source: 'cookie' as const,
+          tokenType: 'session' as const,
+          sessionId: 'test-session-id',
         };
         expect(isAuthError(successResult)).toBe(false);
       });
@@ -897,28 +784,28 @@ describe('Auth Middleware', () => {
         expect(isMCPAuthResult(mcpResult)).toBe(true);
       });
 
-      it('returns false for JWT result', () => {
-        const jwtResult = {
+      it('returns false for session result', () => {
+        const sessionResult = {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
-          tokenType: 'jwt' as const,
-          source: 'cookie' as const,
+          tokenType: 'session' as const,
+          sessionId: 'test-session-id',
         };
-        expect(isMCPAuthResult(jwtResult)).toBe(false);
+        expect(isMCPAuthResult(sessionResult)).toBe(false);
       });
     });
 
-    describe('isWebAuthResult', () => {
-      it('returns true for JWT result', () => {
-        const jwtResult = {
+    describe('isSessionAuthResult', () => {
+      it('returns true for session result', () => {
+        const sessionResult = {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
-          tokenType: 'jwt' as const,
-          source: 'cookie' as const,
+          tokenType: 'session' as const,
+          sessionId: 'test-session-id',
         };
-        expect(isWebAuthResult(jwtResult)).toBe(true);
+        expect(isSessionAuthResult(sessionResult)).toBe(true);
       });
 
       it('returns false for MCP result', () => {
@@ -929,7 +816,7 @@ describe('Auth Middleware', () => {
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
         };
-        expect(isWebAuthResult(mcpResult)).toBe(false);
+        expect(isSessionAuthResult(mcpResult)).toBe(false);
       });
     });
   });

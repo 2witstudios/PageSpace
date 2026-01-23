@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getUserOllamaSettings } from '@/lib/ai/core';
 
@@ -9,7 +9,7 @@ import { getUserOllamaSettings } from '@/lib/ai/core';
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateSessionRequest(request);
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

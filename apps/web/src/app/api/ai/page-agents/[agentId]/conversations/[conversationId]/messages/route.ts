@@ -6,7 +6,7 @@ import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 
 // Auth options: GET is read-only operation
-const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 /**
  * GET /api/ai/page-agents/[agentId]/conversations/[conversationId]/messages

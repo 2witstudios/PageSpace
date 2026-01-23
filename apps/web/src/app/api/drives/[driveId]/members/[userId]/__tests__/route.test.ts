@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
 type DriveAccessResult = Awaited<ReturnType<typeof import('@pagespace/lib/server').checkDriveAccess>>;
 type MemberDetails = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/server').getDriveMemberDetails>>>;
@@ -66,11 +66,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 // Test Fixtures
 // ============================================================================
 
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -180,7 +181,7 @@ describe('GET /api/drives/[driveId]/members/[userId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt'], requireCSRF: false }
+        { allow: ['session'], requireCSRF: false }
       );
     });
   });
@@ -441,7 +442,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt'], requireCSRF: true }
+        { allow: ['session'], requireCSRF: true }
       );
     });
   });

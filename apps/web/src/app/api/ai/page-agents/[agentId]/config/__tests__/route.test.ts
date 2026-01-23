@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PUT } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { PageOperation } from '@/lib/websocket';
 
 // Mock the repository seam (boundary)
@@ -94,11 +94,12 @@ const mockUserId = 'user_123';
 const mockAgentId = 'agent_123';
 const mockDriveId = 'drive_123';
 
-const mockWebAuth = (userId: string): WebAuthResult => ({
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

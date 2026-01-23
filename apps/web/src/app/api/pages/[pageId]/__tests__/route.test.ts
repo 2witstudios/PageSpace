@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { GetPageResult, UpdatePageResult, TrashPageResult, PageWithDetails } from '@/services/api';
 
 // Mock service boundary - this is the ONLY mock of internal implementation
@@ -78,11 +78,12 @@ const mockUserId = 'user_123';
 const mockPageId = 'page_123';
 const mockDriveId = 'drive_123';
 
-const mockWebAuth = (userId: string): WebAuthResult => ({
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

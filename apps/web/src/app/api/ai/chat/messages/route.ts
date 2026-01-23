@@ -6,7 +6,7 @@ import { canUserViewPage } from '@pagespace/lib/server';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 
 // Auth options: GET is read-only operation
-const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 /**
  * GET handler to load chat messages for a page

@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, PATCH, DELETE } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/ai-settings-repository', () => ({
@@ -111,11 +111,12 @@ import { requiresProSubscription } from '@/lib/subscription/rate-limit-middlewar
 // Test fixtures
 const mockUserId = 'user_123';
 
-const mockWebAuth = (userId: string): WebAuthResult => ({
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

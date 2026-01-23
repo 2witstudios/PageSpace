@@ -13,8 +13,8 @@ import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscrip
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS_READ = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserViewPage, canUserEditPage, getActorInfo } from '@pagespace/lib/server';
 import {
   createAIProvider,

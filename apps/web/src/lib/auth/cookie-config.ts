@@ -1,45 +1,42 @@
 /**
  * Cookie Security Configuration (P3-T4)
  *
- * Centralized cookie configuration for all auth-related cookies.
- * This ensures consistent security settings across login, refresh, and logout routes.
+ * Centralized cookie configuration for session-based authentication.
+ * Uses opaque session tokens instead of JWTs for instant revocation capability.
  *
  * SECURITY FEATURES:
  * - httpOnly: Prevents XSS attacks from accessing tokens via JavaScript
  * - secure: Ensures cookies are only sent over HTTPS in production
  * - sameSite: strict - Prevents CSRF attacks by not sending cookies with cross-site requests
- * - path scoping: Refresh token limited to /api/auth endpoints (refresh, logout)
+ * - Opaque tokens: Server-validated, instantly revocable
  *
  * @module @pagespace/web/lib/auth/cookie-config
  */
 
 import { serialize } from 'cookie';
-import { getRefreshTokenMaxAge } from '@pagespace/lib/server';
+
+/**
+ * Session duration: 7 days in seconds
+ */
+const SESSION_MAX_AGE = 7 * 24 * 60 * 60;
 
 /**
  * Cookie configuration constants
  */
 export const COOKIE_CONFIG = {
-  accessToken: {
-    name: 'accessToken',
-    maxAge: 15 * 60, // 15 minutes
+  session: {
+    name: 'session',
+    maxAge: SESSION_MAX_AGE,
     path: '/',
   },
-  refreshToken: {
-    name: 'refreshToken',
-    path: '/api/auth', // SCOPED: Only sent to auth endpoints (refresh, logout)
-    // maxAge is dynamic - use getRefreshTokenMaxAge()
+  /**
+   * Legacy cookie names to clear during migration from JWT to session tokens
+   */
+  legacy: {
+    accessToken: 'accessToken',
+    refreshToken: 'refreshToken',
+    legacyPaths: ['/', '/api/auth', '/api/auth/refresh'],
   },
-  /**
-   * Legacy paths for migration: clear old cookies from previous deployments
-   * Required during transition from unscoped to scoped refresh token path
-   */
-  legacyRefreshTokenPath: '/',
-  /**
-   * Previous scoped path: /api/auth/refresh was used before /api/auth
-   * Clear this to handle any lingering cookies from intermediate rollouts
-   */
-  legacyRefreshTokenPathScoped: '/api/auth/refresh',
 } as const;
 
 /**
@@ -56,150 +53,103 @@ function getCommonOptions() {
 }
 
 /**
- * Create an access token cookie string
+ * Create a session cookie string
  *
- * @param token - The JWT access token
+ * @param token - The opaque session token (ps_sess_...)
  * @returns Serialized cookie string for Set-Cookie header
  */
-export function createAccessTokenCookie(token: string): string {
-  return serialize(COOKIE_CONFIG.accessToken.name, token, {
+export function createSessionCookie(token: string): string {
+  return serialize(COOKIE_CONFIG.session.name, token, {
     ...getCommonOptions(),
-    path: COOKIE_CONFIG.accessToken.path,
-    maxAge: COOKIE_CONFIG.accessToken.maxAge,
+    path: COOKIE_CONFIG.session.path,
+    maxAge: COOKIE_CONFIG.session.maxAge,
   });
 }
 
 /**
- * Create a refresh token cookie string with scoped path
+ * Create a cookie that clears the session
  *
- * The refresh token is scoped to /api/auth/refresh to minimize exposure.
- * This prevents the refresh token from being sent with every request.
- *
- * @param token - The JWT refresh token
- * @returns Serialized cookie string for Set-Cookie header
+ * @returns Serialized cookie string that expires the session
  */
-export function createRefreshTokenCookie(token: string): string {
-  return serialize(COOKIE_CONFIG.refreshToken.name, token, {
+export function createClearSessionCookie(): string {
+  return serialize(COOKIE_CONFIG.session.name, '', {
     ...getCommonOptions(),
-    path: COOKIE_CONFIG.refreshToken.path,
-    maxAge: getRefreshTokenMaxAge(),
-  });
-}
-
-/**
- * Create a cookie that clears the access token
- *
- * @returns Serialized cookie string that expires the access token
- */
-export function createClearAccessTokenCookie(): string {
-  return serialize(COOKIE_CONFIG.accessToken.name, '', {
-    ...getCommonOptions(),
-    path: COOKIE_CONFIG.accessToken.path,
+    path: COOKIE_CONFIG.session.path,
     expires: new Date(0),
   });
 }
 
 /**
- * Create a cookie that clears the refresh token
- *
- * @returns Serialized cookie string that expires the refresh token
+ * Create cookies that clear legacy JWT tokens
+ * Used during migration from JWT to session tokens
  */
-export function createClearRefreshTokenCookie(): string {
-  return serialize(COOKIE_CONFIG.refreshToken.name, '', {
-    ...getCommonOptions(),
-    path: COOKIE_CONFIG.refreshToken.path,
-    expires: new Date(0),
-  });
+function createClearLegacyCookies(): string[] {
+  const common = getCommonOptions();
+  const cookies: string[] = [];
+
+  // Clear accessToken from all paths
+  for (const path of COOKIE_CONFIG.legacy.legacyPaths) {
+    cookies.push(serialize(COOKIE_CONFIG.legacy.accessToken, '', {
+      ...common,
+      path,
+      expires: new Date(0),
+    }));
+  }
+
+  // Clear refreshToken from all paths
+  for (const path of COOKIE_CONFIG.legacy.legacyPaths) {
+    cookies.push(serialize(COOKIE_CONFIG.legacy.refreshToken, '', {
+      ...common,
+      path,
+      expires: new Date(0),
+    }));
+  }
+
+  return cookies;
 }
 
 /**
- * Create a cookie that clears the legacy refresh token (path '/')
- *
- * MIGRATION: This clears old refresh tokens that used path '/' instead of
- * the new scoped path '/api/auth'. During migration, this should be used
- * to ensure cleanup.
- *
- * @returns Serialized cookie string that expires the legacy refresh token
- */
-export function createClearLegacyRefreshTokenCookie(): string {
-  return serialize(COOKIE_CONFIG.refreshToken.name, '', {
-    ...getCommonOptions(),
-    path: COOKIE_CONFIG.legacyRefreshTokenPath,
-    expires: new Date(0),
-  });
-}
-
-/**
- * Create a cookie that clears the legacy scoped refresh token (path '/api/auth/refresh')
- *
- * MIGRATION: This clears refresh tokens from intermediate rollouts that used
- * the narrower path '/api/auth/refresh' before we settled on '/api/auth'.
- *
- * @returns Serialized cookie string that expires the legacy scoped refresh token
- */
-export function createClearLegacyScopedRefreshTokenCookie(): string {
-  return serialize(COOKIE_CONFIG.refreshToken.name, '', {
-    ...getCommonOptions(),
-    path: COOKIE_CONFIG.legacyRefreshTokenPathScoped,
-    expires: new Date(0),
-  });
-}
-
-/**
- * Get all clear cookies for logout
- *
- * Returns current and all legacy cookie clear strings.
- * Use all of these during logout to ensure complete session termination.
- *
- * @returns Object with all clear cookie strings
- */
-export function createClearCookies(): {
-  accessToken: string;
-  refreshToken: string;
-  legacyRefreshToken: string;
-  legacyScopedRefreshToken: string;
-} {
-  return {
-    accessToken: createClearAccessTokenCookie(),
-    refreshToken: createClearRefreshTokenCookie(),
-    legacyRefreshToken: createClearLegacyRefreshTokenCookie(),
-    legacyScopedRefreshToken: createClearLegacyScopedRefreshTokenCookie(),
-  };
-}
-
-/**
- * Append auth cookies to headers for login/refresh responses
- *
- * Sets both the access token and refresh token cookies.
- * Also clears any legacy refresh token cookie (migration).
+ * Append session cookie to headers for login responses
+ * Also clears any legacy JWT cookies
  *
  * @param headers - Headers object to append cookies to
- * @param accessToken - The JWT access token
- * @param refreshToken - The JWT refresh token
+ * @param sessionToken - The opaque session token
  */
-export function appendAuthCookies(
-  headers: Headers,
-  accessToken: string,
-  refreshToken: string
-): void {
-  headers.append('Set-Cookie', createAccessTokenCookie(accessToken));
-  headers.append('Set-Cookie', createRefreshTokenCookie(refreshToken));
-  // Clear any legacy refresh token cookies during migration
-  headers.append('Set-Cookie', createClearLegacyRefreshTokenCookie());
-  headers.append('Set-Cookie', createClearLegacyScopedRefreshTokenCookie());
+export function appendSessionCookie(headers: Headers, sessionToken: string): void {
+  headers.append('Set-Cookie', createSessionCookie(sessionToken));
+  // Clear legacy JWT cookies during migration
+  for (const cookie of createClearLegacyCookies()) {
+    headers.append('Set-Cookie', cookie);
+  }
 }
 
 /**
  * Append clear cookies to headers for logout responses
- *
- * Clears access token, refresh token, and legacy refresh token cookies.
+ * Clears session cookie and all legacy JWT cookies
  *
  * @param headers - Headers object to append cookies to
  */
 export function appendClearCookies(headers: Headers): void {
-  const clearCookies = createClearCookies();
-  headers.append('Set-Cookie', clearCookies.accessToken);
-  headers.append('Set-Cookie', clearCookies.refreshToken);
-  headers.append('Set-Cookie', clearCookies.legacyRefreshToken);
-  headers.append('Set-Cookie', clearCookies.legacyScopedRefreshToken);
+  headers.append('Set-Cookie', createClearSessionCookie());
+  for (const cookie of createClearLegacyCookies()) {
+    headers.append('Set-Cookie', cookie);
+  }
+}
+
+/**
+ * Get session token from cookie header
+ *
+ * @param cookieHeader - The cookie header string
+ * @returns The session token or null if not found
+ */
+export function getSessionFromCookies(cookieHeader: string | null): string | null {
+  if (!cookieHeader) return null;
+
+  const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+    const [key, value] = cookie.trim().split('=');
+    if (key && value) acc[key] = value;
+    return acc;
+  }, {} as Record<string, string>);
+
+  return cookies[COOKIE_CONFIG.session.name] ?? null;
 }

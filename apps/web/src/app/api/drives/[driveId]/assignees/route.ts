@@ -25,7 +25,7 @@ export async function GET(
   context: { params: Promise<{ driveId: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, { allow: ['jwt'] as const });
+    const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const });
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 

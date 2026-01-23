@@ -1,12 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import {
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-  decodeToken,
-  validateOrCreateDeviceToken,
-} from '@pagespace/lib/server';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -16,33 +10,27 @@ import { parse } from 'cookie';
 import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken, getClientIP, appendAuthCookies } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+
+const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const loginSchema = z.object({
   email: z.email(),
-  password: z.string().min(1, {
-      error: "Password is required"
-  }),
-  // Optional device information for device token creation
-  deviceId: z.string().optional(),
-  deviceName: z.string().optional(),
-  deviceToken: z.string().optional(),
+  password: z.string().min(1, 'Password is required'),
 });
 
 export async function POST(req: Request) {
   try {
-    // Get client IP early for logging
     const clientIP = getClientIP(req);
 
     // Validate Login CSRF token to prevent Login CSRF attacks
-    // This prevents attackers from forcing victims to log into attacker's account
     const csrfTokenHeader = req.headers.get('x-login-csrf-token');
     const cookieHeader = req.headers.get('cookie');
     const cookies = parse(cookieHeader || '');
     const csrfTokenCookie = cookies.login_csrf;
 
-    // Both header and cookie must be present and match
     if (!csrfTokenHeader || !csrfTokenCookie) {
       logSecurityEvent('login_csrf_missing', {
         ip: clientIP,
@@ -59,7 +47,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Verify tokens match (double-submit pattern)
     if (csrfTokenHeader !== csrfTokenCookie) {
       logSecurityEvent('login_csrf_mismatch', { ip: clientIP });
       return Response.json(
@@ -72,7 +59,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Validate token signature and expiry
     if (!validateLoginCSRFToken(csrfTokenHeader)) {
       logSecurityEvent('login_csrf_invalid', { ip: clientIP });
       return Response.json(
@@ -92,9 +78,9 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { email, password, deviceId, deviceName, deviceToken: existingDeviceToken } = validation.data;
+    const { email, password } = validation.data;
 
-    // Distributed rate limiting (parallel checks for better performance)
+    // Distributed rate limiting
     const [distributedIpLimit, distributedEmailLimit] = await Promise.all([
       checkDistributedRateLimit(`login:ip:${clientIP}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
       checkDistributedRateLimit(`login:email:${email.toLowerCase()}`, DISTRIBUTED_RATE_LIMITS.LOGIN),
@@ -137,7 +123,6 @@ export async function POST(req: Request) {
     const user = await authRepository.findUserByEmail(email);
 
     // Always perform bcrypt comparison to prevent timing attacks
-    // Use a fake hash for non-existent users to maintain consistent timing
     const passwordToCheck = user?.password || '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYzpLLEm4Eu';
     const isValid = await bcrypt.compare(password, passwordToCheck);
 
@@ -148,50 +133,37 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
-    const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
-
-    const refreshPayload = await decodeToken(refreshToken);
-    const refreshExpiresAt = refreshPayload?.exp
-      ? new Date(refreshPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    // Create or validate device token for web platform
-    let deviceTokenValue: string | undefined;
-    let deviceTokenRecordId: string | undefined;
-    if (deviceId) {
-      const { deviceToken: createdDeviceToken, deviceTokenRecordId: recordId } = await validateOrCreateDeviceToken({
-        providedDeviceToken: existingDeviceToken,
-        userId: user.id,
-        deviceId,
-        platform: 'web',
-        tokenVersion: user.tokenVersion,
-        deviceName,
-        userAgent: req.headers.get('user-agent') ?? undefined,
-        ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
-      });
-      deviceTokenValue = createdDeviceToken;
-      deviceTokenRecordId = recordId;
+    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
+    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
+    if (revokedCount > 0) {
+      loggers.auth.info('Revoked existing sessions on login', { userId: user.id, count: revokedCount });
     }
 
-    await authRepository.createRefreshToken({
-      token: refreshToken,
+    // Create new opaque session token
+    const sessionToken = await sessionService.createSession({
       userId: user.id,
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      expiresAt: refreshExpiresAt,
-      deviceTokenId: deviceTokenRecordId,
-      platform: 'web',
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: SESSION_DURATION_MS,
+      createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
-    // Reset rate limits on successful login (parallel, graceful - failures don't affect successful auth)
+    // Validate session to get claims for CSRF generation
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session', { userId: user.id });
+      return Response.json({ error: 'Failed to create session.' }, { status: 500 });
+    }
+
+    // Generate CSRF token bound to session ID
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // Reset rate limits on successful login
     const resetResults = await Promise.allSettled([
       resetDistributedRateLimit(`login:ip:${clientIP}`),
       resetDistributedRateLimit(`login:email:${email.toLowerCase()}`),
     ]);
 
-    // Log any reset failures for observability
     const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failures.length > 0) {
       loggers.auth.warn('Rate limit reset failed after successful login', {
@@ -200,10 +172,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // Log successful login
     logAuthEvent('login', user.id, email, clientIP);
-    
-    // Track login event
     trackAuthEvent(user.id, 'login', {
       email,
       ip: clientIP,
@@ -211,9 +180,8 @@ export async function POST(req: Request) {
     });
 
     const headers = new Headers();
-    appendAuthCookies(headers, accessToken, refreshToken);
+    appendSessionCookie(headers, sessionToken);
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
-    // After successful login and rate limit reset, remaining attempts are back to max
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
 
     let redirectTo: string | undefined;
@@ -232,7 +200,7 @@ export async function POST(req: Request) {
       id: user.id,
       name: user.name,
       email: user.email,
-      ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
+      csrfToken,
       ...(redirectTo && { redirectTo }),
     }, { status: 200, headers });
 

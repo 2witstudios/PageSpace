@@ -6,8 +6,8 @@ import { globalConversationRepository } from '@/lib/repositories/global-conversa
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * GET - List conversations for the authenticated user with optional pagination

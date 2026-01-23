@@ -4,7 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createNotification } from '@pagespace/lib';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // PATCH /api/connections/[connectionId] - Accept, reject, or block a connection
 export async function PATCH(

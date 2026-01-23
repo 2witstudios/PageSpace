@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock repository seams - the proper architectural boundary
 vi.mock('@pagespace/lib/server', () => ({
@@ -46,12 +46,13 @@ import { createUserServiceToken } from '@pagespace/lib';
 const mockAccountRepo = vi.mocked(accountRepository);
 const mockActivityLogRepo = vi.mocked(activityLogRepository);
 
-// Helper to create mock WebAuthResult
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+// Helper to create mock SessionAuthResult
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 

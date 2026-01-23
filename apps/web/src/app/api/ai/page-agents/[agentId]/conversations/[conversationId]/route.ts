@@ -5,7 +5,7 @@ import { loggers } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 // Auth options: PATCH and DELETE are write operations requiring CSRF protection
-const AUTH_OPTIONS_WRITE = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]

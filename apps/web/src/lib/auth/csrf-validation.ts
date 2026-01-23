@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { validateCSRFToken, getSessionIdFromJWT, decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { validateCSRFToken, sessionService } from '@pagespace/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { getSessionFromCookies } from './cookie-config';
 
 /**
  * CSRF Token Validation for API Routes
@@ -9,6 +9,9 @@ import { loggers } from '@pagespace/lib/server';
  * This module provides CSRF protection for authenticated API endpoints.
  * CSRF tokens are required for all mutation operations (POST, PATCH, PUT, DELETE)
  * to prevent Cross-Site Request Forgery attacks.
+ *
+ * Session-based CSRF: Tokens are bound to server-validated session IDs,
+ * not client-controlled JWT claims.
  *
  * Usage:
  * ```typescript
@@ -27,29 +30,8 @@ const CSRF_HEADER = 'x-csrf-token';
 
 /**
  * Safe methods that don't require CSRF protection
- * These methods should not modify server state per HTTP specification
  */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-
-/**
- * Extracts CSRF token from request headers
- */
-function getCSRFTokenFromRequest(request: Request): string | null {
-  return request.headers.get(CSRF_HEADER);
-}
-
-/**
- * Extracts JWT access token from request cookies
- */
-function getAccessTokenFromRequest(request: Request): string | null {
-  const cookieHeader = request.headers.get('cookie');
-  if (!cookieHeader) {
-    return null;
-  }
-
-  const cookies = parse(cookieHeader);
-  return cookies.accessToken ?? null;
-}
 
 /**
  * Validates CSRF token for the current request
@@ -57,7 +39,7 @@ function getAccessTokenFromRequest(request: Request): string | null {
  * This function:
  * 1. Skips validation for safe HTTP methods (GET, HEAD, OPTIONS)
  * 2. Extracts the CSRF token from the X-CSRF-Token header
- * 3. Validates the token against the user's JWT session ID
+ * 3. Validates the token against the server-validated session ID
  * 4. Returns an error response if validation fails
  *
  * @param request - The incoming HTTP request
@@ -72,7 +54,7 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
   }
 
   // Extract CSRF token from headers
-  const csrfToken = getCSRFTokenFromRequest(request);
+  const csrfToken = request.headers.get(CSRF_HEADER);
   if (!csrfToken) {
     loggers.auth.warn('CSRF token missing from request', {
       method,
@@ -88,10 +70,12 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
     );
   }
 
-  // Extract JWT access token to get session ID
-  const accessToken = getAccessTokenFromRequest(request);
-  if (!accessToken) {
-    loggers.auth.warn('CSRF validation failed: no access token', {
+  // Extract session token from cookies
+  const cookieHeader = request.headers.get('cookie');
+  const sessionToken = getSessionFromCookies(cookieHeader);
+
+  if (!sessionToken) {
+    loggers.auth.warn('CSRF validation failed: no session token', {
       method,
       url: request.url,
     });
@@ -104,10 +88,10 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
     );
   }
 
-  // Decode JWT to get session ID
-  const jwtPayload = await decodeToken(accessToken);
-  if (!jwtPayload) {
-    loggers.auth.warn('CSRF validation failed: invalid JWT', {
+  // Validate session with server
+  const sessionClaims = await sessionService.validateSession(sessionToken);
+  if (!sessionClaims) {
+    loggers.auth.warn('CSRF validation failed: invalid session', {
       method,
       url: request.url,
     });
@@ -120,17 +104,14 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
     );
   }
 
-  // Generate session ID from JWT payload
-  const sessionId = getSessionIdFromJWT(jwtPayload);
-
   // Validate CSRF token against session ID
-  const isValid = validateCSRFToken(csrfToken, sessionId);
+  const isValid = validateCSRFToken(csrfToken, sessionClaims.sessionId);
 
   if (!isValid) {
     loggers.auth.warn('CSRF token validation failed', {
       method,
       url: request.url,
-      userId: jwtPayload.userId,
+      userId: sessionClaims.userId,
     });
     return NextResponse.json(
       {
@@ -142,11 +123,10 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
     );
   }
 
-  // Validation successful
   loggers.auth.debug('CSRF token validated successfully', {
     method,
     url: request.url,
-    userId: jwtPayload.userId,
+    userId: sessionClaims.userId,
   });
 
   return null;
@@ -154,9 +134,6 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
 
 /**
  * Checks if a request requires CSRF protection
- *
- * @param request - The incoming HTTP request
- * @returns true if CSRF protection is required, false otherwise
  */
 export function requiresCSRFProtection(request: Request): boolean {
   return !SAFE_METHODS.has(request.method);

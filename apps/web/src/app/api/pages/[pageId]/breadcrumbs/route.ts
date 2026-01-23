@@ -89,7 +89,7 @@ async function getBreadcrumbs(pageId: string): Promise<BreadcrumbPage[]> {
   return breadcrumbs;
 }
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;

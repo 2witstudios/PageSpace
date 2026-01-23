@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 export async function POST(request: Request) {
   try {

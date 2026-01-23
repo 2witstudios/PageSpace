@@ -1,44 +1,25 @@
-import { generateCSRFToken, getSessionIdFromJWT, loggers, decodeToken } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { parse } from 'cookie';
-
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+import { generateCSRFToken, sessionService } from '@pagespace/lib/auth';
+import { loggers } from '@pagespace/lib/server';
+import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 export async function GET(req: Request) {
   try {
-    // Support both Bearer tokens (desktop) and cookies (web)
-    const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
-    if (isAuthError(auth)) {
-      return auth.error;
+    // Extract session token from cookies
+    const cookieHeader = req.headers.get('cookie');
+    const sessionToken = getSessionFromCookies(cookieHeader);
+
+    if (!sessionToken) {
+      return Response.json({ error: 'No session found' }, { status: 401 });
     }
 
-    // Get the JWT token to extract the iat claim
-    const authHeader = req.headers.get('authorization');
-    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-
-    const jwtToken = bearerToken || (() => {
-      const cookieHeader = req.headers.get('cookie');
-      const cookies = parse(cookieHeader || '');
-      return cookies.accessToken || null;
-    })();
-
-    if (!jwtToken) {
-      return Response.json({ error: 'No JWT token found' }, { status: 401 });
+    // Validate session with server
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      return Response.json({ error: 'Invalid or expired session' }, { status: 401 });
     }
 
-    // Decode the JWT to get the iat claim
-    const decoded = await decodeToken(jwtToken);
-    if (!decoded?.iat) {
-      return Response.json({ error: 'Invalid JWT token' }, { status: 401 });
-    }
-
-    // Get session ID from JWT claims
-    const sessionId = getSessionIdFromJWT({
-      userId: auth.userId,
-      tokenVersion: auth.tokenVersion,
-      iat: decoded.iat,
-    });
-    const csrfToken = generateCSRFToken(sessionId);
+    // Generate CSRF token bound to session ID
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     return Response.json({ csrfToken });
   } catch (error) {
