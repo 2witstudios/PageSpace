@@ -9,6 +9,10 @@ import {
 } from '@/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
+// Use Node.js runtime for database access in session validation
+// Edge runtime doesn't support node-postgres which sessionService uses
+export const runtime = 'nodejs';
+
 const MCP_BEARER_PREFIX = 'Bearer mcp_';
 
 export async function middleware(req: NextRequest) {
