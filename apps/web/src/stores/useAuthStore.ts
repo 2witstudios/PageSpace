@@ -307,7 +307,55 @@ export const useAuthStore = create<AuthState>()(
 
             if (isDesktop && window.electron) {
               const sessionToken = await window.electron.auth.getSessionToken();
-              if (sessionToken) {
+
+              // If no session token, try to get one via device refresh FIRST
+              // This handles app startup when session has expired but device token is valid
+              if (!sessionToken) {
+                const storedSession = await window.electron.auth.getSession();
+                if (storedSession?.deviceToken) {
+                  console.log('[AUTH_STORE] No session token, attempting device refresh');
+                  const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+                  const refreshResult = await refreshAuthSession();
+
+                  if (!refreshResult.success) {
+                    // Device token invalid or refresh failed
+                    if (refreshResult.shouldLogout) {
+                      console.log('[AUTH_STORE] Device token invalid - user must login');
+                      set({
+                        user: null,
+                        isAuthenticated: false,
+                        isLoading: false,
+                        authFailedPermanently: true,
+                      });
+                    } else {
+                      // Transient failure - don't logout, just report not authenticated
+                      console.log('[AUTH_STORE] Device refresh failed (transient) - will retry later');
+                      set({
+                        user: null,
+                        isAuthenticated: false,
+                        isLoading: false,
+                      });
+                    }
+                    return;
+                  }
+
+                  // Refresh succeeded - get the new session token
+                  console.log('[AUTH_STORE] Device refresh succeeded, continuing with auth check');
+                  const newSessionToken = await window.electron.auth.getSessionToken();
+                  if (newSessionToken) {
+                    headers['Authorization'] = `Bearer ${newSessionToken}`;
+                  }
+                } else {
+                  // No device token either - not logged in
+                  console.log('[AUTH_STORE] No session or device token - user not logged in');
+                  set({
+                    user: null,
+                    isAuthenticated: false,
+                    isLoading: false,
+                  });
+                  return;
+                }
+              } else {
                 headers['Authorization'] = `Bearer ${sessionToken}`;
               }
             }
