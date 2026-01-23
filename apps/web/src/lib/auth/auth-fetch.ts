@@ -428,112 +428,85 @@ class AuthFetch {
       return this.refreshDesktopSession();
     }
 
+    // Web: Session-based auth with sliding window expiry
+    // Sessions are extended automatically by middleware on each authenticated request.
+    // When a session expires (user inactive for 7 days), we attempt device token recovery.
+    // If no device token exists, user must re-authenticate.
     try {
-      // Try refresh token first
-      let response = await fetch('/api/auth/refresh', {
+      const deviceToken = typeof localStorage !== 'undefined'
+        ? localStorage.getItem('deviceToken')
+        : null;
+
+      if (!deviceToken) {
+        // No device token - session expired, must re-authenticate
+        this.logger.warn('Web: Session expired and no device token available');
+        return { success: false, shouldLogout: true };
+      }
+
+      // Try device token recovery
+      this.logger.debug('Web: Attempting session recovery via device token');
+      const { getOrCreateDeviceId } = await import('@/lib/analytics/device-fingerprint');
+      const deviceId = getOrCreateDeviceId();
+
+      const response = await fetch('/api/auth/device/refresh', {
         method: 'POST',
-        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceToken,
+          deviceId,
+          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+        }),
       });
 
       if (response.ok) {
-        // Refresh token succeeded
+        // Device token refresh succeeded - new session created
+        let refreshData: { deviceToken?: string; csrfToken?: string } | null = null;
+        try {
+          refreshData = await response.json();
+        } catch {
+          refreshData = null;
+        }
+
+        if (refreshData?.deviceToken && typeof localStorage !== 'undefined') {
+          try {
+            localStorage.setItem('deviceToken', refreshData.deviceToken);
+          } catch (storageError) {
+            this.logger.warn('Failed to persist refreshed device token', {
+              error: storageError instanceof Error ? storageError.message : String(storageError),
+            });
+          }
+        }
+
+        if (refreshData?.csrfToken) {
+          this.csrfToken = refreshData.csrfToken;
+        } else {
+          this.clearCSRFToken();
+        }
+
+        this.logger.info('Web: Session recovered via device token');
         if (typeof window !== 'undefined' && window.dispatchEvent) {
           window.dispatchEvent(new CustomEvent('auth:refreshed'));
         }
         return { success: true, shouldLogout: false };
       }
 
-      // If refresh token fails with 401, try device token fallback
       if (response.status === 401) {
-        const deviceToken = typeof localStorage !== 'undefined'
-          ? localStorage.getItem('deviceToken')
-          : null;
-
-        if (deviceToken) {
-          this.logger.debug('Refresh token failed, attempting device token fallback');
-
-          // Dynamically import device fingerprint utilities
-          const { getOrCreateDeviceId } = await import('@/lib/analytics/device-fingerprint');
-          const deviceId = getOrCreateDeviceId();
-
-          // Try device token refresh as fallback
-          response = await fetch('/api/auth/device/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              deviceToken,
-              deviceId,
-              userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
-            }),
-          });
-
-          if (response.ok) {
-            let refreshData: { deviceToken?: string; csrfToken?: string } | null = null;
-            try {
-              refreshData = await response.json();
-            } catch {
-              refreshData = null;
-            }
-
-            if (refreshData?.deviceToken && typeof localStorage !== 'undefined') {
-              try {
-                localStorage.setItem('deviceToken', refreshData.deviceToken);
-              } catch (storageError) {
-                this.logger.warn('Failed to persist refreshed device token', {
-                  error: storageError instanceof Error ? storageError.message : String(storageError),
-                });
-              }
-            }
-
-            if (refreshData?.csrfToken) {
-              this.csrfToken = refreshData.csrfToken;
-            } else {
-              this.clearCSRFToken();
-            }
-
-            // Device token refresh succeeded
-            this.logger.info('Session recovered via device token fallback');
-            if (typeof window !== 'undefined' && window.dispatchEvent) {
-              window.dispatchEvent(new CustomEvent('auth:refreshed'));
-            }
-            return { success: true, shouldLogout: false };
-          }
-
-          // Device token also failed with 401 - must logout
-          if (response.status === 401) {
-            this.logger.warn('Both refresh token and device token failed - logging out');
-            if (typeof window !== 'undefined' && window.dispatchEvent) {
-              window.dispatchEvent(new CustomEvent('auth:expired'));
-            }
-            return { success: false, shouldLogout: true };
-          }
-        } else {
-          // No device token available, must logout
-          this.logger.warn('Refresh token invalid and no device token available - logging out');
-          if (typeof window !== 'undefined' && window.dispatchEvent) {
-            window.dispatchEvent(new CustomEvent('auth:expired'));
-          }
-          return { success: false, shouldLogout: true };
-        }
+        // Device token invalid - must re-authenticate
+        this.logger.warn('Web: Device token invalid - logging out');
+        return { success: false, shouldLogout: true };
       }
 
       if (response.status === 429 || response.status >= 500) {
-        // Rate limiting or server errors - don't logout, just fail silently
-        this.logger.warn('Token refresh request returned retryable status', {
-          status: response.status,
-        });
+        // Rate limited or server error - don't logout, let retry handle it
+        this.logger.warn('Web: Device refresh returned retryable status', { status: response.status });
         return { success: false, shouldLogout: false };
       }
 
-      // For other client errors, don't logout
-      this.logger.error('Token refresh request failed with non-retryable status', {
-        status: response.status,
-      });
+      // Other client errors
+      this.logger.error('Web: Device refresh failed', { status: response.status });
       return { success: false, shouldLogout: false };
     } catch (error) {
-      this.logger.error('Token refresh request threw an error', {
-        error: error instanceof Error ? error : String(error),
-      });
+      this.logger.error('Web: Session refresh error', { error });
       return { success: false, shouldLogout: false };
     }
   }

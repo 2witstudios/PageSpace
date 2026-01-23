@@ -10,6 +10,11 @@ vi.mock('@/lib/logging/client-logger', () => ({
   }),
 }));
 
+// Mock the device fingerprint module for web refresh tests
+vi.mock('@/lib/analytics/device-fingerprint', () => ({
+  getOrCreateDeviceId: () => 'mock-device-id-12345',
+}));
+
 // Reset modules before each test to get fresh AuthFetch instance
 beforeEach(() => {
   vi.resetModules();
@@ -43,7 +48,11 @@ describe('AuthFetch', () => {
 
       Object.defineProperty(global, 'localStorage', {
         value: {
-          getItem: vi.fn().mockReturnValue(null),
+          getItem: vi.fn().mockImplementation((key: string) => {
+            // Return a mock device token for device refresh tests
+            if (key === 'deviceToken') return 'mock-device-token-abc123';
+            return null;
+          }),
           setItem: vi.fn(),
           removeItem: vi.fn(),
         },
@@ -74,10 +83,13 @@ describe('AuthFetch', () => {
       const { AuthFetch } = await import('../auth-fetch');
       const authFetch = new AuthFetch();
 
-      // Setup: First call to /api/auth/refresh succeeds
+      // Setup: Device token refresh succeeds (web session-based auth)
       mockFetch.mockImplementation(async (url: string) => {
-        if (url === '/api/auth/refresh') {
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        if (url === '/api/auth/device/refresh') {
+          return new Response(JSON.stringify({
+            deviceToken: 'new-device-token',
+            csrfToken: 'new-csrf-token'
+          }), { status: 200 });
         }
         // Subsequent API calls succeed
         return new Response(JSON.stringify({ data: 'test' }), { status: 200 });
@@ -141,9 +153,9 @@ describe('AuthFetch', () => {
       const { AuthFetch } = await import('../auth-fetch');
       const authFetch = new AuthFetch();
 
-      // Setup: Refresh fails with 401
+      // Setup: Device token refresh fails with 401 (invalid/expired device token)
       mockFetch.mockImplementation(async (url: string) => {
-        if (url === '/api/auth/refresh') {
+        if (url === '/api/auth/device/refresh') {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
         }
         return new Response(JSON.stringify({ data: 'test' }), { status: 200 });
@@ -201,10 +213,13 @@ describe('AuthFetch', () => {
       const { AuthFetch } = await import('../auth-fetch');
       const authFetch = new AuthFetch();
 
-      // Setup: Refresh succeeds
+      // Setup: Device token refresh succeeds
       mockFetch.mockImplementation(async (url: string) => {
-        if (url === '/api/auth/refresh') {
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        if (url === '/api/auth/device/refresh') {
+          return new Response(JSON.stringify({
+            deviceToken: 'new-device-token',
+            csrfToken: 'new-csrf-token'
+          }), { status: 200 });
         }
         return new Response(JSON.stringify({ data: 'test' }), { status: 200 });
       });
@@ -225,12 +240,15 @@ describe('AuthFetch', () => {
 
       let refreshCallCount = 0;
 
-      // Setup: Refresh succeeds but takes some time
+      // Setup: Device token refresh succeeds but takes some time
       mockFetch.mockImplementation(async (url: string) => {
-        if (url === '/api/auth/refresh') {
+        if (url === '/api/auth/device/refresh') {
           refreshCallCount++;
           await new Promise(resolve => setTimeout(resolve, 50));
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
+          return new Response(JSON.stringify({
+            deviceToken: 'new-device-token',
+            csrfToken: 'new-csrf-token'
+          }), { status: 200 });
         }
         return new Response(JSON.stringify({ data: 'test' }), { status: 200 });
       });
