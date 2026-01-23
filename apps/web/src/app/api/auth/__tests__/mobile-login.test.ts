@@ -82,7 +82,6 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { sessionService } from '@pagespace/lib/auth';
 
 describe('/api/auth/mobile/login', () => {
   const mockUser = {
