@@ -14,10 +14,10 @@ vi.mock('socket.io-client', () => ({
 
 // Mock auth-fetch module for unified refresh mechanism
 const mockRefreshAuthSession = vi.fn();
-const mockClearJWTCache = vi.fn();
+const mockClearSessionCache = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
   refreshAuthSession: () => mockRefreshAuthSession(),
-  clearSessionCache: () => mockClearJWTCache(),
+  clearSessionCache: () => mockClearSessionCache(),
 }));
 
 vi.mock('@pagespace/lib/broadcast-auth', () => ({
@@ -89,7 +89,7 @@ describe('Socket.IO Integration', () => {
 
     // Reset auth-fetch mocks with default success behavior
     mockRefreshAuthSession.mockResolvedValue({ success: true, shouldLogout: false });
-    mockClearJWTCache.mockClear();
+    mockClearSessionCache.mockClear();
 
     // Mock window
     Object.defineProperty(global, 'window', {
@@ -228,7 +228,7 @@ describe('Socket.IO Integration', () => {
       expect(mockRefreshAuthSession).toHaveBeenCalled();
 
       // Verify JWT cache was cleared after successful refresh
-      expect(mockClearJWTCache).toHaveBeenCalled();
+      expect(mockClearSessionCache).toHaveBeenCalled();
 
       // Verify socket reconnected with new token
       expect(mockSocket.auth).toEqual({ token: newToken });
@@ -347,7 +347,7 @@ describe('Socket.IO Integration', () => {
     it('given Electron environment, should get token from secure storage', async () => {
       const mockToken = 'desktop-token';
       const mockElectron = createMockElectron();
-      mockElectron.auth.getJWT.mockResolvedValue(mockToken);
+      mockElectron.auth.getSessionToken.mockResolvedValue(mockToken);
 
       Object.defineProperty(global, 'window', {
         value: {
@@ -363,7 +363,7 @@ describe('Socket.IO Integration', () => {
       await connect();
 
       // Should use Electron auth
-      expect(mockElectron.auth.getJWT).toHaveBeenCalled();
+      expect(mockElectron.auth.getSessionToken).toHaveBeenCalled();
 
       // Should pass token to socket
       const callArgs = vi.mocked(io).mock.calls[0];
