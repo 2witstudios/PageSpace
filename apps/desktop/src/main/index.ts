@@ -21,7 +21,7 @@ interface StoreSchema {
 
 const store = new Store<StoreSchema>({
   defaults: {
-    windowBounds: { width: 960, height: 680 },
+    windowBounds: { width: 1024, height: 700 },
     minimizeToTray: true,
   },
 }) as any; // Type assertion to work around electron-store v10 type definitions
@@ -171,7 +171,7 @@ function injectDoubleClickHandler(): void {
 
 function createWindow(): void {
   // Get saved window bounds
-  const windowBounds = store.get('windowBounds') || { width: 960, height: 680 };
+  const windowBounds = store.get('windowBounds') || { width: 1024, height: 700 };
 
   // Create the browser window
   // Center window if no saved position exists
