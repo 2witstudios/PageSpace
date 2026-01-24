@@ -30,6 +30,7 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
       // Workspace package aliases for testing
+      '@pagespace/db/test/factories': path.resolve(packagesDir, 'db/src/test/factories'),
       '@pagespace/db': path.resolve(packagesDir, 'db/src'),
       '@pagespace/lib/server': path.resolve(packagesDir, 'lib/src/server'),
       '@pagespace/lib/broadcast-auth': path.resolve(packagesDir, 'lib/src/auth/broadcast-auth'),
