@@ -922,8 +922,7 @@ async function handleAuthExchange(url: string): Promise<boolean> {
 
     const code = urlObj.searchParams.get('code');
     const provider = urlObj.searchParams.get('provider') || 'unknown';
-    // TODO: Use isNewUser to show onboarding flow for new users
-    // const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
+    const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
 
     if (!code) {
       logger.error('[Auth Exchange] Missing code in deep link');
@@ -1013,6 +1012,9 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     // The ?auth=success param is the reliable way to communicate OAuth success across page loads.
     const dashboardUrl = new URL(getAppUrl());
     dashboardUrl.searchParams.set('auth', 'success');
+    if (isNewUser) {
+      dashboardUrl.searchParams.set('isNewUser', 'true');
+    }
     mainWindow?.loadURL(dashboardUrl.toString());
 
     return true;

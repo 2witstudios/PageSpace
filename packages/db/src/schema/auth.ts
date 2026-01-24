@@ -18,6 +18,7 @@ export const users = pgTable('users', {
   provider: authProvider('provider').default('email').notNull(),
   tokenVersion: integer('tokenVersion').default(0).notNull(),
   role: userRole('role').default('user').notNull(),
+  adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
   currentAiProvider: text('currentAiProvider').default('pagespace').notNull(),
   currentAiModel: text('currentAiModel').default('glm-4.5-air').notNull(),
   // Storage tracking fields (quota/tier now computed from subscriptionTier)

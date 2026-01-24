@@ -43,6 +43,7 @@ const mockUser: User = {
   emailVerified: mockVerifiedDate,
   password: '$2a$12$hashedpassword',
   tokenVersion: 0,
+  adminRoleVersion: 0,
   currentAiProvider: 'pagespace',
   currentAiModel: 'glm-4.5-air',
   storageUsedBytes: 0,

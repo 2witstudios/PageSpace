@@ -8,6 +8,7 @@ describe('EnforcedAuthContext', () => {
     userId: 'test-user-id',
     userRole: 'user',
     tokenVersion: 1,
+    adminRoleVersion: 0,
     type: 'user',
     scopes: ['files:read'],
     expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour

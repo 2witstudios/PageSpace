@@ -102,6 +102,7 @@ describe('csrf-validation', () => {
       userId: 'user_123',
       userRole: 'user' as const,
       tokenVersion: 0,
+      adminRoleVersion: 0,
       type: 'user' as const,
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),

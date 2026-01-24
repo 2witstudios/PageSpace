@@ -54,7 +54,7 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  
+  adminRoleVersion: 0,
   role: 'user',
 });
 

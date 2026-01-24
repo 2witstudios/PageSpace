@@ -13,6 +13,7 @@ interface BaseAuthDetails {
   userId: string;
   role: 'user' | 'admin';
   tokenVersion: number;
+  adminRoleVersion: number;
 }
 
 interface MCPAuthDetails extends BaseAuthDetails {
@@ -76,6 +77,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
             id: true,
             role: true,
             tokenVersion: true,
+            adminRoleVersion: true,
           },
         },
       },
@@ -95,6 +97,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       userId: tokenRecord.userId,
       role: user.role as 'user' | 'admin',
       tokenVersion: user.tokenVersion,
+      adminRoleVersion: user.adminRoleVersion,
       tokenId: tokenRecord.id,
     };
   } catch (error) {
@@ -157,6 +160,7 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
           userId: sessionResult.userId,
           role: sessionResult.userRole,
           tokenVersion: sessionResult.tokenVersion,
+          adminRoleVersion: sessionResult.adminRoleVersion,
           sessionId: sessionResult.sessionId,
           tokenType: 'session',
         } satisfies SessionAuthResult;
@@ -189,6 +193,7 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
     userId: sessionClaims.userId,
     role: sessionClaims.userRole,
     tokenVersion: sessionClaims.tokenVersion,
+    adminRoleVersion: sessionClaims.adminRoleVersion,
     sessionId: sessionClaims.sessionId,
     tokenType: 'session',
   } satisfies SessionAuthResult;
