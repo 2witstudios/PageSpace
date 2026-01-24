@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { GitMerge, Folder, Code, MessageSquare, Shield, Zap, Users, HardDrive } from "lucide-react";
 import AuthButtons from "@/components/shared/AuthButtons";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
@@ -7,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import ContactForm from "@/components/shared/ContactForm";
 import PageSpaceDemo from "@/components/landing/PageSpaceDemo";
 import { GoogleOneTap } from "@/components/auth";
+import { NONCE_HEADER } from "@/middleware/security-headers";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -55,7 +57,10 @@ export const metadata: Metadata = {
   },
 };
 
-export default function Home() {
+export default async function Home() {
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get(NONCE_HEADER) ?? undefined;
+
   const organizationSchema = {
     "@context": "https://schema.org",
     "@type": "Organization",
@@ -118,10 +123,12 @@ export default function Home() {
       <GoogleOneTap context="signin" />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: JSON.stringify(webApplicationSchema) }}
       />
       <header className="w-full border-b">
