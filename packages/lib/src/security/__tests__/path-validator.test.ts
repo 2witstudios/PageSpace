@@ -431,6 +431,26 @@ describe('Path Validator - Traversal Prevention', () => {
     });
   });
 
+  describe('handles filesystem root as base', () => {
+    it('allows valid paths under root base', async () => {
+      // Use /tmp as a safe existing directory
+      const result = await resolvePathWithin('/', 'tmp');
+      expect(result).toBe('/tmp');
+    });
+
+    it('allows nested paths under root base', async () => {
+      // The key is it shouldn't be rejected due to double-separator bug
+      // /tmp exists on macOS/Linux systems
+      const result = await resolvePathWithin('/', 'tmp/subdir');
+      expect(result).toBe('/tmp/subdir');
+    });
+
+    it('still blocks traversal with root base', async () => {
+      const result = await resolvePathWithin('/', '../etc/passwd');
+      expect(result).toBeNull();
+    });
+  });
+
   describe('attack vectors from OWASP', () => {
     const attacks = [
       '../etc/passwd',

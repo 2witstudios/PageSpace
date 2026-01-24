@@ -94,6 +94,14 @@ function isAbsoluteAnyPlatform(pathStr: string): boolean {
 }
 
 /**
+ * Ensure path has trailing separator, handling filesystem root correctly
+ * Root paths (/ or C:\) already end with separator
+ */
+function withTrailingSeparator(path: string): string {
+  return path.endsWith(sep) ? path : path + sep;
+}
+
+/**
  * Resolve a path within a base directory, preventing traversal
  * Returns null if path would escape base directory
  *
@@ -160,7 +168,7 @@ export async function resolvePathWithin(
     // The resolved real path must start with the real base path
     // Use sep to ensure we don't match partial directory names
     // e.g., /data/files-backup should not match /data/files
-    if (!realPath.startsWith(realBase + sep) && realPath !== realBase) {
+    if (!realPath.startsWith(withTrailingSeparator(realBase)) && realPath !== realBase) {
       return null;
     }
   } catch (error) {
@@ -175,7 +183,7 @@ export async function resolvePathWithin(
       const realBase = await realpath(resolvedBase);
 
       // Parent must be within or equal to base
-      if (!realParent.startsWith(realBase + sep) && realParent !== realBase) {
+      if (!realParent.startsWith(withTrailingSeparator(realBase)) && realParent !== realBase) {
         return null;
       }
     } catch {
@@ -189,7 +197,7 @@ export async function resolvePathWithin(
         try {
           const realAncestor = await realpath(ancestor);
           // Existing ancestor must be within base
-          if (!realAncestor.startsWith(realBase + sep) && realAncestor !== realBase) {
+          if (!realAncestor.startsWith(withTrailingSeparator(realBase)) && realAncestor !== realBase) {
             return null;
           }
           // Found valid ancestor, path is safe
