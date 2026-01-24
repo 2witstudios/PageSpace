@@ -31,12 +31,12 @@ vi.mock('next/server', () => {
         has: (key: string) => headers.has(key),
       },
     };
-  });
+  }) as unknown as typeof NextResponse;
 
   // Add static methods
-  MockNextResponse.next = vi.fn(() => ({
+  (MockNextResponse as { next: typeof NextResponse.next }).next = vi.fn(() => ({
     headers: new Map(),
-  }));
+  })) as unknown as typeof NextResponse.next;
 
   return { NextResponse: MockNextResponse };
 });

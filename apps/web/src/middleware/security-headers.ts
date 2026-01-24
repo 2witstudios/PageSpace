@@ -33,8 +33,7 @@ export const createSecureErrorResponse = (
   });
 };
 
-export const generateNonce = (): string =>
-  Buffer.from(crypto.randomUUID()).toString('base64');
+export const generateNonce = (): string => btoa(crypto.randomUUID());
 
 type CSPDirectives = Record<string, string[]>;
 
