@@ -193,6 +193,52 @@ describe('Path Validator - Traversal Prevention', () => {
           }
         }
       });
+
+      it('blocks symlink ancestor escape when nested dirs do not exist', async () => {
+        // Attack scenario: symlink exists as ancestor, nested path doesn't exist
+        // Base: testBaseDir
+        // Symlink: testBaseDir/link -> /tmp (escapes base)
+        // User path: link/newdir/file.txt (newdir doesn't exist)
+        // Without proper ancestor checking, this could escape to /tmp/newdir/file.txt
+
+        const symlinkPath = join(testBaseDir, 'link');
+        try {
+          await fs.symlink('/tmp', symlinkPath);
+
+          // Request nested path where parent doesn't exist
+          const result = await resolvePathWithin(testBaseDir, 'link/newdir/file.txt');
+          expect(result).toBeNull();
+        } finally {
+          try {
+            await fs.unlink(symlinkPath);
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+      });
+
+      it('blocks deeply nested symlink ancestor escape', async () => {
+        // Create nested structure with symlink escape in the middle
+        await fs.mkdir(join(testBaseDir, 'level1'), { recursive: true });
+        const symlinkPath = join(testBaseDir, 'level1', 'escape');
+
+        try {
+          await fs.symlink('/tmp', symlinkPath);
+
+          // Request path through symlink with non-existent nested dirs
+          const result = await resolvePathWithin(
+            testBaseDir,
+            'level1/escape/level2/level3/file.txt'
+          );
+          expect(result).toBeNull();
+        } finally {
+          try {
+            await fs.unlink(symlinkPath);
+          } catch {
+            // Ignore
+          }
+        }
+      });
     });
 
     describe('handles invalid inputs', () => {

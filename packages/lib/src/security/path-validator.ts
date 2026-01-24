@@ -179,8 +179,28 @@ export async function resolvePathWithin(
         return null;
       }
     } catch {
-      // Parent doesn't exist - check if it would be within base
-      // This allows creating new nested directories
+      // Parent doesn't exist - walk up to find first existing ancestor
+      // and verify its realpath is within base (catches symlink escapes)
+      const realBase = await realpath(resolvedBase);
+      let ancestor = parent;
+
+      // Walk up until we find an existing ancestor or reach base
+      while (ancestor !== resolvedBase && ancestor !== dirname(ancestor)) {
+        try {
+          const realAncestor = await realpath(ancestor);
+          // Existing ancestor must be within base
+          if (!realAncestor.startsWith(realBase + sep) && realAncestor !== realBase) {
+            return null;
+          }
+          // Found valid ancestor, path is safe
+          break;
+        } catch {
+          // Ancestor doesn't exist, keep walking up
+          ancestor = dirname(ancestor);
+        }
+      }
+
+      // Final check: resolved path must be within base (string check)
       const parentRelative = relative(resolvedBase, parent);
       if (parentRelative.startsWith('..') || isAbsolute(parentRelative)) {
         return null;
@@ -301,6 +321,9 @@ export function validateFilename(filename: string): string | null {
 /**
  * Check if a path would escape a base directory
  * Returns true if the path is safe, false if it would escape
+ *
+ * NOTE: This function does NOT verify symlink escapes.
+ * For full security with symlink checking, use resolvePathWithin.
  *
  * @param base - The base directory
  * @param userPath - The user-provided path to check
