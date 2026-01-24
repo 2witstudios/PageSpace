@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, pages, driveMembers, userProfiles, users, eq, and } from '@pagespace/db';
+import { db, pages, driveMembers, userProfiles, users, drives, eq, and } from '@pagespace/db';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 
 /**
@@ -31,7 +31,19 @@ export async function GET(
 
     const { driveId } = await context.params;
 
-    // Verify drive access
+    // Verify drive access and get drive info (including ownerId)
+    const drive = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
+      columns: { ownerId: true },
+    });
+
+    if (!drive) {
+      return NextResponse.json(
+        { error: 'Drive not found' },
+        { status: 404 }
+      );
+    }
+
     const hasDriveAccess = await getUserDriveAccess(userId, driveId);
     if (!hasDriveAccess) {
       return NextResponse.json(
@@ -91,6 +103,8 @@ export async function GET(
 
     // Add members (filter out those with null user)
     const validMembers = members.filter((m) => m.user);
+    const memberUserIds = new Set(validMembers.map((m) => m.userId));
+
     for (const member of validMembers) {
       assignees.push({
         id: member.userId,
@@ -98,6 +112,37 @@ export async function GET(
         name: member.profile?.displayName || member.user!.name || member.user!.email,
         image: member.profile?.avatarUrl || member.user!.image || null,
       });
+    }
+
+    // Include drive owner if not already in members list
+    if (!memberUserIds.has(drive.ownerId)) {
+      const ownerData = await db
+        .select({
+          user: {
+            id: users.id,
+            email: users.email,
+            name: users.name,
+            image: users.image,
+          },
+          profile: {
+            displayName: userProfiles.displayName,
+            avatarUrl: userProfiles.avatarUrl,
+          },
+        })
+        .from(users)
+        .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
+        .where(eq(users.id, drive.ownerId))
+        .limit(1);
+
+      if (ownerData.length > 0 && ownerData[0].user) {
+        const owner = ownerData[0];
+        assignees.unshift({
+          id: owner.user.id,
+          type: 'user',
+          name: owner.profile?.displayName || owner.user.name || owner.user.email,
+          image: owner.profile?.avatarUrl || owner.user.image || null,
+        });
+      }
     }
 
     // Add agents
@@ -111,10 +156,13 @@ export async function GET(
       });
     }
 
+    // Count user assignees (members + owner if added separately)
+    const userAssigneeCount = assignees.filter((a) => a.type === 'user').length;
+
     return NextResponse.json({
       assignees,
       counts: {
-        members: validMembers.length,
+        members: userAssigneeCount,
         agents: accessibleAgents.length,
         total: assignees.length,
       },
