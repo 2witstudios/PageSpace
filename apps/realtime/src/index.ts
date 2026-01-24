@@ -349,7 +349,7 @@ io.use(async (socket: AuthSocket, next) => {
     userAgent: socket.handshake.headers['user-agent']?.substring(0, 50)
   });
 
-  // Get token from auth field (socket token from /api/auth/socket-token or JWT from desktop app)
+  // Get token from auth field (socket token from /api/auth/socket-token or session token from desktop app)
   const token = socket.handshake.auth.token;
 
   if (!token) {

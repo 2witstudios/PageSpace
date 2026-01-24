@@ -40,7 +40,7 @@ export class WSClient {
   private isIntentionallyClosed = false;
 
   constructor() {
-    // JWT is obtained from Electron secure storage, no window dependency needed
+    // Session token is obtained from Electron secure storage, no window dependency needed
   }
 
   /**
@@ -144,7 +144,7 @@ export class WSClient {
       return;
     }
 
-    // Get opaque WebSocket token (authenticated via JWT)
+    // Get opaque WebSocket token (authenticated via session token)
     const token = await this.getWSToken();
     if (!token) {
       logger.error('Cannot connect without WS token', {});
