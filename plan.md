@@ -2,7 +2,7 @@
 
 > **Zero-Trust Enterprise Cloud Architecture Implementation**
 >
-> Status: Phase 0-3 Complete, Desktop WS Migration Complete, Device Token Migration Complete, Phase 4 Ready
+> Status: Phase 0-4 Complete, Desktop WS Migration Complete, Device Token Migration Complete, Phase 5 Ready
 > Created: 2026-01-05
 > Last Updated: 2026-01-23
 > Sources: cloud-security-analysis.md, cloud-security-gaps.md, cloud-security-tdd-spec.md, zero-trust-architecture.md
@@ -2003,15 +2003,43 @@ if (age > SIGNATURE_MAX_AGE_MS) {  // 5 minutes
 
 ---
 
-## Phase 4: Defense in Depth
+## Phase 4: Defense in Depth ✅
 
+**Status:** COMPLETED (2026-01-24)
 **Objective:** Add layers of security for comprehensive protection.
 
-### P4-T1: Content Security Policy Headers
+**Completed Tasks:**
+- P4-T1: Content Security Policy Headers ✅
+- P4-T2: Admin Role Versioning ✅
+- P4-T3: Multi-Tenant Isolation Tests ✅
+- P4-T4: Path Traversal Prevention ✅
+
+**Test Coverage:** 150+ tests passing
+
+---
+
+### P4-T1: Content Security Policy Headers ✅
 
 **Description:** Add CSP headers to all responses.
 
-**Status:** PLANNED (Phase 4; not part of PR #167)
+**Status:** ✅ COMPLETED (2026-01-24)
+
+**Implementation Notes:**
+- PR #239 merged with nonce-based CSP implementation
+- Core module: `apps/web/src/middleware/security-headers.ts`
+- Middleware integration: `apps/web/middleware.ts`
+- Layout nonce wiring: `apps/web/src/app/layout.tsx`
+- 37 tests passing in `security-headers.test.ts`
+
+**Features Implemented:**
+- Per-request nonce generation with `strict-dynamic`
+- Separate restrictive CSP for API routes (`default-src 'none'`)
+- X-Frame-Options: DENY
+- X-Content-Type-Options: nosniff
+- HSTS header for production
+- Permissions-Policy and Referrer-Policy headers
+- Webpack nonce wiring for dynamic imports
+- Google One Tap authentication support
 
 **Scope Note:** Nonce wiring in `apps/web/src/app/layout.tsx` is part of P4-T1 and should be implemented when Phase 4 begins.
 
@@ -2091,19 +2119,30 @@ describe('Security Headers', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] CSP on all responses
-- [ ] X-Frame-Options DENY
-- [ ] X-Content-Type-Options nosniff
+- [x] CSP on all responses
+- [x] X-Frame-Options DENY
+- [x] X-Content-Type-Options nosniff
 
 **Dependencies:** None
 
 ---
 
-### P4-T2: Admin Role Versioning
+### P4-T2: Admin Role Versioning ✅
 
 **Vulnerability:** #12 - Admin role validation timing issue
 
 **Description:** Add adminRoleVersion to detect role changes.
+
+**Status:** ✅ COMPLETED (2026-01-24)
+
+**Implementation Notes:**
+- PR #236 merged
+- Schema: `adminRoleVersion` column in `packages/db/src/schema/auth.ts`
+- Migration: `0044_funny_orphan.sql`
+- Core logic: `apps/web/src/lib/auth/admin-role.ts`
+- Session integration: `packages/lib/src/auth/session-service.ts`
+- Auth middleware: `apps/web/src/lib/auth/index.ts`
+- 14 tests in `admin-role-version.test.ts` (require database)
 
 **Files to Modify:**
 - `packages/db/src/schema/users.ts`
@@ -2163,9 +2202,9 @@ describe('Admin Role Versioning', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] adminRoleVersion in schema
-- [ ] Version bumped on role changes
-- [ ] Admin requests validate version
+- [x] adminRoleVersion in schema
+- [x] Version bumped on role changes
+- [x] Admin requests validate version
 
 **Dependencies:** P2-T3
 
@@ -2232,9 +2271,29 @@ describe('Multi-Tenant Isolation', () => {
 
 ---
 
-### P4-T4: Path Traversal Prevention
+### P4-T4: Path Traversal Prevention ✅
 
 **Description:** Comprehensive path traversal protection in processor.
+
+**Status:** ✅ COMPLETED (2026-01-24)
+
+**Implementation Notes:**
+- PR #235 merged
+- Core module: `packages/lib/src/security/path-validator.ts` (375 lines)
+- Processor wrapper: `apps/processor/src/utils/security.ts`
+- Integration: Upload (`upload.ts`) and Avatar (`avatar.ts`) endpoints
+- 73 tests passing in `path-validator.test.ts`
+
+**Features Implemented:**
+- `resolvePathWithin()` - async with full symlink verification
+- `resolvePathWithinSync()` - sync for pre-validated identifiers
+- `validateFilename()` - filename-only validation
+- `isPathWithinBase()` - quick boolean check
+- Iterative URI decoding (prevents double/triple encoding bypasses)
+- Null byte stripping
+- Three-tier symlink escape detection
+- Cross-platform absolute path detection
+- OWASP attack vector coverage (10+ patterns)
 
 **Files to Create:**
 - `packages/lib/src/security/path-validator.ts`
@@ -2325,9 +2384,9 @@ describe('Path Traversal Prevention', () => {
 ```
 
 **Acceptance Criteria:**
-- [ ] All traversal attempts blocked
-- [ ] Symlink escapes prevented
-- [ ] Encoding bypasses blocked
+- [x] All traversal attempts blocked
+- [x] Symlink escapes prevented
+- [x] Encoding bypasses blocked
 
 **Dependencies:** None
 
