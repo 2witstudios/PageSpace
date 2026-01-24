@@ -2171,39 +2171,62 @@ describe('Admin Role Versioning', () => {
 
 ---
 
-### P4-T3: Multi-Tenant Isolation Tests
+### P4-T3: Multi-Tenant Isolation Tests ✅
+
+**Status:** Complete (2026-01-24)
 
 **Description:** Comprehensive tests verifying tenant isolation.
 
-**Files to Create:**
-- `apps/web/src/app/api/__tests__/multi-tenant-isolation.test.ts`
+**Files Created:**
+- `packages/lib/src/__tests__/multi-tenant-isolation.test.ts` (26 tests)
 
-**Tests:**
+**Tests Implemented:**
 ```typescript
 describe('Multi-Tenant Isolation', () => {
   describe('Data Isolation', () => {
-    it('user cannot read pages from another tenant');
-    it('user cannot search across tenant boundaries');
-    it('user cannot access files via content hash from another tenant');
-    it('content-addressed storage does not leak across tenants');
+    it('should not be able to read pages from that drive via getUserAccessLevel');
+    it('should not be able to view pages from that drive via canUserViewPage');
+    it('should not be able to edit pages from that drive via canUserEditPage');
+    it('should not be able to delete pages from that drive via canUserDeletePage');
+    it('should not return results from drives they do not have access to');
+    it('should only return results from drives they belong to');
+    it('should not allow user from tenant A to access files from tenant B');
+    it('should allow user to access files from their own drive');
+    it('should not leak file existence across tenants via enumeration');
   });
 
   describe('Service Token Isolation', () => {
-    it('service token for tenant A cannot access tenant B files');
-    it('forged driveId in service token is rejected');
+    it('should not allow access to tenant B files via resource binding check');
+    it('should allow access to tenant A files with proper resource binding');
+    it('should reject forged driveId claims when accessing files');
+    it('should reject token with mismatched page driveId binding');
+    it('should reject token creation for resources user does not own');
+    it('should allow token creation for resources user owns');
   });
 
   describe('Real-time Isolation', () => {
-    it('user cannot join WebSocket room for another tenant page');
-    it('broadcast messages do not leak across tenant rooms');
+    it('should verify page access before allowing room join');
+    it('should verify drive access before allowing drive room join');
+    it('should allow drive member to join their own drive room');
+    it('should allow page collaborator to join page room but not drive room');
+    it('should verify broadcast signatures include tenant-bound timestamps');
+    it('should reject broadcast signatures with expired timestamps');
+    it('should reject broadcast signatures with tampered body');
+  });
+
+  describe('Cross-Tenant Escalation Prevention', () => {
+    it('should not allow MEMBER role to access other drives');
+    it('should not allow ADMIN role from one drive to access another drive');
+    it('should enforce resource binding prevents cross-tenant access');
+    it('should freeze context to prevent mutation attacks');
   });
 });
 ```
 
 **Acceptance Criteria:**
-- [ ] All isolation tests pass
-- [ ] No cross-tenant data leakage
-- [ ] Service tokens respect tenant boundaries
+- [x] All isolation tests pass (26/26 tests passing)
+- [x] No cross-tenant data leakage (verified via permission system mocking)
+- [x] Service tokens respect tenant boundaries (EnforcedAuthContext + resource binding)
 
 **Dependencies:** P2-T7
 

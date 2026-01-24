@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { connection } from "next/server";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "@/styles/editor-readonly.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import ClientTrackingProvider from "@/components/providers/ClientTrackingProvider";
 import { Toaster } from "@/components/ui/sonner";
+import { NONCE_HEADER } from "@/middleware/security-headers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -46,16 +49,31 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Force dynamic rendering for CSP nonce support
+  // Per Next.js 15 requirements: nonces require fresh generation per request
+  await connection();
+
+  // Read nonce from middleware headers (Next.js 15 async API)
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get(NONCE_HEADER) ?? undefined;
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        {/* Set webpack nonce for dynamically loaded chunks (next/dynamic) */}
+        <script
+          nonce={nonce}
+          dangerouslySetInnerHTML={{
+            __html: `__webpack_nonce__ = ${JSON.stringify(nonce)};`,
+          }}
+        />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

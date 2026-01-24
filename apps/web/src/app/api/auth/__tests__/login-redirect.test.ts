@@ -117,6 +117,7 @@ describe('/api/auth/login redirect', () => {
       email: 'test@example.com',
       password: '$2a$12$hashedpassword',
       tokenVersion: 0,
+      adminRoleVersion: 0,
       role: 'user',
       provider: 'email',
       image: null,

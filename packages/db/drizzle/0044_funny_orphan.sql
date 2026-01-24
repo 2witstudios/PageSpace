@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "adminRoleVersion" integer DEFAULT 0 NOT NULL;

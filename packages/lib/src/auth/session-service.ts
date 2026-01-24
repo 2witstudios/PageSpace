@@ -10,6 +10,7 @@ export interface SessionClaims {
   userId: string;
   userRole: 'user' | 'admin';
   tokenVersion: number;
+  adminRoleVersion: number;
   type: 'user' | 'service' | 'mcp' | 'device';
   scopes: string[];
   expiresAt: Date; // When this session expires - critical for enforcing TTL on persistent connections
@@ -87,7 +88,7 @@ export class SessionService {
       ),
       with: {
         user: {
-          columns: { id: true, tokenVersion: true, role: true }
+          columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true }
         }
       }
     });
@@ -110,6 +111,7 @@ export class SessionService {
       userId: session.userId,
       userRole: session.user.role,
       tokenVersion: session.tokenVersion,
+      adminRoleVersion: session.user.adminRoleVersion,
       type: session.type,
       scopes: session.scopes,
       expiresAt: session.expiresAt,
