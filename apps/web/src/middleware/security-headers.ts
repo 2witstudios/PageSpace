@@ -77,7 +77,8 @@ export const applySecurityHeaders = (
 
 export const createSecureResponse = (
   isProduction: boolean,
-  request?: Request
+  request?: Request,
+  isAPIRoute: boolean = false
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
 
@@ -91,7 +92,7 @@ export const createSecureResponse = (
     },
   });
 
-  applySecurityHeaders(response, { nonce, isProduction });
+  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute });
 
   return { response, nonce };
 };

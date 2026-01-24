@@ -262,5 +262,13 @@ describe('Security Headers', () => {
       const requestHeaders = getLastRequestHeaders();
       expect(requestHeaders?.get('x-custom-header')).toBe('test-value');
     });
+
+    it('uses API CSP policy when isAPIRoute is true', () => {
+      const { response } = createSecureResponse(false, undefined, true);
+
+      const csp = response.headers.get('Content-Security-Policy');
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).not.toContain('nonce-');
+    });
   });
 });

@@ -63,7 +63,7 @@ export async function middleware(req: NextRequest) {
     const authHeader = req.headers.get('authorization');
     if (authHeader?.startsWith(MCP_BEARER_PREFIX)) {
       // API routes get restrictive CSP (no nonce needed)
-      const { response } = createSecureResponse(isProduction, req);
+      const { response } = createSecureResponse(isProduction, req, true);
       return response;
     }
 
@@ -76,7 +76,7 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives')
     ) {
-      const { response } = createSecureResponse(isProduction, req);
+      const { response } = createSecureResponse(isProduction, req, isAPIRoute);
       return response;
     }
 
@@ -101,7 +101,7 @@ export async function middleware(req: NextRequest) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response } = createSecureResponse(isProduction, req);
+    const { response } = createSecureResponse(isProduction, req, isAPIRoute);
 
     return response;
   });
