@@ -7,7 +7,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
@@ -71,6 +71,9 @@ export async function GET(req: Request) {
     const { code: authCode, state: stateParam } = validation.data;
 
     let returnUrl = '/dashboard';
+    let platform = 'web';
+    let deviceId: string | undefined;
+    let deviceName: string | undefined;
 
     if (stateParam) {
       try {
@@ -92,6 +95,9 @@ export async function GET(req: Request) {
           }
 
           returnUrl = data.returnUrl || '/dashboard';
+          platform = data.platform || 'web';
+          deviceId = data.deviceId;
+          deviceName = data.deviceName;
         } else {
           returnUrl = stateWithSignature.returnUrl || '/dashboard';
         }
@@ -248,6 +254,50 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
+    // DESKTOP PLATFORM: Return JSON with device token (no redirect)
+    if (platform === 'desktop') {
+      if (!deviceId) {
+        loggers.auth.error('Desktop OAuth callback missing deviceId', {
+          userId: user.id,
+          email: user.email,
+        });
+        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+        return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+      }
+
+      // Generate device token (pattern from One Tap route)
+      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        providedDeviceToken: undefined,
+        userId: user.id,
+        deviceId: deviceId,
+        platform: 'desktop',
+        tokenVersion: user.tokenVersion,
+        deviceName: deviceName || req.headers.get('user-agent') || 'Desktop App',
+        userAgent: req.headers.get('user-agent') || undefined,
+        ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+      });
+
+      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
+
+      trackAuthEvent(user.id, 'login', {
+        email,
+        ip: clientIP,
+        provider: 'google-oauth',
+        platform: 'desktop',
+        userAgent: req.headers.get('user-agent'),
+      });
+
+      // Return JSON (no redirect, no cookies)
+      return NextResponse.json({
+        success: true,
+        user: { id: user.id, name: user.name, email: user.email },
+        tokens: { deviceToken: deviceTokenValue },
+        redirectTo: returnUrl,
+        isNewUser: !!provisionedDrive,
+      });
+    }
+
+    // WEB PLATFORM: Original redirect flow (UNCHANGED)
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');

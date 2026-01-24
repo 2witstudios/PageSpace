@@ -438,17 +438,21 @@ class AuthFetch {
         : null;
 
       if (!deviceToken) {
-        // Web sessions use sliding-window cookies (7-day expiry, extended on each request).
-        // No device token means we can't do proactive session recovery, but that's OK:
-        // - If session cookie is still valid, requests will continue to work
-        // - If session cookie expired, next request gets 401 which triggers this path again
-        // Scheduled refresh should skip web entirely (handled in useTokenRefresh).
-        // This path only runs for 401 recovery, where we need device token to recover.
-        // Without device token, user must re-authenticate on actual session expiry.
-        this.logger.debug('Web: No device token available for session recovery');
-        // Return success=false but shouldLogout=false - session may still be valid
-        // Let the next actual request determine if session is truly expired
-        return { success: false, shouldLogout: false };
+        // If we reached this point (doRefresh called), it means:
+        // 1. A request returned 401 (session invalid/expired)
+        // 2. We're trying to recover the session
+        //
+        // Without a device token, we CANNOT recover the session.
+        // This happens when:
+        // - Legacy user (logged in before device tokens for web)
+        // - User cleared localStorage (lost device token)
+        // - Device token generation failed on login
+        //
+        // CRITICAL: Return shouldLogout: true to prevent broken auth state.
+        // Old logic (shouldLogout: false) caused Bug P2 where users appeared
+        // logged in but all API calls failed. Clean logout provides better UX.
+        this.logger.warn('Web: No device token - session expired, must re-authenticate');
+        return { success: false, shouldLogout: true };
       }
 
       // Try device token recovery
@@ -818,7 +822,7 @@ class AuthFetch {
     const csrfExemptPaths = [
       '/api/auth/login',
       '/api/auth/signup',
-      '/api/auth/refresh',
+      // REMOVED: '/api/auth/refresh' - route doesn't exist (dropped in device token migration)
       '/api/auth/google',
       '/api/auth/resend-verification',
       '/api/stripe/webhook',

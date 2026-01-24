@@ -313,8 +313,8 @@ describe('AuthFetch', () => {
       });
     });
 
-    it('should not force logout when no device token (web uses sliding-window cookies)', async () => {
-      // Arrange - Mock localStorage with NO device token (simulates web login)
+    it('should force logout when no device token and session expired (P2 fix)', async () => {
+      // Arrange - Mock localStorage with NO device token (simulates legacy web user)
       Object.defineProperty(global, 'localStorage', {
         value: {
           getItem: vi.fn().mockReturnValue(null), // No device token
@@ -331,12 +331,13 @@ describe('AuthFetch', () => {
       // Act - Call refreshAuthSession
       const result = await authFetch.refreshAuthSession();
 
-      // Assert - Should NOT force logout
-      // Web sessions use sliding-window cookies that are automatically extended.
-      // Missing device token doesn't mean session is invalid - it just means
-      // we can't do proactive device token recovery.
+      // Assert - SHOULD force logout (P2 fix for broken auth state)
+      // When refreshAuthSession is called, it means we received a 401 (session expired).
+      // Without a device token, we CANNOT recover the session.
+      // Old behavior (shouldLogout: false) caused Bug P2 where users appeared
+      // logged in but all API calls failed. Clean logout provides better UX.
       expect(result.success).toBe(false); // No refresh was possible
-      expect(result.shouldLogout).toBe(false); // But DON'T force logout!
+      expect(result.shouldLogout).toBe(true); // Force logout to prevent broken auth state
 
       // Assert - No network call should be made (can't refresh without device token)
       expect(mockFetch).not.toHaveBeenCalled();

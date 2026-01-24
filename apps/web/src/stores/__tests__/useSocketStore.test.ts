@@ -41,7 +41,7 @@ describe('useSocketStore', () => {
         }
         return Promise.resolve({ ok: false, status: 401 });
       }
-      // Default response for other endpoints (e.g., /api/auth/refresh)
+      // Default response for other endpoints (e.g., /api/auth/device/refresh)
       return Promise.resolve({ ok: true });
     });
   };
