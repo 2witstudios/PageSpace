@@ -83,6 +83,10 @@ function getAppUrl(): string {
 function injectDesktopStyles(): void {
   if (!mainWindow) return;
 
+  // Only add traffic light padding on macOS where the buttons exist
+  const isMacOS = process.platform === 'darwin';
+  const trafficLightPadding = isMacOS ? 'padding-left: 80px !important; /* Space for traffic light buttons */' : '';
+
   const css = `
     /* Make the top navbar/header draggable for window movement */
     /* Exclude sidebar navigation to prevent extra padding on left sidebar */
@@ -92,7 +96,7 @@ function injectDesktopStyles(): void {
     .navbar:not([class*="sidebar"]):not([class*="breadcrumb"]),
     .header:not([class*="sidebar"]):not([class*="breadcrumb"]) {
       -webkit-app-region: drag;
-      padding-left: 80px !important; /* Space for traffic light buttons */
+      ${trafficLightPadding}
     }
 
     /* Make interactive elements non-draggable so they remain clickable */
@@ -922,7 +926,6 @@ async function handleAuthExchange(url: string): Promise<boolean> {
 
     const code = urlObj.searchParams.get('code');
     const provider = urlObj.searchParams.get('provider') || 'unknown';
-    const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
 
     if (!code) {
       logger.error('[Auth Exchange] Missing code in deep link');
