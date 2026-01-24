@@ -593,6 +593,10 @@ describe('useAuthStore', () => {
         status: 401,
       } as Response);
 
+      // Override mock: transient failure (not permanent logout)
+      const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+      vi.mocked(refreshAuthSession).mockResolvedValueOnce({ success: false, shouldLogout: false });
+
       await useAuthStore.getState().loadSession();
 
       // Should have attempted (fetch called) since only 4 recent attempts
@@ -649,6 +653,10 @@ describe('useAuthStore', () => {
         ok: false,
         status: 401,
       } as Response);
+
+      // Override mock: transient failure (not permanent logout)
+      const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+      vi.mocked(refreshAuthSession).mockResolvedValueOnce({ success: false, shouldLogout: false });
 
       await useAuthStore.getState().loadSession();
 

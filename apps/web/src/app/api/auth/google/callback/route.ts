@@ -1,6 +1,6 @@
 import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -254,7 +254,9 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
-    // DESKTOP PLATFORM: Return JSON with device token (no redirect)
+    // DESKTOP PLATFORM: Redirect with tokens encoded in URL
+    // OAuth callbacks happen via browser redirect from Google, so we can't return JSON
+    // The desktop app (Electron) intercepts the redirect URL and extracts the tokens
     if (platform === 'desktop') {
       if (!deviceId) {
         loggers.auth.error('Desktop OAuth callback missing deviceId', {
@@ -265,7 +267,7 @@ export async function GET(req: Request) {
         return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
-      // Generate device token (pattern from One Tap route)
+      // Generate device token (now opaque ps_dev_* token)
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
         providedDeviceToken: undefined,
         userId: user.id,
@@ -287,14 +289,34 @@ export async function GET(req: Request) {
         userAgent: req.headers.get('user-agent'),
       });
 
-      // Return JSON (no redirect, no cookies)
-      return NextResponse.json({
-        success: true,
-        user: { id: user.id, name: user.name, email: user.email },
-        tokens: { deviceToken: deviceTokenValue },
-        redirectTo: returnUrl,
-        isNewUser: !!provisionedDrive,
+      // SECURE TOKEN HANDOFF: Generate one-time exchange code
+      // Tokens are stored server-side in Redis, only opaque code appears in URL
+      // This prevents token leakage in nginx logs, browser history, referer headers
+      const exchangeCode = await createExchangeCode({
+        sessionToken,
+        csrfToken,
+        deviceToken: deviceTokenValue,
+        provider: 'google',
+        userId: user.id,
+        createdAt: Date.now(),
       });
+
+      // Build deep link URL with only the opaque exchange code
+      // Desktop app intercepts this and exchanges code for tokens via POST
+      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      deepLinkUrl.searchParams.set('code', exchangeCode);
+      deepLinkUrl.searchParams.set('provider', 'google');
+      if (provisionedDrive) {
+        deepLinkUrl.searchParams.set('isNewUser', 'true');
+      }
+
+      loggers.auth.info('Desktop OAuth deep link redirect', {
+        userId: user.id,
+        provider: 'google',
+        hasNewUserFlag: !!provisionedDrive,
+      });
+
+      return NextResponse.redirect(deepLinkUrl.toString());
     }
 
     // WEB PLATFORM: Original redirect flow (UNCHANGED)

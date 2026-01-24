@@ -1,0 +1,1 @@
+ALTER TABLE "device_tokens" ADD COLUMN "tokenVersion" integer DEFAULT 0 NOT NULL;

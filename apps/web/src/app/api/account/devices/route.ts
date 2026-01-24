@@ -1,9 +1,10 @@
-import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
+import { users, db, eq, deviceTokens, sql, and, isNull, gt } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { hashToken } from '@pagespace/lib/auth';
 import { secureCompare } from '@pagespace/lib/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { getUserDeviceTokens, revokeAllUserDeviceTokens, decodeDeviceToken, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
+import { getUserDeviceTokens, revokeAllUserDeviceTokens, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/device-auth-utils';
+import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -94,14 +95,20 @@ export async function DELETE(req: Request) {
     const currentDeviceTokenHash = currentDeviceToken ? hashToken(currentDeviceToken) : null;
 
     // Extract device info from current token BEFORE incrementing tokenVersion
-    // This is critical: we need to decode the token while it's still valid
+    // With opaque tokens, we look up the device record by tokenHash (not JWT decode)
     let currentDeviceInfo: { deviceId: string; platform: 'web' | 'desktop' | 'ios' | 'android'; deviceName: string | null } | null = null;
     if (currentDeviceToken && currentDeviceTokenHash) {
-      const payload = await decodeDeviceToken(currentDeviceToken);
-      if (payload) {
+      // Validate opaque token format
+      if (isValidTokenFormat(currentDeviceToken) && getTokenType(currentDeviceToken) === 'dev') {
         // Get device metadata from database using tokenHash
+        // SECURITY: Scope to authenticated user and validate token is active
         const oldDeviceRecord = await db.query.deviceTokens.findFirst({
-          where: eq(deviceTokens.tokenHash, currentDeviceTokenHash),
+          where: and(
+            eq(deviceTokens.tokenHash, currentDeviceTokenHash),
+            eq(deviceTokens.userId, userId),
+            isNull(deviceTokens.revokedAt),
+            gt(deviceTokens.expiresAt, new Date())
+          ),
           columns: { deviceId: true, platform: true, deviceName: true },
         });
         if (oldDeviceRecord) {

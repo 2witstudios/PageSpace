@@ -900,12 +900,147 @@ if (process.defaultApp) {
   app.setAsDefaultProtocolClient('pagespace');
 }
 
-// Handle the protocol on macOS
-app.on('open-url', (event, url) => {
-  event.preventDefault();
+/**
+ * Handle OAuth auth-exchange deep links securely.
+ *
+ * Flow:
+ * 1. OAuth callback redirects to pagespace://auth-exchange?code=<code>
+ * 2. This function POSTs the code to /api/auth/desktop/exchange
+ * 3. Server returns tokens in response body (not in URL - secure)
+ * 4. Tokens are stored in OS keychain via safeStorage
+ *
+ * Security: Tokens never appear in URLs, logs, or browser history.
+ */
+async function handleAuthExchange(url: string): Promise<boolean> {
+  try {
+    const urlObj = new URL(url);
+
+    // Only handle auth-exchange deep links
+    if (urlObj.host !== 'auth-exchange') {
+      return false;
+    }
+
+    const code = urlObj.searchParams.get('code');
+    const provider = urlObj.searchParams.get('provider') || 'unknown';
+    const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
+
+    if (!code) {
+      logger.error('[Auth Exchange] Missing code in deep link');
+      mainWindow?.webContents.send('auth-error', { error: 'Missing exchange code' });
+      return true; // Handled, but with error
+    }
+
+    logger.info('[Auth Exchange] Processing OAuth exchange', { provider });
+
+    // Get base URL for API call
+    const baseUrl = getAppUrl().replace('/dashboard', '');
+
+    // Exchange code for tokens via secure POST request with 30s timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/api/auth/desktop/exchange`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        logger.error('[Auth Exchange] Request timed out');
+        mainWindow?.webContents.send('auth-error', {
+          error: 'Authentication request timed out',
+        });
+        return true;
+      }
+      throw fetchError; // Re-throw for outer catch
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Exchange failed' })) as { error?: string };
+      logger.error('[Auth Exchange] Exchange failed', {
+        status: response.status,
+        error: errorData.error,
+      });
+      mainWindow?.webContents.send('auth-error', {
+        error: errorData.error || 'Failed to complete authentication',
+      });
+      return true;
+    }
+
+    const tokens = await response.json() as Partial<{
+      sessionToken: string;
+      csrfToken: string;
+      deviceToken: string;
+    }> | null;
+
+    // Validate required fields are non-empty strings
+    if (
+      typeof tokens?.sessionToken !== 'string' || !tokens.sessionToken ||
+      typeof tokens?.csrfToken !== 'string' || !tokens.csrfToken ||
+      typeof tokens?.deviceToken !== 'string' || !tokens.deviceToken
+    ) {
+      logger.error('[Auth Exchange] Invalid token response', {
+        hasSessionToken: !!tokens?.sessionToken,
+        hasCsrfToken: !!tokens?.csrfToken,
+        hasDeviceToken: !!tokens?.deviceToken,
+      });
+      mainWindow?.webContents.send('auth-error', {
+        error: 'Invalid authentication response from server',
+      });
+      return true;
+    }
+
+    // Store tokens securely in OS keychain (validated above)
+    await saveAuthSession({
+      sessionToken: tokens.sessionToken,
+      csrfToken: tokens.csrfToken,
+      deviceToken: tokens.deviceToken,
+    });
+
+    logger.info('[Auth Exchange] OAuth exchange successful', { provider });
+
+    // Notify renderer of successful authentication
+    mainWindow?.webContents.send('auth-success', { provider, isNewUser });
+
+    // Navigate to dashboard
+    const dashboardUrl = getAppUrl();
+    mainWindow?.loadURL(dashboardUrl);
+
+    return true;
+  } catch (error) {
+    logger.error('[Auth Exchange] Unexpected error', { error });
+    mainWindow?.webContents.send('auth-error', {
+      error: 'Authentication failed unexpectedly',
+    });
+    return true;
+  }
+}
+
+/**
+ * Process a deep link URL, routing to appropriate handler.
+ */
+async function handleDeepLink(url: string): Promise<void> {
+  // Try auth exchange first (secure OAuth flow)
+  const handled = await handleAuthExchange(url);
+  if (handled) {
+    return;
+  }
+
+  // Forward other deep links to renderer
   if (mainWindow) {
     mainWindow.webContents.send('deep-link', url);
   }
+}
+
+// Handle the protocol on macOS
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
 });
 
 // Handle the protocol on Windows/Linux
@@ -923,7 +1058,7 @@ if (!gotTheLock) {
       // Handle deep link on Windows/Linux
       const url = commandLine.find((arg) => arg.startsWith('pagespace://'));
       if (url) {
-        mainWindow.webContents.send('deep-link', url);
+        handleDeepLink(url);
       }
     }
   });

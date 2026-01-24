@@ -190,6 +190,9 @@ describe('AuthFetch', () => {
         });
       });
 
+      // Prevent unhandled rejection - we'll assert on this later
+      queuedPromise.catch(() => {});
+
       expect(authFetchAny.refreshQueue.length).toBe(1);
 
       // Call refreshAuthSession - it should fail and reject queued requests

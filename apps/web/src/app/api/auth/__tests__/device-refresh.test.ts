@@ -32,7 +32,8 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   validateDeviceToken: vi.fn(),
   updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
-  generateDeviceToken: vi.fn().mockResolvedValue('mock-new-device-token'),
+  // Opaque token generator - now synchronous with no parameters
+  generateDeviceToken: vi.fn().mockReturnValue('ps_dev_mock_token'),
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   loggers: {
     auth: {
@@ -256,7 +257,7 @@ describe('/api/auth/device/refresh', () => {
       (validateDeviceToken as Mock).mockResolvedValue(nearExpiryRecord);
       (atomicDeviceTokenRotation as Mock).mockResolvedValue({
         success: true,
-        newToken: 'rotated-device-token',
+        newToken: 'ps_dev_rotated_token', // Opaque format
         deviceTokenId: 'new-device-token-record-id',
       });
 
@@ -272,7 +273,7 @@ describe('/api/auth/device/refresh', () => {
 
       // Assert
       expect(atomicDeviceTokenRotation).toHaveBeenCalled();
-      expect(body.deviceToken).toBe('rotated-device-token');
+      expect(body.deviceToken).toBe('ps_dev_rotated_token');
     });
 
     it('does not rotate device token when far from expiration', async () => {
