@@ -640,12 +640,24 @@ export const authStoreHelpers = {
 
   // Cleanup functions for event listeners (stored for proper cleanup)
   _authClearedCleanup: null as (() => void) | null,
+  _authSuccessCleanup: null as (() => void) | null,
   _authRefreshedHandler: null as (() => void) | null,
   _authExpiredHandler: null as (() => Promise<void>) | null,
 
   // Initialize auth event listeners (call once at app startup)
   initializeEventListeners: (): void => {
     if (typeof window === 'undefined') return;
+
+    // Handle desktop OAuth success - hydrate the new session
+    const handleAuthSuccess = () => {
+      console.log('[AUTH_STORE] Desktop OAuth success received');
+
+      // Clear any previous auth failure state - user just completed OAuth
+      useAuthStore.setState({ authFailedPermanently: false });
+
+      // Force session reload to hydrate the new tokens from keychain
+      useAuthStore.getState().loadSession(true);
+    };
 
     const handleAuthRefreshed = () => {
       // Import editing store dynamically to avoid circular dependencies
@@ -752,6 +764,20 @@ export const authStoreHelpers = {
       const cleanup = window.electron.on?.('auth:cleared', handleAuthCleared);
       if (cleanup) {
         authStoreHelpers._authClearedCleanup = cleanup;
+      }
+
+      // Desktop-specific: Listen for OAuth success to force session reload
+      // This handles the case where desktop OAuth completes but authFailedPermanently
+      // was previously set (e.g., from prior auth failures), which would otherwise
+      // prevent loadSession() from hydrating the new tokens
+      if (authStoreHelpers._authSuccessCleanup) {
+        authStoreHelpers._authSuccessCleanup();
+        authStoreHelpers._authSuccessCleanup = null;
+      }
+
+      const authSuccessCleanup = window.electron.on?.('auth-success', handleAuthSuccess);
+      if (authSuccessCleanup) {
+        authStoreHelpers._authSuccessCleanup = authSuccessCleanup;
       }
     }
   },
