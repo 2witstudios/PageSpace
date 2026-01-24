@@ -1004,12 +1004,15 @@ async function handleAuthExchange(url: string): Promise<boolean> {
 
     logger.info('[Auth Exchange] OAuth exchange successful', { provider });
 
-    // Notify renderer of successful authentication
-    mainWindow?.webContents.send('auth-success', { provider, isNewUser });
-
-    // Navigate to dashboard
-    const dashboardUrl = getAppUrl();
-    mainWindow?.loadURL(dashboardUrl);
+    // Navigate to dashboard with auth=success query param
+    // This allows the web auth hook to detect OAuth success and force session reload,
+    // bypassing any authFailedPermanently flag that may have been set.
+    // Note: We don't send auth-success IPC event here because the current renderer
+    // is about to be destroyed by loadURL - the event would be lost in the race condition.
+    // The ?auth=success param is the reliable way to communicate OAuth success across page loads.
+    const dashboardUrl = new URL(getAppUrl());
+    dashboardUrl.searchParams.set('auth', 'success');
+    mainWindow?.loadURL(dashboardUrl.toString());
 
     return true;
   } catch (error) {
