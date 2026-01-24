@@ -1,6 +1,6 @@
 import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -289,31 +289,34 @@ export async function GET(req: Request) {
         userAgent: req.headers.get('user-agent'),
       });
 
-      // Encode tokens as base64 JSON for URL transport
-      const tokensPayload = {
+      // SECURE TOKEN HANDOFF: Generate one-time exchange code
+      // Tokens are stored server-side in Redis, only opaque code appears in URL
+      // This prevents token leakage in nginx logs, browser history, referer headers
+      const exchangeCode = await createExchangeCode({
         sessionToken,
         csrfToken,
         deviceToken: deviceTokenValue,
-      };
-      const tokensBase64 = Buffer.from(JSON.stringify(tokensPayload)).toString('base64url');
-
-      // Redirect to dashboard with tokens in URL
-      // Desktop app (Electron) intercepts this and extracts tokens
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-      const redirectUrl = new URL(returnUrl, baseUrl);
-      redirectUrl.searchParams.set('desktop', 'true');
-      redirectUrl.searchParams.set('tokens', tokensBase64);
-      redirectUrl.searchParams.set('auth', 'success');
-      if (provisionedDrive) {
-        redirectUrl.searchParams.set('isNewUser', 'true');
-      }
-
-      loggers.auth.info('Desktop OAuth redirect', {
+        provider: 'google',
         userId: user.id,
-        redirectUrl: redirectUrl.pathname,
+        createdAt: Date.now(),
       });
 
-      return NextResponse.redirect(redirectUrl);
+      // Build deep link URL with only the opaque exchange code
+      // Desktop app intercepts this and exchanges code for tokens via POST
+      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      deepLinkUrl.searchParams.set('code', exchangeCode);
+      deepLinkUrl.searchParams.set('provider', 'google');
+      if (provisionedDrive) {
+        deepLinkUrl.searchParams.set('isNewUser', 'true');
+      }
+
+      loggers.auth.info('Desktop OAuth deep link redirect', {
+        userId: user.id,
+        provider: 'google',
+        hasNewUserFlag: !!provisionedDrive,
+      });
+
+      return NextResponse.redirect(deepLinkUrl.toString());
     }
 
     // WEB PLATFORM: Original redirect flow (UNCHANGED)

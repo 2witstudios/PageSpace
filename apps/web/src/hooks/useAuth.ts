@@ -6,14 +6,6 @@ import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
 import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
-import { z } from 'zod/v4';
-
-// Schema for validating desktop OAuth tokens from URL
-const desktopOAuthTokensSchema = z.object({
-  sessionToken: z.string().min(1, "Session token is required"),
-  csrfToken: z.string(),
-  deviceToken: z.string(),
-});
 
 interface User {
   id: string;
@@ -285,14 +277,12 @@ export function useAuth(): {
     }
   }, [hasHydrated, setHydrated]);
 
-  // Check for OAuth success parameter (from Google callback) and device token
+  // Check for OAuth success parameter (from Google callback)
+  // Desktop OAuth now uses secure exchange codes handled in Electron main process
   const [isOAuthSuccess, setIsOAuthSuccess] = useState(() => {
     if (typeof window === 'undefined') return false;
     return new URLSearchParams(window.location.search).get('auth') === 'success';
   });
-
-  // Track OAuth token storage in progress to prevent race condition
-  const [isStoringOAuthTokens, setIsStoringOAuthTokens] = useState(false);
 
   // Capture device token from URL (signup redirect) and store in localStorage
   useEffect(() => {
@@ -311,92 +301,11 @@ export function useAuth(): {
     }
   }, []);
 
-  // DESKTOP OAUTH: Handle tokens passed through URL from OAuth callback
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!window.electron?.isDesktop) return;
-
-    const params = new URLSearchParams(window.location.search);
-    const isDesktopOAuth = params.get('desktop') === 'true';
-    const tokensParam = params.get('tokens');
-
-    if (isDesktopOAuth && tokensParam) {
-      console.log('[AUTH_HOOK] Desktop OAuth tokens detected, storing in Electron...');
-
-      // Mark storage in progress
-      setIsStoringOAuthTokens(true);
-
-      (async () => {
-        try {
-          // Decode tokens from URL (using browser-native atob)
-          const decodedData = JSON.parse(atob(tokensParam));
-
-          // Validate token structure with Zod
-          const tokensData = desktopOAuthTokensSchema.parse(decodedData);
-
-          // Store in Electron encrypted storage
-          if (!window.electron) {
-            console.error('[AUTH_HOOK] Electron API not available');
-            return;
-          }
-          await window.electron.auth.storeSession({
-            sessionToken: tokensData.sessionToken,
-            csrfToken: tokensData.csrfToken,
-            deviceToken: tokensData.deviceToken,
-          });
-
-          // Store device token in localStorage
-          if (tokensData.deviceToken) {
-            localStorage.setItem('deviceToken', tokensData.deviceToken);
-          }
-
-          clearSessionCache();
-
-          // Verify token is retrievable
-          const storedSession = await window.electron.auth.getSessionToken();
-          if (!storedSession) {
-            console.error('[AUTH_HOOK] Desktop OAuth token storage verification failed');
-            return;
-          }
-
-          console.log('[AUTH_HOOK] Desktop OAuth tokens stored successfully');
-
-          // Clean up URL
-          params.delete('desktop');
-          params.delete('tokens');
-          const newUrl = new URL(window.location.href);
-          newUrl.search = params.toString();
-          window.history.replaceState({}, '', newUrl.toString());
-
-          // Trigger auth state refresh
-          setIsOAuthSuccess(true);
-        } catch (error) {
-          if (error instanceof z.ZodError) {
-            console.error('[AUTH_HOOK] Invalid OAuth token structure:', error.issues);
-          } else {
-            console.error('[AUTH_HOOK] Failed to store desktop OAuth tokens:', error);
-          }
-
-          // Redirect to signin with error
-          window.location.href = '/auth/signin?error=oauth_error';
-        } finally {
-          // Mark storage complete (success or failure)
-          setIsStoringOAuthTokens(false);
-        }
-      })();
-    }
-  }, []);
-
   // Initial auth check - simplified with store-level deduplication
+  // Desktop OAuth now uses secure exchange codes handled in Electron main process
   useEffect(() => {
     // Wait for hydration
     if (!hasHydrated) return;
-
-    // Wait for OAuth token storage to complete
-    if (isStoringOAuthTokens) {
-      console.log('[AUTH_HOOK] Waiting for OAuth token storage to complete...');
-      return;
-    }
 
     // Use store helper to determine if session load is needed
     const shouldLoad = authStoreHelpers.shouldLoadSession() || isOAuthSuccess;
@@ -416,7 +325,7 @@ export function useAuth(): {
         setIsOAuthSuccess(false); // Clear the flag to exit loading state
       }
     }
-  }, [hasHydrated, isOAuthSuccess, isStoringOAuthTokens]);
+  }, [hasHydrated, isOAuthSuccess]);
 
   // Initialize auth event listeners once (moved to store level for deduplication)
   useEffect(() => {
@@ -427,7 +336,7 @@ export function useAuth(): {
 
   return {
     user,
-    isLoading: isLoading || !hasHydrated || isOAuthSuccess || isStoringOAuthTokens, // Block rendering during OAuth token storage
+    isLoading: isLoading || !hasHydrated || isOAuthSuccess,
     isAuthenticated,
     isRefreshing,
     sessionDuration: authStoreHelpers.getSessionDuration(),
