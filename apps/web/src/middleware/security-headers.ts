@@ -81,10 +81,16 @@ export const createSecureResponse = (
   isAPIRoute: boolean = false
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
+  const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
-  // Clone request headers and add nonce so it's available in layout via headers()
+  // Clone request headers and add nonce + CSP
+  // CSP in request headers allows Next.js to parse nonce during SSR
+  // and automatically apply it to framework scripts (via getScriptNonceFromHeader)
   const requestHeaders = new Headers(request?.headers);
   requestHeaders.set(NONCE_HEADER, nonce);
+  if (!isAPIRoute) {
+    requestHeaders.set('Content-Security-Policy', csp);
+  }
 
   const response = NextResponse.next({
     request: {
@@ -92,6 +98,7 @@ export const createSecureResponse = (
     },
   });
 
+  // Also set CSP on response headers for browser enforcement
   applySecurityHeaders(response, { nonce, isProduction, isAPIRoute });
 
   return { response, nonce };

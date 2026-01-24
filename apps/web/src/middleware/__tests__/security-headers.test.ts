@@ -270,5 +270,21 @@ describe('Security Headers', () => {
       expect(csp).toContain("default-src 'none'");
       expect(csp).not.toContain('nonce-');
     });
+
+    it('sets CSP in request headers for Next.js SSR nonce parsing', () => {
+      const { nonce } = createSecureResponse(false);
+
+      const requestHeaders = getLastRequestHeaders();
+      const csp = requestHeaders?.get('Content-Security-Policy');
+      expect(csp).toContain(`'nonce-${nonce}'`);
+      expect(csp).toContain("'strict-dynamic'");
+    });
+
+    it('does not set CSP in request headers for API routes', () => {
+      createSecureResponse(false, undefined, true);
+
+      const requestHeaders = getLastRequestHeaders();
+      expect(requestHeaders?.get('Content-Security-Policy')).toBeNull();
+    });
   });
 });
