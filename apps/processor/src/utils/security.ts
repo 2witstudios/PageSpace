@@ -1,13 +1,10 @@
 import path from 'path';
+import { resolvePathWithinSync as libResolvePathWithinSync } from '@pagespace/lib/security';
 
 export const SAFE_EXTENSION_PATTERN = /^[a-z0-9]{1,8}$/i;
 export const DEFAULT_EXTENSION = '.bin';
 export const DEFAULT_IMAGE_EXTENSION = '.png';
 export const IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]{3,64}$/;
-
-function withTrailingSeparator(value: string): string {
-  return value.endsWith(path.sep) ? value : `${value}${path.sep}`;
-}
 
 export function sanitizeExtension(
   filename: string | undefined | null,
@@ -30,24 +27,26 @@ export function sanitizeExtension(
   return `.${extBody}`;
 }
 
+/**
+ * Resolve a path within a base directory, preventing traversal attacks.
+ * Uses the centralized path validator from @pagespace/lib/security.
+ *
+ * Security features:
+ * - Blocks directory traversal (../)
+ * - Blocks URL-encoded traversal (%2e%2e%2f)
+ * - Blocks double-encoded traversal (%252e%252e%252f)
+ * - Blocks null byte injection
+ * - Blocks absolute paths
+ *
+ * NOTE: For async operations with symlink escape detection,
+ * use resolvePathWithin from @pagespace/lib/security directly.
+ *
+ * @param baseDir - The base directory that paths must stay within
+ * @param segments - Path segments to resolve
+ * @returns The resolved absolute path, or null if validation fails
+ */
 export function resolvePathWithin(baseDir: string, ...segments: string[]): string | null {
-  if (!baseDir) {
-    return null;
-  }
-
-  const normalizedBase = path.resolve(baseDir);
-  const targetPath = path.resolve(normalizedBase, ...segments);
-  const expectedPrefix = withTrailingSeparator(normalizedBase);
-
-  if (targetPath === normalizedBase && segments.length === 0) {
-    return normalizedBase;
-  }
-
-  if (!targetPath.startsWith(expectedPrefix)) {
-    return null;
-  }
-
-  return targetPath;
+  return libResolvePathWithinSync(baseDir, ...segments);
 }
 
 export function normalizeIdentifier(

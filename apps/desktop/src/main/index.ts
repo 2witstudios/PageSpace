@@ -926,6 +926,7 @@ async function handleAuthExchange(url: string): Promise<boolean> {
 
     const code = urlObj.searchParams.get('code');
     const provider = urlObj.searchParams.get('provider') || 'unknown';
+    const isNewUser = urlObj.searchParams.get('isNewUser') === 'true';
 
     if (!code) {
       logger.error('[Auth Exchange] Missing code in deep link');
