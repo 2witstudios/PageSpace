@@ -954,13 +954,30 @@ async function handleAuthExchange(url: string): Promise<boolean> {
       return true;
     }
 
-    const tokens = await response.json() as {
+    const tokens = await response.json() as Partial<{
       sessionToken: string;
       csrfToken: string;
       deviceToken: string;
-    };
+    }> | null;
 
-    // Store tokens securely in OS keychain
+    // Validate required fields are non-empty strings
+    if (
+      typeof tokens?.sessionToken !== 'string' || !tokens.sessionToken ||
+      typeof tokens?.csrfToken !== 'string' || !tokens.csrfToken ||
+      typeof tokens?.deviceToken !== 'string' || !tokens.deviceToken
+    ) {
+      logger.error('[Auth Exchange] Invalid token response', {
+        hasSessionToken: !!tokens?.sessionToken,
+        hasCsrfToken: !!tokens?.csrfToken,
+        hasDeviceToken: !!tokens?.deviceToken,
+      });
+      mainWindow?.webContents.send('auth-error', {
+        error: 'Invalid authentication response from server',
+      });
+      return true;
+    }
+
+    // Store tokens securely in OS keychain (validated above)
     await saveAuthSession({
       sessionToken: tokens.sessionToken,
       csrfToken: tokens.csrfToken,

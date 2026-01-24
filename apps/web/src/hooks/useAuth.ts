@@ -313,17 +313,22 @@ export function useAuth(): {
     if (shouldLoad) {
       console.log(`[AUTH_HOOK] Loading session - hasHydrated: ${hasHydrated}, isOAuthSuccess: ${isOAuthSuccess}`);
 
-      // Use store's deduplicated loadSession
-      authStoreHelpers.loadSession(isOAuthSuccess); // Force reload for OAuth success
-
-      // Clean up OAuth success parameter from URL after auth check
-      if (isOAuthSuccess && typeof window !== 'undefined') {
-        console.log('[AUTH_HOOK] Cleaning up OAuth success parameter from URL');
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.delete('auth');
-        window.history.replaceState({}, '', newUrl.toString());
-        setIsOAuthSuccess(false); // Clear the flag to exit loading state
-      }
+      // Await loadSession to ensure isLoading is set before clearing OAuth flag
+      const loadAndCleanup = async () => {
+        try {
+          await authStoreHelpers.loadSession(isOAuthSuccess); // Force reload for OAuth success
+        } finally {
+          // Clean up OAuth success parameter from URL after session loads
+          if (isOAuthSuccess && typeof window !== 'undefined') {
+            console.log('[AUTH_HOOK] Cleaning up OAuth success parameter from URL');
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.delete('auth');
+            window.history.replaceState({}, '', newUrl.toString());
+            setIsOAuthSuccess(false); // Clear the flag to exit loading state
+          }
+        }
+      };
+      loadAndCleanup();
     }
   }, [hasHydrated, isOAuthSuccess]);
 
