@@ -160,10 +160,17 @@ export async function resolvePathWithin(
     return null;
   }
 
+  // Resolve the real base path once - if base doesn't exist, reject
+  let realBase: string;
+  try {
+    realBase = await realpath(resolvedBase);
+  } catch {
+    return null;
+  }
+
   // Verify no symlink escape
   try {
     const realPath = await realpath(resolvedPath);
-    const realBase = await realpath(resolvedBase);
 
     // The resolved real path must start with the real base path
     // Use sep to ensure we don't match partial directory names
@@ -180,7 +187,6 @@ export async function resolvePathWithin(
       // Check if parent directory exists
       await stat(parent);
       const realParent = await realpath(parent);
-      const realBase = await realpath(resolvedBase);
 
       // Parent must be within or equal to base
       if (!realParent.startsWith(withTrailingSeparator(realBase)) && realParent !== realBase) {
@@ -189,7 +195,6 @@ export async function resolvePathWithin(
     } catch {
       // Parent doesn't exist - walk up to find first existing ancestor
       // and verify its realpath is within base (catches symlink escapes)
-      const realBase = await realpath(resolvedBase);
       let ancestor = parent;
 
       // Walk up until we find an existing ancestor or reach base
