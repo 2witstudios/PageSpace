@@ -43,8 +43,8 @@ import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator'
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
-const AUTH_OPTIONS_READ = { allow: ['jwt'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * GET - Get all messages for a conversation

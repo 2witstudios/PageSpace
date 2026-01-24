@@ -4,7 +4,7 @@ import { stripe, Stripe } from '@/lib/stripe';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 interface ValidatePromoCodeRequest {
   code: string;

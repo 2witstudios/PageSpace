@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import * as net from 'net';
 import * as dgram from 'dgram';
+import { validateExternalURL } from '@pagespace/lib/security';
 
 // Types for audit log entries
 export interface AuditLogEntry {
@@ -209,6 +210,23 @@ export async function sendWebhook(
   const signature = computeHmacSignature(payload, config.secret);
 
   try {
+    // SSRF Protection: Validate webhook URL before fetching
+    const validation = await validateExternalURL(config.url);
+
+    if (!validation.valid) {
+      console.error('SIEM webhook URL validation failed', {
+        url: config.url,
+        reason: validation.error,
+      });
+      return {
+        success: false,
+        entriesDelivered: 0,
+        error: `Invalid webhook URL: ${validation.error || 'SSRF protection blocked request'}`,
+        retryable: false, // Don't retry blocked URLs
+      };
+    }
+
+    // Proceed with fetch (only if validation passed)
     const response = await fetch(config.url, {
       method: 'POST',
       headers: {
@@ -487,6 +505,41 @@ export async function sendSyslog(
   config: SyslogConfig,
   entries: AuditLogEntry[]
 ): Promise<SiemDeliveryResult> {
+  // SSRF Protection: Validate syslog host before connecting
+  // Use validateExternalURL with a fake URL to leverage DNS resolution checks
+  const fakeUrl = `syslog://${config.host}:${config.port}`;
+
+  try {
+    const validation = await validateExternalURL(fakeUrl);
+
+    if (!validation.valid) {
+      console.error('Syslog host validation failed', {
+        host: config.host,
+        port: config.port,
+        reason: validation.error,
+      });
+      return {
+        success: false,
+        entriesDelivered: 0,
+        error: `Invalid syslog host: ${validation.error || 'SSRF protection blocked connection'}`,
+        retryable: false, // Don't retry blocked hosts
+      };
+    }
+  } catch (validationError) {
+    console.error('Syslog host validation error', {
+      host: config.host,
+      port: config.port,
+      error: validationError instanceof Error ? validationError.message : String(validationError),
+    });
+    return {
+      success: false,
+      entriesDelivered: 0,
+      error: `Host validation failed: ${validationError instanceof Error ? validationError.message : 'Unknown error'}`,
+      retryable: false,
+    };
+  }
+
+  // Proceed with socket connection (only if validation passed)
   if (config.protocol === 'tcp') {
     return sendSyslogTcp(config, entries);
   } else {

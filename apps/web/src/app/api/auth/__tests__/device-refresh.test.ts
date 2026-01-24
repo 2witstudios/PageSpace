@@ -4,7 +4,6 @@ import { POST } from '../device/refresh/route';
 // Mock dependencies
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id' },
-  refreshTokens: {},
   deviceTokens: { id: 'id', deviceId: 'deviceId' },
   db: {
     query: {
@@ -34,16 +33,7 @@ vi.mock('@pagespace/lib/server', () => ({
   validateDeviceToken: vi.fn(),
   updateDeviceTokenActivity: vi.fn().mockResolvedValue(undefined),
   generateDeviceToken: vi.fn().mockResolvedValue('mock-new-device-token'),
-  generateAccessToken: vi.fn().mockResolvedValue('new-access-token'),
-  generateRefreshToken: vi.fn().mockResolvedValue('new-refresh-token'),
-  decodeToken: vi.fn().mockResolvedValue({
-    userId: 'test-user-id',
-    exp: Math.floor(Date.now() / 1000) + 2592000,
-    iat: Math.floor(Date.now() / 1000),
-  }),
-  getRefreshTokenMaxAge: vi.fn().mockReturnValue(2592000),
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  getSessionIdFromJWT: vi.fn().mockReturnValue('session-id-123'),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -70,6 +60,23 @@ vi.mock('cookie', () => ({
 vi.mock('@pagespace/lib/auth', () => ({
   hashToken: vi.fn().mockReturnValue('mock-token-hash'),
   getTokenPrefix: vi.fn().mockReturnValue('mock-prefix'),
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock-session-token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'session-123',
+      userId: 'test-user-id',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
+  appendSessionCookie: vi.fn(),
 }));
 
 import { db } from '@pagespace/db';
@@ -77,12 +84,12 @@ import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-trans
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,
-  generateAccessToken,
-  generateRefreshToken,
   logAuthEvent,
   loggers,
 } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { sessionService } from '@pagespace/lib/auth';
+import { appendSessionCookie } from '@/lib/auth';
 
 describe('/api/auth/device/refresh', () => {
   const mockUser = {
@@ -133,16 +140,16 @@ describe('/api/auth/device/refresh', () => {
       const response = await POST(request);
       const body = await response.json();
 
-      // Assert
+      // Assert - mobile/desktop get session token in response (no refreshToken - devices use device tokens)
       expect(response.status).toBe(200);
-      expect(body.token).toBe('new-access-token');
-      expect(body.refreshToken).toBe('new-refresh-token');
+      expect(body.sessionToken).toBe('ps_sess_mock-session-token');
+      expect(body.refreshToken).toBeUndefined(); // No refresh token - devices use device tokens
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('valid-device-token');
     });
 
-    it('returns cookies for web platform', async () => {
-      // Arrange
+    it('returns session cookie for web platform (not JSON tokens)', async () => {
+      // Web platform now uses sessions, sets cookie instead of returning JWT
       const webDeviceRecord = { ...mockDeviceRecord, platform: 'web' };
       (validateDeviceToken as Mock).mockResolvedValue(webDeviceRecord);
 
@@ -156,16 +163,15 @@ describe('/api/auth/device/refresh', () => {
       const response = await POST(request);
       const body = await response.json();
 
-      // Assert
+      // Assert - web gets session cookie set, no JWT token in response
       expect(response.status).toBe(200);
-      expect(body.message).toBe('Session refreshed successfully');
+      expect(body.token).toBeUndefined(); // No JWT for web - uses session cookie
       expect(body.csrfToken).toBe('mock-csrf-token');
-      // Use standard header check for cross-runtime compatibility
-      const setCookie = response.headers.get('set-cookie');
-      expect(setCookie).toBeTruthy();
+      expect(body.deviceToken).toBe('valid-device-token');
+      expect(appendSessionCookie).toHaveBeenCalled();
     });
 
-    it('generates new access and refresh tokens', async () => {
+    it('creates new session for mobile/desktop', async () => {
       // Arrange
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
@@ -176,16 +182,13 @@ describe('/api/auth/device/refresh', () => {
       // Act
       await POST(request);
 
-      // Assert
-      expect(generateAccessToken).toHaveBeenCalledWith(
-        mockUser.id,
-        mockUser.tokenVersion,
-        mockUser.role
-      );
-      expect(generateRefreshToken).toHaveBeenCalledWith(
-        mockUser.id,
-        mockUser.tokenVersion,
-        mockUser.role
+      // Assert - creates session token (no refresh token - devices use device tokens)
+      expect(sessionService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: mockUser.id,
+          type: 'user',
+          scopes: ['*'],
+        })
       );
     });
 

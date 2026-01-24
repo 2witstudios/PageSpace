@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
-import { io, Socket } from 'socket.io-client';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -12,7 +11,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
-import { getCookieValue } from '@/lib/utils/get-cookie-value';
+import { useSocketStore } from '@/stores/useSocketStore';
 import {
   Table,
   TableBody,
@@ -334,8 +333,10 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const [editingTitle, setEditingTitle] = useState('');
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
-  const socketRef = useRef<Socket | null>(null);
   const hasLoadedRef = useRef(false);
+
+  // Use centralized socket store for proper authentication
+  const { socket, connectionStatus, connect } = useSocketStore();
 
   // Drag-and-drop sensors
   const sensors = useSensors(
@@ -367,43 +368,51 @@ export default function TaskListView({ page }: TaskListViewProps) {
     }
   );
 
-  // Socket connection for real-time updates
+  // Connect to socket store when user is available
   useEffect(() => {
     if (!user) return;
 
-    const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
-    if (!socketUrl) return;
+    // Ensure socket is connected
+    if (connectionStatus === 'disconnected') {
+      connect();
+    }
+  }, [user, connectionStatus, connect]);
 
-    const socket = io(socketUrl, {
-      auth: {
-        token: getCookieValue('accessToken'),
-      },
-    });
-    socketRef.current = socket;
+  // Socket connection for real-time updates
+  useEffect(() => {
+    if (!socket || connectionStatus !== 'connected') return;
 
     socket.emit('join_page', page.id);
 
     // Handle task events (event names match backend broadcast format: task:${operation})
-    socket.on('task:task_added', () => {
+    const handleTaskAdded = () => {
       mutate(`/api/pages/${page.id}/tasks`);
-    });
+    };
 
-    socket.on('task:task_updated', () => {
+    const handleTaskUpdated = () => {
       mutate(`/api/pages/${page.id}/tasks`);
-    });
+    };
 
-    socket.on('task:task_deleted', () => {
+    const handleTaskDeleted = () => {
       mutate(`/api/pages/${page.id}/tasks`);
-    });
+    };
 
-    socket.on('task:tasks_reordered', () => {
+    const handleTasksReordered = () => {
       mutate(`/api/pages/${page.id}/tasks`);
-    });
+    };
+
+    socket.on('task:task_added', handleTaskAdded);
+    socket.on('task:task_updated', handleTaskUpdated);
+    socket.on('task:task_deleted', handleTaskDeleted);
+    socket.on('task:tasks_reordered', handleTasksReordered);
 
     return () => {
-      socket.disconnect();
+      socket.off('task:task_added', handleTaskAdded);
+      socket.off('task:task_updated', handleTaskUpdated);
+      socket.off('task:task_deleted', handleTaskDeleted);
+      socket.off('task:tasks_reordered', handleTasksReordered);
     };
-  }, [page.id, user]);
+  }, [socket, connectionStatus, page.id]);
 
   // Filter tasks
   const filteredTasks = data?.tasks.filter(task => {

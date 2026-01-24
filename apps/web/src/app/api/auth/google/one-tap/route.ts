@@ -1,21 +1,12 @@
-import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, or, and } from '@pagespace/db';
+import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import {
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-  decodeToken,
-  generateCSRFToken,
-  getSessionIdFromJWT,
-  validateOrCreateDeviceToken,
-} from '@pagespace/lib/server';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -23,7 +14,9 @@ import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
-import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+
+const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -192,35 +185,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // Generate JWT tokens
-    loggers.auth.debug('Generating tokens for Google One Tap user', {
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-    });
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
-    const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
-
-    const refreshPayload = await decodeToken(refreshToken);
-    const refreshExpiresAt = refreshPayload?.exp
-      ? new Date(refreshPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    // Save refresh token - SECURITY: Only hash stored, never plaintext
-    const refreshTokenHash = hashToken(refreshToken);
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: refreshTokenHash,
-      tokenHash: refreshTokenHash,
-      tokenPrefix: getTokenPrefix(refreshToken),
-      userId: user.id,
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      lastUsedAt: new Date(),
-      platform: platform,
-      expiresAt: refreshExpiresAt,
-    });
-
     // Reset rate limits on successful login
     try {
       await resetDistributedRateLimit(`oauth:onetap:ip:${clientIP}`);
@@ -244,7 +208,8 @@ export async function POST(req: Request) {
 
     const redirectTo = provisionedDrive ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
-    // DESKTOP PLATFORM: Return tokens in response body
+    // DESKTOP PLATFORM: Return device token in response body
+    // Desktop uses device tokens, not web sessions
     if (platform === 'desktop') {
       if (!deviceId) {
         loggers.auth.error('Desktop One Tap missing deviceId', {
@@ -269,22 +234,6 @@ export async function POST(req: Request) {
         ipAddress: clientIP,
       });
 
-      // Generate CSRF token for desktop
-      const decoded = await decodeToken(accessToken);
-      if (!decoded) {
-        loggers.auth.error('Failed to decode access token for desktop One Tap');
-        return NextResponse.json(
-          { error: 'Token generation failed' },
-          { status: 500 }
-        );
-      }
-      const sessionId = getSessionIdFromJWT({
-        userId: user.id,
-        tokenVersion: user.tokenVersion,
-        iat: decoded.iat,
-      });
-      const csrfToken = generateCSRFToken(sessionId);
-
       return NextResponse.json({
         success: true,
         user: {
@@ -293,9 +242,6 @@ export async function POST(req: Request) {
           email: user.email,
         },
         tokens: {
-          accessToken,
-          refreshToken,
-          csrfToken,
           deviceToken: deviceTokenValue,
         },
         redirectTo,
@@ -303,70 +249,33 @@ export async function POST(req: Request) {
       });
     }
 
-    // WEB PLATFORM: Set cookies and return success
-    const isProduction = process.env.NODE_ENV === 'production';
-
-    // Create device token for web platform (90-day persistence for "stay logged in")
-    let deviceTokenValue: string | undefined;
-    if (deviceId) {
-      try {
-        const result = await validateOrCreateDeviceToken({
-          providedDeviceToken: undefined, // New token for One Tap
-          userId: user.id,
-          deviceId,
-          platform: 'web',
-          tokenVersion: user.tokenVersion,
-          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
-          userAgent: req.headers.get('user-agent') || undefined,
-          ipAddress: clientIP,
-        });
-        deviceTokenValue = result.deviceToken;
-
-        // Link refresh token to device token for proper revocation
-        // This ensures revoking a device also revokes its refresh token
-        if (result.deviceTokenRecordId) {
-          await db.update(refreshTokens)
-            .set({ deviceTokenId: result.deviceTokenRecordId })
-            .where(
-              and(
-                eq(refreshTokens.userId, user.id),
-                eq(refreshTokens.tokenHash, refreshTokenHash)
-              )
-            );
-        }
-
-        loggers.auth.debug('Created device token for web One Tap', { userId: user.id, deviceId });
-      } catch (error) {
-        loggers.auth.warn('Failed to create device token for web One Tap', {
-          userId: user.id,
-          deviceId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Continue without device token - session will still work via cookies
-      }
+    // WEB PLATFORM: Use session-based authentication
+    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
+    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
+    if (revokedCount > 0) {
+      loggers.auth.info('Revoked existing sessions on Google One Tap login', { userId: user.id, count: revokedCount });
     }
 
-    const accessTokenCookie = serialize('accessToken', accessToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 15 * 60, // 15 minutes
-      ...(isProduction && { domain: process.env.COOKIE_DOMAIN }),
+    // Create new session
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: SESSION_DURATION_MS,
+      createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
-    const refreshTokenCookie = serialize('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: getRefreshTokenMaxAge(),
-      ...(isProduction && { domain: process.env.COOKIE_DOMAIN }),
-    });
+    // Validate session to get claims for CSRF
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session', { userId: user.id });
+      return NextResponse.json({ error: 'Session creation failed' }, { status: 500 });
+    }
+
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     const headers = new Headers();
-    headers.append('Set-Cookie', accessTokenCookie);
-    headers.append('Set-Cookie', refreshTokenCookie);
+    appendSessionCookie(headers, sessionToken);
 
     return NextResponse.json(
       {
@@ -376,10 +285,9 @@ export async function POST(req: Request) {
           name: user.name,
           email: user.email,
         },
+        csrfToken,
         redirectTo,
         isNewUser,
-        // Include device token for client-side storage
-        ...(deviceTokenValue && { deviceToken: deviceTokenValue }),
       },
       { headers }
     );

@@ -1,27 +1,21 @@
 import { z } from 'zod/v4';
-import { users, refreshTokens, deviceTokens, db, eq } from '@pagespace/db';
+import { users, deviceTokens, db, eq } from '@pagespace/db';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
   updateDeviceTokenActivity,
-  generateAccessToken,
-  generateRefreshToken,
   generateDeviceToken,
-  decodeToken,
-  getRefreshTokenMaxAge,
   generateCSRFToken,
-  getSessionIdFromJWT,
 } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { createId } from '@paralleldrive/cuid2';
-import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
+import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { getClientIP, appendAuthCookies } from '@/lib/auth';
+import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -170,44 +164,6 @@ export async function POST(req: Request) {
 
     await updateDeviceTokenActivity(activeDeviceTokenId, normalizedIP);
 
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
-    const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
-
-    const refreshPayload = await decodeToken(refreshToken);
-    const refreshExpiresAt = refreshPayload?.exp
-      ? new Date(refreshPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    // SECURITY: Only hash stored, never plaintext
-    const refreshTokenHash = hashToken(refreshToken);
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: refreshTokenHash, // Store hash, NOT plaintext
-      tokenHash: refreshTokenHash,
-      tokenPrefix: getTokenPrefix(refreshToken),
-      userId: user.id,
-      device: userAgent ?? deviceRecord.deviceName,
-      userAgent: userAgent ?? deviceRecord.userAgent,
-      ip: normalizedIP ?? null,
-      lastUsedAt: new Date(),
-      platform: deviceRecord.platform,
-      deviceTokenId: activeDeviceTokenId,
-      expiresAt: refreshExpiresAt,
-    });
-
-    const decodedAccess = await decodeToken(accessToken);
-    if (!decodedAccess?.iat) {
-      loggers.auth.error('Failed to decode access token for CSRF generation during device refresh');
-      return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
-    }
-
-    const sessionId = getSessionIdFromJWT({
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-      iat: decodedAccess.iat,
-    });
-    const csrfToken = generateCSRFToken(sessionId);
-
     logAuthEvent('login', user.id, user.email, normalizedIP ?? 'unknown', 'Device token refresh');
     trackAuthEvent(user.id, 'refresh', {
       platform: deviceRecord.platform,
@@ -225,32 +181,55 @@ export async function POST(req: Request) {
       });
     }
 
-    // For web platform, set httpOnly cookies instead of returning tokens in JSON
-    // Detect web by platform === 'web' in device record
-    const isWebPlatform = deviceRecord.platform === 'web';
+    // Web platform: Create session and set cookie (no JWT tokens in response)
+    if (deviceRecord.platform === 'web') {
+      const sessionToken = await sessionService.createSession({
+        userId: user.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+        createdByService: 'device-refresh',
+        createdByIp: normalizedIP,
+      });
 
-    if (isWebPlatform) {
+      const sessionClaims = await sessionService.validateSession(sessionToken);
+      const csrfToken = generateCSRFToken(sessionClaims?.sessionId ?? '');
+
       const headers = new Headers();
-      appendAuthCookies(headers, accessToken, refreshToken);
+      appendSessionCookie(headers, sessionToken);
       headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
       headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
-      return Response.json(
-        {
-          message: 'Session refreshed successfully',
-          csrfToken,
-          deviceToken: activeDeviceToken,
-        },
-        { status: 200, headers }
-      );
+      return Response.json({
+        csrfToken,
+        deviceToken: activeDeviceToken,
+        // No accessToken/refreshToken for web - session cookie is set
+      }, { headers });
     }
 
-    // For mobile/desktop, return tokens in JSON (existing behavior)
+    // Mobile/desktop: Return session token in JSON (no refresh token - devices use device tokens)
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile/desktop
+      createdByService: 'device-refresh',
+      createdByIp: normalizedIP,
+    });
+
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session during device refresh');
+      return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
+    }
+
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
     return Response.json({
-      token: accessToken,
-      refreshToken,
+      sessionToken,
       csrfToken,
       deviceToken: activeDeviceToken,
+      // Note: No refreshToken - mobile/desktop use device tokens for refresh
     }, {
       headers: {
         'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),

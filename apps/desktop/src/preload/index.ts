@@ -49,11 +49,10 @@ contextBridge.exposeInMainWorld('electron', {
 
   // Authentication
   auth: {
-    getJWT: () => ipcRenderer.invoke('auth:get-jwt'),
+    getSessionToken: () => ipcRenderer.invoke('auth:get-session-token'),
     getSession: () => ipcRenderer.invoke('auth:get-session'),
     storeSession: (session: {
-      accessToken: string;
-      refreshToken: string;
+      sessionToken: string;
       csrfToken?: string | null;
       deviceToken?: string | null;
     }) => ipcRenderer.invoke('auth:store-session', session),
@@ -132,16 +131,14 @@ export interface ElectronAPI {
   platform: NodeJS.Platform;
   version: string;
   auth: {
-    getJWT: () => Promise<string | null>;
+    getSessionToken: () => Promise<string | null>;
     getSession: () => Promise<{
-      accessToken: string;
-      refreshToken: string;
+      sessionToken: string;
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
     storeSession: (session: {
-      accessToken: string;
-      refreshToken: string;
+      sessionToken: string;
       csrfToken?: string | null;
       deviceToken?: string | null;
     }) => Promise<{ success: boolean }>;

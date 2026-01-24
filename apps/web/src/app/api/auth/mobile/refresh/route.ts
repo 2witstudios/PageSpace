@@ -1,20 +1,17 @@
 import { users, db, eq } from '@pagespace/db';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
-  decodeToken,
-  generateAccessToken,
   validateDeviceToken,
   updateDeviceTokenActivity,
   generateDeviceToken,
   generateCSRFToken,
-  getSessionIdFromJWT,
 } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
+import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
@@ -135,22 +132,24 @@ export async function POST(req: Request) {
     const normalizedIP = clientIP === 'unknown' ? undefined : clientIP;
     await updateDeviceTokenActivity(activeDeviceTokenId, normalizedIP);
 
-    // Generate new access token
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
+    // Create new session token (opaque, stored in DB)
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      createdByService: 'mobile-refresh',
+      createdByIp: normalizedIP,
+    });
 
-    // Decode access token for CSRF generation (do this once, not three times)
-    const decodedAccess = await decodeToken(accessToken);
-    if (!decodedAccess?.iat) {
-      loggers.auth.error('Failed to decode access token for CSRF generation');
+    // Get session claims for CSRF generation
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session');
       return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
     }
 
-    const sessionId = getSessionIdFromJWT({
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-      iat: decodedAccess.iat,
-    });
-    const csrfToken = generateCSRFToken(sessionId);
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     // Reset rate limit on successful refresh
     try {
@@ -161,9 +160,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // Return tokens (device-token-only pattern - no refreshToken)
+    // Return session token (device-token-only pattern - no refreshToken)
     return Response.json({
-      token: accessToken,
+      sessionToken,
       csrfToken,
       deviceToken: activeDeviceToken,
     }, {

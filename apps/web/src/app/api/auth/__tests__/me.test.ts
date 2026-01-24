@@ -59,14 +59,15 @@ const mockAuthSuccess = {
   userId: 'test-user-id',
   role: 'user',
   tokenVersion: 0,
-  tokenType: 'jwt',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
 };
 
 const createRequest = () => {
   return new Request('http://localhost/api/auth/me', {
     method: 'GET',
     headers: {
-      Cookie: 'accessToken=valid-token',
+      Cookie: 'ps_session=valid-token',
     },
   });
 };

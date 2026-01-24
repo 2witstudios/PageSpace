@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { authenticateWebRequest, isAuthError } from '@/lib/auth';
+import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getUserLMStudioSettings } from '@/lib/ai/core';
+import { validateExternalURL } from '@pagespace/lib/security';
 
 /**
  * GET /api/ai/lmstudio/models
@@ -9,7 +10,7 @@ import { getUserLMStudioSettings } from '@/lib/ai/core';
  */
 export async function GET(request: Request) {
   try {
-    const auth = await authenticateWebRequest(request);
+    const auth = await authenticateSessionRequest(request);
     if (isAuthError(auth)) return auth.error;
     const { userId } = auth;
 
@@ -20,6 +21,22 @@ export async function GET(request: Request) {
       return NextResponse.json({
         success: false,
         error: 'LM Studio not configured. Please configure your LM Studio base URL first.',
+        models: {}
+      }, { status: 400 });
+    }
+
+    // SECURITY: Validate URL to prevent SSRF attacks
+    try {
+      await validateExternalURL(lmstudioSettings.baseUrl);
+    } catch (error) {
+      loggers.ai.warn('SSRF protection: blocked LM Studio URL', {
+        userId,
+        baseUrl: lmstudioSettings.baseUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid URL: blocked for security reasons. Please use a valid, non-internal URL.',
         models: {}
       }, { status: 400 });
     }

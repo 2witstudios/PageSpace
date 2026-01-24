@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 /**
  * GET - Get any active global conversation for the authenticated user

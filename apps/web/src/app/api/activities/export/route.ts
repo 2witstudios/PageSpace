@@ -7,7 +7,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
 import { format } from 'date-fns';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 // Query parameter schema (same as main activities route)
 const querySchema = z.object({

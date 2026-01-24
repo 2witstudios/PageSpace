@@ -7,7 +7,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/[taskId]

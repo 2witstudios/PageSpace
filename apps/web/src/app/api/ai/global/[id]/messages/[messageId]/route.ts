@@ -6,7 +6,7 @@ import { globalConversationRepository } from '@/lib/repositories/global-conversa
 import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * PATCH - Edit message content

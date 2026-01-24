@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveRoleAccessInfo } from '@pagespace/lib/server';
 
 // ============================================================================
@@ -55,11 +55,12 @@ import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activit
 // Test Fixtures
 // ============================================================================
 
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -146,7 +147,7 @@ describe('PATCH /api/drives/[driveId]/roles/reorder', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt'], requireCSRF: true }
+        { allow: ['session'], requireCSRF: true }
       );
     });
   });

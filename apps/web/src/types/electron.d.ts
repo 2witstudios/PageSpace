@@ -16,17 +16,16 @@ export interface ElectronAPI {
   version: string;
   auth: {
     /**
-     * Gets the JWT token from Electron's secure cookie storage.
+     * Gets the opaque session token from Electron's secure storage.
      * Used for Bearer token authentication in Desktop app.
-     * @returns JWT string or null if not authenticated
+     * @returns Session token string (ps_sess_*) or null if not authenticated
      */
-    getJWT: () => Promise<string | null>;
+    getSessionToken: () => Promise<string | null>;
     /**
-     * Retrieves the full stored session, including refresh and device tokens.
+     * Retrieves the full stored session, including device tokens.
      */
     getSession: () => Promise<{
-      accessToken: string;
-      refreshToken: string;
+      sessionToken: string;
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
@@ -34,13 +33,12 @@ export interface ElectronAPI {
      * Persists the current authentication session in the native secure storage.
      */
     storeSession: (session: {
-      accessToken: string;
-      refreshToken: string;
+      sessionToken: string;
       csrfToken?: string | null;
       deviceToken?: string | null;
     }) => Promise<{ success: boolean }>;
     /**
-     * Clears authentication data (JWT cookies) from Electron session.
+     * Clears authentication data from Electron session.
      * Called during logout.
      */
     clearAuth: () => Promise<void>;

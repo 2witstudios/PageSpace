@@ -87,8 +87,7 @@ export function GoogleOneTap({
           if (isDesktop && window.electron && data.tokens) {
             // Desktop: Store in Electron secure storage
             await window.electron.auth.storeSession({
-              accessToken: data.tokens.accessToken,
-              refreshToken: data.tokens.refreshToken,
+              sessionToken: data.tokens.sessionToken,
               csrfToken: data.tokens.csrfToken,
               deviceToken: data.tokens.deviceToken,
             });

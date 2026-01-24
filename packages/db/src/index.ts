@@ -26,8 +26,6 @@ export * from './schema';
 export {
   users,
   usersRelations,
-  refreshTokens,
-  refreshTokensRelations,
   deviceTokens,
   deviceTokensRelations,
   mcpTokens,
@@ -60,4 +58,4 @@ export {
 
 // Note: Auth transaction functions are exported from '@pagespace/db/transactions/auth-transactions'
 // They are NOT re-exported here to avoid circular dependency issues
-// Import directly: import { atomicTokenRefresh, ... } from '@pagespace/db/transactions/auth-transactions';
+// Import directly: import { atomicDeviceTokenRotation, ... } from '@pagespace/db/transactions/auth-transactions';

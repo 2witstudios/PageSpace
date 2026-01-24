@@ -55,10 +55,8 @@ export interface MobileOAuthResponse {
     provider: 'email' | 'google' | 'apple' | 'both';
     role: 'user' | 'admin';
   };
-  /** JWT access token (15 minute expiry) */
-  token: string;
-  /** JWT refresh token (7 day expiry) */
-  refreshToken: string;
+  /** Opaque session token (ps_sess_*) for authentication */
+  sessionToken: string;
   /** CSRF token for additional security */
   csrfToken: string;
   /** Device token for 90-day persistent authentication */

@@ -1,28 +1,23 @@
-import { users, refreshTokens } from '@pagespace/db';
-import { db, eq, or, and } from '@pagespace/db';
+import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { generateAccessToken, generateRefreshToken, getRefreshTokenMaxAge, decodeToken, generateCSRFToken, getSessionIdFromJWT, validateOrCreateDeviceToken } from '@pagespace/lib/server';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { serialize } from 'cookie';
 import { createId } from '@paralleldrive/cuid2';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
-import { hashToken, getTokenPrefix } from '@pagespace/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
-/**
- * Validates that a return URL is a safe same-origin path.
- * Defense-in-depth: validates again in callback even though signin validates.
- * This protects against legacy states or any signin validation bypass.
- */
+const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 function isSafeReturnUrl(url: string | undefined): boolean {
   if (!url) return true;
   if (!url.startsWith('/')) return false;
@@ -33,13 +28,13 @@ function isSafeReturnUrl(url: string | undefined): boolean {
     if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
     if (/[a-z]+:/i.test(decoded)) return false;
   } catch {
-    return false; // Invalid encoding
+    return false;
   }
   return true;
 }
 
 const googleCallbackSchema = z.object({
-  code: z.string().min(1, "Authorization code is required"),
+  code: z.string().min(1, 'Authorization code is required'),
   state: z.string().nullish().optional(),
 });
 
@@ -58,13 +53,10 @@ export async function GET(req: Request) {
 
     if (error) {
       loggers.auth.warn('OAuth error', { error });
-      
-      // Handle specific OAuth errors
       let errorParam = 'oauth_error';
       if (error === 'access_denied') {
         errorParam = 'access_denied';
       }
-      
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL(`/auth/signin?error=${errorParam}`, baseUrl));
     }
@@ -78,11 +70,10 @@ export async function GET(req: Request) {
 
     const { code: authCode, state: stateParam } = validation.data;
 
-    // Parse and verify state parameter signature
-    let platform: 'web' | 'desktop' = 'web';
+    let returnUrl = '/dashboard';
+    let platform = 'web';
     let deviceId: string | undefined;
     let deviceName: string | undefined;
-    let returnUrl = '/dashboard';
 
     if (stateParam) {
       try {
@@ -90,9 +81,7 @@ export async function GET(req: Request) {
           Buffer.from(stateParam, 'base64').toString('utf-8')
         );
 
-        // Check if this is a signed state parameter (new format)
         if (stateWithSignature.data && stateWithSignature.sig) {
-          // Verify HMAC signature
           const { data, sig } = stateWithSignature;
           const expectedSignature = crypto
             .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
@@ -105,27 +94,18 @@ export async function GET(req: Request) {
             return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
           }
 
-          // Signature valid, trust the data
+          returnUrl = data.returnUrl || '/dashboard';
           platform = data.platform || 'web';
           deviceId = data.deviceId;
           deviceName = data.deviceName;
-          returnUrl = data.returnUrl || '/dashboard';
         } else {
-          // Legacy format: unsigned state (backward compatibility)
-          platform = stateWithSignature.platform || 'web';
-          deviceId = stateWithSignature.deviceId;
-          deviceName = stateWithSignature.deviceName;
           returnUrl = stateWithSignature.returnUrl || '/dashboard';
         }
       } catch {
-        // Legacy fallback: state might be just a return URL string
         returnUrl = stateParam;
       }
     }
 
-    // SECURITY: Validate returnUrl to prevent open redirect attacks
-    // Defense-in-depth: signin validates, but callback re-validates in case of
-    // legacy states or bypass attempts. Unsafe URLs fall back to /dashboard.
     if (!isSafeReturnUrl(returnUrl)) {
       loggers.auth.warn('Unsafe returnUrl in OAuth callback - falling back to dashboard', {
         returnUrl,
@@ -134,7 +114,6 @@ export async function GET(req: Request) {
       returnUrl = '/dashboard';
     }
 
-    // Rate limiting by IP address
     const clientIP = getClientIP(req);
 
     const ipRateLimit = await checkDistributedRateLimit(
@@ -146,16 +125,14 @@ export async function GET(req: Request) {
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
-    // Exchange authorization code for tokens
     const { tokens } = await client.getToken(authCode);
-    
+
     if (!tokens.id_token) {
       loggers.auth.error('No ID token received from Google');
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
-    // Verify the ID token
     const ticket = await client.verifyIdToken({
       idToken: tokens.id_token,
       audience: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -176,10 +153,8 @@ export async function GET(req: Request) {
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
-    // Create fallback name if Google doesn't provide one
     const userName = name || email.split('@')[0] || 'User';
 
-    // Check if user exists by Google ID or email
     let user = await db.query.users.findFirst({
       where: or(
         eq(users.googleId, googleId),
@@ -188,27 +163,24 @@ export async function GET(req: Request) {
     });
 
     if (user) {
-      // Update existing user with Google ID if not set, or update other profile info
       if (!user.googleId || !user.name || user.image !== picture) {
         loggers.auth.info('Updating existing user via Google OAuth', { email });
         await db.update(users)
-          .set({ 
+          .set({
             googleId: googleId || user.googleId,
             provider: user.password ? 'both' : 'google',
-            name: user.name || userName, // Update name if it's missing
-            image: picture || user.image, // Update image if different
+            name: user.name || userName,
+            image: picture || user.image,
             emailVerified: email_verified ? new Date() : user.emailVerified,
           })
           .where(eq(users.id, user.id));
-        
-        // Refetch the user to get updated data including any changes
+
         user = await db.query.users.findFirst({
           where: eq(users.id, user.id),
         }) || user;
         loggers.auth.info('User updated via Google OAuth', { userId: user.id, name: user.name });
       }
     } else {
-      // Create new user
       loggers.auth.info('Creating new user via Google OAuth', { email });
       const [newUser] = await db.insert(users).values({
         id: createId(),
@@ -220,7 +192,6 @@ export async function GET(req: Request) {
         provider: 'google',
         tokenVersion: 0,
         role: 'user',
-        // Storage tracking (quota/tier computed from subscriptionTier)
         storageUsedBytes: 0,
         subscriptionTier: 'free',
       }).returning();
@@ -242,33 +213,31 @@ export async function GET(req: Request) {
       });
     }
 
-    // Generate JWT tokens
-    loggers.auth.debug('Generating tokens for Google OAuth user', { userId: user.id, tokenVersion: user.tokenVersion });
-    const accessToken = await generateAccessToken(user.id, user.tokenVersion, user.role);
-    const refreshToken = await generateRefreshToken(user.id, user.tokenVersion, user.role);
+    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
+    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
+    if (revokedCount > 0) {
+      loggers.auth.info('Revoked existing sessions on Google OAuth login', { userId: user.id, count: revokedCount });
+    }
 
-    const refreshPayload = await decodeToken(refreshToken);
-    const refreshExpiresAt = refreshPayload?.exp
-      ? new Date(refreshPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
-
-    // Save refresh token - SECURITY: Only hash stored, never plaintext
-    const refreshTokenHash = hashToken(refreshToken);
-    await db.insert(refreshTokens).values({
-      id: createId(),
-      token: refreshTokenHash, // Store hash, NOT plaintext
-      tokenHash: refreshTokenHash,
-      tokenPrefix: getTokenPrefix(refreshToken),
+    // Create new session
+    const sessionToken = await sessionService.createSession({
       userId: user.id,
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      lastUsedAt: new Date(),
-      platform: platform,
-      expiresAt: refreshExpiresAt,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: SESSION_DURATION_MS,
+      createdByIp: clientIP !== 'unknown' ? clientIP : undefined,
     });
 
-    // Reset rate limits on successful login
+    // Validate session to get claims for CSRF
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session', { userId: user.id });
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    }
+
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
     } catch (error) {
@@ -277,10 +246,7 @@ export async function GET(req: Request) {
       });
     }
 
-    // Log successful login
     logAuthEvent('login', user.id, email, clientIP, 'Google OAuth');
-
-    // Track login event
     trackAuthEvent(user.id, 'login', {
       email,
       ip: clientIP,
@@ -288,140 +254,57 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
-    // DESKTOP PLATFORM: Pass tokens through redirect URL
+    // DESKTOP PLATFORM: Return JSON with device token (no redirect)
     if (platform === 'desktop') {
-      // Validate that we have a deviceId for desktop OAuth
       if (!deviceId) {
-        loggers.auth.error('Desktop OAuth missing deviceId from state', {
+        loggers.auth.error('Desktop OAuth callback missing deviceId', {
           userId: user.id,
           email: user.email,
-          hasStateParam: !!stateParam,
-          platform: platform,
         });
-        const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-        return NextResponse.redirect(new URL('/auth/signin?error=invalid_device', baseUrl));
-      }
-
-      // Generate device token for desktop
-      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
-        providedDeviceToken: undefined, // No existing token for OAuth
-        userId: user.id,
-        deviceId: deviceId, // Required for desktop
-        platform: 'desktop',
-        tokenVersion: user.tokenVersion,
-        deviceName: req.headers.get('user-agent') || 'Desktop App',
-        userAgent: req.headers.get('user-agent') || undefined,
-        ipAddress: clientIP,
-      });
-
-      // Generate CSRF token for desktop
-      const decoded = await decodeToken(accessToken);
-      if (!decoded) {
-        loggers.auth.error('Failed to decode access token for desktop OAuth');
         const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
         return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
-      const sessionId = getSessionIdFromJWT({
+
+      // Generate device token (pattern from One Tap route)
+      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        providedDeviceToken: undefined,
         userId: user.id,
+        deviceId: deviceId,
+        platform: 'desktop',
         tokenVersion: user.tokenVersion,
-        iat: decoded.iat,
+        deviceName: deviceName || req.headers.get('user-agent') || 'Desktop App',
+        userAgent: req.headers.get('user-agent') || undefined,
+        ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
-      const csrfToken = generateCSRFToken(sessionId);
 
-      // Redirect to dashboard with tokens in URL (will be handled by desktop OAuth handler)
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-      const dashboardPath = provisionedDrive
-        ? `/dashboard/${provisionedDrive.driveId}`
-        : '/dashboard';
-      const redirectUrl = new URL(dashboardPath, baseUrl);
-      redirectUrl.searchParams.set('auth', 'success');
-      redirectUrl.searchParams.set('desktop', 'true');
+      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
 
-      // Encode tokens as base64 to pass through URL (desktop will intercept and store)
-      const tokensData = {
-        token: accessToken,
-        refreshToken: refreshToken,
-        csrfToken: csrfToken,
-        deviceToken: deviceTokenValue,
-      };
-      const tokensEncoded = Buffer.from(JSON.stringify(tokensData)).toString('base64');
-      redirectUrl.searchParams.set('tokens', tokensEncoded);
+      trackAuthEvent(user.id, 'login', {
+        email,
+        ip: clientIP,
+        provider: 'google-oauth',
+        platform: 'desktop',
+        userAgent: req.headers.get('user-agent'),
+      });
 
-      return NextResponse.redirect(redirectUrl);
+      // Return JSON (no redirect, no cookies)
+      return NextResponse.json({
+        success: true,
+        user: { id: user.id, name: user.name, email: user.email },
+        tokens: { deviceToken: deviceTokenValue },
+        redirectTo: returnUrl,
+        isNewUser: !!provisionedDrive,
+      });
     }
 
-    // WEB PLATFORM: Set cookies and redirect to dashboard
-    const isProduction = process.env.NODE_ENV === 'production';
-
+    // WEB PLATFORM: Original redirect flow (UNCHANGED)
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     const redirectUrl = new URL(returnUrl, baseUrl);
-
-    // Add a parameter to trigger auth state refresh after OAuth
     redirectUrl.searchParams.set('auth', 'success');
-
-    // Create device token for web platform (90-day persistence for "stay logged in")
-    let deviceTokenValue: string | undefined;
-    if (deviceId) {
-      try {
-        const result = await validateOrCreateDeviceToken({
-          providedDeviceToken: undefined, // New token for OAuth
-          userId: user.id,
-          deviceId,
-          platform: 'web',
-          tokenVersion: user.tokenVersion,
-          deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
-          userAgent: req.headers.get('user-agent') || undefined,
-          ipAddress: clientIP,
-        });
-        deviceTokenValue = result.deviceToken;
-
-        // Link refresh token to device token for proper revocation
-        // This ensures revoking a device also revokes its refresh token
-        if (result.deviceTokenRecordId) {
-          await db.update(refreshTokens)
-            .set({ deviceTokenId: result.deviceTokenRecordId })
-            .where(
-              and(
-                eq(refreshTokens.userId, user.id),
-                eq(refreshTokens.tokenHash, refreshTokenHash)
-              )
-            );
-        }
-
-        // Pass device token to client via URL (client will store in localStorage)
-        redirectUrl.searchParams.set('deviceToken', deviceTokenValue);
-        loggers.auth.debug('Created device token for web OAuth', { userId: user.id, deviceId });
-      } catch (error) {
-        loggers.auth.warn('Failed to create device token for web OAuth', {
-          userId: user.id,
-          deviceId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Continue without device token - session will still work via cookies
-      }
-    }
-
-    const accessTokenCookie = serialize('accessToken', accessToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 15 * 60, // 15 minutes
-      ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-    });
-
-    const refreshTokenCookie = serialize('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: 'strict',
-      path: '/',
-      maxAge: getRefreshTokenMaxAge(), // Configurable via REFRESH_TOKEN_TTL env var (default: 30d)
-      ...(isProduction && { domain: process.env.COOKIE_DOMAIN })
-    });
+    redirectUrl.searchParams.set('csrfToken', csrfToken);
 
     const headers = new Headers();
-    headers.append('Set-Cookie', accessTokenCookie);
-    headers.append('Set-Cookie', refreshTokenCookie);
+    appendSessionCookie(headers, sessionToken);
 
     return NextResponse.redirect(redirectUrl, { headers });
 

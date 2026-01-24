@@ -5,7 +5,7 @@ import { getActivityById, previewRollback } from '@/services/api';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions';
 import type { RollbackContext } from '@pagespace/lib/permissions';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   context: z.enum(['page', 'drive', 'ai_tool', 'user_dashboard']).default('page'),

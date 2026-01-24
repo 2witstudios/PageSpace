@@ -58,37 +58,37 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
 
       const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
 
-      // Extract access token - different sources for desktop vs web
-      let accessToken: string | undefined;
+      // Extract auth token - different sources for desktop vs web
+      let authToken: string | undefined;
 
       // Check if running in Electron (desktop app)
       const isDesktop = typeof window !== 'undefined' &&
                        window.electron &&
-                       typeof window.electron.auth?.getJWT === 'function';
+                       typeof window.electron.auth?.getSessionToken === 'function';
 
       if (isDesktop) {
-        // Desktop: Get token from Electron secure storage
+        // Desktop: Get session token from Electron secure storage
         try {
-          accessToken = await window.electron?.auth.getJWT() ?? undefined;
-          console.log('🔌 Desktop: Retrieved token from Electron storage for Socket.IO');
+          authToken = await window.electron?.auth.getSessionToken() ?? undefined;
+          console.log('🔌 Desktop: Retrieved session token from Electron storage for Socket.IO');
         } catch (error) {
-          console.error('🚨 Failed to get JWT from Electron for Socket.IO:', error);
+          console.error('🚨 Failed to get session token from Electron for Socket.IO:', error);
         }
       } else {
         // Web: Fetch short-lived socket token from server
         // This bypasses sameSite: 'strict' cookie restrictions
-        accessToken = await getSocketToken() ?? undefined;
-        if (accessToken) {
+        authToken = await getSocketToken() ?? undefined;
+        if (authToken) {
           console.log('🔌 Web: Retrieved socket token for Socket.IO');
         }
       }
 
       // Only log when actually creating a new connection
       console.log('🔌 Creating new Socket.IO connection for realtime features');
-      
+
       const newSocket = io(socketUrl, {
         auth: {
-          token: accessToken,
+          token: authToken,
         },
         withCredentials: true, // This sends cookies including httpOnly ones
         reconnection: true,
@@ -124,24 +124,24 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
             try {
               // Use the unified refresh mechanism from auth-fetch
               // This shares deduplication with all other refresh paths
-              const { refreshAuthSession, clearJWTCache } = await import('@/lib/auth/auth-fetch');
+              const { refreshAuthSession, clearSessionCache } = await import('@/lib/auth/auth-fetch');
               const result = await refreshAuthSession();
 
               if (result.success) {
                 console.log('🔄 Token refreshed via unified auth, reconnecting socket...');
 
-                // Clear JWT cache to ensure fresh token retrieval
-                clearJWTCache();
+                // Clear session cache to ensure fresh token retrieval
+                clearSessionCache();
 
                 // Re-check desktop status
                 const isDesktopNow = typeof window !== 'undefined' &&
                                      window.electron &&
-                                     typeof window.electron.auth?.getJWT === 'function';
+                                     typeof window.electron.auth?.getSessionToken === 'function';
 
                 // Re-fetch the new token from storage or socket-token endpoint
                 let newToken: string | undefined;
                 if (isDesktopNow) {
-                  newToken = await window.electron?.auth.getJWT() ?? undefined;
+                  newToken = await window.electron?.auth.getSessionToken() ?? undefined;
                 } else {
                   // Fetch new socket token from server
                   newToken = await getSocketToken() ?? undefined;

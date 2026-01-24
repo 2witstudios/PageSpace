@@ -4,14 +4,13 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
 import { useTokenRefresh } from './useTokenRefresh';
-import { post, clearJWTCache } from '@/lib/auth/auth-fetch';
+import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
 import { z } from 'zod/v4';
 
 // Schema for validating desktop OAuth tokens from URL
 const desktopOAuthTokensSchema = z.object({
-  token: z.string().min(1, "Access token is required"),
-  refreshToken: z.string().min(1, "Refresh token is required"),
+  sessionToken: z.string().min(1, "Session token is required"),
   csrfToken: z.string(),
   deviceToken: z.string(),
 });
@@ -134,18 +133,17 @@ export function useAuth(): {
           const userData = await response.json();
 
           await window.electron.auth.storeSession({
-            accessToken: userData.token,
-            refreshToken: userData.refreshToken,
+            sessionToken: userData.sessionToken,
             csrfToken: userData.csrfToken,
             deviceToken: userData.deviceToken,
           });
 
-          clearJWTCache();
+          clearSessionCache();
 
           // CRITICAL FIX: Verify token is actually retrievable before proceeding
           // This prevents race condition where loadSession is triggered before storage completes
-          const storedJWT = await window.electron.auth.getJWT();
-          if (!storedJWT) {
+          const storedSession = await window.electron.auth.getSessionToken();
+          if (!storedSession) {
             console.error('[Desktop Login] Token storage verification failed');
             return {
               success: false,
@@ -230,7 +228,7 @@ export function useAuth(): {
         } catch (err) {
           console.error('Failed to clear desktop auth session', err);
         }
-        clearJWTCache();
+        clearSessionCache();
       }
 
       // Clear device token from localStorage (web platform)
@@ -342,8 +340,7 @@ export function useAuth(): {
             return;
           }
           await window.electron.auth.storeSession({
-            accessToken: tokensData.token,
-            refreshToken: tokensData.refreshToken,
+            sessionToken: tokensData.sessionToken,
             csrfToken: tokensData.csrfToken,
             deviceToken: tokensData.deviceToken,
           });
@@ -353,11 +350,11 @@ export function useAuth(): {
             localStorage.setItem('deviceToken', tokensData.deviceToken);
           }
 
-          clearJWTCache();
+          clearSessionCache();
 
           // Verify token is retrievable
-          const storedJWT = await window.electron.auth.getJWT();
-          if (!storedJWT) {
+          const storedSession = await window.electron.auth.getSessionToken();
+          if (!storedSession) {
             console.error('[AUTH_HOOK] Desktop OAuth token storage verification failed');
             return;
           }

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { generateCSRFToken, validateCSRFToken, getSessionIdFromJWT } from '../auth/csrf-utils'
+import { generateCSRFToken, validateCSRFToken } from '../auth/csrf-utils'
 
 /**
  * CSRF Token Contract Tests
  *
  * This test suite validates the CSRF token security mechanism which uses:
  * - Synchronizer Token Pattern with HMAC-SHA256 signatures
- * - Session-bound tokens (tied to JWT claims: userId, tokenVersion, iat)
+ * - Session-bound tokens (tied to server-validated session IDs)
  * - Time-limited validity (default 3600s)
  *
  * Token format: tokenValue.timestamp.signature
@@ -289,96 +289,26 @@ describe('csrf-utils', () => {
     })
   })
 
-  describe('getSessionIdFromJWT', () => {
-    it('generates deterministic session ID from JWT payload', () => {
-      const payload = {
-        userId: 'user_123',
-        tokenVersion: 0,
-        iat: 1234567890
-      }
-
-      const sessionId1 = getSessionIdFromJWT(payload)
-      const sessionId2 = getSessionIdFromJWT(payload)
-
-      expect(sessionId1).toBe(sessionId2)
-    })
-
-    it('generates different session IDs for different users', () => {
-      const payload1 = { userId: 'user_1', tokenVersion: 0, iat: 1234567890 }
-      const payload2 = { userId: 'user_2', tokenVersion: 0, iat: 1234567890 }
-
-      const sessionId1 = getSessionIdFromJWT(payload1)
-      const sessionId2 = getSessionIdFromJWT(payload2)
-
-      expect(sessionId1).not.toBe(sessionId2)
-    })
-
-    it('generates different session IDs for different token versions', () => {
-      const payload1 = { userId: 'user_1', tokenVersion: 0, iat: 1234567890 }
-      const payload2 = { userId: 'user_1', tokenVersion: 1, iat: 1234567890 }
-
-      const sessionId1 = getSessionIdFromJWT(payload1)
-      const sessionId2 = getSessionIdFromJWT(payload2)
-
-      expect(sessionId1).not.toBe(sessionId2)
-    })
-
-    it('generates different session IDs for different issued times', () => {
-      const payload1 = { userId: 'user_1', tokenVersion: 0, iat: 1234567890 }
-      const payload2 = { userId: 'user_1', tokenVersion: 0, iat: 9876543210 }
-
-      const sessionId1 = getSessionIdFromJWT(payload1)
-      const sessionId2 = getSessionIdFromJWT(payload2)
-
-      expect(sessionId1).not.toBe(sessionId2)
-    })
-
-    it('handles missing iat field (defaults to 0)', () => {
-      const payload = { userId: 'user_1', tokenVersion: 0 }
-      const sessionId = getSessionIdFromJWT(payload)
-
-      expect(sessionId).toBeTruthy()
-      expect(typeof sessionId).toBe('string')
-      expect(sessionId.length).toBe(16)
-    })
-
-    it('returns 16-character hex string', () => {
-      const payload = { userId: 'user_1', tokenVersion: 0, iat: 1234567890 }
-      const sessionId = getSessionIdFromJWT(payload)
-
-      expect(sessionId.length).toBe(16)
-      expect(sessionId).toMatch(/^[0-9a-f]{16}$/)
-    })
-  })
-
   describe('CSRF protection workflow', () => {
-    it('full workflow: generate session ID, create token, validate token', () => {
-      const jwtPayload = {
-        userId: 'user_123',
-        tokenVersion: 0,
-        iat: Math.floor(Date.now() / 1000)
-      }
+    it('full workflow: use session ID, create token, validate token', () => {
+      // Session ID comes from sessionService.validateSession() in the real flow
+      const sessionId = 'ps_sess_abc123def456'
 
-      // Step 1: Generate session ID from JWT
-      const sessionId = getSessionIdFromJWT(jwtPayload)
-
-      // Step 2: Generate CSRF token for session
+      // Step 1: Generate CSRF token for session
       const csrfToken = generateCSRFToken(sessionId)
 
-      // Step 3: Validate token
+      // Step 2: Validate token
       const isValid = validateCSRFToken(csrfToken, sessionId)
 
       expect(isValid).toBe(true)
     })
 
-    it('token invalidation after token version increment', () => {
-      const payload1 = { userId: 'user_1', tokenVersion: 0, iat: 1234567890 }
-      const sessionId1 = getSessionIdFromJWT(payload1)
+    it('token invalidation when session ID changes', () => {
+      const sessionId1 = 'ps_sess_original'
       const csrfToken = generateCSRFToken(sessionId1)
 
-      // User's token version incremented (e.g., password change)
-      const payload2 = { userId: 'user_1', tokenVersion: 1, iat: 1234567890 }
-      const sessionId2 = getSessionIdFromJWT(payload2)
+      // New session ID (e.g., after re-authentication)
+      const sessionId2 = 'ps_sess_new'
 
       // Old CSRF token should not validate with new session
       const isValid = validateCSRFToken(csrfToken, sessionId2)
@@ -499,17 +429,8 @@ describe('csrf-utils', () => {
     it('validateCSRFToken_stolenTokenUsedWithDifferentSession_rejects', () => {
       // Simulates scenario where attacker obtains a valid token but tries to use
       // it with their own session
-      const victimSessionId = getSessionIdFromJWT({
-        userId: 'victim_user',
-        tokenVersion: 0,
-        iat: 1234567890,
-      })
-
-      const attackerSessionId = getSessionIdFromJWT({
-        userId: 'attacker_user',
-        tokenVersion: 0,
-        iat: 1234567890,
-      })
+      const victimSessionId = 'ps_sess_victim_abc123'
+      const attackerSessionId = 'ps_sess_attacker_xyz789'
 
       // Victim's valid CSRF token
       const victimToken = generateCSRFToken(victimSessionId)

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveWithAccess } from '@pagespace/lib/server';
 
 // ============================================================================
@@ -55,11 +55,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 // Test Helpers
 // ============================================================================
 
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -114,7 +115,7 @@ describe('GET /api/drives', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt', 'mcp'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -264,7 +265,7 @@ describe('POST /api/drives', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt', 'mcp'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });

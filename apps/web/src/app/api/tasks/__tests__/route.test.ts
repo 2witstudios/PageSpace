@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { WebAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // ============================================================================
 // Contract Tests for /api/tasks
@@ -70,11 +70,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 // Test Helpers
 // ============================================================================
 
-const mockWebAuth = (userId: string, tokenVersion = 0): WebAuthResult => ({
+const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   userId,
   tokenVersion,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -225,7 +226,7 @@ describe('GET /api/tasks', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['jwt', 'mcp'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });

@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { WebAuthResult, AuthError } from '../../../../../../lib/auth';
+import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
 
 // Mock service boundary
 vi.mock('../../../../../../services/api', () => ({
@@ -44,11 +44,12 @@ import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
 const mockUserId = 'user_123';
 const mockPageId = 'page_123';
 
-const mockWebAuth = (userId: string): WebAuthResult => ({
+const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,
-  tokenType: 'jwt',
-  source: 'cookie',
+  tokenType: 'session',
+  sessionId: 'test-session-id',
+  
   role: 'user',
 });
 
@@ -125,7 +126,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
-          allow: ['jwt', 'mcp'],
+          allow: ['session', 'mcp'],
           requireCSRF: false,
         })
       );

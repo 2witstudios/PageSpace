@@ -4,7 +4,7 @@ import { canUserViewPage, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;

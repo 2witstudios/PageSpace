@@ -32,34 +32,6 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
-export const refreshTokens = pgTable('refresh_tokens', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  token: text('token').unique().notNull(),
-  tokenHash: text('tokenHash'),
-  tokenPrefix: text('tokenPrefix'),
-  device: text('device'),
-  ip: text('ip'),
-  userAgent: text('userAgent'),
-  expiresAt: timestamp('expiresAt', { mode: 'date' }),
-  lastUsedAt: timestamp('lastUsedAt', { mode: 'date' }),
-  platform: platformType('platform'),
-  deviceTokenId: text('deviceTokenId'),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  // Token revocation tracking for token reuse detection
-  revokedAt: timestamp('revokedAt', { mode: 'date' }),
-  revokedReason: text('revokedReason'), // 'refreshed', 'logout', 'token_reuse_detected'
-}, (table) => {
-  return {
-    userIdx: index('refresh_tokens_user_id_idx').on(table.userId),
-    tokenHashPartialIdx: uniqueIndex('refresh_tokens_token_hash_partial_idx')
-      .on(table.tokenHash)
-      .where(sql`${table.tokenHash} IS NOT NULL`),
-    // Index for efficient token reuse detection queries
-    revokedTokensIdx: index('refresh_tokens_revoked_idx').on(table.tokenHash, table.revokedAt),
-  };
-});
-
 export const deviceTokens = pgTable('device_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -173,7 +145,6 @@ import { subscriptions } from './subscriptions';
 import { sessions } from './sessions';
 
 export const usersRelations = relations(users, ({ many }) => ({
-  refreshTokens: many(refreshTokens),
   deviceTokens: many(deviceTokens),
   chatMessages: many(chatMessages),
   aiSettings: many(userAiSettings),
@@ -182,13 +153,6 @@ export const usersRelations = relations(users, ({ many }) => ({
   socketTokens: many(socketTokens),
   subscriptions: many(subscriptions),
   sessions: many(sessions),
-}));
-
-export const refreshTokensRelations = relations(refreshTokens, ({ one }) => ({
-  user: one(users, {
-    fields: [refreshTokens.userId],
-    references: [users.id],
-  }),
 }));
 
 export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({

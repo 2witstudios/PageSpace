@@ -5,7 +5,7 @@ import { canUserDeletePage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // Note: taskItems linked to this page are automatically deleted via FK cascade (onDelete: 'cascade')
 async function recursivelyDelete(pageId: string, tx: typeof db) {

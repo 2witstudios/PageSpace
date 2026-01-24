@@ -9,7 +9,7 @@
  * - Validation (email, password)
  * - Rate limiting (IP, email)
  * - Security (timing-safe comparison, no sensitive data leakage)
- * - Session management (tokens, cookies, device tokens)
+ * - Session management (session-based auth with opaque tokens)
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
@@ -20,7 +20,6 @@ import type { User } from '@/lib/repositories/auth-repository';
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
     findUserByEmail: vi.fn(),
-    createRefreshToken: vi.fn(),
   },
 }));
 
@@ -31,20 +30,34 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
-// Mock auth utilities (external boundary)
+// Mock session service and CSRF generation from @pagespace/lib/auth
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'test-user-id',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
+
+// Mock server utilities
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn().mockResolvedValue('mock-access-token'),
-  generateRefreshToken: vi.fn().mockResolvedValue('mock-refresh-token'),
-  getRefreshTokenMaxAge: vi.fn().mockReturnValue(2592000), // 30 days
-  decodeToken: vi.fn().mockResolvedValue({
-    userId: 'test-user-id',
-    exp: Math.floor(Date.now() / 1000) + 2592000,
-    iat: Math.floor(Date.now() / 1000),
-  }),
-  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token',
-    deviceTokenRecordId: 'mock-device-token-record-id',
-  }),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -54,6 +67,7 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  logSecurityEvent: vi.fn(),
 }));
 
 // Mock distributed rate limiting (P1-T5)
@@ -85,20 +99,23 @@ vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
 }));
 
+// Mock client IP extraction
+vi.mock('@/lib/auth', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
+  getClientIP: vi.fn().mockReturnValue('unknown'),
+}));
+
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { serialize } from 'cookie';
 import bcrypt from 'bcryptjs';
-import {
-  generateAccessToken,
-  generateRefreshToken,
-  validateOrCreateDeviceToken,
-  logAuthEvent,
-} from '@pagespace/lib/server';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { getClientIP } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -157,8 +174,9 @@ describe('POST /api/auth/login', () => {
 
     // Default mocks for successful login
     vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockUser);
-    vi.mocked(authRepository.createRefreshToken).mockResolvedValue(undefined);
     (bcrypt.compare as Mock).mockResolvedValue(true);
+    // Reset client IP mock
+    (getClientIP as Mock).mockReturnValue('unknown');
   });
 
   describe('successful login', () => {
@@ -171,66 +189,45 @@ describe('POST /api/auth/login', () => {
       expect(body.id).toBe(mockUser.id);
       expect(body.name).toBe(mockUser.name);
       expect(body.email).toBe(mockUser.email);
+      expect(body.csrfToken).toBe('mock-csrf-token');
     });
 
-    it('sets httpOnly cookies for accessToken and refreshToken', async () => {
-      const request = createLoginRequest(validLoginPayload);
-      const response = await POST(request);
-
-      expect(response.headers.get('set-cookie')).toBeTruthy();
-
-      // Verify accessToken cookie contract
-      expect(serialize).toHaveBeenCalledWith(
-        'accessToken',
-        expect.any(String),
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-        })
-      );
-
-      // Verify refreshToken cookie contract
-      expect(serialize).toHaveBeenCalledWith(
-        'refreshToken',
-        expect.any(String),
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-        })
-      );
-    });
-
-    it('generates access and refresh tokens with correct user data', async () => {
+    it('creates session and sets session cookie', async () => {
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
-      expect(generateAccessToken).toHaveBeenCalledWith(
-        mockUser.id,
-        mockUser.tokenVersion,
-        mockUser.role
-      );
-      expect(generateRefreshToken).toHaveBeenCalledWith(
-        mockUser.id,
-        mockUser.tokenVersion,
-        mockUser.role
-      );
-    });
-
-    it('stores refresh token via repository', async () => {
-      await POST(createLoginRequest(validLoginPayload));
-
-      expect(authRepository.createRefreshToken).toHaveBeenCalledWith(
+      // Verify session creation
+      expect(sessionService.createSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          token: 'mock-refresh-token',
           userId: mockUser.id,
-          platform: 'web',
+          type: 'user',
+          scopes: ['*'],
         })
       );
+
+      // Verify session cookie is set
+      expect(appendSessionCookie).toHaveBeenCalled();
+    });
+
+    it('generates CSRF token bound to session', async () => {
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      // Verify CSRF token is generated with session ID
+      expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_mock_session_token');
+      expect(generateCSRFToken).toHaveBeenCalledWith('mock-session-id');
+    });
+
+    it('revokes existing sessions on login (session fixation prevention)', async () => {
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(mockUser.id, 'new_login');
     });
 
     it('resets rate limits on successful login', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+
       const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });
@@ -242,6 +239,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('logs successful login event', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+
       const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });
@@ -262,26 +261,6 @@ describe('POST /api/auth/login', () => {
           ip: '192.168.1.1',
         })
       );
-    });
-
-    it('creates device token when deviceId is provided', async () => {
-      const payloadWithDevice = {
-        ...validLoginPayload,
-        deviceId: 'device-123',
-        deviceName: 'Test Device',
-      };
-      const request = createLoginRequest(payloadWithDevice);
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockUser.id,
-          deviceId: 'device-123',
-          platform: 'web',
-        })
-      );
-      expect(body.deviceToken).toBe('mock-device-token');
     });
   });
 
@@ -337,6 +316,7 @@ describe('POST /api/auth/login', () => {
 
     it('logs failed login attempt', async () => {
       (bcrypt.compare as Mock).mockResolvedValue(false);
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest({
         email: 'test@example.com',
@@ -411,6 +391,7 @@ describe('POST /api/auth/login', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
       (checkDistributedRateLimit as Mock)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
@@ -453,6 +434,8 @@ describe('POST /api/auth/login', () => {
 
   describe('IP extraction', () => {
     it('extracts IP from x-forwarded-for header', async () => {
+      (getClientIP as Mock).mockReturnValue('203.0.113.195');
+
       const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '203.0.113.195, 70.41.3.18, 150.172.238.178',
       });
@@ -466,6 +449,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('extracts IP from x-real-ip header when x-forwarded-for is missing', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.100');
+
       const request = createLoginRequest(validLoginPayload, {
         'x-real-ip': '192.168.1.100',
       });
@@ -479,6 +464,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('uses "unknown" as fallback IP when headers are missing', async () => {
+      (getClientIP as Mock).mockReturnValue('unknown');
+
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
 
@@ -559,6 +546,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('calls checkDistributedRateLimit for IP', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+
       const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });
@@ -583,6 +572,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 429 with X-RateLimit headers when IP rate limit exceeded', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
       vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({
           allowed: false,
@@ -629,6 +619,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('calls resetDistributedRateLimit on successful login', async () => {
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+
       const request = createLoginRequest(validLoginPayload, {
         'x-forwarded-for': '192.168.1.1',
       });

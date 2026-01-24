@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  authenticateWebRequest,
+  authenticateSessionRequest,
   isAuthError as isAuthResultError,
 } from './index';
 
@@ -24,12 +24,18 @@ export interface AuthUser {
   userId: string;
   role: 'user' | 'admin';
   tokenVersion: number;
-  tokenType: 'jwt';
+  tokenType: 'session';
+  sessionId: string;
 }
 
 async function getAuthUser(request: Request | NextRequest): Promise<AuthUser | null> {
-  const result = await authenticateWebRequest(request);
+  const result = await authenticateSessionRequest(request);
   if (isAuthResultError(result)) {
+    return null;
+  }
+
+  // authenticateSessionRequest only returns SessionAuthResult on success
+  if (result.tokenType !== 'session') {
     return null;
   }
 
@@ -37,7 +43,8 @@ async function getAuthUser(request: Request | NextRequest): Promise<AuthUser | n
     userId: result.userId,
     role: result.role,
     tokenVersion: result.tokenVersion,
-    tokenType: 'jwt',
+    tokenType: 'session',
+    sessionId: result.sessionId,
   } satisfies AuthUser;
 }
 

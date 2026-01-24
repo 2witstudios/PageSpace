@@ -9,22 +9,26 @@ import { validateCSRF, requiresCSRFProtection } from '../csrf-validation';
  * Input: HTTP Request with:
  *   - Method (GET/HEAD/OPTIONS skip validation, others require it)
  *   - X-CSRF-Token header (required for mutation methods)
- *   - Cookie: accessToken=<JWT> (required for session binding)
+ *   - Cookie: session=<token> (required for session binding)
  *
  * Output:
  *   - null: Validation successful (or skipped for safe methods)
  *   - NextResponse with 403: CSRF_TOKEN_MISSING or CSRF_TOKEN_INVALID
  *   - NextResponse with 401: CSRF_NO_SESSION or CSRF_INVALID_SESSION
  *
- * The validation binds CSRF tokens to JWT sessions via:
- *   JWT.claims -> getSessionIdFromJWT() -> sessionId -> validateCSRFToken(token, sessionId)
+ * Session-based CSRF: Tokens are bound to server-validated session IDs,
+ * not client-controlled JWT claims.
  */
 
 // Mock dependencies at system boundary
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/auth', () => ({
   validateCSRFToken: vi.fn(),
-  getSessionIdFromJWT: vi.fn(),
-  decodeToken: vi.fn(),
+  sessionService: {
+    validateSession: vi.fn(),
+  },
+}));
+
+vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     auth: {
       warn: vi.fn(),
@@ -34,12 +38,12 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
-vi.mock('cookie', () => ({
-  parse: vi.fn(),
+vi.mock('../cookie-config', () => ({
+  getSessionFromCookies: vi.fn(),
 }));
 
-import { validateCSRFToken, getSessionIdFromJWT, decodeToken } from '@pagespace/lib/server';
-import { parse } from 'cookie';
+import { validateCSRFToken, sessionService } from '@pagespace/lib/auth';
+import { getSessionFromCookies } from '../cookie-config';
 
 describe('csrf-validation', () => {
   beforeEach(() => {
@@ -93,19 +97,20 @@ describe('csrf-validation', () => {
 
   describe('validateCSRF', () => {
     const mockSessionId = 'session_abc123';
-    const mockUserId = 'user_123';
-    const mockJwtPayload = {
-      userId: mockUserId,
+    const mockSessionClaims = {
+      sessionId: mockSessionId,
+      userId: 'user_123',
+      userRole: 'user' as const,
       tokenVersion: 0,
-      role: 'user' as const,
-      iat: Math.floor(Date.now() / 1000),
+      type: 'user' as const,
+      scopes: ['*'],
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     };
 
     beforeEach(() => {
       // Setup default mocks for successful validation path
-      vi.mocked(parse).mockReturnValue({ accessToken: 'mock-jwt-token' });
-      vi.mocked(decodeToken).mockResolvedValue(mockJwtPayload);
-      vi.mocked(getSessionIdFromJWT).mockReturnValue(mockSessionId);
+      vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+      vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
       vi.mocked(validateCSRFToken).mockReturnValue(true);
     });
 
@@ -155,9 +160,9 @@ describe('csrf-validation', () => {
         });
       });
 
-      it('validateCSRF_POSTWithCSRFButNoCookie_returns401WithCSRF_NO_SESSION', async () => {
+      it('validateCSRF_POSTWithCSRFButNoSession_returns401WithCSRF_NO_SESSION', async () => {
         // Arrange: CSRF token present but no session cookie
-        vi.mocked(parse).mockReturnValue({});
+        vi.mocked(getSessionFromCookies).mockReturnValue(null);
 
         const headers = new Headers();
         headers.set('X-CSRF-Token', 'test-csrf-token');
@@ -176,13 +181,13 @@ describe('csrf-validation', () => {
         expect(body.code).toBe('CSRF_NO_SESSION');
       });
 
-      it('validateCSRF_POSTWithInvalidJWT_returns401WithCSRF_INVALID_SESSION', async () => {
-        // Arrange: JWT decoding fails
-        vi.mocked(decodeToken).mockResolvedValue(null);
+      it('validateCSRF_POSTWithInvalidSession_returns401WithCSRF_INVALID_SESSION', async () => {
+        // Arrange: Session validation fails
+        vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
         const headers = new Headers();
         headers.set('X-CSRF-Token', 'test-csrf-token');
-        headers.set('Cookie', 'accessToken=invalid-token');
+        headers.set('Cookie', 'session=ps_sess_invalid');
         const request = new Request('https://example.com/api/test', {
           method: 'POST',
           headers,
@@ -204,7 +209,7 @@ describe('csrf-validation', () => {
 
         const headers = new Headers();
         headers.set('X-CSRF-Token', 'invalid-csrf-token');
-        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        headers.set('Cookie', 'session=ps_sess_valid');
         const request = new Request('https://example.com/api/test', {
           method: 'POST',
           headers,
@@ -226,11 +231,11 @@ describe('csrf-validation', () => {
     });
 
     describe('successful validation', () => {
-      it('validateCSRF_POSTWithValidCSRFAndJWT_returnsNull', async () => {
+      it('validateCSRF_POSTWithValidCSRFAndSession_returnsNull', async () => {
         // Arrange
         const headers = new Headers();
         headers.set('X-CSRF-Token', 'valid-csrf-token');
-        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        headers.set('Cookie', 'session=ps_sess_valid');
         const request = new Request('https://example.com/api/test', {
           method: 'POST',
           headers,
@@ -243,11 +248,11 @@ describe('csrf-validation', () => {
         expect(result).toBeNull();
       });
 
-      it('validateCSRF_validRequest_extractsSessionIdFromJWTClaims', async () => {
+      it('validateCSRF_validRequest_usesSessionIdFromServerValidation', async () => {
         // Arrange
         const headers = new Headers();
         headers.set('X-CSRF-Token', 'valid-csrf-token');
-        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        headers.set('Cookie', 'session=ps_sess_valid');
         const request = new Request('https://example.com/api/test', {
           method: 'POST',
           headers,
@@ -256,9 +261,9 @@ describe('csrf-validation', () => {
         // Act
         await validateCSRF(request);
 
-        // Assert: Verify the session binding flow
-        expect(decodeToken).toHaveBeenCalledWith('mock-jwt-token');
-        expect(getSessionIdFromJWT).toHaveBeenCalledWith(mockJwtPayload);
+        // Assert: Verify the session-based binding flow
+        expect(getSessionFromCookies).toHaveBeenCalled();
+        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_valid');
         expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
       });
     });
@@ -270,7 +275,7 @@ describe('csrf-validation', () => {
         it(`validateCSRF_${method}WithValidCredentials_validatesSuccessfully`, async () => {
           const headers = new Headers();
           headers.set('X-CSRF-Token', 'valid-csrf-token');
-          headers.set('Cookie', 'accessToken=valid-jwt-token');
+          headers.set('Cookie', 'session=ps_sess_valid');
           const request = new Request('https://example.com/api/test', {
             method,
             headers,
@@ -289,7 +294,7 @@ describe('csrf-validation', () => {
         // Contract: HTTP headers are case-insensitive
         const headers = new Headers();
         headers.set('x-csrf-token', 'valid-csrf-token'); // lowercase
-        headers.set('Cookie', 'accessToken=valid-jwt-token');
+        headers.set('Cookie', 'session=ps_sess_valid');
         const request = new Request('https://example.com/api/test', {
           method: 'POST',
           headers,
@@ -301,13 +306,13 @@ describe('csrf-validation', () => {
         expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
       });
 
-      it('validateCSRF_multipleCookies_extractsAccessTokenCorrectly', async () => {
-        // Arrange: Multiple cookies in the header
-        vi.mocked(parse).mockReturnValue({ accessToken: 'custom-token' });
+      it('validateCSRF_sessionFromCookies_extractsCorrectly', async () => {
+        // Arrange: Custom session token from cookies
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_custom');
 
         const headers = new Headers();
         headers.set('X-CSRF-Token', 'valid-csrf-token');
-        headers.set('Cookie', 'accessToken=custom-token; other=value; session=abc');
+        headers.set('Cookie', 'session=ps_sess_custom; other=value');
         const request = new Request('https://example.com/api/test', {
           method: 'POST',
           headers,
@@ -316,10 +321,8 @@ describe('csrf-validation', () => {
         // Act
         await validateCSRF(request);
 
-        // Assert: Cookie parser receives full cookie string
-        expect(parse).toHaveBeenCalledWith('accessToken=custom-token; other=value; session=abc');
-        // Assert: Correct token is used for decoding
-        expect(decodeToken).toHaveBeenCalledWith('custom-token');
+        // Assert: Session service validates the correct token
+        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_custom');
       });
     });
   });

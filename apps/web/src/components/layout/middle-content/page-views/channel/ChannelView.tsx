@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
-import { io, Socket } from 'socket.io-client';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -14,7 +13,7 @@ import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { getCookieValue } from '@/lib/utils/get-cookie-value';
+import { useSocketStore } from '@/stores/useSocketStore';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -24,10 +23,12 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithUser[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const socketRef = useRef<Socket | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputRef>(null);
-  
+
+  // Use centralized socket store for proper authentication
+  const { socket, connectionStatus, connect } = useSocketStore();
+
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
@@ -41,16 +42,19 @@ export default function ChannelView({ page }: ChannelViewProps) {
     fetchMessages();
   }, [page.id]);
 
+  // Connect to socket store when user is available
   useEffect(() => {
     if (!user) return;
 
-    const socketUrl = process.env.NEXT_PUBLIC_REALTIME_URL;
-    const socket = io(socketUrl, {
-      auth: {
-        token: getCookieValue('accessToken'),
-      },
-    });
-    socketRef.current = socket;
+    // Ensure socket is connected
+    if (connectionStatus === 'disconnected') {
+      connect();
+    }
+  }, [user, connectionStatus, connect]);
+
+  // Join channel and handle messages when socket is connected
+  useEffect(() => {
+    if (!socket || connectionStatus !== 'connected') return;
 
     socket.emit('join_channel', page.id);
 
@@ -67,9 +71,9 @@ export default function ChannelView({ page }: ChannelViewProps) {
     socket.on('new_message', handleNewMessage);
 
     return () => {
-      socket.disconnect();
+      socket.off('new_message', handleNewMessage);
     };
-  }, [page.id, user]);
+  }, [socket, connectionStatus, page.id]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {

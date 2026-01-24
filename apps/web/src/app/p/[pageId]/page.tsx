@@ -1,7 +1,9 @@
 import { redirect, notFound } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { db, pages, eq } from '@pagespace/db';
-import { decodeToken, getUserAccessLevel } from '@pagespace/lib/server';
+import { getUserAccessLevel } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
+import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 interface PageProps {
   params: Promise<{ pageId: string }>;
@@ -14,21 +16,22 @@ interface PageProps {
 export default async function PageRedirect({ params }: PageProps) {
   const { pageId } = await params;
 
-  // Get JWT token from cookies
+  // Get session token from cookies
   const cookieStore = await cookies();
-  const token = cookieStore.get('token')?.value;
+  const cookieHeader = cookieStore.toString();
+  const sessionToken = getSessionFromCookies(cookieHeader);
 
-  if (!token) {
+  if (!sessionToken) {
     redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
   }
 
-  // Verify the token
-  const payload = await decodeToken(token);
-  if (!payload) {
+  // Validate the session token
+  const session = await sessionService.validateSession(sessionToken);
+  if (!session) {
     redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
   }
 
-  const userId = payload.userId;
+  const userId = session.userId;
 
   // Look up the page to get its driveId
   const page = await db.query.pages.findFirst({

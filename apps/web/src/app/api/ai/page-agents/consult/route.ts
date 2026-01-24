@@ -3,7 +3,7 @@ import { convertToModelMessages, generateText, stepCountIs } from 'ai';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import {
   createAIProvider,
   isProviderError,

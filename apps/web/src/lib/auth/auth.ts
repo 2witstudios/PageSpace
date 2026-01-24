@@ -1,4 +1,4 @@
-import { authenticateWebRequest, isAuthError } from './index';
+import { authenticateSessionRequest, isAuthError } from './index';
 
 export interface VerifiedUser {
   id: string;
@@ -7,7 +7,7 @@ export interface VerifiedUser {
 }
 
 export async function verifyAuth(request: Request): Promise<VerifiedUser | null> {
-  const result = await authenticateWebRequest(request);
+  const result = await authenticateSessionRequest(request);
   if (isAuthError(result)) {
     return null;
   }

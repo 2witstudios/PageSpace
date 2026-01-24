@@ -33,7 +33,7 @@ interface FileMetadata {
 // Processor service URL
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 export async function POST(request: NextRequest) {
   // Declare variables at function scope for proper cleanup

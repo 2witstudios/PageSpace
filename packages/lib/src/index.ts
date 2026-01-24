@@ -47,7 +47,6 @@ export * from './notifications';
 export * from './sheets';
 
 // Auth and security utilities (server-only)
-export * from './auth/auth-utils';
 export * from './auth/device-auth-utils';
 export { secureCompare } from './auth/secure-compare';
 export { sessionService, type SessionClaims, type CreateSessionOptions } from './auth/session-service';

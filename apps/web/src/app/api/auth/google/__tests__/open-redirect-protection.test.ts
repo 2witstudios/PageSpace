@@ -2,35 +2,15 @@
  * Security tests for open redirect protection in Google OAuth flow.
  *
  * These tests verify that returnUrl is validated to prevent attackers from
- * redirecting OAuth callbacks to external domains and capturing deviceTokens.
- *
- * Attack scenario prevented:
- * 1. Attacker calls POST /api/auth/google/signin with returnUrl: "https://evil.com"
- * 2. Gets signed OAuth state containing malicious returnUrl
- * 3. Tricks victim into completing OAuth with this state
- * 4. Without protection: callback redirects to https://evil.com?deviceToken=<victim-token>
- * 5. Attacker uses captured deviceToken to mint tokens via /api/auth/device/refresh
+ * redirecting OAuth callbacks to external domains.
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
 import { POST } from '../signin/route';
 import { GET } from '../callback/route';
 
 // Mock dependencies for signin
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn().mockResolvedValue('access-token'),
-  generateRefreshToken: vi.fn().mockResolvedValue('refresh-token'),
-  getRefreshTokenMaxAge: vi.fn().mockReturnValue(60),
-  decodeToken: vi.fn().mockResolvedValue({
-    exp: Math.floor(Date.now() / 1000) + 60,
-    iat: Math.floor(Date.now() / 1000),
-  }),
-  generateCSRFToken: vi.fn().mockReturnValue('csrf-token'),
-  getSessionIdFromJWT: vi.fn().mockReturnValue('session-id'),
-  validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'device-token',
-    deviceTokenRecordId: 'device-record-id',
-  }),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -74,7 +54,6 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
-  refreshTokens: { id: 'id' },
   db: {
     query: {
       users: {
@@ -104,17 +83,33 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn(),
 }));
 
+// Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn().mockReturnValue('hashed-token'),
-  getTokenPrefix: vi.fn().mockReturnValue('tok_'),
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'user-123',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
-}));
-
-vi.mock('cookie', () => ({
-  serialize: vi.fn().mockReturnValue('mock-cookie'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -161,6 +156,8 @@ const createSignedState = (data: Record<string, unknown>) => {
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
+import { checkDistributedRateLimit } from '@pagespace/lib/security';
+
 describe('Open Redirect Protection', () => {
   const originalEnv = { ...process.env };
 
@@ -171,6 +168,9 @@ describe('Open Redirect Protection', () => {
     process.env.GOOGLE_OAUTH_REDIRECT_URI = 'http://localhost/api/auth/google/callback';
     process.env.OAUTH_STATE_SECRET = 'test-state-secret';
     process.env.NEXTAUTH_URL = 'http://localhost';
+
+    // Reset rate limiting mock
+    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
   });
 
   afterEach(() => {
@@ -298,10 +298,9 @@ describe('Open Redirect Protection', () => {
       expect(location).toContain('/dashboard');
     });
 
-    it('given safe returnUrl in state, should redirect to that path with deviceToken', async () => {
+    it('given safe returnUrl in state, should redirect to that path with CSRF token', async () => {
       const state = createSignedState({
         platform: 'web',
-        deviceId: 'device-123',
         returnUrl: '/dashboard/my-drive',
       });
 
@@ -316,7 +315,7 @@ describe('Open Redirect Protection', () => {
       const location = response.headers.get('location');
       expect(location).toBeTruthy();
       expect(location).toContain('/dashboard/my-drive');
-      expect(location).toContain('deviceToken=');
+      expect(location).toContain('csrfToken=');
     });
 
     it('given protocol-relative URL in legacy state, should redirect to /dashboard', async () => {

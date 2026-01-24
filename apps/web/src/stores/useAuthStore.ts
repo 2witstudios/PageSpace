@@ -306,9 +306,57 @@ export const useAuthStore = create<AuthState>()(
             const headers: Record<string, string> = {};
 
             if (isDesktop && window.electron) {
-              const jwt = await window.electron.auth.getJWT();
-              if (jwt) {
-                headers['Authorization'] = `Bearer ${jwt}`;
+              const sessionToken = await window.electron.auth.getSessionToken();
+
+              // If no session token, try to get one via device refresh FIRST
+              // This handles app startup when session has expired but device token is valid
+              if (!sessionToken) {
+                const storedSession = await window.electron.auth.getSession();
+                if (storedSession?.deviceToken) {
+                  console.log('[AUTH_STORE] No session token, attempting device refresh');
+                  const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+                  const refreshResult = await refreshAuthSession();
+
+                  if (!refreshResult.success) {
+                    // Device token invalid or refresh failed
+                    if (refreshResult.shouldLogout) {
+                      console.log('[AUTH_STORE] Device token invalid - user must login');
+                      set({
+                        user: null,
+                        isAuthenticated: false,
+                        isLoading: false,
+                        authFailedPermanently: true,
+                      });
+                    } else {
+                      // Transient failure - don't logout, just report not authenticated
+                      console.log('[AUTH_STORE] Device refresh failed (transient) - will retry later');
+                      set({
+                        user: null,
+                        isAuthenticated: false,
+                        isLoading: false,
+                      });
+                    }
+                    return;
+                  }
+
+                  // Refresh succeeded - get the new session token
+                  console.log('[AUTH_STORE] Device refresh succeeded, continuing with auth check');
+                  const newSessionToken = await window.electron.auth.getSessionToken();
+                  if (newSessionToken) {
+                    headers['Authorization'] = `Bearer ${newSessionToken}`;
+                  }
+                } else {
+                  // No device token either - not logged in
+                  console.log('[AUTH_STORE] No session or device token - user not logged in');
+                  set({
+                    user: null,
+                    isAuthenticated: false,
+                    isLoading: false,
+                  });
+                  return;
+                }
+              } else {
+                headers['Authorization'] = `Bearer ${sessionToken}`;
               }
             }
 
@@ -361,12 +409,12 @@ export const useAuthStore = create<AuthState>()(
                 console.log('[AUTH_STORE] Desktop token validation failed, attempting token refresh');
 
                 // Use the unified refresh flow - it handles device token, rate limiting, etc.
-                const { refreshAuthSession, clearJWTCache } = await import('@/lib/auth/auth-fetch');
+                const { refreshAuthSession, clearSessionCache } = await import('@/lib/auth/auth-fetch');
                 const refreshResult = await refreshAuthSession();
 
                 if (refreshResult.success) {
                   console.log('[AUTH_STORE] Token refresh succeeded, retrying session load');
-                  clearJWTCache();
+                  clearSessionCache();
                   return get().loadSession(true);
                 }
 
@@ -638,10 +686,10 @@ export const authStoreHelpers = {
         }
 
         try {
-          const { clearJWTCache } = await import('@/lib/auth/auth-fetch');
-          clearJWTCache();
+          const { clearSessionCache } = await import('@/lib/auth/auth-fetch');
+          clearSessionCache();
         } catch (error) {
-          console.error('[AUTH_STORE] Failed to clear JWT cache on expiry', error);
+          console.error('[AUTH_STORE] Failed to clear session cache on expiry', error);
         }
       }
 

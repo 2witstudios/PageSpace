@@ -40,7 +40,7 @@ export class WSClient {
   private isIntentionallyClosed = false;
 
   constructor() {
-    // JWT is obtained from Electron secure storage, no window dependency needed
+    // Session token is obtained from Electron secure storage, no window dependency needed
   }
 
   /**
@@ -69,34 +69,34 @@ export class WSClient {
   }
 
   /**
-   * Get JWT token from Electron secure storage
+   * Get session token from Electron secure storage
    * Uses the same token source as Socket.IO for consistency
    */
-  private async getJWTToken(): Promise<string | null> {
+  private async getSessionToken(): Promise<string | null> {
     try {
       const storedSession = await loadAuthSession();
 
-      if (storedSession?.accessToken) {
-        return storedSession.accessToken;
+      if (storedSession?.sessionToken) {
+        return storedSession.sessionToken;
       }
 
-      logger.warn('JWT token not found in secure storage', {});
+      logger.warn('Session token not found in secure storage', {});
       return null;
     } catch (error) {
-      logger.error('Error retrieving JWT token from storage', { error });
+      logger.error('Error retrieving session token from storage', { error });
       return null;
     }
   }
 
   /**
    * Get WebSocket session token from server
-   * Uses JWT to authenticate, receives opaque token for WebSocket connection
+   * Uses session token to authenticate, receives opaque token for WebSocket connection
    */
   private async getWSToken(): Promise<string | null> {
     try {
-      const accessToken = await this.getJWTToken();
-      if (!accessToken) {
-        logger.error('No JWT token available to get WS token', {});
+      const sessionToken = await this.getSessionToken();
+      if (!sessionToken) {
+        logger.error('No session token available to get WS token', {});
         return null;
       }
 
@@ -104,7 +104,7 @@ export class WSClient {
       const response = await fetch(`${baseUrl}/api/auth/ws-token`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${sessionToken}`,
           'Content-Type': 'application/json',
         },
       });
@@ -112,7 +112,7 @@ export class WSClient {
       if (!response.ok) {
         // Differentiate error types for smarter retry behavior
         if (response.status === 401) {
-          logger.error('JWT token expired or invalid - need re-authentication', {
+          logger.error('Session token expired or invalid - need re-authentication', {
             status: response.status,
           });
         } else if (response.status === 429) {
@@ -144,7 +144,7 @@ export class WSClient {
       return;
     }
 
-    // Get opaque WebSocket token (authenticated via JWT)
+    // Get opaque WebSocket token (authenticated via session token)
     const token = await this.getWSToken();
     if (!token) {
       logger.error('Cannot connect without WS token', {});

@@ -5,7 +5,7 @@ import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/reorder

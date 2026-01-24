@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
-import { post, fetchWithAuth, refreshAuthSession, clearJWTCache } from '@/lib/auth/auth-fetch';
+import { post, fetchWithAuth, refreshAuthSession, clearSessionCache } from '@/lib/auth/auth-fetch';
 
 interface TokenRefreshOptions {
   refreshBeforeExpiryMs?: number; // How long before expiry to refresh (default: 2 minutes)
@@ -52,7 +52,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
         } catch (error) {
           console.error('Desktop logout: failed to clear secure session', error);
         }
-        clearJWTCache();
+        clearSessionCache();
       }
       router.push('/auth/signin');
     }
@@ -132,6 +132,15 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
   const scheduleTokenRefresh = () => {
     // Clear local timeout ref
     clearRefreshTimeout();
+
+    // Web sessions use sliding-window cookies (7-day expiry, extended on each request).
+    // Scheduled proactive refresh is only needed for desktop, which uses short-lived
+    // sessions (15 min) that require device token refresh to maintain the session.
+    const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+    if (!isDesktop) {
+      console.log('⏰ Skipping scheduled token refresh for web (uses sliding-window cookies)');
+      return;
+    }
 
     // Singleton pattern: Only allow one global schedule
     if (isRefreshScheduled) {

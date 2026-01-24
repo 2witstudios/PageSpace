@@ -1,11 +1,10 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions-cached';
-import { decodeToken } from '@pagespace/lib/server';
+import { sessionService } from '@pagespace/lib/auth';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, users, dmConversations, socketTokens } from '@pagespace/db';
-import { parse } from 'cookie';
+import { db, eq, gt, and, dmConversations, socketTokens } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
 
@@ -350,33 +349,12 @@ io.use(async (socket: AuthSocket, next) => {
     userAgent: socket.handshake.headers['user-agent']?.substring(0, 50)
   });
 
-  // Try to get token from auth field first
-  let token = socket.handshake.auth.token;
-  
-  // If no token in auth field, try to get it from cookies (for httpOnly cookies)
-  if (!token && socket.handshake.headers.cookie) {
-    try {
-      const cookies = parse(socket.handshake.headers.cookie);
-      
-      loggers.realtime.debug('Socket.IO: Parsed cookies', {
-        cookieKeys: Object.keys(cookies),
-        hasAccessToken: !!cookies.accessToken,
-        accessTokenLength: cookies.accessToken?.length || 0
-      });
-      
-      token = cookies.accessToken;
-      if (token) {
-        loggers.realtime.debug('Socket.IO: Using accessToken from httpOnly cookie');
-      }
-    } catch (error) {
-      loggers.realtime.error('Failed to parse cookies', error as Error);
-    }
-  }
+  // Get token from auth field (socket token from /api/auth/socket-token or session token from desktop app)
+  const token = socket.handshake.auth.token;
 
   if (!token) {
-    loggers.realtime.warn('Socket.IO: No token found in auth field or cookies', {
+    loggers.realtime.warn('Socket.IO: No token found in auth field', {
       authFieldEmpty: !socket.handshake.auth.token,
-      cookieHeaderMissing: !socket.handshake.headers.cookie
     });
     return next(new Error('Authentication error: No token provided.'));
   }
@@ -393,33 +371,27 @@ io.use(async (socket: AuthSocket, next) => {
     return next(new Error('Authentication error: Invalid or expired socket token.'));
   }
 
-  // Fall back to JWT validation for backward compatibility (desktop app, etc.)
-  const decoded = await decodeToken(token);
-  if (!decoded) {
-    loggers.realtime.warn('Socket.IO: Token validation failed');
-    return next(new Error('Authentication error: Invalid token.'));
-  }
+  // Check for session token (ps_sess_*) - used by mobile/desktop clients
+  if (token.startsWith('ps_sess_')) {
+    try {
+      const sessionClaims = await sessionService.validateSession(token);
+      if (!sessionClaims) {
+        loggers.realtime.warn('Socket.IO: Session token validation failed');
+        return next(new Error('Authentication error: Invalid or expired session.'));
+      }
 
-  try {
-    const user = await db.query.users.findFirst({
-        where: eq(users.id, decoded.userId),
-        columns: {
-            id: true,
-            tokenVersion: true,
-        },
-    });
-
-    if (!user || user.tokenVersion !== decoded.tokenVersion) {
-      return next(new Error('Authentication error: Invalid token version.'));
+      socket.data.user = { id: sessionClaims.userId };
+      loggers.realtime.info('Socket.IO: User authenticated via session token', { userId: sessionClaims.userId });
+      return next();
+    } catch (error) {
+      loggers.realtime.error('Error validating session token', error as Error);
+      return next(new Error('Authentication error: Server failed.'));
     }
-
-    socket.data.user = { id: user.id };
-    loggers.realtime.info('Socket.IO: User authenticated successfully', { userId: user.id });
-    next();
-  } catch (error) {
-    loggers.realtime.error('Error during authentication', error as Error);
-    return next(new Error('Authentication error: Server failed.'));
   }
+
+  // Unknown token format
+  loggers.realtime.warn('Socket.IO: Unknown token format', { tokenPrefix: token.substring(0, 8) });
+  return next(new Error('Authentication error: Invalid token format.'));
 });
 
 io.on('connection', (socket: AuthSocket) => {

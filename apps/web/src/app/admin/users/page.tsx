@@ -34,9 +34,7 @@ interface UserData {
     drives: number;
     pages: number;
     chatMessages: number;
-    driveChatMessages: number;
     globalMessages: number;
-    refreshTokens: number;
     aiSettings: number;
     totalMessages: number;
   };

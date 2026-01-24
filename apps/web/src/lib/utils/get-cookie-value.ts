@@ -10,7 +10,7 @@
  * @returns The cookie value, or null if not found or on server-side
  *
  * @example
- * const token = getCookieValue('accessToken');
+ * const token = getCookieValue('ps_session');
  */
 export function getCookieValue(name: string): string | null {
   if (typeof document === 'undefined') return null;
@@ -38,7 +38,7 @@ export function getCookieValue(name: string): string | null {
  *
  * @example
  * const cookieHeader = request.headers.get('cookie');
- * const token = getCookieValueFromHeader(cookieHeader, 'accessToken');
+ * const token = getCookieValueFromHeader(cookieHeader, 'ps_session');
  */
 export function getCookieValueFromHeader(cookieHeader: string | null, name: string): string | null {
   if (!cookieHeader) return null;

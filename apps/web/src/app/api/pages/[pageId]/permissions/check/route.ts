@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
 export async function GET(
   req: Request,

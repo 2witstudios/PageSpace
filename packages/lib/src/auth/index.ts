@@ -3,7 +3,6 @@
  * @description Authentication and security utilities
  */
 
-export * from './auth-utils';
 export * from './broadcast-auth';
 export * from './csrf-utils';
 export * from './device-auth-utils';

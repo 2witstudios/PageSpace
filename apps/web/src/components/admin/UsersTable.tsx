@@ -21,9 +21,7 @@ interface UserStats {
   drives: number;
   pages: number;
   chatMessages: number;
-  driveChatMessages: number;
   globalMessages: number;
-  refreshTokens: number;
   aiSettings: number;
   totalMessages: number;
 }
@@ -286,16 +284,8 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                               <TableCell>{user.stats.chatMessages}</TableCell>
                             </TableRow>
                             <TableRow>
-                              <TableCell className="font-medium">Drive Messages</TableCell>
-                              <TableCell>{user.stats.driveChatMessages}</TableCell>
-                            </TableRow>
-                            <TableRow>
                               <TableCell className="font-medium">Global Messages</TableCell>
                               <TableCell>{user.stats.globalMessages}</TableCell>
-                            </TableRow>
-                            <TableRow>
-                              <TableCell className="font-medium">Active Sessions</TableCell>
-                              <TableCell>{user.stats.refreshTokens}</TableCell>
                             </TableRow>
                           </TableBody>
                         </Table>

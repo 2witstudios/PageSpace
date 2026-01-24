@@ -83,13 +83,3 @@ export function validateCSRFToken(token: string, sessionId: string, maxAge: numb
   }
 }
 
-/**
- * Extracts session ID from JWT token (for CSRF validation)
- */
-export function getSessionIdFromJWT(payload: { userId: string; tokenVersion: number; iat?: number }): string {
-  // Create a deterministic session ID from user info and issued time
-  return createHmac('sha256', getCSRFSecret())
-    .update(`${payload.userId}-${payload.tokenVersion}-${payload.iat || 0}`)
-    .digest('hex')
-    .substring(0, 16); // Use first 16 chars for session ID
-}

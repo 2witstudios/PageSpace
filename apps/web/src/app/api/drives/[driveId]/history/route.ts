@@ -7,7 +7,7 @@ import { isActivityEligibleForRollback } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),

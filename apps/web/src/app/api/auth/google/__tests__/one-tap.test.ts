@@ -2,13 +2,13 @@
  * Contract tests for POST /api/auth/google/one-tap
  *
  * These tests verify the Request → Response contract and boundary obligations.
- * Database operations are mocked at the repository seam (not ORM chains).
+ * Uses session-based authentication for web platform.
  *
  * Coverage:
  * - Authentication (valid/invalid Google credentials)
  * - Rate limiting (IP)
  * - User creation/update logic
- * - Session management (tokens, cookies)
+ * - Session management (session-based auth with opaque tokens)
  * - Desktop vs Web platform handling
  */
 
@@ -31,7 +31,6 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
-  refreshTokens: { id: 'id' },
   db: {
     query: {
       users: {
@@ -45,13 +44,32 @@ vi.mock('@pagespace/db', () => ({
   or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
+// Mock session service from @pagespace/lib/auth
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'user-123',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn(),
-  generateRefreshToken: vi.fn(),
-  getRefreshTokenMaxAge: vi.fn(),
-  decodeToken: vi.fn(),
-  generateCSRFToken: vi.fn(),
-  getSessionIdFromJWT: vi.fn(),
   validateOrCreateDeviceToken: vi.fn(),
   loggers: {
     auth: {
@@ -81,15 +99,6 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn(() => 'hashed-token'),
-  getTokenPrefix: vi.fn(() => 'tok_'),
-}));
-
-vi.mock('cookie', () => ({
-  serialize: vi.fn(() => 'mock-cookie'),
-}));
-
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id'),
 }));
@@ -102,18 +111,13 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
 }));
 
-import { db, users, refreshTokens } from '@pagespace/db';
-import {
-  decodeToken,
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-  validateOrCreateDeviceToken,
-} from '@pagespace/lib/server';
+import { db, users } from '@pagespace/db';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { serialize } from 'cookie';
 
 // Test fixtures
 const mockNewUser = {
@@ -168,13 +172,6 @@ describe('POST /api/auth/google/one-tap', () => {
 
     // Default mocks for successful flow
     (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (generateAccessToken as Mock).mockResolvedValue('access-token');
-    (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
-    (decodeToken as Mock).mockResolvedValue({
-      exp: Math.floor(Date.now() / 1000) + 60,
-      iat: Math.floor(Date.now() / 1000),
-    });
-    (getRefreshTokenMaxAge as Mock).mockReturnValue(60);
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
       driveId: 'drive-123',
     });
@@ -188,12 +185,6 @@ describe('POST /api/auth/google/one-tap', () => {
           values: vi.fn(() => ({
             returning: vi.fn(() => Promise.resolve([mockNewUser])),
           })),
-        };
-      }
-
-      if (table === refreshTokens) {
-        return {
-          values: vi.fn(() => Promise.resolve(undefined)),
         };
       }
 
@@ -255,49 +246,35 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
-    it('should set httpOnly cookies for web platform', async () => {
-      const request = createOneTapRequest(validOneTapPayload);
-      const response = await POST(request);
-
-      expect(serialize).toHaveBeenCalledWith(
-        'accessToken',
-        expect.any(String),
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-        })
-      );
-
-      expect(serialize).toHaveBeenCalledWith(
-        'refreshToken',
-        expect.any(String),
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-        })
-      );
-
-      // Verify cookies are actually attached to response headers
-      const setCookie = response.headers.get('set-cookie') ?? '';
-      expect(setCookie).toContain('mock-cookie');
-    });
-
-    it('should generate access and refresh tokens', async () => {
+    it('should create session and set session cookie for web platform', async () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(generateAccessToken).toHaveBeenCalledWith(
-        mockNewUser.id,
-        mockNewUser.tokenVersion,
-        mockNewUser.role
+      expect(sessionService.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: mockNewUser.id,
+          type: 'user',
+          scopes: ['*'],
+        })
       );
-      expect(generateRefreshToken).toHaveBeenCalledWith(
-        mockNewUser.id,
-        mockNewUser.tokenVersion,
-        mockNewUser.role
-      );
+      expect(appendSessionCookie).toHaveBeenCalled();
+    });
+
+    it('should generate CSRF token bound to session', async () => {
+      const request = createOneTapRequest(validOneTapPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_mock_session_token');
+      expect(generateCSRFToken).toHaveBeenCalledWith('mock-session-id');
+      expect(body.csrfToken).toBe('mock-csrf-token');
+    });
+
+    it('should revoke existing sessions on login (session fixation prevention)', async () => {
+      const request = createOneTapRequest(validOneTapPayload);
+      await POST(request);
+
+      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(mockNewUser.id, 'new_login');
     });
 
     it('should track auth event with masked email', async () => {
@@ -365,14 +342,6 @@ describe('POST /api/auth/google/one-tap', () => {
     });
   });
 
-  // NOTE: Google token verification error paths (invalid token, missing payload) are tested
-  // via the hoisted vi.mock for google-auth-library. Changing mock behavior AFTER import
-  // (via vi.doMock) won't work because OAuth2Client is instantiated at module load time.
-  // The route handles these cases via:
-  // 1. A try-catch block around verifyIdToken that returns 401 on rejection
-  // 2. An explicit null/empty payload check that returns 401
-  // 3. Integration/E2E tests with real Google tokens for full coverage
-
   describe('desktop platform handling', () => {
     it('given desktop platform without deviceId, should return 400', async () => {
       (db.query.users.findFirst as Mock).mockResolvedValue(mockExistingUser);
@@ -387,6 +356,30 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('Device ID required');
+    });
+
+    it('given desktop platform with deviceId, should return device token', async () => {
+      (db.query.users.findFirst as Mock).mockResolvedValue(mockExistingUser);
+      (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
+      (validateOrCreateDeviceToken as Mock).mockResolvedValue({
+        deviceToken: 'desktop-device-token',
+        deviceTokenRecordId: 'device-record-id',
+      });
+
+      const request = createOneTapRequest({
+        credential: 'valid-token',
+        platform: 'desktop',
+        deviceId: 'desktop-device-123',
+        deviceName: 'Desktop App',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.tokens.deviceToken).toBe('desktop-device-token');
+      // Desktop should NOT have session cookie
+      expect(appendSessionCookie).not.toHaveBeenCalled();
     });
   });
 
@@ -411,79 +404,6 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-    });
-  });
-
-  describe('web device token creation', () => {
-    beforeEach(() => {
-      (validateOrCreateDeviceToken as Mock).mockResolvedValue({
-        deviceToken: 'web-device-token-123',
-        deviceTokenRecordId: 'device-record-123',
-      });
-    });
-
-    it('given web platform with deviceId, should call validateOrCreateDeviceToken', async () => {
-      const request = createOneTapRequest({
-        credential: 'valid-google-id-token',
-        platform: 'web',
-        deviceId: 'web-device-id-123',
-        deviceName: 'Test Browser',
-      });
-      await POST(request);
-
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockNewUser.id,
-          deviceId: 'web-device-id-123',
-          platform: 'web',
-          deviceName: 'Test Browser',
-        })
-      );
-    });
-
-    it('given web platform with deviceId, should include deviceToken in response', async () => {
-      const request = createOneTapRequest({
-        credential: 'valid-google-id-token',
-        platform: 'web',
-        deviceId: 'web-device-id-456',
-      });
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(body.deviceToken).toBe('web-device-token-123');
-    });
-
-    it('given device token creation fails, should still return success', async () => {
-      (validateOrCreateDeviceToken as Mock).mockRejectedValue(new Error('Device token error'));
-
-      const request = createOneTapRequest({
-        credential: 'valid-google-id-token',
-        platform: 'web',
-        deviceId: 'web-device-id-789',
-      });
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      // deviceToken should not be present when creation fails
-      expect(body.deviceToken).toBeUndefined();
-    });
-
-    it('given web platform without deviceId, should not call validateOrCreateDeviceToken', async () => {
-      (validateOrCreateDeviceToken as Mock).mockClear();
-
-      const request = createOneTapRequest({
-        credential: 'valid-google-id-token',
-        platform: 'web',
-        // No deviceId provided
-      });
-      await POST(request);
-
-      // validateOrCreateDeviceToken should not be called for web without deviceId
-      expect(validateOrCreateDeviceToken).not.toHaveBeenCalled();
     });
   });
 });

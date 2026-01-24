@@ -1,31 +1,46 @@
+/**
+ * Contract tests for POST /api/auth/logout
+ *
+ * These tests verify the Request → Response contract for user logout.
+ * Uses session-based authentication with opaque tokens.
+ *
+ * Coverage:
+ * - Session revocation
+ * - Cookie clearing
+ * - Logging
+ */
+
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { POST } from '../logout/route';
 
-// Mock hashToken to return predictable hash for testing
-// Note: The hash value is hardcoded in the factory since vi.mock is hoisted
+// Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
-  hashToken: vi.fn().mockReturnValue('hashed_mock-refresh-token_sha256'),
-}));
-
-// Export for test assertions
-const mockTokenHash = 'hashed_mock-refresh-token_sha256';
-
-// Mock dependencies
-vi.mock('@pagespace/db', () => ({
-  refreshTokens: { token: 'token', tokenHash: 'tokenHash' },
-  db: {
-    delete: vi.fn().mockReturnValue({
-      where: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{ id: 'deleted-token-id' }]),
-      }),
+  sessionService: {
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'test-session-id',
+      userId: 'test-user-id',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
     }),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
 }));
 
-vi.mock('cookie', () => ({
-  parse: vi.fn().mockReturnValue({ refreshToken: 'mock-refresh-token' }),
-  serialize: vi.fn().mockReturnValue('mock-cookie'),
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+}));
+
+// Mock client IP extraction
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('unknown'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -44,161 +59,91 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/device-auth-utils', () => ({
-  revokeDeviceTokenByValue: vi.fn().mockResolvedValue(true),
-  revokeDeviceTokensByDevice: vi.fn().mockResolvedValue(1),
-}));
-
-vi.mock('@/lib/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/auth')>();
-  return {
-    ...actual,
-    authenticateRequestWithOptions: vi.fn().mockResolvedValue({
-      userId: 'test-user-id',
-      role: 'user',
-      tokenVersion: 0,
-      tokenType: 'jwt',
-      source: 'cookie',
-    }),
-    isAuthError: vi.fn().mockReturnValue(false),
-  };
-});
-
-import { db, eq } from '@pagespace/db';
-import { parse, serialize } from 'cookie';
+import { sessionService } from '@pagespace/lib/auth';
+import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
+import { getClientIP } from '@/lib/auth';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import {
-  revokeDeviceTokenByValue,
-  revokeDeviceTokensByDevice,
-} from '@pagespace/lib/device-auth-utils';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 describe('/api/auth/logout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default: authenticated user
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
+    // Default: valid session
+    (getSessionFromCookies as unknown as Mock).mockReturnValue('ps_sess_mock_session_token');
+    (sessionService.validateSession as unknown as Mock).mockResolvedValue({
+      sessionId: 'test-session-id',
       userId: 'test-user-id',
-      role: 'user',
+      userRole: 'user',
       tokenVersion: 0,
-      tokenType: 'jwt',
-      source: 'cookie',
+      type: 'user',
+      scopes: ['*'],
     });
-    (isAuthError as unknown as Mock).mockReturnValue(false);
-    (parse as unknown as Mock).mockReturnValue({ refreshToken: 'mock-refresh-token' });
+    (getClientIP as Mock).mockReturnValue('unknown');
   });
 
   describe('successful logout', () => {
     it('returns 200 on successful logout', async () => {
-      // Arrange
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
+          Cookie: 'session=ps_sess_mock_session_token',
         },
       });
 
-      // Act
       const response = await POST(request);
       const body = await response.json();
 
-      // Assert
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
     });
 
-    it('clears access and refresh token cookies', async () => {
-      // Arrange
+    it('revokes session on logout', async () => {
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
+          Cookie: 'session=ps_sess_mock_session_token',
         },
       });
 
-      // Act
-      const response = await POST(request);
+      await POST(request);
 
-      // Assert - verify cookie contract: both tokens cleared with expires: epoch
-      expect(response.headers.get('set-cookie')).toBeTruthy();
-
-      // Verify accessToken cookie is cleared (expires in the past)
-      // Must mirror original cookie attributes (sameSite, httpOnly, path) to guarantee overwrite
-      expect(serialize).toHaveBeenCalledWith(
-        'accessToken',
-        '',
-        expect.objectContaining({
-          expires: new Date(0), // Epoch = cookie cleared
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-        })
-      );
-
-      // Verify refreshToken cookie is cleared
-      expect(serialize).toHaveBeenCalledWith(
-        'refreshToken',
-        '',
-        expect.objectContaining({
-          expires: new Date(0), // Epoch = cookie cleared
-          httpOnly: true,
-          sameSite: 'strict',
-          path: '/',
-        })
+      expect(sessionService.revokeSession).toHaveBeenCalledWith(
+        'ps_sess_mock_session_token',
+        'logout'
       );
     });
 
-    it('deletes refresh token from database using hash lookup', async () => {
-      // Arrange
+    it('clears cookies on logout', async () => {
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
+          Cookie: 'session=ps_sess_mock_session_token',
         },
       });
 
-      // Act
       await POST(request);
 
-      // Assert - verify delete was called with hash-based lookup
-      expect(db.delete).toHaveBeenCalled();
-      expect(eq).toHaveBeenCalled();
-      const eqCalls = (eq as Mock).mock.calls;
-
-      // Should look up by tokenHash (hash of the refresh token), NOT plaintext
-      const hashDeleteCall = eqCalls.find(
-        (call) => call[1] === mockTokenHash
-      );
-      expect(hashDeleteCall).toBeDefined();
-
-      // Should NOT use plaintext token for primary lookup (only as fallback if hash not found)
-      // Since our mock returns a deleted row, it should not fall back to plaintext
+      expect(appendClearCookies).toHaveBeenCalled();
     });
 
     it('logs logout event', async () => {
-      // Arrange
+      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
+          Cookie: 'session=ps_sess_mock_session_token',
           'x-forwarded-for': '192.168.1.1',
         },
       });
 
-      // Act
       await POST(request);
 
-      // Assert
       expect(logAuthEvent).toHaveBeenCalledWith(
         'logout',
         'test-user-id',
@@ -215,182 +160,91 @@ describe('/api/auth/logout', () => {
     });
   });
 
-  describe('device token revocation', () => {
-    it('revokes device token from X-Device-Token header', async () => {
-      // Arrange
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
-          'X-Device-Token': 'mock-device-token',
-        },
-      });
-
-      // Act
-      await POST(request);
-
-      // Assert
-      expect(revokeDeviceTokenByValue).toHaveBeenCalledWith(
-        'mock-device-token',
-        'logout'
-      );
-    });
-
-    it('revokes device tokens by deviceId and platform from body', async () => {
-      // Arrange
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
-        },
-        body: JSON.stringify({
-          deviceId: 'device-123',
-          platform: 'desktop',
-        }),
-      });
-
-      // Act
-      await POST(request);
-
-      // Assert
-      expect(revokeDeviceTokensByDevice).toHaveBeenCalledWith(
-        'test-user-id',
-        'device-123',
-        'desktop',
-        'logout'
-      );
-    });
-
-    it('handles device token revocation failure gracefully', async () => {
-      // Arrange
-      (revokeDeviceTokenByValue as unknown as Mock).mockRejectedValue(new Error('Revocation failed'));
-
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
-          'X-Device-Token': 'mock-device-token',
-        },
-      });
-
-      // Act
-      const response = await POST(request);
-
-      // Assert - logout should still succeed
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('authentication', () => {
-    it('returns error when not authenticated', async () => {
-      // Arrange
-      const mockError = { error: Response.json({ error: 'Unauthorized' }, { status: 401 }) };
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockError);
-      (isAuthError as unknown as Mock).mockReturnValue(true);
-
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      // Act
-      const response = await POST(request);
-
-      // Assert
-      expect(response.status).toBe(401);
-    });
-
-    it('requires CSRF token for cookie-based auth', async () => {
-      // Arrange
-      const request = new Request('http://localhost/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token',
-        },
-      });
-
-      // Act
-      await POST(request);
-
-      // Assert
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          requireCSRF: true,
-        })
-      );
-    });
-  });
-
   describe('edge cases', () => {
-    it('handles missing refresh token cookie gracefully', async () => {
-      // Arrange
-      (parse as unknown as Mock).mockReturnValue({});
+    it('handles missing session cookie gracefully', async () => {
+      (getSessionFromCookies as unknown as Mock).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRF-Token': 'mock-csrf-token',
         },
       });
 
-      // Act
       const response = await POST(request);
+      const body = await response.json();
 
-      // Assert - logout should still succeed
+      // Logout should still succeed even without session
       expect(response.status).toBe(200);
-      expect(db.delete).not.toHaveBeenCalled();
+      expect(body.message).toBe('Logged out successfully');
+      // Session revoke should not be called since there's no session
+      expect(sessionService.revokeSession).not.toHaveBeenCalled();
+      // But cookies should still be cleared
+      expect(appendClearCookies).toHaveBeenCalled();
     });
 
-    it('handles refresh token not found in database gracefully', async () => {
-      // Arrange - hash lookup returns empty, fallback also returns empty
-      (db.delete as unknown as Mock).mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([]),
-        }),
-      });
+    it('handles invalid session gracefully', async () => {
+      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
+          Cookie: 'session=invalid_session_token',
         },
       });
 
-      // Act
       const response = await POST(request);
+      const body = await response.json();
 
-      // Assert - logout should still succeed even if token not found
+      // Logout should still succeed
       expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+      // Session revoke should still be attempted
+      expect(sessionService.revokeSession).toHaveBeenCalled();
+      // Cookies should be cleared
+      expect(appendClearCookies).toHaveBeenCalled();
     });
 
-    it('handles malformed body gracefully', async () => {
-      // Arrange
+    it('handles session revocation failure gracefully', async () => {
+      (sessionService.revokeSession as unknown as Mock).mockRejectedValue(
+        new Error('Database error')
+      );
+
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'accessToken=mock-access-token; refreshToken=mock-refresh-token',
-          'X-CSRF-Token': 'mock-csrf-token',
+          Cookie: 'session=ps_sess_mock_session_token',
         },
-        body: 'not-json',
       });
 
-      // Act
       const response = await POST(request);
+      const body = await response.json();
 
-      // Assert - logout should still succeed
+      // Logout should still succeed even if revocation fails
       expect(response.status).toBe(200);
+      expect(body.message).toBe('Logged out successfully');
+      // Cookies should still be cleared
+      expect(appendClearCookies).toHaveBeenCalled();
+    });
+
+    it('does not log logout event when no user ID', async () => {
+      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+
+      const request = new Request('http://localhost/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
+
+      await POST(request);
+
+      // Should not log when no user ID
+      expect(logAuthEvent).not.toHaveBeenCalled();
+      expect(trackAuthEvent).not.toHaveBeenCalled();
     });
   });
 });

@@ -4,7 +4,7 @@ import { buildTree } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
-const AUTH_OPTIONS = { allow: ['jwt', 'mcp'] as const };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
 interface DriveParams {
   driveId: string;

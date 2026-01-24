@@ -6,7 +6,7 @@
 import { writeUserActivity, writeApiMetrics } from '../logging/logger-database';
 import { loggers } from '../logging/logger-config';
 import { AIMonitoring } from './ai-monitoring';
-import { decodeToken } from '../auth/auth-utils';
+import { sessionService } from '../auth/session-service';
 
 /**
  * Track user activity - fire and forget, never blocks
@@ -232,17 +232,17 @@ export async function getUserIdFromRequest(request: Request): Promise<string | u
   try {
     const cookieHeader = request.headers.get('cookie');
     if (!cookieHeader) return undefined;
-    
-    // Simple cookie parsing - you may want to use your existing auth utilities
+
+    // Simple cookie parsing for session token
     const cookies = Object.fromEntries(
       cookieHeader.split('; ').map(c => c.split('='))
     );
-    
-    const token = cookies.accessToken;
+
+    const token = cookies.session;
     if (!token) return undefined;
 
-    const payload = await decodeToken(token);
-    return payload?.userId;
+    const sessionClaims = await sessionService.validateSession(token);
+    return sessionClaims?.userId;
   } catch {
     return undefined;
   }

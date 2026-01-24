@@ -4,7 +4,7 @@ import { db, aiUsageLogs, pages, eq, desc } from '@pagespace/db';
 import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const };
+const AUTH_OPTIONS = { allow: ['session'] as const };
 
 /**
  * GET - Get AI usage statistics for a specific page (across all conversations)

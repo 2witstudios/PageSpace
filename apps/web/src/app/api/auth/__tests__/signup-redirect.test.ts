@@ -1,10 +1,13 @@
+/**
+ * Tests for signup redirect functionality to Getting Started drive
+ */
+
 import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
 import { POST } from '../signup/route';
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', email: 'email', tokenVersion: 'tokenVersion', role: 'role' },
   userAiSettings: { userId: 'userId' },
-  refreshTokens: { id: 'id' },
   db: {
     query: {
       users: {
@@ -22,13 +25,33 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
+// Mock session service from @pagespace/lib/auth
+vi.mock('@pagespace/lib/auth', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: 'mock-session-id',
+      userId: 'user-123',
+      userRole: 'user',
+      tokenVersion: 0,
+      type: 'user',
+      scopes: ['*'],
+    }),
+    revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
+
+// Mock cookie utilities
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+  appendClearCookies: vi.fn(),
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
+
 vi.mock('@pagespace/lib/server', () => ({
-  generateAccessToken: vi.fn(),
-  generateRefreshToken: vi.fn(),
-  getRefreshTokenMaxAge: vi.fn(),
   createNotification: vi.fn(),
-  decodeToken: vi.fn(),
-  validateOrCreateDeviceToken: vi.fn(),
   loggers: {
     auth: {
       error: vi.fn(),
@@ -80,6 +103,12 @@ vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
 }));
 
+// Mock client IP extraction
+vi.mock('@/lib/auth', () => ({
+  validateLoginCSRFToken: vi.fn(() => true),
+  getClientIP: vi.fn().mockReturnValue('unknown'),
+}));
+
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'mock-id'),
 }));
@@ -88,15 +117,15 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
   provisionGettingStartedDriveIfNeeded: vi.fn(),
 }));
 
-import { db, users, userAiSettings, refreshTokens } from '@pagespace/db';
+vi.mock('react', () => ({
+  default: {
+    createElement: vi.fn().mockReturnValue({}),
+  },
+}));
+
+import { db, users, userAiSettings } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
-import {
-  createNotification,
-  decodeToken,
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-} from '@pagespace/lib/server';
+import { createNotification } from '@pagespace/lib/server';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
@@ -107,12 +136,6 @@ describe('/api/auth/signup redirect', () => {
 
     (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 3 });
     (bcrypt.hash as Mock).mockResolvedValue('hashed-password');
-    (generateAccessToken as Mock).mockResolvedValue('access-token');
-    (generateRefreshToken as Mock).mockResolvedValue('refresh-token');
-    (decodeToken as Mock).mockResolvedValue({
-      exp: Math.floor(Date.now() / 1000) + 60,
-    });
-    (getRefreshTokenMaxAge as Mock).mockReturnValue(60);
 
     (createVerificationToken as Mock).mockResolvedValue('verification-token');
     (createNotification as Mock).mockResolvedValue(undefined);
@@ -143,7 +166,7 @@ describe('/api/auth/signup redirect', () => {
         };
       }
 
-      if (table === userAiSettings || table === refreshTokens) {
+      if (table === userAiSettings) {
         return {
           values: vi.fn(() => Promise.resolve(undefined)),
         };
@@ -153,11 +176,9 @@ describe('/api/auth/signup redirect', () => {
         values: vi.fn(() => Promise.resolve(undefined)),
       };
     });
-
   });
 
   test('given successful signup, should redirect to Getting Started drive', async () => {
-    // Arrange
     const request = new Request('http://localhost/api/auth/signup', {
       method: 'POST',
       headers: {
@@ -174,10 +195,8 @@ describe('/api/auth/signup redirect', () => {
       }),
     });
 
-    // Act
     const response = await POST(request);
 
-    // Assert
     expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-123');
     expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(303);
@@ -186,7 +205,6 @@ describe('/api/auth/signup redirect', () => {
   });
 
   test('given signup when provisioning returns null, should redirect to default dashboard', async () => {
-    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
 
     const request = new Request('http://localhost/api/auth/signup', {
@@ -205,17 +223,14 @@ describe('/api/auth/signup redirect', () => {
       }),
     });
 
-    // Act
     const response = await POST(request);
 
-    // Assert
     expect(response.status).toBe(303);
     expect(response.headers.get('Location')).toContain('/dashboard');
     expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');
   });
 
   test('given signup when provisioning throws, should still redirect to dashboard', async () => {
-    // Arrange
     (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
       new Error('Provisioning failed')
     );
@@ -236,10 +251,8 @@ describe('/api/auth/signup redirect', () => {
       }),
     });
 
-    // Act
     const response = await POST(request);
 
-    // Assert
     expect(response.status).toBe(303);
     expect(response.headers.get('Location')).toContain('/dashboard');
     expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');

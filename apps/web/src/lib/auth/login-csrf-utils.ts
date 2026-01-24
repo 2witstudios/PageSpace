@@ -6,12 +6,12 @@ export const LOGIN_CSRF_MAX_AGE = 300; // 5 minutes
 const LOGIN_CSRF_TOKEN_LENGTH = 32;
 
 /**
- * Gets the CSRF secret, with fallback to JWT_SECRET for convenience
+ * Gets the CSRF secret for login CSRF token generation/validation
  */
 function getLoginCSRFSecret(): string {
-  const secret = process.env.CSRF_SECRET || process.env.JWT_SECRET;
+  const secret = process.env.CSRF_SECRET;
   if (!secret || secret.length < 32) {
-    throw new Error('CSRF_SECRET or JWT_SECRET must be at least 32 characters');
+    throw new Error('CSRF_SECRET must be configured and at least 32 characters');
   }
   return secret;
 }

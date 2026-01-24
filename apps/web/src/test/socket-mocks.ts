@@ -71,7 +71,7 @@ export const createMockSocket = (): MockSocket => {
  */
 export const createMockElectron = () => ({
   auth: {
-    getJWT: vi.fn().mockResolvedValue(null) as ReturnType<typeof vi.fn<() => Promise<string | null>>>,
+    getSessionToken: vi.fn().mockResolvedValue(null) as ReturnType<typeof vi.fn<() => Promise<string | null>>>,
     getSession: vi.fn().mockResolvedValue(null) as ReturnType<typeof vi.fn<() => Promise<{ deviceToken?: string } | null>>>,
     getDeviceInfo: vi.fn().mockResolvedValue({ deviceId: 'test-device-id' }) as ReturnType<typeof vi.fn<() => Promise<{ deviceId: string }>>>,
     storeSession: vi.fn().mockResolvedValue(undefined) as ReturnType<typeof vi.fn<() => Promise<void>>>,

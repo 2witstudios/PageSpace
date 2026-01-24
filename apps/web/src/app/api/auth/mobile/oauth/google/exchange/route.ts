@@ -48,12 +48,7 @@
 
 import { z } from 'zod/v4';
 import {
-  generateAccessToken,
-  generateRefreshToken,
-  getRefreshTokenMaxAge,
-  decodeToken,
   generateCSRFToken,
-  getSessionIdFromJWT,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
 import {
@@ -61,9 +56,10 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { sessionService } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { verifyOAuthIdToken, createOrLinkOAuthUser, saveRefreshToken, OAuthProvider } from '@pagespace/lib/server';
+import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
 
@@ -225,25 +221,28 @@ export async function POST(req: Request) {
       provider: user.provider,
     });
 
-    // Generate JWT tokens
-    const accessToken = await generateAccessToken(
-      user.id,
-      user.tokenVersion,
-      user.role
-    );
-    const refreshToken = await generateRefreshToken(
-      user.id,
-      user.tokenVersion,
-      user.role
-    );
+    // Create session token (opaque, stored in DB)
+    const sessionToken = await sessionService.createSession({
+      userId: user.id,
+      type: 'user',
+      scopes: ['*'],
+      expiresInMs: 90 * 24 * 60 * 60 * 1000, // 90 days for mobile
+      createdByService: 'mobile-oauth-google',
+      createdByIp: clientIP,
+    });
 
-    // Save refresh token to database
-    const refreshTokenPayload = await decodeToken(refreshToken);
-    const refreshTokenExpiresAt = refreshTokenPayload?.exp
-      ? new Date(refreshTokenPayload.exp * 1000)
-      : new Date(Date.now() + getRefreshTokenMaxAge() * 1000);
+    // Get session claims for CSRF generation
+    const sessionClaims = await sessionService.validateSession(sessionToken);
+    if (!sessionClaims) {
+      loggers.auth.error('Failed to validate newly created session');
+      return Response.json(
+        { error: 'Failed to generate session' },
+        { status: 500 }
+      );
+    }
 
-    const { deviceToken: deviceTokenValue, deviceTokenRecordId } = await validateOrCreateDeviceToken({
+    // Create or validate device token for the mobile device
+    const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
       providedDeviceToken,
       userId: user.id,
       deviceId,
@@ -252,16 +251,6 @@ export async function POST(req: Request) {
       deviceName: deviceName || undefined,
       userAgent: req.headers.get('user-agent') || undefined,
       ipAddress: clientIP,
-    });
-
-    await saveRefreshToken(refreshToken, user.id, {
-      device: req.headers.get('user-agent'),
-      userAgent: req.headers.get('user-agent'),
-      ip: clientIP,
-      platform,
-      deviceTokenId: deviceTokenRecordId,
-      expiresAt: refreshTokenExpiresAt,
-      lastUsedAt: new Date(),
     });
 
     // Reset rate limits on successful authentication (graceful - failures don't affect successful auth)
@@ -293,24 +282,11 @@ export async function POST(req: Request) {
       appVersion,
     });
 
-    // Generate CSRF token for mobile client
-    const decoded = await decodeToken(accessToken);
-    if (!decoded?.iat) {
-      loggers.auth.error('Failed to decode access token for CSRF generation');
-      return Response.json(
-        { error: 'Failed to generate session' },
-        { status: 500 }
-      );
-    }
-
-    const sessionId = getSessionIdFromJWT({
-      userId: user.id,
-      tokenVersion: user.tokenVersion,
-      iat: decoded.iat,
-    });
-    const csrfToken = generateCSRFToken(sessionId);
+    // Generate CSRF token using session ID
+    const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     // Return tokens in JSON response for mobile client
+    // Note: No refreshToken - mobile uses device tokens for refresh
     const response: MobileOAuthResponse = {
       user: {
         id: user.id,
@@ -320,9 +296,8 @@ export async function POST(req: Request) {
         provider: user.provider,
         role: user.role,
       },
-      token: accessToken,
-      refreshToken: refreshToken,
-      csrfToken: csrfToken,
+      sessionToken,
+      csrfToken,
       deviceToken: deviceTokenValue,
     };
 

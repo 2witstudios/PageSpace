@@ -100,7 +100,7 @@ async function getUserAccessibleDrives(userId: string): Promise<Array<{id: strin
   }
 }
 
-const AUTH_OPTIONS = { allow: ['jwt'] as const, requireCSRF: false } as const;
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
 export async function GET(request: Request) {
   loggers.api.debug('[API] /api/mentions/search - Request received', {});

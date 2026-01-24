@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
-import { parse } from 'cookie';
-import { decodeToken } from '@pagespace/lib/server';
-import { db, mcpTokens, users, eq, and, isNull } from '@pagespace/db';
-import { hashToken } from '@pagespace/lib/auth';
+import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
+import { hashToken, sessionService, type SessionClaims } from '@pagespace/lib/auth';
+import { getSessionFromCookies } from './cookie-config';
 
 const BEARER_PREFIX = 'Bearer ';
 const MCP_TOKEN_PREFIX = 'mcp_';
+const SESSION_TOKEN_PREFIX = 'ps_sess_';
 
-export type TokenType = 'mcp' | 'jwt';
+export type TokenType = 'mcp' | 'session';
 
 interface BaseAuthDetails {
   userId: string;
@@ -23,12 +23,12 @@ export interface MCPAuthResult extends MCPAuthDetails {
   tokenType: 'mcp';
 }
 
-export interface WebAuthResult extends BaseAuthDetails {
-  tokenType: 'jwt';
-  source: 'header' | 'cookie';
+export interface SessionAuthResult extends BaseAuthDetails {
+  tokenType: 'session';
+  sessionId: string;
 }
 
-export type AuthResult = MCPAuthResult | WebAuthResult;
+export type AuthResult = MCPAuthResult | SessionAuthResult;
 
 export interface AuthError {
   error: NextResponse;
@@ -56,23 +56,12 @@ function getBearerToken(request: Request): string | null {
   return authHeader.slice(BEARER_PREFIX.length);
 }
 
-function getCookieToken(request: Request): string | null {
-  const cookieHeader = request.headers.get('cookie');
-  if (!cookieHeader) {
-    return null;
-  }
-
-  const cookies = parse(cookieHeader);
-  return cookies.accessToken ?? null;
-}
-
 export async function validateMCPToken(token: string): Promise<MCPAuthDetails | null> {
   try {
     if (!token || !token.startsWith(MCP_TOKEN_PREFIX)) {
       return null;
     }
 
-    // P1-T3: Hash-based token lookup only (no plaintext fallback)
     const tokenHash = hashToken(token);
 
     const tokenRecord = await db.query.mcpTokens.findFirst({
@@ -114,37 +103,14 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
   }
 }
 
-export async function validateJWTToken(token: string): Promise<BaseAuthDetails | null> {
+export async function validateSessionToken(token: string): Promise<SessionClaims | null> {
   try {
     if (!token) {
       return null;
     }
-
-    const payload = await decodeToken(token);
-    if (!payload) {
-      return null;
-    }
-
-    const userRecord = await db.query.users.findFirst({
-      where: eq(users.id, payload.userId),
-      columns: {
-        id: true,
-        role: true,
-        tokenVersion: true,
-      },
-    });
-
-    if (!userRecord || userRecord.tokenVersion !== payload.tokenVersion) {
-      return null;
-    }
-
-    return {
-      userId: userRecord.id,
-      role: userRecord.role as 'user' | 'admin',
-      tokenVersion: userRecord.tokenVersion,
-    };
+    return await sessionService.validateSession(token);
   } catch (error) {
-    console.error('validateJWTToken error', error);
+    console.error('validateSessionToken error', error);
     return null;
   }
 }
@@ -171,39 +137,65 @@ export async function authenticateMCPRequest(request: Request): Promise<Authenti
   } satisfies MCPAuthResult;
 }
 
-export async function authenticateWebRequest(request: Request): Promise<AuthenticationResult> {
+export async function authenticateSessionRequest(request: Request): Promise<AuthenticationResult> {
+  // Check for bearer token first (desktop/mobile clients)
   const bearerToken = getBearerToken(request);
 
-  if (bearerToken?.startsWith(MCP_TOKEN_PREFIX)) {
-    return {
-      error: unauthorized('MCP tokens are not permitted for this endpoint'),
-    };
+  if (bearerToken) {
+    // Reject MCP tokens - wrong endpoint
+    if (bearerToken.startsWith(MCP_TOKEN_PREFIX)) {
+      return {
+        error: unauthorized('MCP tokens are not permitted for this endpoint'),
+      };
+    }
+
+    // Session token sent as Bearer (mobile/desktop)
+    if (bearerToken.startsWith(SESSION_TOKEN_PREFIX)) {
+      const sessionResult = await validateSessionToken(bearerToken);
+      if (sessionResult) {
+        return {
+          userId: sessionResult.userId,
+          role: sessionResult.userRole,
+          tokenVersion: sessionResult.tokenVersion,
+          sessionId: sessionResult.sessionId,
+          tokenType: 'session',
+        } satisfies SessionAuthResult;
+      }
+      return { error: unauthorized('Invalid or expired session') };
+    }
+
+    // Unknown Bearer token format
+    return { error: unauthorized('Invalid token format') };
   }
 
-  const jwtToken = bearerToken ?? getCookieToken(request);
+  // No bearer token - try session cookie (web browsers)
+  const cookieHeader = request.headers.get('cookie');
+  const sessionToken = getSessionFromCookies(cookieHeader);
 
-  if (!jwtToken) {
+  if (!sessionToken) {
     return {
       error: unauthorized('Authentication required'),
     };
   }
 
-  const jwtDetails = await validateJWTToken(jwtToken);
-  if (!jwtDetails) {
+  const sessionClaims = await validateSessionToken(sessionToken);
+  if (!sessionClaims) {
     return {
       error: unauthorized('Invalid or expired session'),
     };
   }
 
   return {
-    ...jwtDetails,
-    tokenType: 'jwt',
-    source: bearerToken ? 'header' : 'cookie',
-  } satisfies WebAuthResult;
+    userId: sessionClaims.userId,
+    role: sessionClaims.userRole,
+    tokenVersion: sessionClaims.tokenVersion,
+    sessionId: sessionClaims.sessionId,
+    tokenType: 'session',
+  } satisfies SessionAuthResult;
 }
 
 export async function authenticateHybridRequest(request: Request): Promise<AuthenticationResult> {
-  return authenticateRequestWithOptions(request, { allow: ['mcp', 'jwt'] });
+  return authenticateRequestWithOptions(request, { allow: ['mcp', 'session'] });
 }
 
 export function isAuthError(result: AuthenticationResult): result is AuthError {
@@ -214,8 +206,8 @@ export function isMCPAuthResult(result: AuthenticationResult): result is MCPAuth
   return !('error' in result) && result.tokenType === 'mcp';
 }
 
-export function isWebAuthResult(result: AuthenticationResult): result is WebAuthResult {
-  return !('error' in result) && result.tokenType === 'jwt';
+export function isSessionAuthResult(result: AuthenticationResult): result is SessionAuthResult {
+  return !('error' in result) && result.tokenType === 'session';
 }
 
 export async function authenticateRequestWithOptions(
@@ -223,8 +215,6 @@ export async function authenticateRequestWithOptions(
   options: AuthenticateOptions,
 ): Promise<AuthenticationResult> {
   const { allow, requireCSRF = false } = options;
-  // Origin validation is automatically enabled when requireCSRF is true (defense-in-depth)
-  // It can be explicitly disabled per-route by setting requireOriginValidation: false
   const requireOriginValidation = options.requireOriginValidation ?? requireCSRF;
 
   if (!allow.length) {
@@ -235,7 +225,7 @@ export async function authenticateRequestWithOptions(
 
   const allowedTypes = new Set(allow);
   const allowMCP = allowedTypes.has('mcp');
-  const allowJWT = allowedTypes.has('jwt');
+  const allowSession = allowedTypes.has('session');
 
   const bearerToken = getBearerToken(request);
 
@@ -250,8 +240,8 @@ export async function authenticateRequestWithOptions(
 
   let authResult: AuthenticationResult;
 
-  if (allowJWT) {
-    authResult = await authenticateWebRequest(request);
+  if (allowSession) {
+    authResult = await authenticateSessionRequest(request);
   } else if (allowMCP) {
     authResult = await authenticateMCPRequest(request);
   } else {
@@ -260,17 +250,14 @@ export async function authenticateRequestWithOptions(
     };
   }
 
-  // If authentication failed, return the error
   if (isAuthError(authResult)) {
     return authResult;
   }
 
-  // Apply origin and CSRF validation only for cookie-based JWT authentication
-  // Bearer tokens (header-based auth) are exempt because they're not sent automatically by browsers
-  const isCookieBasedAuth = authResult.tokenType === 'jwt' && authResult.source === 'cookie';
+  // Apply origin and CSRF validation for session-based authentication
+  const isSessionAuth = authResult.tokenType === 'session';
 
-  // Origin validation (defense-in-depth) - happens before CSRF validation
-  if (requireOriginValidation && isCookieBasedAuth) {
+  if (requireOriginValidation && isSessionAuth) {
     const { validateOrigin } = await import('./origin-validation');
     const originError = validateOrigin(request);
     if (originError) {
@@ -278,19 +265,25 @@ export async function authenticateRequestWithOptions(
     }
   }
 
-  // CSRF validation
-  if (requireCSRF && isCookieBasedAuth) {
-    const { validateCSRF } = await import('./csrf-validation');
-    const csrfError = await validateCSRF(request);
-    if (csrfError) {
-      return { error: csrfError };
+  if (requireCSRF && isSessionAuth) {
+    // Skip CSRF for Bearer token auth - not vulnerable to CSRF attacks.
+    // CSRF attacks exploit that browsers automatically send cookies with requests.
+    // Bearer tokens must be explicitly set in JavaScript headers, so they can't
+    // be exploited by malicious sites tricking users into making requests.
+    const hasBearerAuth = !!getBearerToken(request);
+    if (!hasBearerAuth) {
+      const { validateCSRF } = await import('./csrf-validation');
+      const csrfError = await validateCSRF(request);
+      if (csrfError) {
+        return { error: csrfError };
+      }
     }
   }
 
   return authResult;
 }
 
-// Re-export from other auth modules for barrel export pattern
+// Re-export from other auth modules
 export { verifyAuth, verifyAdminAuth, type VerifiedUser } from './auth';
 export { validateCSRF } from './csrf-validation';
 export {
@@ -305,12 +298,9 @@ export { getClientIP } from './auth-helpers';
 export { validateLoginCSRFToken } from './login-csrf-utils';
 export {
   COOKIE_CONFIG,
-  createAccessTokenCookie,
-  createRefreshTokenCookie,
-  createClearAccessTokenCookie,
-  createClearRefreshTokenCookie,
-  createClearLegacyRefreshTokenCookie,
-  createClearCookies,
-  appendAuthCookies,
+  createSessionCookie,
+  createClearSessionCookie,
+  appendSessionCookie,
   appendClearCookies,
+  getSessionFromCookies,
 } from './cookie-config';

@@ -26,12 +26,12 @@ class AuthFetch {
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
-  private jwtCache: { token: string | null; timestamp: number } | null = null;
-  // Desktop JWT cache TTL reduced from 30s to 5s to minimize staleness risk
-  // This is critical for desktop where JWT rotation after refresh was causing
+  private sessionCache: { token: string | null; timestamp: number } | null = null;
+  // Desktop session cache TTL reduced from 30s to 5s to minimize staleness risk
+  // This is critical for desktop where token rotation after refresh was causing
   // stale token usage when the cache held old tokens
-  private readonly JWT_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
-  private readonly JWT_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
+  private readonly SESSION_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
+  private readonly SESSION_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
   private authClearedCleanup: (() => void) | null = null;
   private initialized = false;
 
@@ -64,8 +64,8 @@ class AuthFetch {
       }
 
       const cleanup = window.electron.on?.('auth:cleared', () => {
-        this.logger.info('Desktop auth cleared event received, clearing JWT cache');
-        this.clearJWTCache();
+        this.logger.info('Desktop auth cleared event received, clearing session cache');
+        this.clearSessionCache();
         this.csrfToken = null;
       });
 
@@ -115,8 +115,8 @@ class AuthFetch {
         forceRefresh,
       });
 
-      // Clear JWT cache on wake to ensure fresh token retrieval
-      this.clearJWTCache();
+      // Clear session cache on wake to ensure fresh token retrieval
+      this.clearSessionCache();
 
       // Dispatch event for other components (like useTokenRefresh) to resume
       if (typeof window !== 'undefined') {
@@ -132,8 +132,8 @@ class AuthFetch {
       this.logger.debug('[Power] Screen unlocked', { shouldRefresh });
 
       if (shouldRefresh) {
-        // Clear JWT cache to ensure fresh auth state
-        this.clearJWTCache();
+        // Clear session cache to ensure fresh auth state
+        this.clearSessionCache();
 
         // Dispatch event for soft refresh
         if (typeof window !== 'undefined') {
@@ -177,19 +177,19 @@ class AuthFetch {
     if (isDesktop) {
       // Desktop: Use Bearer token authentication (CSRF-exempt)
       try {
-        // Get JWT from Electron's secure storage (cached for performance)
-        const jwt = await this.getJWTFromElectron();
-        if (jwt) {
+        // Get session token from Electron's secure storage (cached for performance)
+        const sessionToken = await this.getSessionFromElectron();
+        if (sessionToken) {
           headers = {
             ...headers,
-            'Authorization': `Bearer ${jwt}`,
+            'Authorization': `Bearer ${sessionToken}`,
           };
           this.logger.debug('Desktop: Using Bearer token authentication', { url });
         } else {
-          this.logger.warn('Desktop: No JWT available for Bearer token', { url });
+          this.logger.warn('Desktop: No session token available for Bearer token', { url });
         }
       } catch (error) {
-        this.logger.error('Desktop: Failed to get JWT for Bearer token', {
+        this.logger.error('Desktop: Failed to get session token for Bearer token', {
           url,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -251,18 +251,18 @@ class AuthFetch {
         if (isDesktop) {
           // Desktop: Get fresh Bearer token (cache was already cleared in refreshToken())
           try {
-            const freshJwt = await this.getJWTFromElectron();
-            if (freshJwt) {
+            const freshSession = await this.getSessionFromElectron();
+            if (freshSession) {
               headers = {
                 ...headers,
-                'Authorization': `Bearer ${freshJwt}`,
+                'Authorization': `Bearer ${freshSession}`,
               };
               this.logger.debug('Desktop: Updated Bearer token after refresh', { url });
             } else {
-              this.logger.warn('Desktop: No fresh JWT available after refresh', { url });
+              this.logger.warn('Desktop: No fresh session token available after refresh', { url });
             }
           } catch (error) {
-            this.logger.error('Desktop: Failed to get fresh JWT after refresh', {
+            this.logger.error('Desktop: Failed to get fresh session token after refresh', {
               url,
               error: error instanceof Error ? error.message : String(error),
             });
@@ -344,15 +344,15 @@ class AuthFetch {
       return result.success;
     }
 
-    // CRITICAL FIX: Clear JWT cache IMMEDIATELY before refresh starts
+    // CRITICAL FIX: Clear session cache IMMEDIATELY before refresh starts
     // This prevents the race condition where:
-    // 1. doRefresh() completes and stores new JWT
-    // 2. Original request retries with getJWTFromElectron()
-    // 3. Cache still contains OLD JWT (60s TTL)
-    // 4. Retry uses stale JWT → 401 → infinite loop
-    // By clearing cache here, retry will read fresh JWT from storage
-    this.clearJWTCache();
-    this.logger.debug('JWT cache cleared BEFORE token refresh to prevent stale retry');
+    // 1. doRefresh() completes and stores new session
+    // 2. Original request retries with getSessionFromElectron()
+    // 3. Cache still contains OLD session token (5s TTL)
+    // 4. Retry uses stale token → 401 → infinite loop
+    // By clearing cache here, retry will read fresh session from storage
+    this.clearSessionCache();
+    this.logger.debug('Session cache cleared BEFORE token refresh to prevent stale retry');
 
     // Set flags and promise IMMEDIATELY (atomic operation)
     this.isRefreshing = true;
@@ -369,10 +369,10 @@ class AuthFetch {
         // Track successful refresh for cooldown (prevents delayed callbacks from re-refreshing)
         this.lastSuccessfulRefresh = Date.now();
 
-        // Defensive: Clear JWT cache again for queued requests
+        // Defensive: Clear session cache again for queued requests
         // (Already cleared before doRefresh, but clear again in case queue accumulated during refresh)
-        this.clearJWTCache();
-        this.logger.debug('JWT cache cleared after successful token refresh (for queued requests)');
+        this.clearSessionCache();
+        this.logger.debug('Session cache cleared after successful token refresh (for queued requests)');
 
         // Retry all queued requests using this.fetch to preserve auth logic
         this.logger.info('Token refresh successful, retrying queued requests', {
@@ -428,112 +428,97 @@ class AuthFetch {
       return this.refreshDesktopSession();
     }
 
+    // Web: Session-based auth with sliding window expiry
+    // Sessions are extended automatically by middleware on each authenticated request.
+    // When a session expires (user inactive for 7 days), we attempt device token recovery.
+    // If no device token exists, user must re-authenticate.
     try {
-      // Try refresh token first
-      let response = await fetch('/api/auth/refresh', {
+      const deviceToken = typeof localStorage !== 'undefined'
+        ? localStorage.getItem('deviceToken')
+        : null;
+
+      if (!deviceToken) {
+        // If we reached this point (doRefresh called), it means:
+        // 1. A request returned 401 (session invalid/expired)
+        // 2. We're trying to recover the session
+        //
+        // Without a device token, we CANNOT recover the session.
+        // This happens when:
+        // - Legacy user (logged in before device tokens for web)
+        // - User cleared localStorage (lost device token)
+        // - Device token generation failed on login
+        //
+        // CRITICAL: Return shouldLogout: true to prevent broken auth state.
+        // Old logic (shouldLogout: false) caused Bug P2 where users appeared
+        // logged in but all API calls failed. Clean logout provides better UX.
+        this.logger.warn('Web: No device token - session expired, must re-authenticate');
+        return { success: false, shouldLogout: true };
+      }
+
+      // Try device token recovery
+      this.logger.debug('Web: Attempting session recovery via device token');
+      const { getOrCreateDeviceId } = await import('@/lib/analytics/device-fingerprint');
+      const deviceId = getOrCreateDeviceId();
+
+      const response = await fetch('/api/auth/device/refresh', {
         method: 'POST',
-        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceToken,
+          deviceId,
+          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+        }),
       });
 
       if (response.ok) {
-        // Refresh token succeeded
+        // Device token refresh succeeded - new session created
+        let refreshData: { deviceToken?: string; csrfToken?: string } | null = null;
+        try {
+          refreshData = await response.json();
+        } catch {
+          refreshData = null;
+        }
+
+        if (refreshData?.deviceToken && typeof localStorage !== 'undefined') {
+          try {
+            localStorage.setItem('deviceToken', refreshData.deviceToken);
+          } catch (storageError) {
+            this.logger.warn('Failed to persist refreshed device token', {
+              error: storageError instanceof Error ? storageError.message : String(storageError),
+            });
+          }
+        }
+
+        if (refreshData?.csrfToken) {
+          this.csrfToken = refreshData.csrfToken;
+        } else {
+          this.clearCSRFToken();
+        }
+
+        this.logger.info('Web: Session recovered via device token');
         if (typeof window !== 'undefined' && window.dispatchEvent) {
           window.dispatchEvent(new CustomEvent('auth:refreshed'));
         }
         return { success: true, shouldLogout: false };
       }
 
-      // If refresh token fails with 401, try device token fallback
       if (response.status === 401) {
-        const deviceToken = typeof localStorage !== 'undefined'
-          ? localStorage.getItem('deviceToken')
-          : null;
-
-        if (deviceToken) {
-          this.logger.debug('Refresh token failed, attempting device token fallback');
-
-          // Dynamically import device fingerprint utilities
-          const { getOrCreateDeviceId } = await import('@/lib/analytics/device-fingerprint');
-          const deviceId = getOrCreateDeviceId();
-
-          // Try device token refresh as fallback
-          response = await fetch('/api/auth/device/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              deviceToken,
-              deviceId,
-              userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
-            }),
-          });
-
-          if (response.ok) {
-            let refreshData: { deviceToken?: string; csrfToken?: string } | null = null;
-            try {
-              refreshData = await response.json();
-            } catch {
-              refreshData = null;
-            }
-
-            if (refreshData?.deviceToken && typeof localStorage !== 'undefined') {
-              try {
-                localStorage.setItem('deviceToken', refreshData.deviceToken);
-              } catch (storageError) {
-                this.logger.warn('Failed to persist refreshed device token', {
-                  error: storageError instanceof Error ? storageError.message : String(storageError),
-                });
-              }
-            }
-
-            if (refreshData?.csrfToken) {
-              this.csrfToken = refreshData.csrfToken;
-            } else {
-              this.clearCSRFToken();
-            }
-
-            // Device token refresh succeeded
-            this.logger.info('Session recovered via device token fallback');
-            if (typeof window !== 'undefined' && window.dispatchEvent) {
-              window.dispatchEvent(new CustomEvent('auth:refreshed'));
-            }
-            return { success: true, shouldLogout: false };
-          }
-
-          // Device token also failed with 401 - must logout
-          if (response.status === 401) {
-            this.logger.warn('Both refresh token and device token failed - logging out');
-            if (typeof window !== 'undefined' && window.dispatchEvent) {
-              window.dispatchEvent(new CustomEvent('auth:expired'));
-            }
-            return { success: false, shouldLogout: true };
-          }
-        } else {
-          // No device token available, must logout
-          this.logger.warn('Refresh token invalid and no device token available - logging out');
-          if (typeof window !== 'undefined' && window.dispatchEvent) {
-            window.dispatchEvent(new CustomEvent('auth:expired'));
-          }
-          return { success: false, shouldLogout: true };
-        }
+        // Device token invalid - must re-authenticate
+        this.logger.warn('Web: Device token invalid - logging out');
+        return { success: false, shouldLogout: true };
       }
 
       if (response.status === 429 || response.status >= 500) {
-        // Rate limiting or server errors - don't logout, just fail silently
-        this.logger.warn('Token refresh request returned retryable status', {
-          status: response.status,
-        });
+        // Rate limited or server error - don't logout, let retry handle it
+        this.logger.warn('Web: Device refresh returned retryable status', { status: response.status });
         return { success: false, shouldLogout: false };
       }
 
-      // For other client errors, don't logout
-      this.logger.error('Token refresh request failed with non-retryable status', {
-        status: response.status,
-      });
+      // Other client errors
+      this.logger.error('Web: Device refresh failed', { status: response.status });
       return { success: false, shouldLogout: false };
     } catch (error) {
-      this.logger.error('Token refresh request threw an error', {
-        error: error instanceof Error ? error : String(error),
-      });
+      this.logger.error('Web: Session refresh error', { error });
       return { success: false, shouldLogout: false };
     }
   }
@@ -554,7 +539,6 @@ class AuthFetch {
       const session = await window.electron.auth.getSession();
       const deviceInfo = await window.electron.auth.getDeviceInfo();
 
-      const refreshToken = session?.refreshToken;
       const deviceToken = session?.deviceToken;
 
       // Desktop REQUIRES a device token for long-lived sessions
@@ -564,9 +548,9 @@ class AuthFetch {
         return { success: false, shouldLogout: true };
       }
 
-      let response: Response | null = null;
+      let response: Response;
 
-      // PRIORITY 1: Try device token refresh (90-day validity)
+      // Device token refresh (90-day validity)
       // This is the PRIMARY auth mechanism for desktop - designed for long-lived sessions
       try {
         response = await fetch('/api/auth/device/refresh', {
@@ -591,43 +575,10 @@ class AuthFetch {
         return { success: false, shouldLogout: false };
       }
 
-      // PRIORITY 2: Fall back to refresh token ONLY if available
-      // This is optional - desktop can work with device token alone
-      if (response?.status === 401 && refreshToken) {
-        this.logger.debug('Desktop: Device token rejected, trying refresh token fallback');
-
-        try {
-          response = await fetch('/api/auth/mobile/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              refreshToken,
-              deviceToken,
-              deviceId: deviceInfo.deviceId,
-              platform: 'desktop',
-            }),
-          });
-        } catch (networkError) {
-          this.logger.warn('Desktop: Refresh token fallback network error', {
-            error: networkError instanceof Error ? networkError.message : String(networkError),
-          });
-          return { success: false, shouldLogout: false };
-        }
-      }
-
-      // Handle final response
-      if (!response) {
-        this.logger.error('Desktop: No response from token refresh');
-        return { success: false, shouldLogout: false };
-      }
-
       if (response.status === 401) {
-        // 401 = token is genuinely invalid (expired or revoked)
+        // 401 = device token is genuinely invalid (expired or revoked)
         // User must re-authenticate
-        this.logger.warn('Desktop: Authentication token rejected - user must re-authenticate', {
-          hadRefreshToken: !!refreshToken,
-        });
+        this.logger.warn('Desktop: Device token rejected - user must re-authenticate');
         return { success: false, shouldLogout: true };
       }
 
@@ -653,13 +604,12 @@ class AuthFetch {
       const data = await response.json();
 
       await window.electron.auth.storeSession({
-        accessToken: data.token,
-        refreshToken: data.refreshToken,
+        sessionToken: data.sessionToken,
         csrfToken: data.csrfToken,
         deviceToken: data.deviceToken,
       });
 
-      this.clearJWTCache();
+      this.clearSessionCache();
       this.logger.info('Desktop: Session refreshed successfully via secure storage');
       if (typeof window !== 'undefined' && window.dispatchEvent) {
         window.dispatchEvent(new CustomEvent('auth:refreshed'));
@@ -697,8 +647,8 @@ class AuthFetch {
       return { success: true, shouldLogout: false };
     }
 
-    // Clear JWT cache before refresh to prevent stale token usage
-    this.clearJWTCache();
+    // Clear session cache before refresh to prevent stale token usage
+    this.clearSessionCache();
 
     // Set the shared promise
     this.isRefreshing = true;
@@ -715,8 +665,8 @@ class AuthFetch {
         // Track successful refresh for cooldown
         this.lastSuccessfulRefresh = Date.now();
 
-        // Clear JWT cache for queued requests to get fresh token
-        this.clearJWTCache();
+        // Clear session cache for queued requests to get fresh token
+        this.clearSessionCache();
 
         // Retry all queued requests
         this.logger.info('refreshAuthSession: Retrying queued requests', {
@@ -816,44 +766,44 @@ class AuthFetch {
   }
 
   /**
-   * Gets JWT token from Electron with caching to avoid excessive IPC calls.
+   * Gets session token from Electron with caching to avoid excessive IPC calls.
    * Cache is valid for 5 seconds to balance performance and freshness.
-   * @returns JWT string or null if not authenticated
+   * @returns Session token string or null if not authenticated
    */
-  private async getJWTFromElectron(): Promise<string | null> {
+  private async getSessionFromElectron(): Promise<string | null> {
     const now = Date.now();
 
     // Return cached token if still valid
-    if (this.jwtCache && (now - this.jwtCache.timestamp) < this.JWT_CACHE_TTL) {
-      return this.jwtCache.token;
+    if (this.sessionCache && (now - this.sessionCache.timestamp) < this.SESSION_CACHE_TTL) {
+      return this.sessionCache.token;
     }
 
     if (!window.electron) return null;
 
     // Fetch fresh token from Electron
-    let token = await window.electron.auth.getJWT();
+    let token = await window.electron.auth.getSessionToken();
 
     // DEFENSIVE FIX: If null, retry once after brief delay
     // This handles async timing issues where storage hasn't completed yet
     if (!token) {
-      await new Promise(resolve => setTimeout(resolve, this.JWT_RETRY_DELAY_MS));
-      token = await window.electron.auth.getJWT();
+      await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
+      token = await window.electron.auth.getSessionToken();
 
       if (token) {
-        this.logger.info(`JWT retrieval succeeded on retry after ${this.JWT_RETRY_DELAY_MS}ms delay`);
+        this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
       }
     }
 
-    this.jwtCache = { token, timestamp: now };
+    this.sessionCache = { token, timestamp: now };
     return token;
   }
 
   /**
-   * Clears the cached JWT token.
+   * Clears the cached session token.
    * Should be called when user logs out or when token needs to be refreshed.
    */
-  clearJWTCache(): void {
-    this.jwtCache = null;
+  clearSessionCache(): void {
+    this.sessionCache = null;
   }
 
   /**
@@ -872,7 +822,7 @@ class AuthFetch {
     const csrfExemptPaths = [
       '/api/auth/login',
       '/api/auth/signup',
-      '/api/auth/refresh',
+      // REMOVED: '/api/auth/refresh' - route doesn't exist (dropped in device token migration)
       '/api/auth/google',
       '/api/auth/resend-verification',
       '/api/stripe/webhook',
@@ -996,8 +946,8 @@ export const patch = <T = unknown>(url: string, body?: unknown, options?: FetchO
 export const clearCSRFToken = () =>
   getAuthFetch().clearCSRFToken();
 
-export const clearJWTCache = () =>
-  getAuthFetch().clearJWTCache();
+export const clearSessionCache = () =>
+  getAuthFetch().clearSessionCache();
 
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();
