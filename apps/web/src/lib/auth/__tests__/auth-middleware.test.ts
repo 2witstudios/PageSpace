@@ -62,6 +62,7 @@ describe('Auth Middleware', () => {
     userId: 'test-user-id',
     userRole: 'user' as const,
     tokenVersion: 0,
+    adminRoleVersion: 0,
     type: 'user' as const,
     scopes: ['*'],
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
@@ -794,6 +795,7 @@ describe('Auth Middleware', () => {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
+          adminRoleVersion: 0,
           tokenType: 'session' as const,
           sessionId: 'test-session-id',
         };
@@ -807,6 +809,7 @@ describe('Auth Middleware', () => {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
+          adminRoleVersion: 0,
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
         };
@@ -818,6 +821,7 @@ describe('Auth Middleware', () => {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
+          adminRoleVersion: 0,
           tokenType: 'session' as const,
           sessionId: 'test-session-id',
         };
@@ -831,6 +835,7 @@ describe('Auth Middleware', () => {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
+          adminRoleVersion: 0,
           tokenType: 'session' as const,
           sessionId: 'test-session-id',
         };
@@ -842,6 +847,7 @@ describe('Auth Middleware', () => {
           userId: 'test',
           role: 'user' as const,
           tokenVersion: 0,
+          adminRoleVersion: 0,
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
         };

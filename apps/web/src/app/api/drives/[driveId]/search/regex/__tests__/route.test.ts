@@ -42,8 +42,8 @@ const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
   tokenVersion,
   tokenType: 'session',
   sessionId: 'test-session-id',
-  
   role: 'user',
+  adminRoleVersion: 0,
 });
 
 const mockAuthError = (status = 401): AuthError => ({
