@@ -2,6 +2,37 @@ import { NextResponse } from 'next/server';
 
 export const NONCE_HEADER = 'x-nonce';
 
+// Security headers for error responses (API routes)
+const ERROR_RESPONSE_HEADERS: Record<string, string> = {
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+};
+
+export const createSecureErrorResponse = (
+  body: string | object,
+  status: number,
+  isProduction: boolean = false
+): NextResponse => {
+  const isJson = typeof body === 'object';
+  const headers: Record<string, string> = {
+    ...ERROR_RESPONSE_HEADERS,
+    'Content-Type': isJson ? 'application/json' : 'text/plain',
+  };
+
+  if (isProduction) {
+    headers['Strict-Transport-Security'] =
+      'max-age=63072000; includeSubDomains; preload';
+  }
+
+  return new NextResponse(isJson ? JSON.stringify(body) : body, {
+    status,
+    headers,
+  });
+};
+
 export const generateNonce = (): string =>
   Buffer.from(crypto.randomUUID()).toString('base64');
 
@@ -30,6 +61,7 @@ export const buildCSPPolicy = (nonce: string): string => {
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
+    'object-src': ["'none'"], // Prevent Flash/plugin-based attacks
   };
 
   return buildCSPString(directives);

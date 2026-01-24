@@ -10,16 +10,36 @@ import {
   buildAPICSPPolicy,
   applySecurityHeaders,
   createSecureResponse,
+  createSecureErrorResponse,
   NONCE_HEADER,
 } from '../security-headers';
 
-vi.mock('next/server', () => ({
-  NextResponse: {
-    next: vi.fn(() => ({
-      headers: new Map(),
-    })),
-  },
-}));
+vi.mock('next/server', () => {
+  // Create a class-like constructor for NextResponse
+  const MockNextResponse = vi.fn((body?: string | null, init?: ResponseInit) => {
+    const headers = new Map<string, string>();
+    if (init?.headers) {
+      Object.entries(init.headers).forEach(([key, value]) => {
+        headers.set(key, value as string);
+      });
+    }
+    return {
+      status: init?.status ?? 200,
+      headers: {
+        set: (key: string, value: string) => headers.set(key, value),
+        get: (key: string) => headers.get(key) ?? null,
+        has: (key: string) => headers.has(key),
+      },
+    };
+  });
+
+  // Add static methods
+  MockNextResponse.next = vi.fn(() => ({
+    headers: new Map(),
+  }));
+
+  return { NextResponse: MockNextResponse };
+});
 
 describe('Security Headers', () => {
   let lastRequestHeaders: Headers | undefined;
@@ -127,6 +147,12 @@ describe('Security Headers', () => {
       const csp = buildCSPPolicy('test-nonce');
 
       expect(csp).toContain('frame-src https://accounts.google.com');
+    });
+
+    it('blocks plugins via object-src none', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).toContain("object-src 'none'");
     });
   });
 
@@ -285,6 +311,53 @@ describe('Security Headers', () => {
 
       const requestHeaders = getLastRequestHeaders();
       expect(requestHeaders?.get('Content-Security-Policy')).toBeNull();
+    });
+  });
+
+  describe('createSecureErrorResponse', () => {
+    it('returns response with correct status code', () => {
+      const response = createSecureErrorResponse('Error', 401);
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns JSON response for object body', () => {
+      const response = createSecureErrorResponse({ error: 'Not allowed' }, 403);
+
+      expect(response.headers.get('Content-Type')).toBe('application/json');
+    });
+
+    it('returns text response for string body', () => {
+      const response = createSecureErrorResponse('Error message', 401);
+
+      expect(response.headers.get('Content-Type')).toBe('text/plain');
+    });
+
+    it('includes security headers', () => {
+      const response = createSecureErrorResponse('Error', 500);
+
+      expect(response.headers.get('Content-Security-Policy')).toContain(
+        "default-src 'none'"
+      );
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('Referrer-Policy')).toBe(
+        'strict-origin-when-cross-origin'
+      );
+    });
+
+    it('includes HSTS in production', () => {
+      const response = createSecureErrorResponse('Error', 500, true);
+
+      expect(response.headers.get('Strict-Transport-Security')).toBe(
+        'max-age=63072000; includeSubDomains; preload'
+      );
+    });
+
+    it('excludes HSTS in development', () => {
+      const response = createSecureErrorResponse('Error', 500, false);
+
+      expect(response.headers.get('Strict-Transport-Security')).toBeNull();
     });
   });
 });

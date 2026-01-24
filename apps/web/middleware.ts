@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { monitoringMiddleware } from '@/middleware/monitoring';
-import { createSecureResponse } from '@/middleware/security-headers';
+import {
+  createSecureResponse,
+  createSecureErrorResponse,
+} from '@/middleware/security-headers';
 import { logSecurityEvent } from '@pagespace/lib/server';
 import {
   validateOriginForMiddleware,
@@ -16,6 +19,8 @@ const MCP_BEARER_PREFIX = 'Bearer mcp_';
 export async function middleware(req: NextRequest) {
   return monitoringMiddleware(req, async () => {
     const { pathname } = req.nextUrl;
+    const isProduction = process.env.NODE_ENV === 'production';
+    const isAPIRoute = pathname.startsWith('/api');
     const ip =
       req.headers.get('x-forwarded-for')?.split(',')[0] ||
       req.headers.get('x-real-ip') ||
@@ -34,15 +39,10 @@ export async function middleware(req: NextRequest) {
             action: 'blocked',
             ip,
           });
-          return new NextResponse(
-            JSON.stringify({
-              error: 'Origin not allowed',
-              code: 'ORIGIN_INVALID',
-            }),
-            {
-              status: 403,
-              headers: { 'Content-Type': 'application/json' },
-            }
+          return createSecureErrorResponse(
+            { error: 'Origin not allowed', code: 'ORIGIN_INVALID' },
+            403,
+            isProduction
           );
         }
         logSecurityEvent('origin_validation_warning', {
@@ -54,9 +54,6 @@ export async function middleware(req: NextRequest) {
         });
       }
     }
-
-    const isProduction = process.env.NODE_ENV === 'production';
-    const isAPIRoute = pathname.startsWith('/api');
 
     // MCP token format check (Edge-safe - no database access)
     // Full validation happens in route handlers via validateMCPToken()
@@ -93,7 +90,7 @@ export async function middleware(req: NextRequest) {
       });
 
       if (isAPIRoute) {
-        return new NextResponse('Authentication required', { status: 401 });
+        return createSecureErrorResponse('Authentication required', 401, isProduction);
       }
 
       return NextResponse.redirect(new URL('/auth/signin', req.url));

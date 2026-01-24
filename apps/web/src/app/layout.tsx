@@ -66,8 +66,14 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-        data-nonce={nonce}
       >
+        {/* Set webpack nonce for dynamically loaded chunks (next/dynamic) */}
+        <script
+          nonce={nonce}
+          dangerouslySetInnerHTML={{
+            __html: `__webpack_nonce__ = ${JSON.stringify(nonce)};`,
+          }}
+        />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
