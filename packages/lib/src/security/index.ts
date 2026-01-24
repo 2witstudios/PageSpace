@@ -6,7 +6,7 @@
  * - JTI (JWT ID) tracking and revocation
  * - Session management
  * - SSRF prevention (URL validation)
- * - Path traversal prevention (coming soon)
+ * - Path traversal prevention
  */
 
 // Security Redis operations
@@ -45,3 +45,12 @@ export {
   isBlockedIP,
   type URLValidationResult,
 } from './url-validator';
+
+// Path traversal prevention
+export {
+  resolvePathWithin,
+  resolvePathWithinSync,
+  validateFilename,
+  isPathWithinBase,
+  type PathValidationResult,
+} from './path-validator';
