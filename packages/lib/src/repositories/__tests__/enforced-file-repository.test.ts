@@ -73,6 +73,7 @@ const createMockClaims = (overrides: Partial<SessionClaims> = {}): SessionClaims
   userId: 'user-123',
   userRole: 'user',
   tokenVersion: 1,
+  adminRoleVersion: 0,
   type: 'service',
   scopes: ['files:read'],
   expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour

@@ -7,9 +7,16 @@ vi.mock('../index', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
+// Mock the admin-role module
+vi.mock('../admin-role', () => ({
+  validateAdminAccess: vi.fn(),
+}));
+
 import { authenticateSessionRequest } from '../index';
+import { validateAdminAccess } from '../admin-role';
 
 const mockAuthenticateWebRequest = vi.mocked(authenticateSessionRequest);
+const mockValidateAdminAccess = vi.mocked(validateAdminAccess);
 
 describe('auth', () => {
   beforeEach(() => {
@@ -22,6 +29,7 @@ describe('auth', () => {
         userId: 'user-123',
         role: 'user' as const,
         tokenVersion: 1,
+        adminRoleVersion: 0,
         tokenType: 'session' as const,
         sessionId: 'test-session-id',
       };
@@ -34,6 +42,7 @@ describe('auth', () => {
         id: 'user-123',
         role: 'user',
         tokenVersion: 1,
+        adminRoleVersion: 0,
       });
       expect(mockAuthenticateWebRequest).toHaveBeenCalledWith(request);
     });
@@ -43,6 +52,7 @@ describe('auth', () => {
         userId: 'admin-123',
         role: 'admin' as const,
         tokenVersion: 2,
+        adminRoleVersion: 1,
         tokenType: 'session' as const,
         sessionId: 'test-session-id',
       };
@@ -55,6 +65,7 @@ describe('auth', () => {
         id: 'admin-123',
         role: 'admin',
         tokenVersion: 2,
+        adminRoleVersion: 1,
       });
     });
 
@@ -75,6 +86,7 @@ describe('auth', () => {
         userId: 'user-456',
         role: 'user' as const,
         tokenVersion: 42,
+        adminRoleVersion: 0,
         tokenType: 'session' as const,
         sessionId: 'test-session-id',
       };
@@ -88,15 +100,17 @@ describe('auth', () => {
   });
 
   describe('verifyAdminAuth', () => {
-    it('returns user when admin authentication succeeds', async () => {
+    it('returns user when admin authentication succeeds and adminRoleVersion is valid', async () => {
       const mockAuthResult = {
         userId: 'admin-123',
         role: 'admin' as const,
         tokenVersion: 1,
+        adminRoleVersion: 0,
         tokenType: 'session' as const,
         sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
+      mockValidateAdminAccess.mockResolvedValue(true);
 
       const request = new Request('http://localhost/api/admin/test');
       const result = await verifyAdminAuth(request);
@@ -105,7 +119,9 @@ describe('auth', () => {
         id: 'admin-123',
         role: 'admin',
         tokenVersion: 1,
+        adminRoleVersion: 0,
       });
+      expect(mockValidateAdminAccess).toHaveBeenCalledWith('admin-123', 0);
     });
 
     it('returns null when user is not admin', async () => {
@@ -113,6 +129,7 @@ describe('auth', () => {
         userId: 'user-123',
         role: 'user' as const,
         tokenVersion: 1,
+        adminRoleVersion: 0,
         tokenType: 'session' as const,
         sessionId: 'test-session-id',
       };
@@ -122,6 +139,8 @@ describe('auth', () => {
       const result = await verifyAdminAuth(request);
 
       expect(result).toBeNull();
+      // validateAdminAccess should not be called for non-admin users
+      expect(mockValidateAdminAccess).not.toHaveBeenCalled();
     });
 
     it('returns null when authentication fails', async () => {
@@ -134,6 +153,26 @@ describe('auth', () => {
       const result = await verifyAdminAuth(request);
 
       expect(result).toBeNull();
+    });
+
+    it('returns null when adminRoleVersion validation fails (role changed)', async () => {
+      const mockAuthResult = {
+        userId: 'admin-123',
+        role: 'admin' as const,
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        tokenType: 'session' as const,
+        sessionId: 'test-session-id',
+      };
+      mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
+      // Simulate role change - validateAdminAccess returns false
+      mockValidateAdminAccess.mockResolvedValue(false);
+
+      const request = new Request('http://localhost/api/admin/test');
+      const result = await verifyAdminAuth(request);
+
+      expect(result).toBeNull();
+      expect(mockValidateAdminAccess).toHaveBeenCalledWith('admin-123', 0);
     });
   });
 });
