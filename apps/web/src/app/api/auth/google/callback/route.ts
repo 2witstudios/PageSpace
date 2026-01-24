@@ -254,7 +254,9 @@ export async function GET(req: Request) {
       userAgent: req.headers.get('user-agent')
     });
 
-    // DESKTOP PLATFORM: Return JSON with device token (no redirect)
+    // DESKTOP PLATFORM: Redirect with tokens encoded in URL
+    // OAuth callbacks happen via browser redirect from Google, so we can't return JSON
+    // The desktop app (Electron) intercepts the redirect URL and extracts the tokens
     if (platform === 'desktop') {
       if (!deviceId) {
         loggers.auth.error('Desktop OAuth callback missing deviceId', {
@@ -265,7 +267,7 @@ export async function GET(req: Request) {
         return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
-      // Generate device token (pattern from One Tap route)
+      // Generate device token (now opaque ps_dev_* token)
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
         providedDeviceToken: undefined,
         userId: user.id,
@@ -287,14 +289,31 @@ export async function GET(req: Request) {
         userAgent: req.headers.get('user-agent'),
       });
 
-      // Return JSON (no redirect, no cookies)
-      return NextResponse.json({
-        success: true,
-        user: { id: user.id, name: user.name, email: user.email },
-        tokens: { deviceToken: deviceTokenValue },
-        redirectTo: returnUrl,
-        isNewUser: !!provisionedDrive,
+      // Encode tokens as base64 JSON for URL transport
+      const tokensPayload = {
+        sessionToken,
+        csrfToken,
+        deviceToken: deviceTokenValue,
+      };
+      const tokensBase64 = Buffer.from(JSON.stringify(tokensPayload)).toString('base64url');
+
+      // Redirect to dashboard with tokens in URL
+      // Desktop app (Electron) intercepts this and extracts tokens
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+      const redirectUrl = new URL(returnUrl, baseUrl);
+      redirectUrl.searchParams.set('desktop', 'true');
+      redirectUrl.searchParams.set('tokens', tokensBase64);
+      redirectUrl.searchParams.set('auth', 'success');
+      if (provisionedDrive) {
+        redirectUrl.searchParams.set('isNewUser', 'true');
+      }
+
+      loggers.auth.info('Desktop OAuth redirect', {
+        userId: user.id,
+        redirectUrl: redirectUrl.pathname,
       });
+
+      return NextResponse.redirect(redirectUrl);
     }
 
     // WEB PLATFORM: Original redirect flow (UNCHANGED)

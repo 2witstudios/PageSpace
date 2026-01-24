@@ -1,32 +1,7 @@
-import * as jose from 'jose';
 import { createId } from '@paralleldrive/cuid2';
-import { db, deviceTokens, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
+import { db, deviceTokens, users, eq, and, isNull, lt, gt, sql, or } from '@pagespace/db';
 import { hashToken, getTokenPrefix } from './token-utils';
-
-const JWT_ALGORITHM = 'HS256';
-
-function getJWTConfig() {
-  const jwtSecret = process.env.JWT_SECRET;
-  if (!jwtSecret) {
-    throw new Error('JWT_SECRET environment variable is required');
-  }
-  if (jwtSecret.length < 32) {
-    throw new Error('JWT_SECRET must be at least 32 characters long');
-  }
-
-  return {
-    secret: new TextEncoder().encode(jwtSecret),
-    issuer: process.env.JWT_ISSUER || 'pagespace',
-    audience: process.env.JWT_AUDIENCE || 'pagespace-devices'
-  };
-}
-
-export interface DeviceTokenPayload extends jose.JWTPayload {
-  userId: string;
-  deviceId: string;
-  platform: 'web' | 'desktop' | 'ios' | 'android';
-  tokenVersion: number;
-}
+import { generateOpaqueToken, isValidTokenFormat, getTokenType } from './opaque-tokens';
 
 export type DeviceToken = typeof deviceTokens.$inferSelect;
 
@@ -41,64 +16,24 @@ export const TOKEN_LIFETIMES = {
 };
 
 /**
- * Generate a device token (90-day lifetime)
+ * Generate an opaque device token (ps_dev_*)
+ *
+ * SECURITY: Device tokens are now opaque - no embedded claims.
+ * All device info (userId, deviceId, platform, tokenVersion) is stored
+ * in the database record, not in the token itself.
+ *
+ * This provides zero-trust security - tokens reveal nothing about the user.
  */
-export async function generateDeviceToken(
-  userId: string,
-  deviceId: string,
-  platform: 'web' | 'desktop' | 'ios' | 'android',
-  tokenVersion: number = 0
-): Promise<string> {
-  const config = getJWTConfig();
-  return await new jose.SignJWT({ userId, deviceId, platform, tokenVersion })
-    .setProtectedHeader({ alg: JWT_ALGORITHM })
-    .setIssuer(config.issuer)
-    .setAudience(config.audience)
-    .setIssuedAt()
-    .setJti(createId())
-    .setExpirationTime(TOKEN_LIFETIMES.DEVICE_TOKEN)
-    .sign(config.secret);
-}
-
-/**
- * Decode and validate device token
- */
-export async function decodeDeviceToken(token: string): Promise<DeviceTokenPayload | null> {
-  if (typeof token !== 'string') {
-    return null;
-  }
-
-  try {
-    const config = getJWTConfig();
-    const { payload } = await jose.jwtVerify(token, config.secret, {
-      algorithms: [JWT_ALGORITHM],
-      issuer: config.issuer,
-      audience: config.audience,
-    });
-
-    // Validate required payload fields
-    if (!payload.userId || typeof payload.userId !== 'string') {
-      throw new Error('Invalid device token: missing or invalid userId');
-    }
-    if (!payload.deviceId || typeof payload.deviceId !== 'string') {
-      throw new Error('Invalid device token: missing or invalid deviceId');
-    }
-    if (!payload.platform || !['web', 'desktop', 'ios', 'android'].includes(payload.platform as string)) {
-      throw new Error('Invalid device token: missing or invalid platform');
-    }
-    if (typeof payload.tokenVersion !== 'number') {
-      throw new Error('Invalid device token: missing or invalid tokenVersion');
-    }
-
-    return payload as DeviceTokenPayload;
-  } catch (error) {
-    console.error('Invalid device token:', error);
-    return null;
-  }
+export function generateDeviceToken(): string {
+  const { token } = generateOpaqueToken('dev');
+  return token;
 }
 
 /**
  * Create a device token record in the database
+ *
+ * SECURITY: Token is now opaque (ps_dev_*) - no embedded claims.
+ * All device info is stored in the DB record only.
  */
 export async function createDeviceTokenRecord(
   userId: string,
@@ -112,8 +47,8 @@ export async function createDeviceTokenRecord(
     location?: string;
   } = {}
 ): Promise<{ id: string; token: string }> {
-  // Generate the JWT token
-  const token = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
+  // Generate opaque device token (ps_dev_*)
+  const token = generateDeviceToken();
 
   // Calculate expiration date (90 days from now)
   const expiresAt = new Date();
@@ -122,11 +57,12 @@ export async function createDeviceTokenRecord(
   // SECURITY: Hash the token before storing - never store plaintext
   const tokenHashValue = hashToken(token);
 
-  // Insert into database
+  // Insert into database with all device context stored in record
   const [record] = await db.insert(deviceTokens).values({
     userId,
     deviceId,
     platform,
+    tokenVersion, // Store tokenVersion in record for validation
     token: tokenHashValue,       // Store hash, NOT plaintext
     tokenHash: tokenHashValue,
     tokenPrefix: getTokenPrefix(token),
@@ -142,7 +78,7 @@ export async function createDeviceTokenRecord(
 
   return {
     id: record.id,
-    token,  // Return plaintext token to caller (client needs the JWT)
+    token,  // Return plaintext opaque token to caller
   };
 }
 
@@ -195,14 +131,20 @@ export async function revokeExpiredDeviceTokens(
 
 /**
  * Validate device token against database
- * SECURITY: Also validates tokenVersion to prevent use after tokenVersion bump
- * Uses hash-only lookup (no plaintext fallback)
+ *
+ * SECURITY: Opaque token validation (ps_dev_*):
+ * 1. Validate token format (ps_dev_*)
+ * 2. Hash-only lookup in DB (no plaintext fallback)
+ * 3. Validate tokenVersion against user's current version
+ *
+ * All device context (userId, deviceId, platform, tokenVersion) is stored
+ * in the database record, not embedded in the token.
  */
 export async function validateDeviceToken(token: string): Promise<DeviceToken | null> {
   try {
-    // First decode the JWT
-    const payload = await decodeDeviceToken(token);
-    if (!payload) {
+    // Validate opaque token format
+    if (!isValidTokenFormat(token) || getTokenType(token) !== 'dev') {
+      console.error('Invalid device token format');
       return null;
     }
 
@@ -220,29 +162,27 @@ export async function validateDeviceToken(token: string): Promise<DeviceToken | 
       return null;
     }
 
-    // Verify the token matches the stored device
-    if (deviceToken.deviceId !== payload.deviceId || deviceToken.userId !== payload.userId) {
-      console.error('Device token mismatch:', {
-        storedDeviceId: deviceToken.deviceId,
-        payloadDeviceId: payload.deviceId,
+    // SECURITY: Validate tokenVersion against current user
+    // This ensures device tokens are invalidated when user's tokenVersion is bumped
+    // (e.g., after refresh token reuse detection or manual "logout all devices")
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, deviceToken.userId),
+      columns: { tokenVersion: true },
+    });
+
+    if (!user) {
+      console.warn('Device token validation failed: user not found', {
+        userId: deviceToken.userId,
       });
       return null;
     }
 
-    // SECURITY: Validate tokenVersion against current user
-    // This ensures device tokens are invalidated when user's tokenVersion is bumped
-    // (e.g., after refresh token reuse detection or manual "logout all devices")
-    const { users } = await import('@pagespace/db');
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, payload.userId),
-      columns: { tokenVersion: true },
-    });
-
-    if (!user || user.tokenVersion !== payload.tokenVersion) {
+    // Compare stored tokenVersion in device record against user's current version
+    if (deviceToken.tokenVersion !== user.tokenVersion) {
       console.warn('Device token invalidated due to tokenVersion mismatch', {
-        userId: payload.userId,
-        tokenVersion: payload.tokenVersion,
-        currentVersion: user?.tokenVersion,
+        userId: deviceToken.userId,
+        tokenVersion: deviceToken.tokenVersion,
+        currentVersion: user.tokenVersion,
       });
       return null;
     }
@@ -474,6 +414,7 @@ export async function validateOrCreateDeviceToken(params: {
     hashToken,
     getTokenPrefix,
     generateDeviceToken,
-    validateDeviceTokenPayload: decodeDeviceToken,
+    // Opaque token validation - check format and type
+    validateOpaqueToken: (token: string) => isValidTokenFormat(token) && getTokenType(token) === 'dev',
   });
 }

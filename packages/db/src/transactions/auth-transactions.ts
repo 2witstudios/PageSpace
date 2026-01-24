@@ -59,11 +59,11 @@ export interface AtomicDeviceTokenResult {
  * - Validates tokenVersion to ensure device token is still valid
  * - Grace period (30s) allows retry for concurrent requests
  *
- * @param oldTokenValue - The current device token
+ * @param oldTokenValue - The current device token (opaque ps_dev_*)
  * @param metadata - Updated metadata for the new token
  * @param hashToken - Function to hash tokens
  * @param getTokenPrefix - Function to get token prefix for debugging
- * @param generateDeviceToken - Function to generate new device token JWT
+ * @param generateDeviceToken - Function to generate new opaque device token
  * @returns DeviceRotationResult with new token on success
  */
 export async function atomicDeviceTokenRotation(
@@ -74,18 +74,15 @@ export async function atomicDeviceTokenRotation(
   },
   hashToken: (token: string) => string,
   getTokenPrefix: (token: string) => string,
-  generateDeviceToken: (
-    userId: string,
-    deviceId: string,
-    platform: 'web' | 'desktop' | 'ios' | 'android',
-    tokenVersion: number
-  ) => Promise<string>
+  generateDeviceToken: () => string
 ): Promise<DeviceRotationResult> {
   const tokenHash = hashToken(oldTokenValue);
 
   return db.transaction(async (tx) => {
     // Lock the device token row (includes revoked tokens for grace period check)
     // IMPORTANT: Column names use camelCase to match Drizzle schema
+    // Note: We get tokenVersion from device_tokens now (opaque token migration)
+    // and validate it against user's current tokenVersion
     const lockResult = await tx.execute(sql`
       SELECT
         dt.id,
@@ -100,7 +97,8 @@ export async function atomicDeviceTokenRotation(
         dt."revokedAt",
         dt."revokedReason",
         dt."replacedByTokenId",
-        u."tokenVersion"
+        dt."tokenVersion" as "deviceTokenVersion",
+        u."tokenVersion" as "userTokenVersion"
       FROM device_tokens dt
       JOIN users u ON u.id = dt."userId"
       WHERE dt."tokenHash" = ${tokenHash}
@@ -120,11 +118,19 @@ export async function atomicDeviceTokenRotation(
       revokedAt: Date | null;
       revokedReason: string | null;
       replacedByTokenId: string | null;
-      tokenVersion: number;
+      deviceTokenVersion: number;
+      userTokenVersion: number;
     } | undefined;
 
     if (!row) {
       return { success: false, error: 'Invalid or expired device token' };
+    }
+
+    // SECURITY: Validate tokenVersion against user's current version
+    // Reject rotation if device token was issued with an old tokenVersion
+    // (e.g., user did "logout all devices" since this token was created)
+    if (row.deviceTokenVersion !== row.userTokenVersion) {
+      return { success: false, error: 'Device token invalidated by security policy' };
     }
 
     // Check if already rotated (revoked with reason 'rotated')
@@ -181,13 +187,8 @@ export async function atomicDeviceTokenRotation(
       return { success: false, error: 'Device token has expired' };
     }
 
-    // Generate new token
-    const newToken = await generateDeviceToken(
-      row.userId,
-      row.deviceId,
-      row.platform,
-      row.tokenVersion
-    );
+    // Generate new opaque token (ps_dev_*)
+    const newToken = generateDeviceToken();
     const newTokenHash = hashToken(newToken);
     const newTokenPrefix = getTokenPrefix(newToken);
 
@@ -214,6 +215,7 @@ export async function atomicDeviceTokenRotation(
         token,
         "tokenHash",
         "tokenPrefix",
+        "tokenVersion",
         "expiresAt",
         "deviceName",
         "userAgent",
@@ -231,6 +233,7 @@ export async function atomicDeviceTokenRotation(
         ${newTokenHash},
         ${newTokenHash},
         ${newTokenPrefix},
+        ${row.userTokenVersion},
         ${expiresAt},
         ${row.deviceName},
         ${metadata.userAgent || row.userAgent},
@@ -266,12 +269,13 @@ export async function atomicDeviceTokenRotation(
  * - FOR UPDATE lock on user prevents concurrent token creation
  * - Prevents duplicate device tokens for same user/device/platform
  * - Handles token regeneration for existing records safely
+ * - Opaque tokens (ps_dev_*) - no embedded claims, DB is source of truth
  *
  * @param params - Token validation/creation parameters
  * @param hashToken - Function to hash tokens
  * @param getTokenPrefix - Function to get token prefix
- * @param generateDeviceToken - Function to generate device token JWT
- * @param decodeDeviceToken - Function to decode and validate device token
+ * @param generateDeviceToken - Function to generate opaque device token
+ * @param validateOpaqueToken - Function to validate opaque token format
  * @returns AtomicDeviceTokenResult with token info
  */
 export async function atomicValidateOrCreateDeviceToken(params: {
@@ -286,18 +290,8 @@ export async function atomicValidateOrCreateDeviceToken(params: {
 }, utilities: {
   hashToken: (token: string) => string;
   getTokenPrefix: (token: string) => string;
-  generateDeviceToken: (
-    userId: string,
-    deviceId: string,
-    platform: 'web' | 'desktop' | 'ios' | 'android',
-    tokenVersion: number
-  ) => Promise<string>;
-  validateDeviceTokenPayload: (token: string) => Promise<{
-    userId: string;
-    deviceId: string;
-    platform: string;
-    tokenVersion: number;
-  } | null>;
+  generateDeviceToken: () => string;
+  validateOpaqueToken: (token: string) => boolean;
 }): Promise<AtomicDeviceTokenResult> {
   const {
     providedDeviceToken,
@@ -310,23 +304,18 @@ export async function atomicValidateOrCreateDeviceToken(params: {
     ipAddress,
   } = params;
 
-  const { hashToken, getTokenPrefix, generateDeviceToken, validateDeviceTokenPayload } = utilities;
+  const { hashToken, getTokenPrefix, generateDeviceToken, validateOpaqueToken } = utilities;
 
   return db.transaction(async (tx) => {
     // If a device token was provided, try to validate it first
     if (providedDeviceToken) {
-      const payload = await validateDeviceTokenPayload(providedDeviceToken);
-
-      if (payload &&
-          payload.userId === userId &&
-          payload.deviceId === deviceId &&
-          payload.platform === platform &&
-          payload.tokenVersion === tokenVersion) { // SECURITY: Enforce tokenVersion
-        // Token payload is valid (including tokenVersion), now check DB record with lock
+      // Validate opaque token format (ps_dev_*)
+      if (validateOpaqueToken(providedDeviceToken)) {
+        // Token format is valid, check DB record with lock
         const tokenHash = hashToken(providedDeviceToken);
 
         const existingResult = await tx.execute(sql`
-          SELECT id, "expiresAt"
+          SELECT id, "expiresAt", "userId", "deviceId", platform, "tokenVersion"
           FROM device_tokens
           WHERE "tokenHash" = ${tokenHash}
             AND "revokedAt" IS NULL
@@ -336,9 +325,19 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         const existing = existingResult.rows[0] as {
           id: string;
           expiresAt: Date | null;
+          userId: string;
+          deviceId: string;
+          platform: string;
+          tokenVersion: number;
         } | undefined;
 
-        if (existing && (!existing.expiresAt || new Date(existing.expiresAt) > new Date())) {
+        // SECURITY: Validate DB record matches expected claims
+        if (existing &&
+            existing.userId === userId &&
+            existing.deviceId === deviceId &&
+            existing.platform === platform &&
+            existing.tokenVersion === tokenVersion && // Enforce tokenVersion
+            (!existing.expiresAt || new Date(existing.expiresAt) > new Date())) {
           // Valid token, update activity and return
           await tx.execute(sql`UPDATE device_tokens SET "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existing.id}`);
 
@@ -375,16 +374,17 @@ export async function atomicValidateOrCreateDeviceToken(params: {
     } | undefined;
 
     if (existingActive) {
-      // Regenerate token for existing record (DB stores hash, not plaintext)
-      // This maintains the same record ID but issues a fresh JWT
-      const regeneratedToken = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
+      // Regenerate opaque token for existing record (DB stores hash, not plaintext)
+      // This maintains the same record ID but issues a fresh opaque token
+      const regeneratedToken = generateDeviceToken();
       const newTokenHash = hashToken(regeneratedToken);
       const newTokenPrefix = getTokenPrefix(regeneratedToken);
-      // Refresh expiresAt to match new JWT (90 days from now)
+      // Refresh expiresAt (90 days from now)
       const refreshedExpiresAt = new Date();
       refreshedExpiresAt.setDate(refreshedExpiresAt.getDate() + 90);
 
-      await tx.execute(sql`UPDATE device_tokens SET "token" = ${newTokenHash}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
+      // Update token, hash, tokenVersion, and expiration
+      await tx.execute(sql`UPDATE device_tokens SET "token" = ${newTokenHash}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "tokenVersion" = ${tokenVersion}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
 
       return {
         deviceToken: regeneratedToken,
@@ -404,8 +404,8 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         AND "expiresAt" <= NOW()
     `);
 
-    // Create new token (safe - we hold user lock)
-    const newToken = await generateDeviceToken(userId, deviceId, platform, tokenVersion);
+    // Create new opaque token (safe - we hold user lock)
+    const newToken = generateDeviceToken();
     const newTokenHash = hashToken(newToken);
     const newTokenPrefix = getTokenPrefix(newToken);
 
@@ -423,6 +423,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         token,
         "tokenHash",
         "tokenPrefix",
+        "tokenVersion",
         "expiresAt",
         "deviceName",
         "userAgent",
@@ -439,6 +440,7 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         ${newTokenHash},
         ${newTokenHash},
         ${newTokenPrefix},
+        ${tokenVersion},
         ${expiresAt},
         ${deviceName || null},
         ${userAgent || null},

@@ -2,9 +2,9 @@
 
 > **Zero-Trust Enterprise Cloud Architecture Implementation**
 >
-> Status: Phase 0-2 Complete, Desktop WS Migration Complete, Phase 3 Ready
+> Status: Phase 0-2 Complete, Desktop WS Migration Complete, Device Token Migration Complete, Phase 3 Ready
 > Created: 2026-01-05
-> Last Updated: 2026-01-14
+> Last Updated: 2026-01-23
 > Sources: cloud-security-analysis.md, cloud-security-gaps.md, cloud-security-tdd-spec.md, zero-trust-architecture.md
 
 ---
@@ -65,6 +65,17 @@ Phase 5: Monitoring & Incident Response
 - **Issue:** `X-RateLimit-Remaining` computed before decrement showed stale values
 - **Solution:** Return post-decrement values in response headers
 - **Lesson:** Test header values match actual state after operations
+
+### Device Token JWT to Opaque Migration (P5-T5 Partial)
+- **Issue:** Device tokens used JWTs (`eyJhbGc...`) exposing userId, deviceId, tokenVersion in payload. OAuth callback for desktop returned JSON instead of redirect, breaking browser flow.
+- **Solution:** Migrated to opaque tokens (`ps_dev_*`) with hash-only database lookup. Fixed OAuth callback to redirect with base64url-encoded tokens in URL. Added `tokenVersion` column to `device_tokens` table for "logout all devices" invalidation.
+- **Lesson:** Opaque tokens are simpler and more secure - no payload to leak, no signature verification needed, just hash lookup. OAuth callbacks must always redirect, never return JSON.
+- **PR:** #232
+
+### Desktop OAuth Redirect Fix (P5-T5 Related)
+- **Issue:** Google OAuth callback returned `NextResponse.json()` for desktop platform, but OAuth callbacks happen via browser redirect from Google. Browser displayed raw JSON instead of completing login.
+- **Solution:** Changed to `NextResponse.redirect()` with tokens encoded as base64url in URL query params (`?desktop=true&tokens=...`).
+- **Lesson:** OAuth callbacks are browser redirects - always respond with redirects, never JSON. Desktop apps must parse tokens from redirect URL.
 
 ---
 
@@ -2505,12 +2516,21 @@ jobs:
 - Web access + refresh flows
 - Realtime JWT fallback
 - Desktop WS auth
-- Device token JWTs (replace with sessions)
+- ~~Device token JWTs (replace with sessions)~~ ✅ COMPLETED (2026-01-23, PR #232)
+
+**Implementation Notes (Device Token Migration):**
+- Changed `generateDeviceToken()` from async JWT to sync opaque token (`ps_dev_*`)
+- Changed `validateDeviceToken()` from JWT decode + hash lookup to hash-only lookup
+- Added `tokenVersion` column to `device_tokens` table for "logout all devices" invalidation
+- Updated `atomicDeviceTokenRotation()` and `atomicValidateOrCreateDeviceToken()` transactions
+- Fixed OAuth callback for desktop to redirect with tokens instead of returning JSON
+- Files modified: `device-auth-utils.ts`, `auth-transactions.ts`, `google/callback/route.ts`, `account/devices/route.ts`
 
 **Acceptance Criteria:**
 - [ ] No JWT tokens issued for user auth
 - [ ] Realtime only accepts opaque/session tokens or socket tokens
 - [ ] Desktop uses opaque sessions
+- [x] Device tokens use opaque format (`ps_dev_*`) with hash-only validation
 - [ ] Audit confirms zero legacy JWT usage for 30 days
 
 **Dependencies:** P2-T4, P5-T1

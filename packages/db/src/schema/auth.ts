@@ -48,6 +48,10 @@ export const deviceTokens = pgTable('device_tokens', {
   platform: platformType('platform').notNull(),
   deviceName: text('deviceName'),
 
+  // Token version for "logout all devices" invalidation
+  // Must match user.tokenVersion for token to be valid
+  tokenVersion: integer('tokenVersion').default(0).notNull(),
+
   // Security tracking
   userAgent: text('userAgent'),
   ipAddress: text('ipAddress'),

@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   generateDeviceToken,
-  decodeDeviceToken,
   validateDeviceToken,
   createDeviceTokenRecord,
   updateDeviceTokenActivity,
   revokeDeviceToken,
   validateOrCreateDeviceToken,
 } from '../auth/device-auth-utils';
+import { isValidTokenFormat, getTokenType } from '../auth/opaque-tokens';
 import { db, deviceTokens, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -38,59 +38,34 @@ describe('device-auth-utils', () => {
   });
 
   describe('generateDeviceToken', () => {
-    it('creates valid device token JWT', async () => {
-      const token = await generateDeviceToken(
-        testUserId,
-        testDeviceId,
-        testPlatform,
-        testTokenVersion
-      );
+    it('creates valid opaque device token (ps_dev_*)', () => {
+      const token = generateDeviceToken();
 
       expect(token).toBeTruthy();
       expect(typeof token).toBe('string');
-      expect(token.split('.')).toHaveLength(3); // JWT format
+      expect(token.startsWith('ps_dev_')).toBe(true);
     });
 
-    it('includes required device token claims', async () => {
-      const token = await generateDeviceToken(
-        testUserId,
-        testDeviceId,
-        testPlatform,
-        testTokenVersion
-      );
+    it('generates tokens with valid format', () => {
+      const token = generateDeviceToken();
 
-      const decoded = await decodeDeviceToken(token);
-      expect(decoded).toBeTruthy();
-      expect(decoded?.userId).toBe(testUserId);
-      expect(decoded?.deviceId).toBe(testDeviceId);
-      expect(decoded?.platform).toBe(testPlatform);
-      expect(decoded?.tokenVersion).toBe(testTokenVersion);
+      expect(isValidTokenFormat(token)).toBe(true);
+      expect(getTokenType(token)).toBe('dev');
     });
 
-    it('sets 90-day expiration', async () => {
-      const token = await generateDeviceToken(
-        testUserId,
-        testDeviceId,
-        testPlatform,
-        testTokenVersion
-      );
+    it('generates unique tokens on each call', () => {
+      const token1 = generateDeviceToken();
+      const token2 = generateDeviceToken();
+      const token3 = generateDeviceToken();
 
-      const decoded = await decodeDeviceToken(token);
-      const exp = decoded?.exp;
-      const iat = decoded?.iat;
-
-      expect(exp).toBeTruthy();
-      expect(iat).toBeTruthy();
-
-      // Should be approximately 90 days (allow 1 second tolerance)
-      const expectedDuration = 90 * 24 * 60 * 60; // 90 days in seconds
-      const actualDuration = exp! - iat!;
-      expect(Math.abs(actualDuration - expectedDuration)).toBeLessThan(2);
+      expect(token1).not.toBe(token2);
+      expect(token2).not.toBe(token3);
+      expect(token1).not.toBe(token3);
     });
   });
 
   describe('createDeviceTokenRecord', () => {
-    it('creates database record and returns token', async () => {
+    it('creates database record and returns opaque token', async () => {
       const result = await createDeviceTokenRecord(
         testUserId,
         testDeviceId,
@@ -105,6 +80,7 @@ describe('device-auth-utils', () => {
 
       expect(result.id).toBeTruthy();
       expect(result.token).toBeTruthy();
+      expect(result.token.startsWith('ps_dev_')).toBe(true);
 
       // Verify database record
       const records = await db
@@ -118,6 +94,7 @@ describe('device-auth-utils', () => {
       expect(records[0].platform).toBe(testPlatform);
       expect(records[0].deviceName).toBe('Test iPhone');
       expect(records[0].trustScore).toBe(1.0); // Initial trust score
+      expect(records[0].tokenVersion).toBe(testTokenVersion); // tokenVersion stored in record
     });
 
     it('sets default trust score to 1.0', async () => {
@@ -216,6 +193,13 @@ describe('device-auth-utils', () => {
 
     it('rejects malformed token', async () => {
       const validated = await validateDeviceToken('invalid.token.here');
+      expect(validated).toBeNull();
+    });
+
+    it('rejects JWT-format tokens (migration check)', async () => {
+      // Old JWT tokens should be rejected since we now use opaque tokens
+      const jwtLikeToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+      const validated = await validateDeviceToken(jwtLikeToken);
       expect(validated).toBeNull();
     });
   });

@@ -1349,13 +1349,41 @@ export async function validateToken(token: string): Promise<SessionClaims | null
 
 ### 8.2 Migration Phases
 
-| Phase | Duration | Actions |
-|-------|----------|---------|
-| 1 | Week 1-2 | Deploy session store, dual-mode auth |
-| 2 | Week 3-4 | Migrate web app to opaque tokens |
-| 3 | Week 5-6 | Migrate processor to verify via session store |
-| 4 | Week 7-8 | Migrate realtime service |
-| 5 | Week 9+ | Deprecate and remove JWT code paths |
+| Phase | Duration | Actions | Status |
+|-------|----------|---------|--------|
+| 1 | Week 1-2 | Deploy session store, dual-mode auth | ✅ Complete |
+| 2 | Week 3-4 | Migrate web app to opaque tokens | ✅ Complete |
+| 3 | Week 5-6 | Migrate processor to verify via session store | ✅ Complete |
+| 4 | Week 7-8 | Migrate realtime service | ✅ Complete |
+| 5 | Week 9+ | Deprecate and remove JWT code paths | 🔄 In Progress |
+
+### 8.3 Device Token Migration (Phase 5 - Completed Jan 2026)
+
+Device tokens have been migrated from JWT to opaque session-based tokens:
+
+**Changes Made:**
+- `generateDeviceToken()` now returns opaque `ps_dev_*` tokens (synchronous, no params)
+- `validateDeviceToken()` uses hash-only DB lookup, validates opaque token format
+- Removed JWT/jose dependency for device tokens
+- Added `tokenVersion` column to `device_tokens` table for "logout all devices" support
+- Updated `atomicDeviceTokenRotation()` and `atomicValidateOrCreateDeviceToken()` for opaque tokens
+
+**Security Improvements:**
+| Aspect | Before | After |
+|--------|--------|-------|
+| Token format | JWT (eyJhbGc...) | Opaque (ps_dev_...) |
+| Token payload | userId, deviceId, tokenVersion visible | Nothing visible (zero-trust) |
+| Validation | JWT verify + DB lookup | DB lookup only |
+| TokenVersion storage | Embedded in JWT | Stored in DB record |
+
+**Breaking Change:** Existing JWT device tokens will fail validation. Users need to re-authenticate once after deployment.
+
+**Files Modified:**
+- `packages/lib/src/auth/device-auth-utils.ts`
+- `packages/db/src/schema/auth.ts` (added tokenVersion column)
+- `packages/db/src/transactions/auth-transactions.ts`
+- `apps/web/src/app/api/auth/google/callback/route.ts` (OAuth redirect fix for desktop)
+- `apps/web/src/app/api/account/devices/route.ts`
 
 ---
 

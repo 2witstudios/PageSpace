@@ -22,30 +22,14 @@ function getTokenPrefix(token: string): string {
   return token.substring(0, 12);
 }
 
-async function generateDeviceToken(
-  userId: string,
-  deviceId: string,
-  platform: 'web' | 'desktop' | 'ios' | 'android',
-  tokenVersion: number
-): Promise<string> {
-  return `dev_${createId()}_${userId}_${deviceId}_${platform}_${tokenVersion}`;
+// Opaque token generator (matches new signature)
+function generateDeviceToken(): string {
+  return `ps_dev_${createId()}${createId()}`;
 }
 
-async function validateDeviceTokenPayload(token: string): Promise<{
-  userId: string;
-  deviceId: string;
-  platform: string;
-  tokenVersion: number;
-} | null> {
-  if (!token.startsWith('dev_')) return null;
-  const parts = token.split('_');
-  if (parts.length < 6) return null;
-  return {
-    userId: parts[2],
-    deviceId: parts[3],
-    platform: parts[4],
-    tokenVersion: parseInt(parts[5], 10),
-  };
+// Opaque token validator (replaces JWT payload decoder)
+function validateOpaqueToken(token: string): boolean {
+  return typeof token === 'string' && token.startsWith('ps_dev_') && token.length > 10;
 }
 
 describe('auth-transactions', () => {
@@ -72,8 +56,8 @@ describe('auth-transactions', () => {
 
   describe('atomicDeviceTokenRotation', () => {
     it('should successfully rotate device token', async () => {
-      // Create a device token
-      const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+      // Create a device token (now opaque format)
+      const rawToken = generateDeviceToken();
       const tokenHash = hashToken(rawToken);
 
       await db.insert(deviceTokens).values({
@@ -84,6 +68,7 @@ describe('auth-transactions', () => {
         token: tokenHash,
         tokenHash,
         tokenPrefix: getTokenPrefix(rawToken),
+        tokenVersion: 1, // Store tokenVersion in record (opaque tokens)
         expiresAt: new Date(Date.now() + 86400000),
         deviceName: 'Test Device',
         trustScore: 1.0,
@@ -100,6 +85,7 @@ describe('auth-transactions', () => {
 
       expect(result.success).toBe(true);
       expect(result.newToken).toBeDefined();
+      expect(result.newToken?.startsWith('ps_dev_')).toBe(true);
       expect(result.userId).toBe(testUserId);
       expect(result.deviceId).toBe('device-1');
       expect(result.platform).toBe('web');
@@ -119,7 +105,7 @@ describe('auth-transactions', () => {
     });
 
     it('should atomically prevent concurrent rotation attempts', async () => {
-      const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+      const rawToken = generateDeviceToken();
       const tokenHash = hashToken(rawToken);
 
       await db.insert(deviceTokens).values({
@@ -130,6 +116,7 @@ describe('auth-transactions', () => {
         token: tokenHash,
         tokenHash,
         tokenPrefix: getTokenPrefix(rawToken),
+        tokenVersion: 1,
         expiresAt: new Date(Date.now() + 86400000),
         trustScore: 1.0,
         suspiciousActivityCount: 0,
@@ -159,7 +146,7 @@ describe('auth-transactions', () => {
 
     describe('grace period handling', () => {
       it('should allow retry within 30 second grace period', async () => {
-        const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const rawToken = generateDeviceToken();
         const tokenHash = hashToken(rawToken);
 
         await db.insert(deviceTokens).values({
@@ -170,6 +157,7 @@ describe('auth-transactions', () => {
           token: tokenHash,
           tokenHash,
           tokenPrefix: getTokenPrefix(rawToken),
+          tokenVersion: 1,
           expiresAt: new Date(Date.now() + 86400000),
           deviceName: 'Test Device',
           trustScore: 1.0,
@@ -204,7 +192,7 @@ describe('auth-transactions', () => {
       });
 
       it('should reject retry after grace period expires', async () => {
-        const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const rawToken = generateDeviceToken();
         const tokenHash = hashToken(rawToken);
         const tokenId = createId();
         const newTokenId = createId();
@@ -219,6 +207,7 @@ describe('auth-transactions', () => {
           token: tokenHash,
           tokenHash,
           tokenPrefix: getTokenPrefix(rawToken),
+          tokenVersion: 1,
           expiresAt: new Date(Date.now() + 86400000),
           trustScore: 1.0,
           suspiciousActivityCount: 0,
@@ -228,7 +217,7 @@ describe('auth-transactions', () => {
         });
 
         // Create the replacement token (this is the active one)
-        const newToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const newToken = generateDeviceToken();
         const newTokenHash = hashToken(newToken);
         await db.insert(deviceTokens).values({
           id: newTokenId,
@@ -238,6 +227,7 @@ describe('auth-transactions', () => {
           token: newTokenHash,
           tokenHash: newTokenHash,
           tokenPrefix: getTokenPrefix(newToken),
+          tokenVersion: 1,
           expiresAt: new Date(Date.now() + 86400000),
           trustScore: 1.0,
           suspiciousActivityCount: 0,
@@ -256,7 +246,7 @@ describe('auth-transactions', () => {
       });
 
       it('should reject retry when revoked for other reasons', async () => {
-        const rawToken = await generateDeviceToken(testUserId, 'device-1', 'web', 1);
+        const rawToken = generateDeviceToken();
         const tokenHash = hashToken(rawToken);
         const tokenId = createId();
 
@@ -268,6 +258,7 @@ describe('auth-transactions', () => {
           token: tokenHash,
           tokenHash,
           tokenPrefix: getTokenPrefix(rawToken),
+          tokenVersion: 1,
           expiresAt: new Date(Date.now() + 86400000),
           trustScore: 1.0,
           suspiciousActivityCount: 0,
@@ -288,6 +279,40 @@ describe('auth-transactions', () => {
         expect(result.success).toBe(false);
         expect(result.error).toBe('Device token has been revoked');
       });
+
+      it('should reject token when tokenVersion mismatch (logout all devices)', async () => {
+        const rawToken = generateDeviceToken();
+        const tokenHash = hashToken(rawToken);
+
+        // Create token with tokenVersion 0
+        await db.insert(deviceTokens).values({
+          id: createId(),
+          userId: testUserId,
+          deviceId: 'device-1',
+          platform: 'web',
+          token: tokenHash,
+          tokenHash,
+          tokenPrefix: getTokenPrefix(rawToken),
+          tokenVersion: 0, // Old tokenVersion
+          expiresAt: new Date(Date.now() + 86400000),
+          trustScore: 1.0,
+          suspiciousActivityCount: 0,
+        });
+
+        // User's tokenVersion is 1 (set in beforeEach)
+        // Token was created with tokenVersion 0
+        // Should be rejected due to mismatch
+
+        const result = await atomicDeviceTokenRotation(
+          rawToken,
+          {},
+          hashToken,
+          getTokenPrefix,
+          generateDeviceToken
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Device token invalidated by security policy');
+      });
     });
   });
 
@@ -296,7 +321,7 @@ describe('auth-transactions', () => {
       hashToken,
       getTokenPrefix,
       generateDeviceToken,
-      validateDeviceTokenPayload,
+      validateOpaqueToken,
     };
 
     it('should create new token when no existing record', async () => {
