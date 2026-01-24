@@ -315,14 +315,16 @@ export async function getUserDeviceTokens(userId: string): Promise<DeviceToken[]
 
 /**
  * Rotate device token (creates new token, revokes old one)
+ *
+ * SECURITY: Fetches current tokenVersion from DB to ensure new token
+ * respects any "logout all devices" operations that may have occurred.
  */
 export async function rotateDeviceToken(
   oldToken: string,
   metadata: {
     userAgent?: string;
     ipAddress?: string;
-  },
-  tokenVersion: number = 0
+  }
 ): Promise<{ token: string; deviceToken: DeviceToken } | null> {
   try {
     // Validate old token
@@ -330,6 +332,22 @@ export async function rotateDeviceToken(
     if (!oldDeviceToken) {
       return null;
     }
+
+    // Fetch current user's tokenVersion from DB
+    // This ensures the new token respects any version bumps (e.g., "logout all devices")
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, oldDeviceToken.userId),
+      columns: { tokenVersion: true },
+    });
+
+    if (!user) {
+      console.warn('Device token rotation failed: user not found', {
+        userId: oldDeviceToken.userId,
+      });
+      return null;
+    }
+
+    const tokenVersion = user.tokenVersion;
 
     // Revoke old token
     await revokeDeviceToken(oldDeviceToken.id, 'user_action');

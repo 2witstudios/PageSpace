@@ -1,4 +1,4 @@
-import { users, db, eq, deviceTokens, sql, and, isNull } from '@pagespace/db';
+import { users, db, eq, deviceTokens, sql, and, isNull, gt } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { hashToken } from '@pagespace/lib/auth';
 import { secureCompare } from '@pagespace/lib/secure-compare';
@@ -101,8 +101,14 @@ export async function DELETE(req: Request) {
       // Validate opaque token format
       if (isValidTokenFormat(currentDeviceToken) && getTokenType(currentDeviceToken) === 'dev') {
         // Get device metadata from database using tokenHash
+        // SECURITY: Scope to authenticated user and validate token is active
         const oldDeviceRecord = await db.query.deviceTokens.findFirst({
-          where: eq(deviceTokens.tokenHash, currentDeviceTokenHash),
+          where: and(
+            eq(deviceTokens.tokenHash, currentDeviceTokenHash),
+            eq(deviceTokens.userId, userId),
+            isNull(deviceTokens.revokedAt),
+            gt(deviceTokens.expiresAt, new Date())
+          ),
           columns: { deviceId: true, platform: true, deviceName: true },
         });
         if (oldDeviceRecord) {

@@ -1355,7 +1355,7 @@ export async function validateToken(token: string): Promise<SessionClaims | null
 | 2 | Week 3-4 | Migrate web app to opaque tokens | ✅ Complete |
 | 3 | Week 5-6 | Migrate processor to verify via session store | ✅ Complete |
 | 4 | Week 7-8 | Migrate realtime service | ✅ Complete |
-| 5 | Week 9+ | Deprecate and remove JWT code paths | 🔄 In Progress |
+| 5 | Week 9+ | Deprecate and remove JWT code paths | ✅ Complete |
 
 ### 8.3 Device Token Migration (Phase 5 - Completed Jan 2026)
 
@@ -1369,6 +1369,7 @@ Device tokens have been migrated from JWT to opaque session-based tokens:
 - Updated `atomicDeviceTokenRotation()` and `atomicValidateOrCreateDeviceToken()` for opaque tokens
 
 **Security Improvements:**
+
 | Aspect | Before | After |
 |--------|--------|-------|
 | Token format | JWT (eyJhbGc...) | Opaque (ps_dev_...) |

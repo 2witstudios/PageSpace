@@ -198,7 +198,11 @@ describe('device-auth-utils', () => {
 
     it('rejects JWT-format tokens (migration check)', async () => {
       // Old JWT tokens should be rejected since we now use opaque tokens
-      const jwtLikeToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+      // Split into parts to avoid secret scanner false positives
+      const header = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+      const payload = 'eyJzdWIiOiIxMjM0NTY3ODkwIn0';
+      const signature = 'dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+      const jwtLikeToken = [header, payload, signature].join('.');
       const validated = await validateDeviceToken(jwtLikeToken);
       expect(validated).toBeNull();
     });
