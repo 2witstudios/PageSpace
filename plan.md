@@ -2,7 +2,7 @@
 
 > **Zero-Trust Enterprise Cloud Architecture Implementation**
 >
-> Status: Phase 0-2 Complete, Desktop WS Migration Complete, Device Token Migration Complete, Phase 3 Ready
+> Status: Phase 0-3 Complete, Desktop WS Migration Complete, Device Token Migration Complete, Phase 4 Ready
 > Created: 2026-01-05
 > Last Updated: 2026-01-23
 > Sources: cloud-security-analysis.md, cloud-security-gaps.md, cloud-security-tdd-spec.md, zero-trust-architecture.md
@@ -1776,13 +1776,15 @@ describe('Enforced File Repository', () => {
 
 ---
 
-## Phase 3: Distributed Security Services
+## Phase 3: Distributed Security Services ✅
 
 **Objective:** Implement SSRF protection, advanced rate limiting, and race condition prevention.
 
-### P3-T1: SSRF (Server-Side Request Forgery) Protection ⚠️ PARTIALLY COMPLETED
+**Status:** COMPLETED - All P3 tasks finished.
 
-**Status:** PARTIALLY COMPLETED - AI providers protected, SIEM webhooks unprotected
+### P3-T1: SSRF (Server-Side Request Forgery) Protection ✅ COMPLETED
+
+**Status:** COMPLETED - All external URL fetches now validated
 
 **Completed:**
 - [x] SSRF validator implemented: `packages/lib/src/security/ssrf-validator.ts`
@@ -1791,80 +1793,51 @@ describe('Enforced File Repository', () => {
 - [x] Metadata endpoints blocked
 - [x] Private IPs blocked (for AI providers)
 - [x] DNS rebinding prevented (for AI providers)
-
-**Remaining Work:**
-- [ ] SIEM webhooks use raw fetch without SSRF validation (`apps/processor/src/services/siem-adapter.ts:212`)
-- [ ] Syslog connections use raw sockets without IP validation (lines 357-481)
+- [x] SIEM webhooks validated: `apps/processor/src/services/siem-adapter.ts:213-226`
+- [x] Syslog connections validated: `apps/processor/src/services/siem-adapter.ts:508-527`
 
 **Acceptance Criteria:**
 - [x] AI provider URL fetches validated
 - [x] Metadata endpoints blocked
-- [x] Private IPs blocked (for AI providers)
-- [ ] ALL external URL fetches validated (SIEM webhooks still unprotected)
-
-**Security Gap:**
-The SIEM adapter's `sendWebhook()` function fetches to `AUDIT_WEBHOOK_URL` environment variable without any SSRF protection. This allows potential SSRF attacks via webhook configuration.
-
-**New Tasks Required:**
-- **P3-T1B:** Add SSRF protection to SIEM webhook adapter (see below)
-- **P3-T1C:** Add IP validation for syslog connections (see below)
+- [x] Private IPs blocked
+- [x] ALL external URL fetches validated
 
 **Dependencies:** None
 
 ---
 
-### P3-T1B: SIEM Webhook SSRF Protection
+### P3-T1B: SIEM Webhook SSRF Protection ✅ COMPLETED
 
-**Description:** Apply SSRF validation to SIEM webhook adapter to prevent attacks via webhook URL configuration.
+**Status:** COMPLETED
 
-**Files to Modify:**
-- `apps/processor/src/services/siem-adapter.ts`
-
-**Implementation:**
-```typescript
-import { validateExternalURL } from '@pagespace/lib/security';
-
-async function sendWebhook(config: SIEMConfig, event: AuditEvent): Promise<void> {
-  // SSRF Protection: Validate webhook URL before fetching
-  const urlValidation = validateExternalURL(config.url);
-  if (!urlValidation.valid) {
-    logger.error('SIEM webhook URL validation failed', {
-      url: config.url,
-      reason: urlValidation.error
-    });
-    throw new Error(`Invalid webhook URL: ${urlValidation.error}`);
-  }
-
-  const response = await fetch(config.url, {
-    // ... rest of implementation
-  });
-}
-```
+**Implementation:** `apps/processor/src/services/siem-adapter.ts:213-226`
+- Uses `validateExternalURL()` before webhook fetch
+- Returns `{ success: false, retryable: false }` for blocked URLs
+- Logs validation failures with error details
 
 **Acceptance Criteria:**
-- [ ] Webhook URL validated before fetch
-- [ ] Private IPs blocked
-- [ ] Localhost blocked
-- [ ] Metadata endpoints blocked
+- [x] Webhook URL validated before fetch
+- [x] Private IPs blocked
+- [x] Localhost blocked
+- [x] Metadata endpoints blocked
 
 **Dependencies:** P3-T1
 
 ---
 
-### P3-T1C: Syslog Connection Validation
+### P3-T1C: Syslog Connection Validation ✅ COMPLETED
 
-**Description:** Add IP address validation for syslog TCP/UDP connections.
+**Status:** COMPLETED
 
-**Files to Modify:**
-- `apps/processor/src/services/siem-adapter.ts`
-
-**Implementation:**
-Apply same IP validation logic used in SSRF validator to syslog host addresses before creating TCP/UDP sockets.
+**Implementation:** `apps/processor/src/services/siem-adapter.ts:508-527`
+- Uses `validateExternalURL()` with synthetic `syslog://` URL for DNS resolution checks
+- Returns `{ success: false, retryable: false }` for blocked hosts
+- Validates before TCP/UDP socket creation
 
 **Acceptance Criteria:**
-- [ ] Syslog host addresses validated
-- [ ] Private IPs blocked
-- [ ] Localhost blocked
+- [x] Syslog host addresses validated
+- [x] Private IPs blocked
+- [x] Localhost blocked
 
 **Dependencies:** P3-T1
 
@@ -1894,7 +1867,7 @@ Apply same IP validation logic used in SSRF validator to syslog host addresses b
 - [x] Serializable isolation level used
 
 **Known Issues:**
-- Dead code: `apps/web/src/lib/auth/auth-fetch.ts:821` lists `/api/auth/refresh` as CSRF-exempt (route doesn't exist)
+- ~~Dead code: `apps/web/src/lib/auth/auth-fetch.ts:821` lists `/api/auth/refresh` as CSRF-exempt (route doesn't exist)~~ **RESOLVED** - Removed in P3 Cleanup
 
 **Cleanup Required:**
 - Remove `/api/auth/refresh` from CSRF exemption list in auth-fetch.ts
@@ -2013,19 +1986,20 @@ if (age > SIGNATURE_MAX_AGE_MS) {  // 5 minutes
 
 ---
 
-## P3 Cleanup Tasks
+## P3 Cleanup Tasks ✅ COMPLETED
 
-### Remove Dead CSRF Exemption Code
+### Remove Dead CSRF Exemption Code ✅ COMPLETED
 
-**File:** `apps/web/src/lib/auth/auth-fetch.ts:821`
+**Status:** COMPLETED
 
-**Issue:** Lists `/api/auth/refresh` as CSRF-exempt, but route doesn't exist
+**File:** `apps/web/src/lib/auth/auth-fetch.ts:833`
 
-**Fix:** Remove `/api/auth/refresh` from `csrfExemptPaths` array
+**Implementation:** Route removed from `csrfExemptPaths` with comment:
+```typescript
+// REMOVED: '/api/auth/refresh' - route doesn't exist (dropped in device token migration)
+```
 
-**Background:** The codebase previously used JWT refresh tokens with a `/api/auth/refresh` endpoint. Migration `0042_conscious_tombstone.sql` dropped the `refresh_tokens` table and the system now uses device token rotation with device-specific endpoints (`/api/auth/device/refresh`, `/api/auth/mobile/refresh`). However, the CSRF exemption list still references the old generic endpoint.
-
-**Priority:** Low (dead code, no security impact)
+**Background:** The codebase previously used JWT refresh tokens with a `/api/auth/refresh` endpoint. Migration `0042_conscious_tombstone.sql` dropped the `refresh_tokens` table and the system now uses device token rotation with device-specific endpoints (`/api/auth/device/refresh`, `/api/auth/mobile/refresh`).
 
 ---
 
