@@ -455,6 +455,7 @@ export const useAuthStore = create<AuthState>()(
                   }
 
                   if (!refreshResult.shouldLogout) {
+                    // Transient failure - will retry later
                     console.log('[AUTH_STORE] Token refresh failed but not fatal - will retry later');
                     set({
                       failedAuthAttempts: get().failedAuthAttempts + 1,
@@ -462,6 +463,18 @@ export const useAuthStore = create<AuthState>()(
                     });
                     return;
                   }
+
+                  // Definitive failure - matches desktop behavior (line 434-441)
+                  // CRITICAL: authFailedPermanently survives page reload and breaks the loop
+                  console.log('[AUTH_STORE] Web auth recovery failed - user must login');
+                  set({
+                    user: null,
+                    isAuthenticated: false,
+                    authFailedPermanently: true, // CRITICAL: persists to localStorage
+                    failedAuthAttempts: get().failedAuthAttempts + 1,
+                    lastFailedAuthCheck: Date.now(),
+                  });
+                  return;
                 } catch (refreshError) {
                   console.error('[AUTH_STORE] Web token refresh failed:', refreshError);
                   set({

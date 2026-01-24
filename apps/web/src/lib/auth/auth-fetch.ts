@@ -411,7 +411,11 @@ class AuthFetch {
       }
 
       if (shouldLogout && typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('auth:expired'));
+        // Only dispatch auth:expired if user WAS authenticated (prevents loop for new users)
+        const { useAuthStore } = await import('@/stores/useAuthStore');
+        if (useAuthStore.getState().isAuthenticated) {
+          window.dispatchEvent(new CustomEvent('auth:expired'));
+        }
       }
 
       return success;
@@ -701,7 +705,11 @@ class AuthFetch {
       }
 
       if (result.shouldLogout && typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('auth:expired'));
+        // Only dispatch auth:expired if user WAS authenticated (prevents loop for new users)
+        const { useAuthStore } = await import('@/stores/useAuthStore');
+        if (useAuthStore.getState().isAuthenticated) {
+          window.dispatchEvent(new CustomEvent('auth:expired'));
+        }
       }
 
       return result;
