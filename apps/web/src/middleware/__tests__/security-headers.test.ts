@@ -22,11 +22,16 @@ vi.mock('next/server', () => ({
 }));
 
 describe('Security Headers', () => {
+  let lastRequestHeaders: Headers | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    lastRequestHeaders = undefined;
 
     // Reset the mock to return a fresh response with Map-based headers
-    vi.mocked(NextResponse.next).mockImplementation(() => {
+    // and capture request headers passed via options
+    vi.mocked(NextResponse.next).mockImplementation((options?: { request?: { headers?: Headers } }) => {
+      lastRequestHeaders = options?.request?.headers;
       const headersMap = new Map<string, string>();
       return {
         headers: {
@@ -37,6 +42,9 @@ describe('Security Headers', () => {
       } as unknown as NextResponse;
     });
   });
+
+  // Helper to get the last request headers passed to NextResponse.next()
+  const getLastRequestHeaders = () => lastRequestHeaders;
 
   describe('generateNonce', () => {
     it('generates unique nonces per call', () => {
@@ -107,6 +115,18 @@ describe('Security Headers', () => {
 
       expect(csp).toContain('ws:');
       expect(csp).toContain('wss:');
+    });
+
+    it('allows Google accounts domain for One Tap authentication', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).toContain('https://accounts.google.com');
+    });
+
+    it('allows Google accounts iframe via frame-src', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).toContain('frame-src https://accounts.google.com');
     });
   });
 
@@ -212,10 +232,11 @@ describe('Security Headers', () => {
   });
 
   describe('createSecureResponse', () => {
-    it('returns response with nonce header', () => {
-      const { response, nonce } = createSecureResponse(false);
+    it('passes nonce to request headers for layout access', () => {
+      const { nonce } = createSecureResponse(false);
 
-      expect(response.headers.get(NONCE_HEADER)).toBe(nonce);
+      const requestHeaders = getLastRequestHeaders();
+      expect(requestHeaders?.get(NONCE_HEADER)).toBe(nonce);
     });
 
     it('returns response with security headers applied', () => {
@@ -230,6 +251,16 @@ describe('Security Headers', () => {
       const { nonce: nonce2 } = createSecureResponse(false);
 
       expect(nonce1).not.toBe(nonce2);
+    });
+
+    it('clones existing request headers when provided', () => {
+      const mockRequest = new Request('https://example.com', {
+        headers: { 'x-custom-header': 'test-value' },
+      });
+      createSecureResponse(false, mockRequest);
+
+      const requestHeaders = getLastRequestHeaders();
+      expect(requestHeaders?.get('x-custom-header')).toBe('test-value');
     });
   });
 });

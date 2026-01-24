@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { monitoringMiddleware } from '@/middleware/monitoring';
-import { createSecureResponse, NONCE_HEADER } from '@/middleware/security-headers';
+import { createSecureResponse } from '@/middleware/security-headers';
 import { logSecurityEvent } from '@pagespace/lib/server';
 import {
   validateOriginForMiddleware,
@@ -63,7 +63,7 @@ export async function middleware(req: NextRequest) {
     const authHeader = req.headers.get('authorization');
     if (authHeader?.startsWith(MCP_BEARER_PREFIX)) {
       // API routes get restrictive CSP (no nonce needed)
-      const { response } = createSecureResponse(isProduction);
+      const { response } = createSecureResponse(isProduction, req);
       return response;
     }
 
@@ -76,7 +76,7 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives')
     ) {
-      const { response } = createSecureResponse(isProduction);
+      const { response } = createSecureResponse(isProduction, req);
       return response;
     }
 
@@ -101,10 +101,7 @@ export async function middleware(req: NextRequest) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response, nonce } = createSecureResponse(isProduction);
-
-    // Pass nonce to request headers for use in layout
-    response.headers.set(NONCE_HEADER, nonce);
+    const { response } = createSecureResponse(isProduction, req);
 
     return response;
   });

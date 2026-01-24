@@ -20,11 +20,13 @@ export const buildCSPPolicy = (nonce: string): string => {
       `'nonce-${nonce}'`,
       "'strict-dynamic'",
       "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
+      'https://accounts.google.com', // Google One Tap authentication
     ],
     'style-src': ["'self'", "'unsafe-inline'"],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
     'font-src': ["'self'", 'data:'],
+    'frame-src': ['https://accounts.google.com'], // Google One Tap iframe
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
@@ -74,12 +76,21 @@ export const applySecurityHeaders = (
 };
 
 export const createSecureResponse = (
-  isProduction: boolean
+  isProduction: boolean,
+  request?: Request
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
-  const response = NextResponse.next();
 
-  response.headers.set(NONCE_HEADER, nonce);
+  // Clone request headers and add nonce so it's available in layout via headers()
+  const requestHeaders = new Headers(request?.headers);
+  requestHeaders.set(NONCE_HEADER, nonce);
+
+  const response = NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
+
   applySecurityHeaders(response, { nonce, isProduction });
 
   return { response, nonce };
