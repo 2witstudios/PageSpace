@@ -45,9 +45,7 @@ export async function POST(req: Request) {
     const data = await consumeExchangeCode(code);
 
     if (!data) {
-      loggers.auth.warn('Exchange code invalid or expired', {
-        codePrefix: code.substring(0, 8),
-      });
+      // consumeExchangeCode already logs the warning with codePrefix
       return Response.json(
         { error: 'Invalid or expired exchange code' },
         { status: 401 }

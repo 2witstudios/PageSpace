@@ -935,12 +935,30 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     // Get base URL for API call
     const baseUrl = getAppUrl().replace('/dashboard', '');
 
-    // Exchange code for tokens via secure POST request
-    const response = await fetch(`${baseUrl}/api/auth/desktop/exchange`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
+    // Exchange code for tokens via secure POST request with 30s timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/api/auth/desktop/exchange`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        logger.error('[Auth Exchange] Request timed out');
+        mainWindow?.webContents.send('auth-error', {
+          error: 'Authentication request timed out',
+        });
+        return true;
+      }
+      throw fetchError; // Re-throw for outer catch
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Exchange failed' })) as { error?: string };
