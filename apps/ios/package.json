@@ -5,7 +5,8 @@
   "private": true,
   "license": "AGPL-3.0",
   "scripts": {
-    "build": "pnpm --filter web build && pnpm exec cap sync ios",
+    "build": "pnpm exec cap sync ios",
+    "build:full": "pnpm --filter web build && pnpm exec cap sync ios",
     "dev": "pnpm exec cap open ios",
     "sync": "pnpm exec cap sync ios",
     "update": "pnpm exec cap update ios",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "web": "workspace:*"
   }
 }
