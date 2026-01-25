@@ -58,6 +58,16 @@ export {
   subscriptionTierEnum,
 } from './schema/monitoring';
 
+// Security audit logging re-exports
+export {
+  securityAuditLog,
+  securityAuditLogRelations,
+  securityEventTypeEnum,
+  type SecurityEventType,
+  type InsertSecurityAuditLog,
+  type SelectSecurityAuditLog,
+} from './schema/security-audit';
+
 // Note: Auth transaction functions are exported from '@pagespace/db/transactions/auth-transactions'
 // They are NOT re-exported here to avoid circular dependency issues
 // Import directly: import { atomicDeviceTokenRotation, ... } from '@pagespace/db/transactions/auth-transactions';
