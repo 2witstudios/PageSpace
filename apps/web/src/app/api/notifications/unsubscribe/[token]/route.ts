@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db, emailNotificationPreferences, eq, and } from '@pagespace/db';
-import { jwtVerify } from 'jose';
+import { db, emailNotificationPreferences, emailUnsubscribeTokens, eq, and, gt, isNull } from '@pagespace/db';
+import { hashToken } from '@pagespace/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
 type NotificationType =
@@ -24,25 +24,31 @@ export async function GET(
   try {
     const { token } = await context.params;
 
-    // Verify the JWT token
-    const secret = new TextEncoder().encode(
-      process.env.JWT_SECRET || 'your_jwt_secret_here'
-    );
+    // Look up the opaque token by hash
+    const tokenHash = hashToken(token);
+    const record = await db.query.emailUnsubscribeTokens.findFirst({
+      where: and(
+        eq(emailUnsubscribeTokens.tokenHash, tokenHash),
+        gt(emailUnsubscribeTokens.expiresAt, new Date()),
+        isNull(emailUnsubscribeTokens.usedAt)
+      ),
+    });
 
-    let payload;
-    try {
-      const verified = await jwtVerify(token, secret);
-      payload = verified.payload;
-    } catch (error) {
-      loggers.api.error('Invalid unsubscribe token:', error as Error);
+    if (!record) {
+      loggers.api.warn('Invalid or expired unsubscribe token attempted');
       return NextResponse.json(
         { error: 'Invalid or expired unsubscribe link' },
         { status: 400 }
       );
     }
 
-    const userId = payload.userId as string;
-    const notificationType = payload.notificationType as NotificationType;
+    // Mark token as used (one-time use)
+    await db.update(emailUnsubscribeTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(emailUnsubscribeTokens.tokenHash, tokenHash));
+
+    const userId = record.userId;
+    const notificationType = record.notificationType as NotificationType;
 
     if (!userId || !notificationType) {
       return NextResponse.json(

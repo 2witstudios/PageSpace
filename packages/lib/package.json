@@ -345,7 +345,6 @@
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "ioredis": "^5.8.0",
-    "jose": "^6.0.11",
     "mammoth": "^1.10.0",
     "pako": "^2.1.0",
     "pdf-parse-debugging-disabled": "^1.1.1",

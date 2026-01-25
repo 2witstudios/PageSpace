@@ -158,6 +158,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   socketTokens: many(socketTokens),
   subscriptions: many(subscriptions),
   sessions: many(sessions),
+  emailUnsubscribeTokens: many(emailUnsubscribeTokens),
 }));
 
 export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
@@ -184,6 +185,33 @@ export const verificationTokensRelations = relations(verificationTokens, ({ one 
 export const socketTokensRelations = relations(socketTokens, ({ one }) => ({
   user: one(users, {
     fields: [socketTokens.userId],
+    references: [users.id],
+  }),
+}));
+
+// Email unsubscribe tokens for one-click email unsubscribe links
+// Replaces JWT-based tokens for Legacy JWT Deprecation (P5-T5)
+export const emailUnsubscribeTokens = pgTable('email_unsubscribe_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  // SECURITY: Only store hash, never plaintext token
+  tokenHash: text('token_hash').unique().notNull(),
+  tokenPrefix: text('token_prefix').notNull(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  notificationType: text('notification_type').notNull(),
+  expiresAt: timestamp('expires_at', { mode: 'date' }).notNull(),
+  usedAt: timestamp('used_at', { mode: 'date' }),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    tokenHashIdx: index('email_unsubscribe_tokens_token_hash_idx').on(table.tokenHash),
+    userIdx: index('email_unsubscribe_tokens_user_id_idx').on(table.userId),
+    expiresAtIdx: index('email_unsubscribe_tokens_expires_at_idx').on(table.expiresAt),
+  };
+});
+
+export const emailUnsubscribeTokensRelations = relations(emailUnsubscribeTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [emailUnsubscribeTokens.userId],
     references: [users.id],
   }),
 }));

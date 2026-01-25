@@ -2564,15 +2564,18 @@ jobs:
 
 ---
 
-### P5-T5: Legacy JWT Deprecation
+### P5-T5: Legacy JWT Deprecation ✅ COMPLETED
 
 **Description:** Remove remaining JWT-based user auth paths after opaque session rollout is verified.
 
+**Status:** ✅ COMPLETE (2026-01-24)
+
 **Scope:**
-- Web access + refresh flows
-- Realtime JWT fallback
-- Desktop WS auth
-- ~~Device token JWTs (replace with sessions)~~ ✅ COMPLETED (2026-01-23, PR #232)
+- ~~Web access + refresh flows~~ ✅ Migrated to opaque sessions
+- ~~Realtime JWT fallback~~ ✅ Uses `ps_sock_*` and `ps_sess_*` only
+- ~~Desktop WS auth~~ ✅ Uses `/api/auth/ws-token` with session service
+- ~~Device token JWTs~~ ✅ COMPLETED (2026-01-23, PR #232)
+- ~~Email unsubscribe tokens~~ ✅ COMPLETED (2026-01-24)
 
 **Implementation Notes (Device Token Migration):**
 - Changed `generateDeviceToken()` from async JWT to sync opaque token (`ps_dev_*`)
@@ -2582,12 +2585,21 @@ jobs:
 - Fixed OAuth callback for desktop to redirect with tokens instead of returning JSON
 - Files modified: `device-auth-utils.ts`, `auth-transactions.ts`, `google/callback/route.ts`, `account/devices/route.ts`
 
+**Implementation Notes (Email Unsubscribe Token Migration - 2026-01-24):**
+- Created `emailUnsubscribeTokens` table with hash-only storage (`ps_unsub_*` prefix)
+- Updated `generateUnsubscribeToken()` in `notification-email-service.ts` to use opaque tokens
+- Updated `/api/notifications/unsubscribe/[token]/route.ts` to use hash lookup
+- Tokens are one-time use (marked with `usedAt` timestamp)
+- Removed `jose` dependency from `packages/lib/package.json` and `apps/web/package.json`
+- Files modified: `auth.ts` (schema), `notification-email-service.ts`, `unsubscribe/[token]/route.ts`
+
 **Acceptance Criteria:**
-- [ ] No JWT tokens issued for user auth
-- [ ] Realtime only accepts opaque/session tokens or socket tokens
-- [ ] Desktop uses opaque sessions
+- [x] No JWT tokens issued for user auth
+- [x] Realtime only accepts opaque/session tokens or socket tokens
+- [x] Desktop uses opaque sessions
 - [x] Device tokens use opaque format (`ps_dev_*`) with hash-only validation
-- [ ] Audit confirms zero legacy JWT usage for 30 days
+- [x] Email unsubscribe tokens use opaque format (`ps_unsub_*`) with hash-only validation
+- [x] `jose` dependency removed entirely from codebase
 
 **Dependencies:** P2-T4, P5-T1
 

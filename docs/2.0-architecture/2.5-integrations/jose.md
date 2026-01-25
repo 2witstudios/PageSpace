@@ -1,6 +1,12 @@
 # Integration: jose
 
-This document outlines how pagespace uses the `jose` library for all JSON Web Token (JWT) operations, which are the foundation of our custom authentication system.
+> **⚠️ ARCHIVED (2026-01-24):** The `jose` library has been removed from PageSpace as part of the P5-T5 Legacy JWT Deprecation effort. All authentication now uses opaque session tokens stored in the database. See [authentication.md](../2.2-backend/authentication.md) for the current session-based architecture.
+
+---
+
+**HISTORICAL DOCUMENTATION** - This document describes the legacy JWT implementation that has been replaced.
+
+This document outlines how pagespace previously used the `jose` library for all JSON Web Token (JWT) operations.
 
 ## Overview
 

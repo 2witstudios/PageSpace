@@ -1,6 +1,8 @@
 # Authentication
 
-Authentication is managed by a **custom JWT-based system** with multiple authentication providers, providing secure user session management with advanced security features.
+Authentication is managed by a **custom opaque session-based system** with multiple authentication providers, providing secure user session management with advanced security features.
+
+> **Updated 2026-01-24:** PageSpace has migrated from JWT-based authentication to opaque session tokens. This improves security by eliminating payload exposure and simplifying token validation to hash-only database lookups.
 
 ## 1. Core Concepts
 
@@ -12,13 +14,15 @@ Authentication is managed by a **custom JWT-based system** with multiple authent
 
 ### 1.2. Session Management
 
-*   **JWT Tokens:** Sessions are managed using JSON Web Tokens (JWTs) with enhanced security features.
-*   **Token Types:** Two types of tokens are used:
-    *   **Access Token:** Short-lived (15 minutes) for API authentication
-    *   **Refresh Token:** Long-lived (7 days) for obtaining new access tokens
-*   **Token Security:** JWTs contain `userId`, `tokenVersion`, and `role` for comprehensive authorization.
-*   **Token Rotation:** Refresh tokens are single-use and deleted after each refresh operation.
-*   **Version Control:** `tokenVersion` field enables global session invalidation (e.g., on password change or security breach).
+*   **Opaque Sessions:** Sessions are managed using opaque tokens stored in the database with hash-only validation.
+*   **Token Types:** Multiple opaque token types are used:
+    *   **Session Token (`ps_sess_*`):** Primary session token for web authentication
+    *   **Device Token (`ps_dev_*`):** Long-lived token for desktop/mobile device authentication
+    *   **Socket Token (`ps_sock_*`):** Short-lived (5 min) token for WebSocket authentication
+    *   **Email Unsubscribe Token (`ps_unsub_*`):** One-time use token for email unsubscribe links
+*   **Token Security:** Tokens are stored as SHA-256 hashes in the database; raw tokens are never stored.
+*   **Token Rotation:** Device tokens support automatic rotation with grace periods.
+*   **Version Control:** `tokenVersion` field enables global session invalidation (e.g., on password change or "logout all devices").
 
 ### 1.3. Security Features
 
@@ -146,51 +150,55 @@ Authentication is managed by a **custom JWT-based system** with multiple authent
 
 ## 4. Core Functions
 
-The core authentication logic is located in `packages/lib/src/auth-utils.ts`.
+The core authentication logic is located in `packages/lib/src/auth/`.
 
-### decodeToken(token: string): Promise<UserPayload | null>
-**Purpose:** Verifies and decodes a JWT, returning the user payload if valid.
-**Location:** [`packages/lib/src/auth-utils.ts:29`](packages/lib/src/auth-utils.ts:29)
-**Dependencies:** `jose`
-**Security:** Validates token signature, expiration, issuer, audience, and payload structure
-**Last Updated:** 2025-08-21
+### Session Service (`packages/lib/src/auth/session-service.ts`)
 
-### generateAccessToken(userId: string, tokenVersion: number, role: string): Promise<string>
-**Purpose:** Creates a short-lived JWT (15 minutes) for API authentication.
-**Location:** [`packages/lib/src/auth-utils.ts:56`](packages/lib/src/auth-utils.ts:56)
-**Dependencies:** `jose`
-**Includes:** userId, tokenVersion, role, standard JWT claims
-**Last Updated:** 2025-08-21
+**createSession(userId: string, options?: SessionOptions): Promise<SessionResult>**
+**Purpose:** Creates a new opaque session token for user authentication.
+**Security:** Generates cryptographically secure token, stores hash in database
+**Last Updated:** 2026-01-24
 
-### generateRefreshToken(userId: string, tokenVersion: number, role: string): Promise<string>
-**Purpose:** Creates a long-lived JWT (7 days) for token refresh operations.
-**Location:** [`packages/lib/src/auth-utils.ts:67`](packages/lib/src/auth-utils.ts:67)
-**Dependencies:** `jose`
-**Security:** Includes JTI (JWT ID) for single-use enforcement
-**Last Updated:** 2025-08-21
+**validateSession(token: string): Promise<SessionData | null>**
+**Purpose:** Validates an opaque session token by hash lookup.
+**Security:** Uses constant-time comparison, checks expiration
+**Last Updated:** 2026-01-24
 
-### isAdmin(userPayload: UserPayload): boolean
-**Purpose:** Check if user has admin role.
-**Location:** [`packages/lib/src/auth-utils.ts:79`](packages/lib/src/auth-utils.ts:79)
-**Returns:** True if user role is 'admin'
-**Last Updated:** 2025-08-21
+### Token Utilities (`packages/lib/src/auth/token-utils.ts`)
 
-### requireAdminPayload(userPayload: UserPayload | null): void
-**Purpose:** Throws error if user is not admin.
-**Location:** [`packages/lib/src/auth-utils.ts:83`](packages/lib/src/auth-utils.ts:83)
-**Use Case:** Protecting admin-only endpoints
-**Last Updated:** 2025-08-21
+**generateToken(prefix: string): GeneratedToken**
+**Purpose:** Generates a cryptographically secure opaque token with prefix.
+**Returns:** `{ token, hash, tokenPrefix }`
+**Security:** Uses 32 bytes of entropy, base64url encoding
+**Last Updated:** 2026-01-24
+
+**hashToken(token: string): string**
+**Purpose:** Computes SHA-256 hash of a token for database storage/lookup.
+**Security:** One-way hash, constant-time friendly
+**Last Updated:** 2026-01-24
+
+### Device Auth (`packages/lib/src/auth/device-auth-utils.ts`)
+
+**generateDeviceToken(): GeneratedToken**
+**Purpose:** Creates a device-specific opaque token (`ps_dev_*`).
+**Security:** Used for desktop/mobile persistent authentication
+**Last Updated:** 2026-01-24
+
+**validateDeviceToken(token: string): Promise<DeviceTokenData | null>**
+**Purpose:** Validates device token by hash lookup with version check.
+**Security:** Supports "logout all devices" via tokenVersion
+**Last Updated:** 2026-01-24
 
 ---
 
 ## 5. Security Features
 
-### 5.1. JWT Configuration
+### 5.1. Token Security
 
-- **Algorithm:** HS256 (HMAC with SHA-256)
-- **Secret:** Configurable via `JWT_SECRET` environment variable (minimum 32 characters)
-- **Issuer/Audience:** Configurable for token validation
-- **Claims Validation:** Strict validation of all required payload fields
+- **Opaque Tokens:** No payload exposure - tokens are random strings with type prefixes
+- **Hash-Only Storage:** Only SHA-256 hashes stored in database, never raw tokens
+- **Prefix Identification:** Token prefixes (`ps_sess_`, `ps_dev_`, `ps_sock_`, `ps_unsub_`) for debugging
+- **Constant-Time Comparison:** Prevents timing attacks on token validation
 
 ### 5.2. Rate Limiting
 
@@ -200,10 +208,10 @@ The core authentication logic is located in `packages/lib/src/auth-utils.ts`.
 
 ### 5.3. Token Security
 
-- **Single-Use Refresh:** Refresh tokens are deleted after use to prevent replay attacks
-- **Token Theft Detection:** Reuse of refresh tokens triggers session invalidation
+- **Device Token Rotation:** Automatic rotation with grace periods for race condition handling
+- **One-Time Use Tokens:** Email unsubscribe tokens are marked as used after first use
 - **Version Control:** Global session invalidation via tokenVersion increment
-- **Secure Storage:** HTTP-only, secure, SameSite cookies
+- **Secure Storage:** HTTP-only, secure, SameSite cookies for session tokens
 
 ### 5.4. Activity Monitoring
 

@@ -1,4 +1,4 @@
-import { db, users, emailNotificationPreferences, emailNotificationLog, eq, and } from '@pagespace/db';
+import { db, users, emailNotificationPreferences, emailNotificationLog, emailUnsubscribeTokens, eq, and } from '@pagespace/db';
 import { sendEmail } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
 import { DirectMessageEmail } from '../email-templates/DirectMessageEmail';
@@ -11,7 +11,8 @@ import { PermissionRevokedEmail } from '../email-templates/PermissionRevokedEmai
 import { PermissionUpdatedEmail } from '../email-templates/PermissionUpdatedEmail';
 import { DriveJoinedEmail } from '../email-templates/DriveJoinedEmail';
 import { DriveRoleChangedEmail } from '../email-templates/DriveRoleChangedEmail';
-import { SignJWT } from 'jose';
+import { hashToken, getTokenPrefix } from '../auth/token-utils';
+import { randomBytes } from 'crypto';
 import type { ReactElement } from 'react';
 
 type NotificationType =
@@ -39,14 +40,21 @@ interface NotificationEmailData {
 }
 
 // Generate unsubscribe token for a specific user and notification type
+// Uses opaque tokens stored in database (replaces JWT for P5-T5 Legacy JWT Deprecation)
 async function generateUnsubscribeToken(userId: string, notificationType: NotificationType): Promise<string> {
-  const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'your_jwt_secret_here');
+  // Generate opaque token with prefix for identification
+  const token = `ps_unsub_${randomBytes(24).toString('base64url')}`;
+  const tokenHash = hashToken(token);
+  const tokenPrefix = getTokenPrefix(token);
 
-  const token = await new SignJWT({ userId, notificationType })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('365d') // Long-lived for unsubscribe links
-    .sign(secret);
+  // Store in database with 365-day expiry
+  await db.insert(emailUnsubscribeTokens).values({
+    tokenHash,
+    tokenPrefix,
+    userId,
+    notificationType,
+    expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 365 days
+  });
 
   return token;
 }

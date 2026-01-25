@@ -34,6 +34,8 @@ export {
   verificationTokensRelations,
   socketTokens,
   socketTokensRelations,
+  emailUnsubscribeTokens,
+  emailUnsubscribeTokensRelations,
   userRole,
   authProvider,
   platformType,
