@@ -10,6 +10,9 @@ let keyboardHideListener: PluginListenerHandle | null = null;
  * Sets up status bar appearance and keyboard behavior.
  */
 export async function setupIOSUI(): Promise<void> {
+  // Add platform class for CSS targeting (safe-area, keyboard styles)
+  document.documentElement.classList.add('capacitor-ios');
+
   // Configure status bar for dark theme
   try {
     await StatusBar.setStyle({ style: Style.Light });
