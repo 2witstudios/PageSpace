@@ -1,4 +1,4 @@
-import { SecureStorage } from '@aparajita/capacitor-secure-storage';
+import { PageSpaceKeychain } from './keychain-plugin';
 import { Preferences } from '@capacitor/preferences';
 
 const AUTH_KEY = 'pagespace_session';
@@ -18,14 +18,6 @@ export interface StoredAuthSession {
 let migrationComplete = false;
 
 /**
- * Ensure secure storage is initialized with correct settings.
- * Disables iCloud sync so tokens stay on-device only.
- */
-async function initSecureStorage(): Promise<void> {
-  await SecureStorage.setSynchronize(false);
-}
-
-/**
  * Migrate any existing session data from NSUserDefaults to Keychain.
  * This is a one-time migration that runs on first access after update.
  * Includes error handling to prevent crashes if Keychain access fails.
@@ -40,12 +32,10 @@ async function ensureMigrated(): Promise<void> {
   }
 
   try {
-    await initSecureStorage();
-
     // Migrate session from NSUserDefaults to Keychain
     const { value: legacySession } = await Preferences.get({ key: AUTH_KEY });
     if (legacySession) {
-      await SecureStorage.set(AUTH_KEY, legacySession, false, false);
+      await PageSpaceKeychain.set({ key: AUTH_KEY, value: legacySession });
       await Preferences.remove({ key: AUTH_KEY });
       console.log('[PageSpace iOS] Migrated session to Keychain');
     }
@@ -53,7 +43,7 @@ async function ensureMigrated(): Promise<void> {
     // Migrate CSRF token from NSUserDefaults to Keychain
     const { value: legacyCsrf } = await Preferences.get({ key: CSRF_KEY });
     if (legacyCsrf) {
-      await SecureStorage.set(CSRF_KEY, legacyCsrf, false, false);
+      await PageSpaceKeychain.set({ key: CSRF_KEY, value: legacyCsrf });
       await Preferences.remove({ key: CSRF_KEY });
       console.log('[PageSpace iOS] Migrated CSRF token to Keychain');
     }
@@ -93,8 +83,7 @@ export async function getOrCreateDeviceId(): Promise<string> {
 export async function storeSession(session: StoredAuthSession): Promise<void> {
   try {
     await ensureMigrated();
-    // set(key, data, convertDate, sync)
-    await SecureStorage.set(AUTH_KEY, JSON.stringify(session), false, false);
+    await PageSpaceKeychain.set({ key: AUTH_KEY, value: JSON.stringify(session) });
   } catch (error) {
     console.error('[PageSpace iOS] Failed to store session:', error);
     throw error; // Re-throw so caller knows login failed
@@ -107,8 +96,7 @@ export async function storeSession(session: StoredAuthSession): Promise<void> {
 export async function getSession(): Promise<StoredAuthSession | null> {
   try {
     await ensureMigrated();
-    // get(key, convertDate, sync)
-    const value = await SecureStorage.get(AUTH_KEY, false, false);
+    const { value } = await PageSpaceKeychain.get({ key: AUTH_KEY });
     if (!value || typeof value !== 'string') return null;
 
     try {
@@ -138,9 +126,8 @@ export async function getSessionToken(): Promise<string | null> {
 export async function clearSession(): Promise<void> {
   try {
     await ensureMigrated();
-    // remove(key, sync)
-    await SecureStorage.remove(AUTH_KEY, false);
-    await SecureStorage.remove(CSRF_KEY, false);
+    await PageSpaceKeychain.remove({ key: AUTH_KEY });
+    await PageSpaceKeychain.remove({ key: CSRF_KEY });
   } catch (error) {
     console.error('[PageSpace iOS] Failed to clear session:', error);
     // Don't re-throw - logout should succeed even if Keychain fails
@@ -153,7 +140,7 @@ export async function clearSession(): Promise<void> {
 export async function storeCsrfToken(token: string): Promise<void> {
   try {
     await ensureMigrated();
-    await SecureStorage.set(CSRF_KEY, token, false, false);
+    await PageSpaceKeychain.set({ key: CSRF_KEY, value: token });
   } catch (error) {
     console.error('[PageSpace iOS] Failed to store CSRF token:', error);
     // Don't re-throw - CSRF storage failure shouldn't break the app
@@ -166,7 +153,7 @@ export async function storeCsrfToken(token: string): Promise<void> {
 export async function getCsrfToken(): Promise<string | null> {
   try {
     await ensureMigrated();
-    const value = await SecureStorage.get(CSRF_KEY, false, false);
+    const { value } = await PageSpaceKeychain.get({ key: CSRF_KEY });
     return typeof value === 'string' ? value : null;
   } catch (error) {
     console.error('[PageSpace iOS] Failed to get CSRF token:', error);
