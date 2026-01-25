@@ -1,8 +1,10 @@
+import { SecureStorage } from '@aparajita/capacitor-secure-storage';
 import { Preferences } from '@capacitor/preferences';
 
 const AUTH_KEY = 'pagespace_session';
 const DEVICE_ID_KEY = 'pagespace_device_id';
 const CSRF_KEY = 'pagespace_csrf';
+const MIGRATED_KEY = 'pagespace_keychain_migrated';
 
 export interface StoredAuthSession {
   /** Opaque session token (ps_sess_*) for authentication */
@@ -13,9 +15,56 @@ export interface StoredAuthSession {
   deviceId?: string | null;
 }
 
+let migrationComplete = false;
+
+/**
+ * Ensure secure storage is initialized with correct settings.
+ * Disables iCloud sync so tokens stay on-device only.
+ */
+async function initSecureStorage(): Promise<void> {
+  await SecureStorage.setSynchronize(false);
+}
+
+/**
+ * Migrate any existing session data from NSUserDefaults to Keychain.
+ * This is a one-time migration that runs on first access after update.
+ */
+async function ensureMigrated(): Promise<void> {
+  if (migrationComplete) return;
+
+  const { value: migrated } = await Preferences.get({ key: MIGRATED_KEY });
+  if (migrated === 'true') {
+    migrationComplete = true;
+    return;
+  }
+
+  await initSecureStorage();
+
+  // Migrate session from NSUserDefaults to Keychain
+  const { value: legacySession } = await Preferences.get({ key: AUTH_KEY });
+  if (legacySession) {
+    await SecureStorage.set(AUTH_KEY, legacySession, false, false);
+    await Preferences.remove({ key: AUTH_KEY });
+    console.log('[PageSpace iOS] Migrated session to Keychain');
+  }
+
+  // Migrate CSRF token from NSUserDefaults to Keychain
+  const { value: legacyCsrf } = await Preferences.get({ key: CSRF_KEY });
+  if (legacyCsrf) {
+    await SecureStorage.set(CSRF_KEY, legacyCsrf, false, false);
+    await Preferences.remove({ key: CSRF_KEY });
+    console.log('[PageSpace iOS] Migrated CSRF token to Keychain');
+  }
+
+  await Preferences.set({ key: MIGRATED_KEY, value: 'true' });
+  migrationComplete = true;
+  console.log('[PageSpace iOS] Keychain migration complete');
+}
+
 /**
  * Get or create a unique device ID for this iOS installation.
  * Used for device tracking and session management.
+ * Note: Device ID is not sensitive, stored in NSUserDefaults.
  */
 export async function getOrCreateDeviceId(): Promise<string> {
   const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
@@ -30,29 +79,27 @@ export async function getOrCreateDeviceId(): Promise<string> {
 }
 
 /**
- * Store the authentication session.
- * Note: On iOS, Preferences uses NSUserDefaults which is NOT encrypted.
- * Data is sandboxed per-app but stored in plain text. For higher security,
- * consider using capacitor-secure-storage-plugin which uses iOS Keychain.
+ * Store the authentication session in iOS Keychain.
+ * Uses encrypted storage that persists across app reinstalls.
  */
 export async function storeSession(session: StoredAuthSession): Promise<void> {
-  await Preferences.set({
-    key: AUTH_KEY,
-    value: JSON.stringify(session),
-  });
+  await ensureMigrated();
+  // set(key, data, convertDate, sync)
+  await SecureStorage.set(AUTH_KEY, JSON.stringify(session), false, false);
 }
 
 /**
- * Retrieve the stored session token.
+ * Retrieve the stored session token from iOS Keychain.
  */
 export async function getSession(): Promise<StoredAuthSession | null> {
-  const { value } = await Preferences.get({ key: AUTH_KEY });
-  if (!value) return null;
+  await ensureMigrated();
+  // get(key, convertDate, sync)
+  const value = await SecureStorage.get(AUTH_KEY, false, false);
+  if (!value || typeof value !== 'string') return null;
 
   try {
     return JSON.parse(value) as StoredAuthSession;
   } catch {
-    // Corrupted data - clear it
     await clearSession();
     return null;
   }
@@ -68,25 +115,30 @@ export async function getSessionToken(): Promise<string | null> {
 
 /**
  * Clear all stored session data (logout).
+ * Removes tokens from Keychain but preserves device ID.
  */
 export async function clearSession(): Promise<void> {
-  await Preferences.remove({ key: AUTH_KEY });
-  await Preferences.remove({ key: CSRF_KEY });
+  await ensureMigrated();
+  // remove(key, sync)
+  await SecureStorage.remove(AUTH_KEY, false);
+  await SecureStorage.remove(CSRF_KEY, false);
 }
 
 /**
- * Store CSRF token separately for quick access.
+ * Store CSRF token in iOS Keychain.
  */
 export async function storeCsrfToken(token: string): Promise<void> {
-  await Preferences.set({ key: CSRF_KEY, value: token });
+  await ensureMigrated();
+  await SecureStorage.set(CSRF_KEY, token, false, false);
 }
 
 /**
- * Get stored CSRF token.
+ * Get stored CSRF token from iOS Keychain.
  */
 export async function getCsrfToken(): Promise<string | null> {
-  const { value } = await Preferences.get({ key: CSRF_KEY });
-  return value;
+  await ensureMigrated();
+  const value = await SecureStorage.get(CSRF_KEY, false, false);
+  return typeof value === 'string' ? value : null;
 }
 
 /**
