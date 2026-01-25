@@ -6,8 +6,8 @@ const config: CapacitorConfig = {
   appName: 'PageSpace',
   webDir: './public', // Fallback for offline scenarios; app loads from server.url
   server: {
-    // Production: load from hosted URL
-    url: 'https://pagespace.ai',
+    // Production: load directly to dashboard, bypassing landing page
+    url: 'https://pagespace.ai/dashboard',
     cleartext: false,
   },
   ios: {
