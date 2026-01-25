@@ -28,6 +28,7 @@ async function initSecureStorage(): Promise<void> {
 /**
  * Migrate any existing session data from NSUserDefaults to Keychain.
  * This is a one-time migration that runs on first access after update.
+ * Includes error handling to prevent crashes if Keychain access fails.
  */
 async function ensureMigrated(): Promise<void> {
   if (migrationComplete) return;
@@ -38,27 +39,34 @@ async function ensureMigrated(): Promise<void> {
     return;
   }
 
-  await initSecureStorage();
+  try {
+    await initSecureStorage();
 
-  // Migrate session from NSUserDefaults to Keychain
-  const { value: legacySession } = await Preferences.get({ key: AUTH_KEY });
-  if (legacySession) {
-    await SecureStorage.set(AUTH_KEY, legacySession, false, false);
-    await Preferences.remove({ key: AUTH_KEY });
-    console.log('[PageSpace iOS] Migrated session to Keychain');
+    // Migrate session from NSUserDefaults to Keychain
+    const { value: legacySession } = await Preferences.get({ key: AUTH_KEY });
+    if (legacySession) {
+      await SecureStorage.set(AUTH_KEY, legacySession, false, false);
+      await Preferences.remove({ key: AUTH_KEY });
+      console.log('[PageSpace iOS] Migrated session to Keychain');
+    }
+
+    // Migrate CSRF token from NSUserDefaults to Keychain
+    const { value: legacyCsrf } = await Preferences.get({ key: CSRF_KEY });
+    if (legacyCsrf) {
+      await SecureStorage.set(CSRF_KEY, legacyCsrf, false, false);
+      await Preferences.remove({ key: CSRF_KEY });
+      console.log('[PageSpace iOS] Migrated CSRF token to Keychain');
+    }
+
+    await Preferences.set({ key: MIGRATED_KEY, value: 'true' });
+    migrationComplete = true;
+    console.log('[PageSpace iOS] Keychain migration complete');
+  } catch (error) {
+    // Log error but don't crash - user can still log in fresh
+    console.error('[PageSpace iOS] Keychain migration failed:', error);
+    // Mark as migrated to prevent retry loop
+    migrationComplete = true;
   }
-
-  // Migrate CSRF token from NSUserDefaults to Keychain
-  const { value: legacyCsrf } = await Preferences.get({ key: CSRF_KEY });
-  if (legacyCsrf) {
-    await SecureStorage.set(CSRF_KEY, legacyCsrf, false, false);
-    await Preferences.remove({ key: CSRF_KEY });
-    console.log('[PageSpace iOS] Migrated CSRF token to Keychain');
-  }
-
-  await Preferences.set({ key: MIGRATED_KEY, value: 'true' });
-  migrationComplete = true;
-  console.log('[PageSpace iOS] Keychain migration complete');
 }
 
 /**
@@ -83,24 +91,34 @@ export async function getOrCreateDeviceId(): Promise<string> {
  * Uses encrypted storage that persists across app reinstalls.
  */
 export async function storeSession(session: StoredAuthSession): Promise<void> {
-  await ensureMigrated();
-  // set(key, data, convertDate, sync)
-  await SecureStorage.set(AUTH_KEY, JSON.stringify(session), false, false);
+  try {
+    await ensureMigrated();
+    // set(key, data, convertDate, sync)
+    await SecureStorage.set(AUTH_KEY, JSON.stringify(session), false, false);
+  } catch (error) {
+    console.error('[PageSpace iOS] Failed to store session:', error);
+    throw error; // Re-throw so caller knows login failed
+  }
 }
 
 /**
  * Retrieve the stored session token from iOS Keychain.
  */
 export async function getSession(): Promise<StoredAuthSession | null> {
-  await ensureMigrated();
-  // get(key, convertDate, sync)
-  const value = await SecureStorage.get(AUTH_KEY, false, false);
-  if (!value || typeof value !== 'string') return null;
-
   try {
-    return JSON.parse(value) as StoredAuthSession;
-  } catch {
-    await clearSession();
+    await ensureMigrated();
+    // get(key, convertDate, sync)
+    const value = await SecureStorage.get(AUTH_KEY, false, false);
+    if (!value || typeof value !== 'string') return null;
+
+    try {
+      return JSON.parse(value) as StoredAuthSession;
+    } catch {
+      await clearSession();
+      return null;
+    }
+  } catch (error) {
+    console.error('[PageSpace iOS] Failed to get session:', error);
     return null;
   }
 }
@@ -118,27 +136,42 @@ export async function getSessionToken(): Promise<string | null> {
  * Removes tokens from Keychain but preserves device ID.
  */
 export async function clearSession(): Promise<void> {
-  await ensureMigrated();
-  // remove(key, sync)
-  await SecureStorage.remove(AUTH_KEY, false);
-  await SecureStorage.remove(CSRF_KEY, false);
+  try {
+    await ensureMigrated();
+    // remove(key, sync)
+    await SecureStorage.remove(AUTH_KEY, false);
+    await SecureStorage.remove(CSRF_KEY, false);
+  } catch (error) {
+    console.error('[PageSpace iOS] Failed to clear session:', error);
+    // Don't re-throw - logout should succeed even if Keychain fails
+  }
 }
 
 /**
  * Store CSRF token in iOS Keychain.
  */
 export async function storeCsrfToken(token: string): Promise<void> {
-  await ensureMigrated();
-  await SecureStorage.set(CSRF_KEY, token, false, false);
+  try {
+    await ensureMigrated();
+    await SecureStorage.set(CSRF_KEY, token, false, false);
+  } catch (error) {
+    console.error('[PageSpace iOS] Failed to store CSRF token:', error);
+    // Don't re-throw - CSRF storage failure shouldn't break the app
+  }
 }
 
 /**
  * Get stored CSRF token from iOS Keychain.
  */
 export async function getCsrfToken(): Promise<string | null> {
-  await ensureMigrated();
-  const value = await SecureStorage.get(CSRF_KEY, false, false);
-  return typeof value === 'string' ? value : null;
+  try {
+    await ensureMigrated();
+    const value = await SecureStorage.get(CSRF_KEY, false, false);
+    return typeof value === 'string' ? value : null;
+  } catch (error) {
+    console.error('[PageSpace iOS] Failed to get CSRF token:', error);
+    return null;
+  }
 }
 
 /**
