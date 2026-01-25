@@ -1,5 +1,6 @@
 import { Metadata } from 'next';
-import { WifiOff, RefreshCw } from 'lucide-react';
+import { WifiOff } from 'lucide-react';
+import { RefreshButton } from './refresh-button';
 
 export const metadata: Metadata = {
   title: 'Offline',
@@ -20,13 +21,7 @@ export default function OfflinePage() {
           Check your internet connection and try again. Some features may be available from cache.
         </p>
 
-        <button
-          onClick={() => window.location.reload()}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          <RefreshCw className="h-4 w-4" />
-          Try again
-        </button>
+        <RefreshButton />
       </div>
     </div>
   );
