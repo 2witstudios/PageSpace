@@ -56,6 +56,8 @@ import {
   isHighFrequencyAccess,
   isNewUserAgent,
   isKnownBadIP,
+  extractNetworkPrefix,
+  expandIPv6,
 } from '../anomaly-detection';
 import { tryGetRateLimitRedisClient } from '../security-redis';
 import { securityAudit } from '../../audit/security-audit';
@@ -256,6 +258,7 @@ describe('Anomaly Detection', () => {
   });
 
   describe('detectImpossibleTravel', () => {
+    // IPv4 tests
     it('returns false for same IP', () => {
       const result = detectImpossibleTravel(
         '192.168.1.1',
@@ -286,6 +289,72 @@ describe('Anomaly Detection', () => {
         { ip: '10.0.1.1', timestamp: Date.now() - 2 * 60 * 60 * 1000 } // 2 hours ago
       );
       expect(result).toBe(false);
+    });
+
+    // IPv6 tests
+    it('returns false for same IPv6 address', () => {
+      const result = detectImpossibleTravel(
+        '2001:db8:abcd:1234::1',
+        { ip: '2001:db8:abcd:1234::1', timestamp: Date.now() - 1000 }
+      );
+      expect(result).toBe(false);
+    });
+
+    it('returns false for same IPv6 /48 prefix', () => {
+      const result = detectImpossibleTravel(
+        '2001:db8:abcd:1234::1',
+        { ip: '2001:db8:abcd:5678::2', timestamp: Date.now() - 1000 }
+      );
+      expect(result).toBe(false);
+    });
+
+    it('returns true for different IPv6 /48 prefix within 1 hour', () => {
+      const result = detectImpossibleTravel(
+        '2001:db8:abcd::1',
+        { ip: '2001:db8:ffff::2', timestamp: Date.now() - 30 * 60 * 1000 } // 30 minutes ago
+      );
+      expect(result).toBe(true);
+    });
+
+    it('returns false for different IPv6 prefix after 1+ hour', () => {
+      const result = detectImpossibleTravel(
+        '2001:db8:abcd::1',
+        { ip: '2001:db8:ffff::2', timestamp: Date.now() - 2 * 60 * 60 * 1000 } // 2 hours ago
+      );
+      expect(result).toBe(false);
+    });
+
+    it('handles full IPv6 format', () => {
+      const result = detectImpossibleTravel(
+        '2001:0db8:abcd:0000:0000:0000:0000:0001',
+        { ip: '2001:0db8:abcd:1234:5678:9abc:def0:0002', timestamp: Date.now() - 1000 }
+      );
+      expect(result).toBe(false);
+    });
+
+    it('handles compressed IPv6 with leading zeros', () => {
+      const result = detectImpossibleTravel(
+        '2001:db8:abcd::1',
+        { ip: '2001:0db8:abcd::2', timestamp: Date.now() - 1000 }
+      );
+      expect(result).toBe(false);
+    });
+
+    // Mixed IPv4/IPv6 tests (always different networks)
+    it('returns true for IPv4 to IPv6 transition within 1 hour', () => {
+      const result = detectImpossibleTravel(
+        '2001:db8:abcd::1',
+        { ip: '192.168.1.1', timestamp: Date.now() - 30 * 60 * 1000 } // 30 minutes ago
+      );
+      expect(result).toBe(true);
+    });
+
+    it('returns true for IPv6 to IPv4 transition within 1 hour', () => {
+      const result = detectImpossibleTravel(
+        '192.168.1.1',
+        { ip: '2001:db8:abcd::1', timestamp: Date.now() - 30 * 60 * 1000 } // 30 minutes ago
+      );
+      expect(result).toBe(true);
     });
   });
 
@@ -326,6 +395,58 @@ describe('Anomaly Detection', () => {
 
     it('returns false for value 0', () => {
       expect(isKnownBadIP(0)).toBe(false);
+    });
+  });
+
+  describe('expandIPv6', () => {
+    it('expands fully compressed IPv6 address (::)', () => {
+      expect(expandIPv6('::')).toBe('0000:0000:0000:0000:0000:0000:0000:0000');
+    });
+
+    it('expands leading compression (::1)', () => {
+      expect(expandIPv6('::1')).toBe('0000:0000:0000:0000:0000:0000:0000:0001');
+    });
+
+    it('expands trailing compression (2001::)', () => {
+      expect(expandIPv6('2001::')).toBe('2001:0000:0000:0000:0000:0000:0000:0000');
+    });
+
+    it('expands middle compression (2001:db8::1)', () => {
+      expect(expandIPv6('2001:db8::1')).toBe('2001:0db8:0000:0000:0000:0000:0000:0001');
+    });
+
+    it('expands longer middle compression (2001:db8:abcd::1234)', () => {
+      expect(expandIPv6('2001:db8:abcd::1234')).toBe('2001:0db8:abcd:0000:0000:0000:0000:1234');
+    });
+
+    it('handles already full IPv6 address', () => {
+      expect(expandIPv6('2001:0db8:abcd:1234:5678:9abc:def0:0001')).toBe('2001:0db8:abcd:1234:5678:9abc:def0:0001');
+    });
+
+    it('pads short hextets', () => {
+      expect(expandIPv6('2001:db8:a:b:c:d:e:f')).toBe('2001:0db8:000a:000b:000c:000d:000e:000f');
+    });
+  });
+
+  describe('extractNetworkPrefix', () => {
+    it('extracts /16 prefix from IPv4 address', () => {
+      expect(extractNetworkPrefix('192.168.1.100')).toBe('192.168');
+    });
+
+    it('extracts /48 prefix from full IPv6 address', () => {
+      expect(extractNetworkPrefix('2001:0db8:abcd:1234:5678:9abc:def0:0001')).toBe('2001:0db8:abcd');
+    });
+
+    it('extracts /48 prefix from compressed IPv6 address', () => {
+      expect(extractNetworkPrefix('2001:db8:abcd::1')).toBe('2001:0db8:abcd');
+    });
+
+    it('extracts /48 prefix from ::1', () => {
+      expect(extractNetworkPrefix('::1')).toBe('0000:0000:0000');
+    });
+
+    it('extracts /48 prefix from 2001::', () => {
+      expect(extractNetworkPrefix('2001::')).toBe('2001:0000:0000');
     });
   });
 

@@ -69,12 +69,57 @@ const LOCATION_TTL_SECONDS = 86400; // 24 hours
 const USER_AGENT_SET_TTL_SECONDS = 604800; // 7 days
 
 /**
+ * Expand compressed IPv6 address to full format.
+ * e.g., "2001:db8::1" -> "2001:0db8:0000:0000:0000:0000:0000:0001"
+ *
+ * @param ip - IPv6 address (may be compressed)
+ * @returns Fully expanded IPv6 address with 8 hextets, each 4 chars
+ */
+export function expandIPv6(ip: string): string {
+  // Handle :: compression
+  if (ip.includes('::')) {
+    const [left, right] = ip.split('::');
+    const leftParts = left ? left.split(':') : [];
+    const rightParts = right ? right.split(':') : [];
+    const missing = 8 - leftParts.length - rightParts.length;
+    const zeros = Array(missing).fill('0000');
+    const allParts = [...leftParts, ...zeros, ...rightParts];
+    return allParts.map(p => p.padStart(4, '0')).join(':');
+  }
+
+  // No compression, just pad each hextet
+  return ip.split(':').map(p => p.padStart(4, '0')).join(':');
+}
+
+/**
+ * Extract network prefix from IP address for comparison.
+ * IPv4: /16 prefix (first two octets)
+ * IPv6: /48 prefix (first three hextets)
+ *
+ * @param ip - IP address (IPv4 or IPv6)
+ * @returns Network prefix string
+ */
+export function extractNetworkPrefix(ip: string): string {
+  if (ip.includes(':')) {
+    // IPv6 - extract first 3 hextets (/48 prefix)
+    const expanded = expandIPv6(ip);
+    return expanded.split(':').slice(0, 3).join(':');
+  } else {
+    // IPv4 - extract first 2 octets (/16 prefix)
+    return ip.split('.').slice(0, 2).join('.');
+  }
+}
+
+/**
  * Detect impossible travel based on IP changes within short time windows.
  *
- * Uses a simplified heuristic: different /16 subnet within 1 hour is suspicious.
+ * Uses a simplified heuristic:
+ * - IPv4: different /16 subnet within 1 hour is suspicious
+ * - IPv6: different /48 prefix within 1 hour is suspicious
+ *
  * Production implementations should use GeoIP for more accurate detection.
  *
- * @param currentIp - Current request IP address
+ * @param currentIp - Current request IP address (IPv4 or IPv6)
  * @param lastLocation - Previous location data
  * @returns true if impossible travel detected
  */
@@ -95,11 +140,11 @@ export function detectImpossibleTravel(
     return false;
   }
 
-  // Extract /16 subnet prefixes (first two octets)
-  const currentPrefix = currentIp.split('.').slice(0, 2).join('.');
-  const lastPrefix = lastLocation.ip.split('.').slice(0, 2).join('.');
+  // Extract network prefix (handles both IPv4 and IPv6)
+  const currentPrefix = extractNetworkPrefix(currentIp);
+  const lastPrefix = extractNetworkPrefix(lastLocation.ip);
 
-  // Different /16 subnet in under an hour is suspicious
+  // Different network prefix in under an hour is suspicious
   return currentPrefix !== lastPrefix;
 }
 

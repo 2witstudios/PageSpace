@@ -111,7 +111,7 @@ export const securityAuditLog = pgTable('security_audit_log', {
   timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
 
   // Hash chain integrity
-  previousHash: text('previous_hash'),
+  previousHash: text('previous_hash').notNull(),
   eventHash: text('event_hash').notNull(),
 }, (table) => ({
   // Time-based queries (most common access pattern)
