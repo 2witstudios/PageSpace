@@ -1,0 +1,21 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "M96WTV3CKX.ai.pagespace.app",
+        "paths": [
+          "/auth/callback/*",
+          "/api/auth/callback/*",
+          "/invite/*",
+          "/join/*"
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": [
+      "M96WTV3CKX.ai.pagespace.app"
+    ]
+  }
+}

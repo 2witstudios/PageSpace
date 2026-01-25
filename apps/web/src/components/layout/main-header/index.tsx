@@ -21,7 +21,7 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-50 liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
+    <header className="sticky top-0 z-50 pt-[env(safe-area-inset-top)] liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Button

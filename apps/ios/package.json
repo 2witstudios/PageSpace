@@ -1,0 +1,28 @@
+{
+  "name": "@pagespace/ios",
+  "version": "1.0.0",
+  "description": "PageSpace iOS App - Native wrapper for PageSpace using Capacitor",
+  "private": true,
+  "license": "AGPL-3.0",
+  "scripts": {
+    "build": "pnpm --filter web build && npx cap sync ios",
+    "dev": "npx cap open ios",
+    "sync": "npx cap sync ios",
+    "update": "npx cap update ios",
+    "add-platform": "npx cap add ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/preferences": "^7.0.0",
+    "@capacitor/keyboard": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/browser": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "typescript": "^5.8.3"
+  }
+}
