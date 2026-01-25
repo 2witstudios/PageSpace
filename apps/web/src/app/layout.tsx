@@ -37,6 +37,12 @@ export const metadata: Metadata = {
     ],
     apple: "/apple-touch-icon.png",
   },
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'PageSpace',
+  },
   openGraph: {
     type: 'website',
     locale: 'en_US',
@@ -47,6 +53,17 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     creator: '@pagespace',
   },
+  other: {
+    'mobile-web-app-capable': 'yes',
+  },
+};
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
 };
 
 export default async function RootLayout({
@@ -72,6 +89,21 @@ export default async function RootLayout({
           nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `__webpack_nonce__ = ${JSON.stringify(nonce)};`,
+          }}
+        />
+        {/* Register service worker for offline support */}
+        <script
+          nonce={nonce}
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js').catch(function(err) {
+                    console.log('ServiceWorker registration failed:', err);
+                  });
+                });
+              }
+            `,
           }}
         />
         <ThemeProvider

@@ -1,0 +1,46 @@
+# Dynamic pnpm package path resolution
+# Handles version changes without manual Podfile updates
+def resolve_pnpm_package(package_name)
+  base = '../../../../node_modules/.pnpm'
+  # Replace / with + for pnpm directory naming (e.g., @capacitor/ios -> @capacitor+ios)
+  dir_pattern = package_name.gsub('/', '+')
+  pattern = "#{base}/#{dir_pattern}@*/node_modules/#{package_name}"
+  matches = Dir.glob(pattern)
+  raise "Package not found: #{package_name}. Run 'pnpm install' first." if matches.empty?
+  # Use semantic version comparison (not lexicographic) for correct ordering
+  matches.max_by do |path|
+    version_match = path.match(%r{#{Regexp.escape(dir_pattern)}@([^_/]+)})
+    version_str = version_match ? version_match[1] : '0.0.0'
+    Gem::Version.new(version_str)
+  end
+end
+
+require_relative resolve_pnpm_package('@capacitor/ios') + '/scripts/pods_helpers'
+
+platform :ios, '14.0'
+use_frameworks!
+
+# workaround to avoid Xcode caching of Pods that requires
+# Product -> Clean Build Folder after new Cordova plugins installed
+# Requires CocoaPods 1.6 or newer
+install! 'cocoapods', :disable_input_output_paths => true
+
+def capacitor_pods
+  pod 'Capacitor', :path => resolve_pnpm_package('@capacitor/ios')
+  pod 'CapacitorCordova', :path => resolve_pnpm_package('@capacitor/ios')
+  pod 'CapacitorApp', :path => resolve_pnpm_package('@capacitor/app')
+  pod 'CapacitorPreferences', :path => resolve_pnpm_package('@capacitor/preferences')
+  pod 'CapacitorKeyboard', :path => resolve_pnpm_package('@capacitor/keyboard')
+  pod 'CapacitorStatusBar', :path => resolve_pnpm_package('@capacitor/status-bar')
+  pod 'CapacitorSplashScreen', :path => resolve_pnpm_package('@capacitor/splash-screen')
+  pod 'CapacitorBrowser', :path => resolve_pnpm_package('@capacitor/browser')
+end
+
+target 'App' do
+  capacitor_pods
+  # Add your Pods here
+end
+
+post_install do |installer|
+  assertDeploymentTarget(installer)
+end
