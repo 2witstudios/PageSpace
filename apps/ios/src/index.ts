@@ -35,7 +35,6 @@ export {
 // Re-export Capacitor utilities for convenience
 export { Capacitor } from '@capacitor/core';
 export { App } from '@capacitor/app';
-export { Preferences } from '@capacitor/preferences';
 export { Browser } from '@capacitor/browser';
 
 import { setupIOSUI } from './ui-setup';

@@ -28,12 +28,13 @@ install! 'cocoapods', :disable_input_output_paths => true
 def capacitor_pods
   pod 'Capacitor', :path => resolve_pnpm_package('@capacitor/ios')
   pod 'CapacitorCordova', :path => resolve_pnpm_package('@capacitor/ios')
+  pod 'AparajitaCapacitorSecureStorage', :path => resolve_pnpm_package('@aparajita/capacitor-secure-storage')
   pod 'CapacitorApp', :path => resolve_pnpm_package('@capacitor/app')
-  pod 'CapacitorPreferences', :path => resolve_pnpm_package('@capacitor/preferences')
-  pod 'CapacitorKeyboard', :path => resolve_pnpm_package('@capacitor/keyboard')
-  pod 'CapacitorStatusBar', :path => resolve_pnpm_package('@capacitor/status-bar')
-  pod 'CapacitorSplashScreen', :path => resolve_pnpm_package('@capacitor/splash-screen')
   pod 'CapacitorBrowser', :path => resolve_pnpm_package('@capacitor/browser')
+  pod 'CapacitorKeyboard', :path => resolve_pnpm_package('@capacitor/keyboard')
+  pod 'CapacitorPreferences', :path => resolve_pnpm_package('@capacitor/preferences')
+  pod 'CapacitorSplashScreen', :path => resolve_pnpm_package('@capacitor/splash-screen')
+  pod 'CapacitorStatusBar', :path => resolve_pnpm_package('@capacitor/status-bar')
 end
 
 target 'App' do

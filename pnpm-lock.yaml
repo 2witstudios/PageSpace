@@ -112,6 +112,9 @@ importers:
 
   apps/ios:
     dependencies:
+      '@aparajita/capacitor-secure-storage':
+        specifier: ^7.1.6
+        version: 7.1.6
       '@capacitor/app':
         specifier: ^7.0.0
         version: 7.1.1(@capacitor/core@7.4.5)
@@ -740,6 +743,10 @@ packages:
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
 
+  '@aparajita/capacitor-secure-storage@7.1.6':
+    resolution: {integrity: sha512-KIfLOm/oSciUiWsOMtMv2nzlnwW3LERid0DvZ3djt7UORBQvFqpvSefiLG5kkc8D34pGkb2ZqAz0ZprrI9LiTQ==}
+    engines: {node: '>=20.0.0'}
+
   '@asamuzakjp/css-color@3.2.0':
     resolution: {integrity: sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==}
 
@@ -974,6 +981,11 @@ packages:
 
   '@bundled-es-modules/statuses@1.0.1':
     resolution: {integrity: sha512-yn7BklA5acgcBr+7w064fGV+SGIFySjCKpqjcWgBAIfrAkY+4GQTJJHQMeT3V/sgz23VTEVV8TtOmkvJAhFVfg==}
+
+  '@capacitor/android@7.4.5':
+    resolution: {integrity: sha512-G76C+PGIFkG+hxj6JLlY003txRaGZwsXBPo4b4xiZMZaD6DG++sDCoumYl/5xL40dL2b8P5tb3CKf/khWyL2Gw==}
+    peerDependencies:
+      '@capacitor/core': ^7.4.0
 
   '@capacitor/app@7.1.1':
     resolution: {integrity: sha512-H4rmMXlL6GEDs2Yds5JvYqZxz4mdp7R4XdGJ7p+oGV+YapuQ2kW38UabuhdP6qSrKfIeLde6qx+8FEX02krypA==}
@@ -9145,6 +9157,7 @@ packages:
   tar@7.5.1:
     resolution: {integrity: sha512-nlGpxf+hv0v7GkWBK2V9spgactGOp0qvfWRxUMjqHyzrt3SgwE48DIv/FhqPHJYLHpgW1opq3nERbz5Anq7n1g==}
     engines: {node: '>=18'}
+    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exhorbitant rates) by contacting i@izs.me
 
   temp-file@3.4.0:
     resolution: {integrity: sha512-C5tjlC/HCtVUOi3KWVokd4vHVViOmGjtLwIh4MuzPo/nMYTV/p1urt3RnMz2IWXDdKEGJH3k5+KPxtqRsUYGtg==}
@@ -10030,6 +10043,13 @@ snapshots:
       package-manager-detector: 1.6.0
       tinyexec: 1.0.2
 
+  '@aparajita/capacitor-secure-storage@7.1.6':
+    dependencies:
+      '@capacitor/android': 7.4.5(@capacitor/core@7.4.5)
+      '@capacitor/app': 7.1.1(@capacitor/core@7.4.5)
+      '@capacitor/core': 7.4.5
+      '@capacitor/ios': 7.4.5(@capacitor/core@7.4.5)
+
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
       '@csstools/css-calc': 2.1.4(@csstools/css-parser-algorithms@3.0.5(@csstools/css-tokenizer@3.0.4))(@csstools/css-tokenizer@3.0.4)
@@ -10339,6 +10359,10 @@ snapshots:
   '@bundled-es-modules/statuses@1.0.1':
     dependencies:
       statuses: 2.0.1
+
+  '@capacitor/android@7.4.5(@capacitor/core@7.4.5)':
+    dependencies:
+      '@capacitor/core': 7.4.5
 
   '@capacitor/app@7.1.1(@capacitor/core@7.4.5)':
     dependencies:
