@@ -214,8 +214,12 @@ export class AnomalyDetector {
           riskScore += this.riskWeights.new_user_agent;
         }
 
-        // Add current user agent to known set (fire and forget)
-        redis.sadd(`user:${ctx.userId}:user_agents`, ctx.userAgent).catch(() => {});
+        // Add current user agent to known set and refresh TTL (fire and forget)
+        const userAgentKey = `user:${ctx.userId}:user_agents`;
+        const uaPipeline = redis.pipeline();
+        uaPipeline.sadd(userAgentKey, ctx.userAgent);
+        uaPipeline.expire(userAgentKey, USER_AGENT_SET_TTL_SECONDS);
+        uaPipeline.exec().catch(() => {});
       } catch (error) {
         loggers.api.debug('Anomaly detection: Failed to check user agent', { error });
       }

@@ -24,7 +24,7 @@
  */
 
 import { createHash } from 'crypto';
-import { db, securityAuditLog, desc, and, gte, lte, eq } from '@pagespace/db';
+import { db, securityAuditLog, desc, and, gte, lte, eq, sql } from '@pagespace/db';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db';
 
 /**
@@ -141,6 +141,9 @@ export class SecurityAuditService {
   /**
    * Log a security event with hash chain integrity.
    *
+   * Uses database transaction with FOR UPDATE locking to serialize concurrent writes
+   * and prevent hash chain forking (where multiple events share the same previousHash).
+   *
    * @param event - The security event to log
    */
   async logEvent(event: AuditEvent): Promise<void> {
@@ -150,32 +153,46 @@ export class SecurityAuditService {
     }
 
     const timestamp = new Date();
-    const previousHash = this.lastHash;
 
-    // Compute hash for this event
-    const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
+    await db.transaction(async (tx) => {
+      // Get last hash from DB with lock to serialize concurrent writes.
+      // FOR UPDATE on the most recent row prevents concurrent inserts from reading
+      // the same previousHash, which would fork the hash chain.
+      const lastRecord = await tx.execute(sql`
+        SELECT "eventHash"
+        FROM security_audit_log
+        ORDER BY timestamp DESC
+        LIMIT 1
+        FOR UPDATE
+      `);
 
-    // Insert the event
-    await db.insert(securityAuditLog).values({
-      eventType: event.eventType,
-      userId: event.userId,
-      sessionId: event.sessionId,
-      serviceId: event.serviceId,
-      resourceType: event.resourceType,
-      resourceId: event.resourceId,
-      ipAddress: event.ipAddress,
-      userAgent: event.userAgent,
-      geoLocation: event.geoLocation,
-      details: event.details,
-      riskScore: event.riskScore,
-      anomalyFlags: event.anomalyFlags,
-      timestamp,
-      previousHash,
-      eventHash,
+      const previousHash = (lastRecord.rows[0] as { eventHash: string } | undefined)?.eventHash ?? 'genesis';
+
+      // Compute hash for this event
+      const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
+
+      // Insert the event
+      await tx.insert(securityAuditLog).values({
+        eventType: event.eventType,
+        userId: event.userId,
+        sessionId: event.sessionId,
+        serviceId: event.serviceId,
+        resourceType: event.resourceType,
+        resourceId: event.resourceId,
+        ipAddress: event.ipAddress,
+        userAgent: event.userAgent,
+        geoLocation: event.geoLocation,
+        details: event.details,
+        riskScore: event.riskScore,
+        anomalyFlags: event.anomalyFlags,
+        timestamp,
+        previousHash,
+        eventHash,
+      });
+
+      // Update in-memory cache for reads (optimization for single-instance)
+      this.lastHash = eventHash;
     });
-
-    // Update lastHash for next event
-    this.lastHash = eventHash;
   }
 
   // ==========================================================================
@@ -416,13 +433,18 @@ export class SecurityAuditService {
       conditions.push(lte(securityAuditLog.timestamp, options.toTimestamp));
     }
 
-    const query = db
+    const baseQuery = db
       .select()
       .from(securityAuditLog)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(securityAuditLog.timestamp));
 
-    return query;
+    // Apply limit if specified
+    if (options.limit) {
+      return baseQuery.limit(options.limit);
+    }
+
+    return baseQuery;
   }
 
   /**

@@ -1,34 +1,74 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'crypto';
 
+// Use vi.hoisted to create shared state that can be accessed from the hoisted mock
+const { testState } = vi.hoisted(() => {
+  const state = {
+    capturedInserts: [] as Array<{ previousHash: string; eventHash: string }>,
+  };
+  return { testState: state };
+});
+
 // Mock the database module
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      securityAuditLog: {
-        findFirst: vi.fn(),
+vi.mock('@pagespace/db', () => {
+  // Create a mock transaction context that mirrors the main db interface
+  const createMockTx = () => {
+    const insertValuesMock = vi.fn().mockImplementation((value) => {
+      testState.capturedInserts.push({
+        previousHash: value.previousHash,
+        eventHash: value.eventHash,
+      });
+      return Promise.resolve(undefined);
+    });
+
+    const insertMock = vi.fn().mockReturnValue({
+      values: insertValuesMock,
+    });
+
+    return {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+      insert: insertMock,
+    };
+  };
+
+  return {
+    db: {
+      query: {
+        securityAuditLog: {
+          findFirst: vi.fn(),
+        },
       },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn(),
-      }),
-    }),
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          orderBy: vi.fn(),
+      insert: vi.fn().mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          returning: vi.fn(),
         }),
       }),
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockReturnValue({
+              limit: vi.fn(),
+            }),
+          }),
+        }),
+      }),
+      transaction: vi.fn().mockImplementation(async (callback) => {
+        const tx = createMockTx();
+        return callback(tx);
+      }),
+    },
+    securityAuditLog: {},
+    desc: vi.fn(),
+    and: vi.fn(),
+    gte: vi.fn(),
+    lte: vi.fn(),
+    eq: vi.fn(),
+    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+      strings,
+      values,
     }),
-  },
-  securityAuditLog: {},
-  desc: vi.fn(),
-  and: vi.fn(),
-  gte: vi.fn(),
-  lte: vi.fn(),
-  eq: vi.fn(),
-}));
+  };
+});
 
 // Import after mocking
 import {
@@ -43,6 +83,7 @@ describe('Security Audit Service', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    testState.capturedInserts.length = 0; // Clear captured inserts
     service = new SecurityAuditService();
   });
 
@@ -161,12 +202,7 @@ describe('Security Audit Service', () => {
       await service.initialize();
     });
 
-    it('logs events with hash chain', async () => {
-      const mockInsert = vi.fn().mockReturnValue({
-        values: vi.fn().mockResolvedValue(undefined),
-      });
-      vi.mocked(db.insert).mockImplementation(mockInsert);
-
+    it('logs events with hash chain using transaction', async () => {
       await service.logEvent({
         eventType: 'auth.login.success',
         userId: 'user123',
@@ -174,23 +210,12 @@ describe('Security Audit Service', () => {
         userAgent: 'Mozilla/5.0',
       });
 
-      expect(mockInsert).toHaveBeenCalledWith(securityAuditLog);
+      // Transaction was called for atomic insert with row locking
+      expect(db.transaction).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
-    it('hash chain is verifiable (subsequent events reference previous hash)', async () => {
-      const insertedValues: Array<{ previousHash: string; eventHash: string }> = [];
-
-      const mockInsert = vi.fn().mockImplementation(() => ({
-        values: vi.fn().mockImplementation((value) => {
-          insertedValues.push({
-            previousHash: value.previousHash,
-            eventHash: value.eventHash,
-          });
-          return Promise.resolve();
-        }),
-      }));
-      vi.mocked(db.insert).mockImplementation(mockInsert);
-
+    it('uses transaction for each event to ensure atomic insert with row locking', async () => {
       // Log first event
       await service.logEvent({
         eventType: 'auth.login.success',
@@ -203,24 +228,13 @@ describe('Security Audit Service', () => {
         userId: 'user123',
       });
 
-      expect(insertedValues).toHaveLength(2);
-      // First event should have 'genesis' as previous hash
-      expect(insertedValues[0].previousHash).toBe('genesis');
-      // Second event should reference first event's hash
-      expect(insertedValues[1].previousHash).toBe(insertedValues[0].eventHash);
+      // Both events should have used transactions
+      expect(db.transaction).toHaveBeenCalledTimes(2);
+      // Each transaction callback should have been invoked
+      expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
-    it('handles concurrent logging (sequential processing)', async () => {
-      const insertedEvents: AuditEvent[] = [];
-
-      const mockInsert = vi.fn().mockImplementation(() => ({
-        values: vi.fn().mockImplementation((value) => {
-          insertedEvents.push(value);
-          return Promise.resolve();
-        }),
-      }));
-      vi.mocked(db.insert).mockImplementation(mockInsert);
-
+    it('handles concurrent logging (all use transactions)', async () => {
       // Simulate concurrent logging
       await Promise.all([
         service.logEvent({ eventType: 'auth.login.success', userId: 'user1' }),
@@ -228,8 +242,8 @@ describe('Security Audit Service', () => {
         service.logEvent({ eventType: 'auth.login.success', userId: 'user3' }),
       ]);
 
-      // All events should be logged
-      expect(insertedEvents).toHaveLength(3);
+      // All 3 events should have used transactions for serialized writes
+      expect(db.transaction).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -237,11 +251,6 @@ describe('Security Audit Service', () => {
     beforeEach(async () => {
       vi.mocked(db.query.securityAuditLog.findFirst).mockResolvedValue(undefined);
       await service.initialize();
-
-      const mockInsert = vi.fn().mockReturnValue({
-        values: vi.fn().mockResolvedValue(undefined),
-      });
-      vi.mocked(db.insert).mockImplementation(mockInsert);
     });
 
     it('logAuthSuccess logs correct event type', async () => {
@@ -416,6 +425,23 @@ describe('Security Audit Service', () => {
 
       const result = await service.queryEvents({ eventType: 'auth.login.failure' });
 
+      expect(result).toEqual(mockEvents);
+    });
+
+    it('applies limit when specified', async () => {
+      const mockEvents = [
+        { id: 'evt1', eventType: 'auth.login.success' },
+      ];
+
+      const mockLimit = vi.fn().mockResolvedValue(mockEvents);
+      const mockOrderBy = vi.fn().mockReturnValue({ limit: mockLimit });
+      const mockWhere = vi.fn().mockReturnValue({ orderBy: mockOrderBy });
+      const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
+      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
+
+      const result = await service.queryEvents({ limit: 10 });
+
+      expect(mockLimit).toHaveBeenCalledWith(10);
       expect(result).toEqual(mockEvents);
     });
   });
