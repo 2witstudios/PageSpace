@@ -146,6 +146,13 @@ export function GoogleOneTap({
       return;
     }
 
+    // Don't run in Capacitor native app (use native Google Sign-In instead)
+    if (typeof window !== 'undefined' &&
+        (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()) {
+      console.debug('Google One Tap: Skipping on Capacitor native app');
+      return;
+    }
+
     // Don't run on mobile browsers or in-app browsers (social media webviews)
     // Google One Tap (FedCM) has limited support and causes login loops
     if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {

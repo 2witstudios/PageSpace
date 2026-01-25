@@ -36,7 +36,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
     // Dynamic imports for Capacitor plugins (only available in native context)
     const { SocialLogin } = await import('@capgo/capacitor-social-login');
     const { Preferences } = await import('@capacitor/preferences');
-    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage');
+    const { PageSpaceKeychain } = await import('./keychain-plugin');
 
     // Initialize the plugin with iOS client ID
     await SocialLogin.initialize({
@@ -50,6 +50,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
       provider: 'google',
       options: {
         scopes: ['email', 'profile'],
+        forcePrompt: true, // Always show account picker, don't auto-select cached account
       },
     });
 
@@ -92,18 +93,15 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
       throw new Error('No session token received from server');
     }
 
-    // Store tokens in iOS Keychain via SecureStorage
-    await SecureStorage.setSynchronize(false); // Disable iCloud sync for security
-    await SecureStorage.set(
-      'pagespace_session',
-      JSON.stringify({
+    // Store tokens in iOS Keychain via PageSpaceKeychain plugin
+    await PageSpaceKeychain.set({
+      key: 'pagespace_session',
+      value: JSON.stringify({
         sessionToken,
         csrfToken: csrfToken || null,
         deviceId,
       }),
-      false,
-      false
-    );
+    });
 
     console.log('[iOS Google Auth] Sign-in successful, tokens stored');
 
@@ -130,4 +128,52 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
  */
 export function isNativeGoogleAuthAvailable(): boolean {
   return isCapacitorApp() && getPlatform() === 'ios';
+}
+
+/**
+ * Retrieve stored session from iOS Keychain.
+ * Returns the full session object including sessionToken, csrfToken, and deviceId.
+ */
+export async function getStoredSession(): Promise<{
+  sessionToken: string;
+  csrfToken: string | null;
+  deviceId: string;
+} | null> {
+  if (!isCapacitorApp() || getPlatform() !== 'ios') {
+    return null;
+  }
+
+  try {
+    const { PageSpaceKeychain } = await import('./keychain-plugin');
+    const { value } = await PageSpaceKeychain.get({ key: 'pagespace_session' });
+    if (!value) return null;
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get session token from iOS Keychain for API authorization.
+ * Convenience wrapper that returns just the token.
+ */
+export async function getSessionToken(): Promise<string | null> {
+  const session = await getStoredSession();
+  return session?.sessionToken ?? null;
+}
+
+/**
+ * Clear stored session from iOS Keychain on logout.
+ */
+export async function clearStoredSession(): Promise<void> {
+  if (!isCapacitorApp() || getPlatform() !== 'ios') {
+    return;
+  }
+
+  try {
+    const { PageSpaceKeychain } = await import('./keychain-plugin');
+    await PageSpaceKeychain.remove({ key: 'pagespace_session' });
+  } catch (error) {
+    console.error('[iOS Google Auth] Failed to clear session:', error);
+  }
 }

@@ -2,7 +2,6 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { GitMerge, Folder, Code, MessageSquare, Shield, Zap, Users, HardDrive } from "lucide-react";
 import AuthButtons from "@/components/shared/AuthButtons";
-import NativeAppRedirect from "@/components/shared/NativeAppRedirect";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -121,7 +120,6 @@ export default async function Home() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <NativeAppRedirect />
       <GoogleOneTap context="signin" />
       <script
         type="application/ld+json"

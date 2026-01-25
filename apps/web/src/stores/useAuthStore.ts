@@ -305,6 +305,10 @@ export const useAuthStore = create<AuthState>()(
             const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
             const headers: Record<string, string> = {};
 
+            // Check for iOS Capacitor app
+            const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
+            const isIOS = isCapacitorApp() && getPlatform() === 'ios';
+
             if (isDesktop && window.electron) {
               const sessionToken = await window.electron.auth.getSessionToken();
 
@@ -358,6 +362,22 @@ export const useAuthStore = create<AuthState>()(
               } else {
                 headers['Authorization'] = `Bearer ${sessionToken}`;
               }
+            } else if (isIOS) {
+              // iOS: Get session token from Keychain
+              const { getSessionToken } = await import('@/lib/ios-google-auth');
+              const sessionToken = await getSessionToken();
+
+              if (!sessionToken) {
+                console.log('[AUTH_STORE] iOS: No session token in Keychain - user not logged in');
+                set({
+                  user: null,
+                  isAuthenticated: false,
+                  isLoading: false,
+                });
+                return;
+              }
+
+              headers['Authorization'] = `Bearer ${sessionToken}`;
             }
 
             const response = await fetch('/api/auth/me', {

@@ -100,8 +100,24 @@ function SignInForm() {
         const result = await nativeSignIn();
 
         if (result.success) {
+          // Clear authFailedPermanently flag directly in localStorage
+          // This prevents dashboard from skipping auth validation
+          try {
+            const stored = localStorage.getItem('auth-storage');
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (parsed.state?.authFailedPermanently) {
+                parsed.state.authFailedPermanently = false;
+                localStorage.setItem('auth-storage', JSON.stringify(parsed));
+              }
+            }
+          } catch {
+            // Ignore localStorage errors
+          }
+
           toast.success("Welcome! You've been signed in successfully.");
-          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
+          // Use window.location.href for Capacitor WebView - router.replace doesn't work reliably
+          window.location.href = result.isNewUser ? '/dashboard?welcome=true' : '/dashboard';
         } else {
           // Don't show error for cancellation
           if (result.error !== 'Sign-in cancelled') {
