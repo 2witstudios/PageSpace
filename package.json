@@ -25,7 +25,8 @@
     "check:fetch": "node scripts/check-fetch-auth.js",
     "knip": "knip",
     "knip:fix": "knip --fix",
-    "changelog:generate": "npx tsx scripts/changelog/index.ts"
+    "changelog:generate": "npx tsx scripts/changelog/index.ts",
+    "test:security": "./scripts/test-security.sh"
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",

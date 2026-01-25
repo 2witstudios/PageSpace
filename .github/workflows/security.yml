@@ -6,25 +6,49 @@ on:
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
+      - 'packages/lib/src/permissions/**'
+      - 'packages/lib/src/repositories/**'
       - 'packages/lib/src/__tests__/security-test-utils.ts'
       - 'packages/lib/src/__tests__/test-fixtures/security-fixtures.ts'
+      - 'packages/lib/src/__tests__/**/*(security|auth|csrf|permission|token|rate-limit|broadcast|encryption|multi-tenant)*.ts'
+      - 'packages/db/src/schema/auth.ts'
+      - 'packages/db/src/schema/sessions.ts'
+      - 'packages/db/src/transactions/**'
       - 'apps/web/src/lib/auth/**'
       - 'apps/web/src/app/api/auth/**'
+      - 'apps/web/src/middleware/**'
       - 'apps/processor/src/middleware/auth*'
+      - 'apps/processor/src/utils/security*'
+      - 'apps/realtime/src/**/*auth*'
+      - 'scripts/test-security.sh'
       - '.github/workflows/security.yml'
   pull_request:
     branches: [master]
     paths:
       - 'packages/lib/src/security/**'
       - 'packages/lib/src/auth/**'
+      - 'packages/lib/src/permissions/**'
+      - 'packages/lib/src/repositories/**'
       - 'packages/lib/src/__tests__/security-test-utils.ts'
       - 'packages/lib/src/__tests__/test-fixtures/security-fixtures.ts'
+      - 'packages/lib/src/__tests__/**/*(security|auth|csrf|permission|token|rate-limit|broadcast|encryption|multi-tenant)*.ts'
+      - 'packages/db/src/schema/auth.ts'
+      - 'packages/db/src/schema/sessions.ts'
+      - 'packages/db/src/transactions/**'
       - 'apps/web/src/lib/auth/**'
       - 'apps/web/src/app/api/auth/**'
+      - 'apps/web/src/middleware/**'
       - 'apps/processor/src/middleware/auth*'
+      - 'apps/processor/src/utils/security*'
+      - 'apps/realtime/src/**/*auth*'
+      - 'scripts/test-security.sh'
       - '.github/workflows/security.yml'
   # Allow manual trigger
   workflow_dispatch:
+  # Run on schedule for continuous security monitoring
+  schedule:
+    # Run at 6:00 UTC every day
+    - cron: '0 6 * * *'
 
 jobs:
   security-tests:
@@ -58,13 +82,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -72,18 +96,88 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run security tests
+      - name: Run database migrations
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+
+      - name: Run core security tests
         run: pnpm --filter @pagespace/lib vitest run src/security/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
-      - name: Run auth tests
+      - name: Run auth module tests
         run: pnpm --filter @pagespace/lib vitest run src/auth/
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run security utility tests
+        run: |
+          pnpm --filter @pagespace/lib vitest run src/__tests__/secure-compare.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/csrf-utils.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/token-utils.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/token-lookup.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/broadcast-auth.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/encryption-utils.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/device-auth-utils.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/rate-limit-utils.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run multi-tenant isolation tests
+        run: pnpm --filter @pagespace/lib vitest run src/__tests__/multi-tenant-isolation.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run permission tests
+        run: |
+          pnpm --filter @pagespace/lib vitest run src/__tests__/permissions.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/permissions-cached.test.ts
+          pnpm --filter @pagespace/lib vitest run src/__tests__/permission-cache.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run web app auth route tests
+        run: pnpm --filter web vitest run src/app/api/auth/__tests__/
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run web app auth library tests
+        run: pnpm --filter web vitest run src/lib/auth/__tests__/
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run security headers tests
+        run: pnpm --filter web vitest run src/middleware/__tests__/security-headers.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: test
+
+      - name: Run database transaction security tests
+        run: pnpm --filter @pagespace/db vitest run src/transactions/__tests__/auth-transactions.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
+      - name: Run processor security tests
+        run: pnpm --filter processor vitest run tests/security-utils.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
   dependency-audit:
@@ -92,13 +186,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -106,9 +200,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run audit
+      - name: Run audit (high severity)
         run: pnpm audit --audit-level=high
-        continue-on-error: true # Don't fail on audit warnings, but report them
+        continue-on-error: true
 
       - name: Check for critical vulnerabilities
         run: pnpm audit --audit-level=critical
@@ -119,13 +213,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Full history for secret scanning
+          fetch-depth: 0
 
       - name: TruffleHog Secret Scan
-        # Pinned to v3.92.4 (2025-12-19) for reproducibility; Dependabot updates this automatically
-        uses: trufflesecurity/trufflehog@v3.92.5
+        uses: trufflesecurity/trufflehog@v3.88.0
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
@@ -138,13 +231,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -157,3 +250,59 @@ jobs:
 
       - name: ESLint security rules
         run: pnpm --filter web lint
+
+  codeql-analysis:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
+
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [security-tests, dependency-audit, secret-scanning, static-analysis, codeql-analysis]
+    if: always()
+
+    steps:
+      - name: Check all security jobs
+        run: |
+          echo "Security Test Suite Summary"
+          echo "==========================="
+          echo ""
+          echo "Security Tests: ${{ needs.security-tests.result }}"
+          echo "Dependency Audit: ${{ needs.dependency-audit.result }}"
+          echo "Secret Scanning: ${{ needs.secret-scanning.result }}"
+          echo "Static Analysis: ${{ needs.static-analysis.result }}"
+          echo "CodeQL Analysis: ${{ needs.codeql-analysis.result }}"
+          echo ""
+
+          # Fail if any critical job failed
+          if [ "${{ needs.security-tests.result }}" == "failure" ]; then
+            echo "❌ Security tests failed"
+            exit 1
+          fi
+          if [ "${{ needs.dependency-audit.result }}" == "failure" ]; then
+            echo "❌ Dependency audit failed (critical vulnerabilities found)"
+            exit 1
+          fi
+          if [ "${{ needs.secret-scanning.result }}" == "failure" ]; then
+            echo "❌ Secret scanning found exposed secrets"
+            exit 1
+          fi
+
+          echo "✅ All critical security checks passed"

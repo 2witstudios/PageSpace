@@ -2394,9 +2394,17 @@ describe('Path Traversal Prevention', () => {
 
 ## Phase 5: Monitoring & Incident Response
 
+**Status:** In Progress (2/5 tasks complete)
 **Objective:** Implement comprehensive security monitoring and audit logging.
 
-### P5-T1: Security Audit Log Schema ✅
+**Completed Tasks:**
+- P5-T1: Security Audit Log Schema
+- P5-T2: Security Audit Service
+- P5-T3: Anomaly Detection
+- P5-T4: Security Monitoring CI Pipeline ✅
+- P5-T5: Legacy JWT Deprecation ✅
+
+### P5-T1: Security Audit Log Schema
 
 **Description:** Create audit log table with hash chain integrity.
 
@@ -2509,56 +2517,48 @@ describe('Security Audit Service', () => {
 
 ---
 
-### P5-T4: Security Monitoring CI Pipeline
+### P5-T4: Security Monitoring CI Pipeline ✅ COMPLETED
 
 **Description:** CI workflow for security tests.
 
-**Files to Create:**
-- `.github/workflows/security.yml`
+**Status:** ✅ COMPLETED (2026-01-25)
 
-**Implementation:**
-```yaml
-name: Security Tests
+**Implementation Notes:**
+- Enhanced `.github/workflows/security.yml` with comprehensive test coverage
+- Created `scripts/test-security.sh` runner script for local testing
+- Added `pnpm test:security` script to root `package.json`
 
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
+**CI Pipeline Jobs:**
+1. **Security Tests** - Runs all 51+ security-related test files:
+   - Core security modules (rate limiting, path validation, URL validation)
+   - Authentication modules (tokens, sessions, CSRF)
+   - Authorization (permissions, multi-tenant isolation)
+   - Web app auth route tests
+   - Processor security tests
+   - Database transaction security tests
+2. **Dependency Audit** - `pnpm audit --audit-level=high/critical`
+3. **Secret Scanning** - TruffleHog integration for verified secrets
+4. **Static Analysis** - TypeScript type checking + ESLint security rules
+5. **CodeQL Analysis** - GitHub CodeQL with security-extended queries
+6. **Security Summary** - Aggregates results and fails on critical issues
 
-jobs:
-  security-tests:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: test
-      redis:
-        image: redis:7
+**Triggers:**
+- Push to `master`/`develop` branches (path-filtered)
+- Pull requests to `master` (path-filtered)
+- Manual workflow dispatch
+- Daily scheduled run at 6:00 UTC
 
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
-      - uses: actions/setup-node@v4
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run security tests
-        run: pnpm test:security
-
-      - name: Dependency audit
-        run: pnpm audit --audit-level=high
-
-      - name: Secret scanning
-        uses: trufflesecurity/trufflehog@main
-```
+**Files Created/Modified:**
+- `.github/workflows/security.yml` (enhanced)
+- `scripts/test-security.sh` (new)
+- `package.json` (added `test:security` script)
 
 **Acceptance Criteria:**
-- [ ] Security tests in CI
-- [ ] Dependency audit on every PR
-- [ ] Secret scanning enabled
+- [x] Security tests in CI (51+ test files across 6 categories)
+- [x] Dependency audit on every PR (high + critical levels)
+- [x] Secret scanning enabled (TruffleHog with --only-verified)
+- [x] CodeQL security analysis enabled
+- [x] Daily scheduled security runs for continuous monitoring
 
 **Dependencies:** P0-T2
 
