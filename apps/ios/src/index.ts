@@ -19,7 +19,11 @@ export {
 } from './auth-bridge';
 
 // UI Configuration
-export { setupIOSUI, setStatusBarStyle } from './ui-setup';
+export {
+  setupIOSUI,
+  setStatusBarStyle,
+  cleanupKeyboardListeners,
+} from './ui-setup';
 
 // App Lifecycle
 export {
@@ -34,14 +38,14 @@ export { App } from '@capacitor/app';
 export { Preferences } from '@capacitor/preferences';
 export { Browser } from '@capacitor/browser';
 
+import { setupIOSUI } from './ui-setup';
+import { setupAppLifecycle } from './lifecycle';
+
 /**
  * Initialize the iOS native bridge.
  * Call this early in your app's startup.
  */
 export async function initializeIOSBridge(): Promise<void> {
-  const { setupIOSUI } = await import('./ui-setup');
-  const { setupAppLifecycle } = await import('./lifecycle');
-
   await setupIOSUI();
   setupAppLifecycle();
 

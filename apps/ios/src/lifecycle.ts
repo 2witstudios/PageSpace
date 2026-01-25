@@ -26,11 +26,11 @@ export function setupAppLifecycle(): void {
 
   // Hide splash screen after web app loads
   if (typeof window !== 'undefined') {
-    window.addEventListener('load', async () => {
-      // Small delay to ensure web app has rendered
-      setTimeout(async () => {
+    window.addEventListener('load', () => {
+      // Use requestAnimationFrame to ensure first paint is complete
+      requestAnimationFrame(async () => {
         await SplashScreen.hide({ fadeOutDuration: 300 });
-      }, 100);
+      });
     });
   }
 }
@@ -58,7 +58,18 @@ function handleDeepLink(url: string): void {
   console.log('[Lifecycle] Deep link received:', url);
 
   // Parse the URL to determine action
-  const parsedUrl = new URL(url);
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    console.error('[Lifecycle] Invalid deep link URL:', url);
+    // Still call custom handler with raw URL if defined
+    if (deepLinkHandler) {
+      deepLinkHandler(url);
+    }
+    return;
+  }
+
   const path = parsedUrl.pathname;
 
   // OAuth callback handling

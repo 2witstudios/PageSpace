@@ -4,7 +4,7 @@ import { KeyboardResize } from '@capacitor/keyboard';
 const config: CapacitorConfig = {
   appId: 'ai.pagespace.app',
   appName: 'PageSpace',
-  webDir: '../web/.next/static',
+  webDir: './public', // Fallback for offline scenarios; app loads from server.url
   server: {
     // Production: load from hosted URL
     url: 'https://pagespace.ai',
@@ -30,7 +30,7 @@ const config: CapacitorConfig = {
       resizeOnFullScreen: true,
     },
     StatusBar: {
-      style: 'dark',
+      style: 'light', // Light content (icons/text) on dark background
       backgroundColor: '#000000',
     },
   },

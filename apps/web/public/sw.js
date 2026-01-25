@@ -138,8 +138,16 @@ async function networkFirstWithOfflineFallback(request) {
     // Try cached version first
     const cached = await caches.match(request);
     if (cached) return cached;
+
     // Fall back to offline page
-    return caches.match('/offline');
+    const offlinePage = await caches.match('/offline');
+    if (offlinePage) return offlinePage;
+
+    // Ultimate fallback if offline page not cached
+    return new Response('You are offline', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   }
 }
 

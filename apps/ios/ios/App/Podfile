@@ -1,4 +1,16 @@
-require_relative '../../../../node_modules/.pnpm/@capacitor+ios@7.4.5_@capacitor+core@7.4.5/node_modules/@capacitor/ios/scripts/pods_helpers'
+# Dynamic pnpm package path resolution
+# Handles version changes without manual Podfile updates
+def resolve_pnpm_package(package_name)
+  base = '../../../../node_modules/.pnpm'
+  # Replace / with + for pnpm directory naming (e.g., @capacitor/ios -> @capacitor+ios)
+  dir_pattern = package_name.gsub('/', '+')
+  pattern = "#{base}/#{dir_pattern}@*/node_modules/#{package_name}"
+  matches = Dir.glob(pattern)
+  raise "Package not found: #{package_name}. Run 'pnpm install' first." if matches.empty?
+  matches.sort.last # Use latest version if multiple exist
+end
+
+require_relative resolve_pnpm_package('@capacitor/ios') + '/scripts/pods_helpers'
 
 platform :ios, '14.0'
 use_frameworks!
@@ -9,14 +21,14 @@ use_frameworks!
 install! 'cocoapods', :disable_input_output_paths => true
 
 def capacitor_pods
-  pod 'Capacitor', :path => '../../../../node_modules/.pnpm/@capacitor+ios@7.4.5_@capacitor+core@7.4.5/node_modules/@capacitor/ios'
-  pod 'CapacitorCordova', :path => '../../../../node_modules/.pnpm/@capacitor+ios@7.4.5_@capacitor+core@7.4.5/node_modules/@capacitor/ios'
-  pod 'CapacitorApp', :path => '../../../../node_modules/.pnpm/@capacitor+app@7.1.1_@capacitor+core@7.4.5/node_modules/@capacitor/app'
-  pod 'CapacitorPreferences', :path => '../../../../node_modules/.pnpm/@capacitor+preferences@7.0.3_@capacitor+core@7.4.5/node_modules/@capacitor/preferences'
-  pod 'CapacitorKeyboard', :path => '../../../../node_modules/.pnpm/@capacitor+keyboard@7.0.4_@capacitor+core@7.4.5/node_modules/@capacitor/keyboard'
-  pod 'CapacitorStatusBar', :path => '../../../../node_modules/.pnpm/@capacitor+status-bar@7.0.4_@capacitor+core@7.4.5/node_modules/@capacitor/status-bar'
-  pod 'CapacitorSplashScreen', :path => '../../../../node_modules/.pnpm/@capacitor+splash-screen@7.0.4_@capacitor+core@7.4.5/node_modules/@capacitor/splash-screen'
-  pod 'CapacitorBrowser', :path => '../../../../node_modules/.pnpm/@capacitor+browser@7.0.3_@capacitor+core@7.4.5/node_modules/@capacitor/browser'
+  pod 'Capacitor', :path => resolve_pnpm_package('@capacitor/ios')
+  pod 'CapacitorCordova', :path => resolve_pnpm_package('@capacitor/ios')
+  pod 'CapacitorApp', :path => resolve_pnpm_package('@capacitor/app')
+  pod 'CapacitorPreferences', :path => resolve_pnpm_package('@capacitor/preferences')
+  pod 'CapacitorKeyboard', :path => resolve_pnpm_package('@capacitor/keyboard')
+  pod 'CapacitorStatusBar', :path => resolve_pnpm_package('@capacitor/status-bar')
+  pod 'CapacitorSplashScreen', :path => resolve_pnpm_package('@capacitor/splash-screen')
+  pod 'CapacitorBrowser', :path => resolve_pnpm_package('@capacitor/browser')
 end
 
 target 'App' do

@@ -5,11 +5,11 @@
   "private": true,
   "license": "AGPL-3.0",
   "scripts": {
-    "build": "pnpm --filter web build && npx cap sync ios",
-    "dev": "npx cap open ios",
-    "sync": "npx cap sync ios",
-    "update": "npx cap update ios",
-    "add-platform": "npx cap add ios"
+    "build": "pnpm --filter web build && pnpm exec cap sync ios",
+    "dev": "pnpm exec cap open ios",
+    "sync": "pnpm exec cap sync ios",
+    "update": "pnpm exec cap update ios",
+    "add-platform": "pnpm exec cap add ios"
   },
   "dependencies": {
     "@capacitor/core": "^7.0.0",

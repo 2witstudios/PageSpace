@@ -21,14 +21,19 @@ export async function getOrCreateDeviceId(): Promise<string> {
   const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
   if (value) return value;
 
-  const deviceId = crypto.randomUUID();
+  const deviceId =
+    typeof crypto?.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await Preferences.set({ key: DEVICE_ID_KEY, value: deviceId });
   return deviceId;
 }
 
 /**
- * Store the authentication session securely.
- * On iOS, Preferences uses NSUserDefaults which is encrypted at rest.
+ * Store the authentication session.
+ * Note: On iOS, Preferences uses NSUserDefaults which is NOT encrypted.
+ * Data is sandboxed per-app but stored in plain text. For higher security,
+ * consider using capacitor-secure-storage-plugin which uses iOS Keychain.
  */
 export async function storeSession(session: StoredAuthSession): Promise<void> {
   await Preferences.set({
