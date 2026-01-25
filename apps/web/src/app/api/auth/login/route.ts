@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -13,8 +13,6 @@ import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-s
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
-
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const loginSchema = z.object({
   email: z.email(),

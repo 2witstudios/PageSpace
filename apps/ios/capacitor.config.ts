@@ -33,6 +33,11 @@ const config: CapacitorConfig = {
       style: 'light', // Light content (icons/text) on dark background
       backgroundColor: '#000000',
     },
+    SocialLogin: {
+      google: {
+        iOSClientId: '636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com',
+      },
+    },
   },
 };
 

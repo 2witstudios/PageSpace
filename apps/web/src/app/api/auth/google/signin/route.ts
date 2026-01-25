@@ -42,7 +42,7 @@ function isSafeReturnUrl(url: string | undefined): boolean {
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),
-  platform: z.enum(['web', 'desktop']).optional(),
+  platform: z.enum(['web', 'desktop', 'ios']).optional(),
   deviceId: z.string().optional(), // For device tracking on all platforms
   deviceName: z.string().optional(), // Human-readable device name
 });

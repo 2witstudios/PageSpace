@@ -1,7 +1,7 @@
 import { users, userAiSettings, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { createNotification } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -20,8 +20,6 @@ import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const signupSchema = z.object({
   name: z.string().min(1, 'Name is required'),

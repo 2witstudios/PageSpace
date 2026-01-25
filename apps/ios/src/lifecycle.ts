@@ -1,6 +1,6 @@
 import { App, type URLOpenListenerEvent } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
-import { getSessionToken } from './auth-bridge';
+import { getSessionToken, storeSession, getOrCreateDeviceId } from './auth-bridge';
 
 type DeepLinkHandler = (url: string) => void;
 
@@ -70,9 +70,16 @@ function handleDeepLink(url: string): void {
     return;
   }
 
+  // Handle auth-exchange deep links (OAuth callback with exchange code)
+  // URL format: pagespace://auth-exchange?code=...&provider=...
+  if (parsedUrl.host === 'auth-exchange' || parsedUrl.pathname === '/auth-exchange') {
+    handleAuthExchange(parsedUrl);
+    return;
+  }
+
   const path = parsedUrl.pathname;
 
-  // OAuth callback handling
+  // OAuth callback handling (legacy path-based)
   if (path.includes('/auth/callback') || path.includes('/api/auth/callback')) {
     // Forward to custom handler if set
     if (deepLinkHandler) {
@@ -89,6 +96,74 @@ function handleDeepLink(url: string): void {
   // Universal link to specific page
   if (deepLinkHandler) {
     deepLinkHandler(url);
+  }
+}
+
+/**
+ * Handle OAuth auth-exchange deep links.
+ * Exchanges the one-time code for session tokens and stores them in Keychain.
+ */
+async function handleAuthExchange(url: URL): Promise<void> {
+  const code = url.searchParams.get('code');
+  const isNewUser = url.searchParams.get('isNewUser') === 'true';
+
+  if (!code) {
+    console.error('[Auth] Missing exchange code in deep link');
+    if (typeof window !== 'undefined') {
+      window.location.href = '/auth/signin?error=missing_code';
+    }
+    return;
+  }
+
+  console.log('[Auth] Exchanging code for tokens...');
+
+  try {
+    // Get the API base URL from the current page or use production URL
+    const baseUrl = typeof window !== 'undefined' && window.location.origin
+      ? window.location.origin
+      : 'https://pagespace.ai';
+
+    // Exchange code for tokens via the desktop exchange endpoint (platform-agnostic)
+    const response = await fetch(`${baseUrl}/api/auth/desktop/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('[Auth] Exchange failed:', response.status, errorData);
+      throw new Error(`Exchange failed: ${response.status}`);
+    }
+
+    const { sessionToken, csrfToken } = await response.json();
+
+    if (!sessionToken) {
+      throw new Error('No session token received from exchange');
+    }
+
+    // Get device ID for storage
+    const deviceId = await getOrCreateDeviceId();
+
+    // Store tokens in iOS Keychain
+    await storeSession({
+      sessionToken,
+      csrfToken: csrfToken || null,
+      deviceId,
+    });
+
+    console.log('[Auth] Tokens stored successfully, navigating to app');
+
+    // Navigate to the app
+    if (typeof window !== 'undefined') {
+      const destination = isNewUser ? '/dashboard?welcome=true' : '/dashboard';
+      window.location.href = destination;
+    }
+  } catch (error) {
+    console.error('[Auth] Token exchange failed:', error);
+    if (typeof window !== 'undefined') {
+      window.location.href = '/auth/signin?error=exchange_failed';
+    }
   }
 }
 

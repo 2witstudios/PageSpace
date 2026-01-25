@@ -91,8 +91,28 @@ function SignInForm() {
     setError(null);
 
     try {
-      // Detect platform and get deviceId for ALL platforms
+      // Detect platform
       const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
+
+      // Check for iOS native app - use native Google Sign-In SDK
+      const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } = await import('@/lib/ios-google-auth');
+      if (isNativeGoogleAuthAvailable()) {
+        const result = await nativeSignIn();
+
+        if (result.success) {
+          toast.success("Welcome! You've been signed in successfully.");
+          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
+        } else {
+          // Don't show error for cancellation
+          if (result.error !== 'Sign-in cancelled') {
+            setError(result.error || 'Google sign-in failed');
+            toast.error(result.error || 'Google sign-in failed');
+          }
+        }
+        return;
+      }
+
+      // Desktop or web: Use OAuth redirect flow
       let deviceId: string;
       let deviceName: string;
 

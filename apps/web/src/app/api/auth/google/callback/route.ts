@@ -1,6 +1,6 @@
 import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -15,8 +15,6 @@ import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function isSafeReturnUrl(url: string | undefined): boolean {
   if (!url) return true;
@@ -311,6 +309,61 @@ export async function GET(req: Request) {
       }
 
       loggers.auth.info('Desktop OAuth deep link redirect', {
+        userId: user.id,
+        provider: 'google',
+        hasNewUserFlag: !!provisionedDrive,
+      });
+
+      return NextResponse.redirect(deepLinkUrl.toString());
+    }
+
+    // iOS PLATFORM: Same as desktop - use secure exchange code flow
+    if (platform === 'ios') {
+      // Generate deviceId if not provided
+      const iosDeviceId = deviceId || createId();
+
+      // Generate device token
+      const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        providedDeviceToken: undefined,
+        userId: user.id,
+        deviceId: iosDeviceId,
+        platform: 'ios',
+        tokenVersion: user.tokenVersion,
+        deviceName: deviceName || req.headers.get('user-agent') || 'iOS App',
+        userAgent: req.headers.get('user-agent') || undefined,
+        ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
+      });
+
+      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
+
+      trackAuthEvent(user.id, 'login', {
+        email,
+        ip: clientIP,
+        provider: 'google-oauth',
+        platform: 'ios',
+        userAgent: req.headers.get('user-agent'),
+      });
+
+      // SECURE TOKEN HANDOFF: Generate one-time exchange code
+      // Tokens are stored server-side in Redis, only opaque code appears in URL
+      const exchangeCode = await createExchangeCode({
+        sessionToken,
+        csrfToken,
+        deviceToken: deviceTokenValue,
+        provider: 'google',
+        userId: user.id,
+        createdAt: Date.now(),
+      });
+
+      // Build deep link URL with only the opaque exchange code
+      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      deepLinkUrl.searchParams.set('code', exchangeCode);
+      deepLinkUrl.searchParams.set('provider', 'google');
+      if (provisionedDrive) {
+        deepLinkUrl.searchParams.set('isNewUser', 'true');
+      }
+
+      loggers.auth.info('iOS OAuth deep link redirect', {
         userId: user.id,
         provider: 'google',
         hasNewUserFlag: !!provisionedDrive,

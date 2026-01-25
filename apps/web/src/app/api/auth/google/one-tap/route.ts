@@ -1,6 +1,6 @@
 import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -15,8 +15,6 @@ import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
