@@ -14,7 +14,8 @@ import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { isCapacitorApp } from "@/lib/capacitor-bridge";
 import { useCallback, useEffect, useState } from "react";
 import {
   Sheet,
@@ -31,6 +32,7 @@ interface LayoutProps {
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
   // Use selective Zustand subscriptions to prevent re-renders when unrelated store values change
@@ -59,6 +61,15 @@ function Layout({ children }: LayoutProps) {
       setRightSheetOpen(false);
     }
   }, [isSheetBreakpoint]);
+
+  // Auto-close sheets on navigation (Capacitor only)
+  // This fixes the issue where tapping a sidebar item navigates but leaves the sheet open
+  useEffect(() => {
+    if (isCapacitorApp() && isSheetBreakpoint) {
+      setLeftSheetOpen(false);
+      setRightSheetOpen(false);
+    }
+  }, [pathname, isSheetBreakpoint]);
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {

@@ -7,6 +7,7 @@ import { InputActions } from './InputActions';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 export interface ChatInputProps {
   /** Current input value */
@@ -135,6 +136,18 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       },
     });
 
+    // Mobile keyboard management
+    const keyboard = useMobileKeyboard();
+    const prevStreamingRef = useRef(isStreaming);
+
+    // Dismiss keyboard when streaming starts
+    useEffect(() => {
+      if (isStreaming && !prevStreamingRef.current) {
+        keyboard.dismiss();
+      }
+      prevStreamingRef.current = isStreaming;
+    }, [isStreaming, keyboard]);
+
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
       clear: () => textareaRef.current?.clear(),
@@ -142,6 +155,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
     const handleSend = () => {
       if (value.trim() && !disabled) {
+        keyboard.dismiss();
         onSend();
       }
     };

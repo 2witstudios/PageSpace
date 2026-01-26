@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 interface FloatingCellEditorProps {
   value: string;
@@ -32,6 +33,9 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const [mounted, setMounted] = useState(false);
   const suggestionContext = useSuggestionContext();
+  const { height: keyboardHeight } = useMobileKeyboard();
+  // Track IME composition state to prevent accidental commits during predictive text
+  const [isComposing, setIsComposing] = useState(false);
 
   // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
   // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
@@ -63,6 +67,10 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
 
       switch (event.key) {
         case 'Enter':
+          // Don't commit during IME composition (predictive text, etc.)
+          if (isComposing || event.nativeEvent.isComposing) {
+            return;
+          }
           if (!event.shiftKey) {
             event.preventDefault();
             onCommit(value);
@@ -87,7 +95,7 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
           break;
       }
     },
-    [value, onCommit, onCancel, suggestion, suggestionContext.isOpen]
+    [value, onCommit, onCancel, suggestion, suggestionContext.isOpen, isComposing]
   );
 
   const handleBlur = useCallback(
@@ -149,10 +157,26 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
   const minWidth = isMobile ? 100 : 120;
   const minHeight = isMobile ? 36 : cellRect.height;
 
+  // Calculate position, accounting for keyboard on iOS
+  const viewportHeight = typeof window !== 'undefined'
+    ? (window.visualViewport?.height ?? window.innerHeight)
+    : 0;
+  const availableHeight = viewportHeight - keyboardHeight;
+  const cellBottom = cellRect.top + Math.max(cellRect.height, minHeight);
+
+  // If cell would be hidden behind keyboard, move it up
+  let adjustedTop = cellRect.top;
+  if (keyboardHeight > 0 && cellBottom > availableHeight - 20) {
+    // Move editor to be visible above keyboard with some padding
+    adjustedTop = availableHeight - Math.max(cellRect.height, minHeight) - 20;
+    // Don't go above the viewport
+    adjustedTop = Math.max(20, adjustedTop);
+  }
+
   const style: React.CSSProperties = {
     position: 'fixed',
     left: cellRect.left,
-    top: cellRect.top,
+    top: adjustedTop,
     width: Math.max(cellRect.width, minWidth),
     height: Math.max(cellRect.height, minHeight),
     zIndex: 1000,
@@ -172,6 +196,8 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
         onChange={(e) => suggestion.handleValueChange(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
+        onCompositionStart={() => setIsComposing(true)}
+        onCompositionEnd={() => setIsComposing(false)}
         className={cn(
           'h-full w-full rounded-none border-2 border-primary bg-background px-2 py-1.5 text-sm',
           'sm:px-3 sm:py-2',

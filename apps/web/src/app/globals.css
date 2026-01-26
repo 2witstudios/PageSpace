@@ -732,6 +732,25 @@
   -webkit-text-size-adjust: 100%;
 }
 
+/* Prevent iOS input zoom - font-size < 16px causes auto-zoom on focus */
+.capacitor-ios input,
+.capacitor-ios textarea,
+.capacitor-ios select,
+.capacitor-ios [contenteditable] {
+  font-size: 16px !important;
+}
+
+/* Smooth keyboard padding transition for elements that adapt to keyboard */
+.capacitor-ios .keyboard-animate {
+  transition: padding-bottom 0.25s ease-out;
+}
+
+/* Utility for elements that need keyboard-aware bottom positioning */
+.capacitor-ios .keyboard-aware-bottom {
+  padding-bottom: var(--keyboard-height, 0px);
+  transition: padding-bottom 0.25s ease-out;
+}
+
 @media print {
   /* Hide ALL UI chrome - comprehensive selectors */
   header,
