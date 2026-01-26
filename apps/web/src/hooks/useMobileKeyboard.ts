@@ -83,7 +83,7 @@ export function useMobileKeyboard(): UseMobileKeyboardReturn {
   }, []);
 
   // Dismiss keyboard - only works on iOS Capacitor
-  const dismiss = useCallback(async () => {
+  const dismiss = useCallback(() => {
     if (typeof window === 'undefined') return;
 
     // Only attempt dismiss on iOS Capacitor

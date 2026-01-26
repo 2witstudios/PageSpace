@@ -25,17 +25,39 @@ export interface InlinePositionParams {
  * Get the effective viewport height, accounting for iOS keyboard.
  * Uses Visual Viewport API when available (modern browsers, iOS Safari).
  */
-function getViewportHeight(): number {
+export function getViewportHeight(): number {
   return window.visualViewport?.height ?? window.innerHeight;
 }
 
+// Keyboard height cache to reduce getComputedStyle calls during rapid position updates
+let cachedKeyboardHeight: number | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 100; // Invalidate after 100ms
+
 /**
  * Get the current keyboard height from CSS variable.
+ * Uses caching to reduce getComputedStyle calls during cursor movement/typing.
  */
-function getKeyboardOffset(): number {
+export function getKeyboardOffset(): number {
   if (typeof window === 'undefined') return 0;
+
+  const now = Date.now();
+  if (cachedKeyboardHeight !== null && (now - cacheTimestamp) < CACHE_TTL_MS) {
+    return cachedKeyboardHeight;
+  }
+
   const cssHeight = getComputedStyle(document.body).getPropertyValue('--keyboard-height');
-  return parseInt(cssHeight, 10) || 0;
+  cachedKeyboardHeight = parseInt(cssHeight, 10) || 0;
+  cacheTimestamp = now;
+  return cachedKeyboardHeight;
+}
+
+/**
+ * Clear the keyboard height cache. Useful for testing.
+ */
+export function clearKeyboardOffsetCache(): void {
+  cachedKeyboardHeight = null;
+  cacheTimestamp = 0;
 }
 
 export const positioningService = {
