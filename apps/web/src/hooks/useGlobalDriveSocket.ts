@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useSocket } from './useSocket';
+import { useAuth } from './useAuth';
 import { useDriveStore } from './useDrive';
 import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/websocket';
 
@@ -9,10 +10,14 @@ import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/websocket';
  */
 export function useGlobalDriveSocket() {
   const socket = useSocket();
+  const { user } = useAuth();
   const { fetchDrives } = useDriveStore();
   
   // Track if we've joined the global drives channel
   const hasJoinedRef = useRef(false);
+
+  // Store the user ID we joined with, so we can properly leave on cleanup
+  const joinedUserIdRef = useRef<string | null>(null);
   
   // Debounced refetch to handle rapid consecutive operations
   const revalidationTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -60,11 +65,12 @@ export function useGlobalDriveSocket() {
     console.log('🌍 useGlobalDriveSocket: Setting up global drive listeners');
 
     // Join the global drives channel AND user-specific drives channel
-    if (!hasJoinedRef.current) {
+    if (!hasJoinedRef.current && user?.id) {
       socket.emit('join_global_drives');
-      socket.emit('join', `user:${socket.id}:drives`); // Join user-specific channel for member events
+      socket.emit('join', `user:${user.id}:drives`); // Join user-specific channel for member events
       hasJoinedRef.current = true;
-      console.log('🌍 Joined global:drives and user:drives channels');
+      joinedUserIdRef.current = user.id;
+      console.log(`🌍 Joined global:drives and user:${user.id}:drives channels`);
     }
 
     // Listen for drive events (both global and user-specific)
@@ -82,39 +88,31 @@ export function useGlobalDriveSocket() {
       console.log(`🌍 Listening for ${event}`);
     });
 
-    // Cleanup function
+    // Cleanup function - runs when socket, user?.id, or handleDriveEvent changes
     return () => {
       console.log('🌍 useGlobalDriveSocket: Cleaning up global drive listeners');
-      
+
       // Remove all event listeners
       events.forEach(event => {
         socket.off(event, handleDriveEvent);
       });
-      
+
       // Clear any pending debounced refetch
       if (revalidationTimeoutRef.current) {
         clearTimeout(revalidationTimeoutRef.current);
         revalidationTimeoutRef.current = undefined;
       }
-    };
-  }, [socket, handleDriveEvent]);
 
-  // Clean up timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (revalidationTimeoutRef.current) {
-        clearTimeout(revalidationTimeoutRef.current);
-      }
-      
-      // Leave the global drives channel and user-specific drives channel when unmounting
-      if (socket && hasJoinedRef.current) {
+      // Leave the global drives channel and user-specific drives channel
+      if (hasJoinedRef.current && joinedUserIdRef.current) {
         socket.emit('leave_global_drives');
-        socket.emit('leave', `user:${socket.id}:drives`);
+        socket.emit('leave', `user:${joinedUserIdRef.current}:drives`);
+        console.log(`🌍 Left global:drives and user:${joinedUserIdRef.current}:drives channels`);
         hasJoinedRef.current = false;
-        console.log('🌍 Left global:drives and user:drives channels');
+        joinedUserIdRef.current = null;
       }
     };
-  }, [socket]);
+  }, [socket, user?.id, handleDriveEvent]);
 
   return {
     isSocketConnected: !!socket?.connected,

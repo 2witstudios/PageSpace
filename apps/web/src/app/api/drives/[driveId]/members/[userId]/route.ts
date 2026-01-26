@@ -7,6 +7,8 @@ import {
   getMemberPermissions,
   updateMemberRole,
   updateMemberPermissions,
+  invalidateUserPermissions,
+  invalidateDrivePermissions,
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
@@ -151,6 +153,12 @@ export async function PATCH(
       currentUserId,
       permissions
     );
+
+    // Invalidate permission caches so changes take effect immediately
+    await Promise.all([
+      invalidateUserPermissions(userId),
+      invalidateDrivePermissions(driveId),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -299,6 +307,12 @@ export async function DELETE(
         driveName: access.drive.name,
       })
     );
+
+    // Invalidate permission caches so removed user loses access immediately
+    await Promise.all([
+      invalidateUserPermissions(targetUserId),
+      invalidateDrivePermissions(driveId),
+    ]);
 
     // Note: No in-app notification sent for removal - the broadcast event
     // will trigger a page refresh/redirect for the removed user, and the
