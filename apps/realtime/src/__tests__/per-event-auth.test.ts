@@ -75,6 +75,9 @@ describe('SensitiveEventType', () => {
       'file_upload',
       'comment_create',
       'comment_delete',
+      'task_create',
+      'task_update',
+      'task_delete',
     ];
 
     sensitiveEvents.forEach(event => {

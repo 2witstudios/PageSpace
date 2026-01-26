@@ -90,7 +90,8 @@ function getRevocationMessage(payload: AccessRevokedPayload): string {
 export function useAccessRevocation() {
   const router = useRouter();
   const pathname = usePathname();
-  const getSocket = useSocketStore((state) => state.getSocket);
+  // Subscribe to socket instance directly so effect re-runs on reconnect
+  const socket = useSocketStore((state) => state.socket);
 
   // Use ref to track handled rooms and prevent duplicate toasts
   const handledRooms = useRef(new Set<string>());
@@ -136,7 +137,6 @@ export function useAccessRevocation() {
   );
 
   useEffect(() => {
-    const socket = getSocket();
     if (!socket) return;
 
     socket.on('access_revoked', handleAccessRevoked);
@@ -144,5 +144,5 @@ export function useAccessRevocation() {
     return () => {
       socket.off('access_revoked', handleAccessRevoked);
     };
-  }, [getSocket, handleAccessRevoked]);
+  }, [socket, handleAccessRevoked]);
 }

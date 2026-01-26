@@ -30,6 +30,8 @@ export interface KickResult {
   error?: string;
 }
 
+const VALID_REASONS = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked'] as const;
+
 interface ParseResult {
   success: boolean;
   payload?: KickPayload;
@@ -63,6 +65,10 @@ export function validateKickPayload(payload: KickPayload): ValidationResult {
 
   if (!payload.roomPattern || typeof payload.roomPattern !== 'string' || payload.roomPattern.trim() === '') {
     return { valid: false, error: 'Missing or invalid roomPattern' };
+  }
+
+  if (!payload.reason || !VALID_REASONS.includes(payload.reason)) {
+    return { valid: false, error: 'Missing or invalid reason' };
   }
 
   return { valid: true };

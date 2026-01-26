@@ -116,6 +116,31 @@ describe('Kick API', () => {
 
       expect(result.valid).toBe(false);
     });
+
+    it('given missing reason, should fail validation', () => {
+      const payload = {
+        userId: 'user-123',
+        roomPattern: 'drive:drive-456',
+      } as KickPayload;
+
+      const result = validateKickPayload(payload);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('reason');
+    });
+
+    it('given invalid reason, should fail validation', () => {
+      const payload = {
+        userId: 'user-123',
+        roomPattern: 'drive:drive-456',
+        reason: 'invalid_reason' as KickPayload['reason'],
+      };
+
+      const result = validateKickPayload(payload);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('reason');
+    });
   });
 
   describe('room pattern matching', () => {

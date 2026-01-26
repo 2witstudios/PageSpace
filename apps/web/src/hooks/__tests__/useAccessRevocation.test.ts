@@ -32,11 +32,11 @@ vi.mock('sonner', () => ({
   toast: mockToast,
 }));
 
-// Mock socket store
+// Mock socket store - returns socket instance directly when selector accesses state.socket
 vi.mock('@/stores/useSocketStore', () => ({
   useSocketStore: vi.fn((selector) => {
     if (typeof selector === 'function') {
-      return selector({ getSocket: () => mockSocket });
+      return selector({ socket: mockSocket });
     }
     return mockSocket;
   }),

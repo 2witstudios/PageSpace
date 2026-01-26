@@ -16,6 +16,8 @@ import {
   createDriveMemberEventPayload,
   kickUserFromDrive,
   kickUserFromDriveActivity,
+  kickUserFromPage,
+  kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
@@ -315,10 +317,22 @@ export async function DELETE(
 
     // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
     // This ensures the user stops receiving updates even if their socket is still connected
+
+    // First, kick from drive-level rooms
     await Promise.all([
       kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
       kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
     ]);
+
+    // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
+    const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
+    if (drivePages.length > 0) {
+      const pageKickPromises = drivePages.flatMap((page) => [
+        kickUserFromPage(page.id, targetUserId, 'member_removed'),
+        kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
+      ]);
+      await Promise.all(pageKickPromises);
+    }
 
     // Invalidate permission caches so removed user loses access immediately
     await Promise.all([
