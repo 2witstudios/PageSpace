@@ -6,10 +6,20 @@
  * - Handles incomplete markdown syntax gracefully
  * - Built-in memoization for performance
  * - Custom mention rendering support
+ * - Mobile-aware link handling (stays in WebView on Capacitor)
  */
 
-import { memo, useMemo, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode } from 'react';
+'use client';
+
+import { memo, useMemo, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode, MouseEvent } from 'react';
 import { Streamdown } from 'streamdown';
+import { useRouter } from 'next/navigation';
+import { isInternalUrl, openExternalUrl } from '@/lib/navigation/app-navigation';
+
+/** Router interface for navigation - compatible with Next.js useRouter */
+interface RouterLike {
+  push: (url: string) => void;
+}
 
 /**
  * Regex pattern for mention preprocessing
@@ -30,51 +40,6 @@ function preprocessMentions(content: string): string {
     // Convert to a special link format that we'll intercept in the component
     return `[mention:${label}](mention://${id}/${type})`;
   });
-}
-
-// Custom anchor component for mentions and regular links
-function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
-  // Check if this is a mention link
-  if (typeof href === 'string' && href.startsWith('mention://')) {
-    // Extract the label from children (format: "mention:Label")
-    const label = typeof children === 'string'
-      ? children.replace(/^mention:/, '')
-      : Array.isArray(children) && typeof children[0] === 'string'
-        ? children[0].replace(/^mention:/, '')
-        : children;
-
-    // Parse the mention URL: mention://id/type
-    const mentionPath = href.replace('mention://', '');
-    const [id, type] = mentionPath.split('/');
-
-    // Only page mentions should be clickable links
-    // User and other mention types render as non-clickable badges
-    if (type === 'page') {
-      return (
-        <a
-          href={`/p/${id}`}
-          className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1 hover:bg-primary/30 dark:hover:bg-primary/40 transition-colors cursor-pointer no-underline"
-          {...props}
-        >
-          @{label}
-        </a>
-      );
-    }
-
-    // Non-page mentions (user, agent, etc.) render as styled badges without links
-    return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1">
-        @{label}
-      </span>
-    );
-  }
-
-  // Regular link
-  return (
-    <a href={href} className="min-w-0 max-w-full break-all [overflow-wrap:anywhere] inline-block" {...props}>
-      {children}
-    </a>
-  );
 }
 
 // Custom code component with proper overflow handling
@@ -140,18 +105,90 @@ function CustomSpan({ children, ...props }: HTMLAttributes<HTMLSpanElement> & { 
 }
 
 /**
- * Custom components for Streamdown rendering
- * Includes width constraints, overflow handling, and mention support
+ * Create custom anchor component with router for mobile-aware navigation
  */
-const streamdownComponents = {
-  a: CustomAnchor,
-  code: CustomCode,
-  pre: CustomPre,
-  p: CustomParagraph,
-  table: CustomTable,
-  li: CustomListItem,
-  span: CustomSpan,
-};
+function createCustomAnchor(router: RouterLike) {
+  return function CustomAnchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
+    const handleClick = async (e: MouseEvent<HTMLAnchorElement>) => {
+      if (!href) return;
+
+      e.preventDefault();
+
+      if (isInternalUrl(href)) {
+        router.push(href);
+      } else {
+        await openExternalUrl(href);
+      }
+    };
+
+    // Check if this is a mention link
+    if (typeof href === 'string' && href.startsWith('mention://')) {
+      // Extract the label from children (format: "mention:Label")
+      const label = typeof children === 'string'
+        ? children.replace(/^mention:/, '')
+        : Array.isArray(children) && typeof children[0] === 'string'
+          ? children[0].replace(/^mention:/, '')
+          : children;
+
+      // Parse the mention URL: mention://id/type
+      const mentionPath = href.replace('mention://', '');
+      const [id, type] = mentionPath.split('/');
+
+      // Only page mentions should be clickable links
+      // User and other mention types render as non-clickable badges
+      if (type === 'page') {
+        const pageHref = `/p/${id}`;
+        return (
+          <a
+            href={pageHref}
+            onClick={(e) => {
+              e.preventDefault();
+              router.push(pageHref);
+            }}
+            className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1 hover:bg-primary/30 dark:hover:bg-primary/40 transition-colors cursor-pointer no-underline"
+            {...props}
+          >
+            @{label}
+          </a>
+        );
+      }
+
+      // Non-page mentions (user, agent, etc.) render as styled badges without links
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/20 text-primary dark:bg-primary/30 dark:text-primary text-sm font-medium mx-1">
+          @{label}
+        </span>
+      );
+    }
+
+    // Regular link with mobile-aware click handling
+    return (
+      <a
+        href={href}
+        onClick={handleClick}
+        className="min-w-0 max-w-full break-all [overflow-wrap:anywhere] inline-block"
+        {...props}
+      >
+        {children}
+      </a>
+    );
+  };
+}
+
+/**
+ * Create streamdown components with router for mobile-aware navigation
+ */
+function createStreamdownComponents(router: RouterLike) {
+  return {
+    a: createCustomAnchor(router),
+    code: CustomCode,
+    pre: CustomPre,
+    p: CustomParagraph,
+    table: CustomTable,
+    li: CustomListItem,
+    span: CustomSpan,
+  };
+}
 
 interface StreamingMarkdownProps {
   content: string;
@@ -171,11 +208,18 @@ interface StreamingMarkdownProps {
  * - Progressive formatting (applies styles to partial content)
  * - Built-in memoization
  * - Custom mention rendering
+ * - Mobile-aware link handling (internal links use router.push on Capacitor)
  */
 export const StreamingMarkdown = memo(
   ({ content, isStreaming = false, className }: StreamingMarkdownProps) => {
+    const router = useRouter();
+
     // Pre-process mentions before rendering
     const processedContent = useMemo(() => preprocessMentions(content), [content]);
+
+    // Create components with router for mobile-aware navigation
+    // Memoize to avoid recreating on every render
+    const streamdownComponents = useMemo(() => createStreamdownComponents(router), [router]);
 
     return (
       <Streamdown

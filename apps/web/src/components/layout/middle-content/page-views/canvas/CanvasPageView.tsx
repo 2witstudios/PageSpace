@@ -12,6 +12,7 @@ import { useDocumentStore } from '@/stores/useDocumentStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
+import { openExternalUrl } from '@/lib/navigation/app-navigation';
 
 interface CanvasPageViewProps {
   page: TreePage;
@@ -91,11 +92,11 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   const handleNavigation = useCallback(async (url: string, isExternal: boolean) => {
     if (!url) return;
 
-    // Handle external URLs
+    // Handle external URLs - uses Capacitor Browser on mobile (Safari View Controller)
     if (isExternal) {
       const confirmed = window.confirm(`Navigate to external site?\n\n${url}`);
       if (confirmed) {
-        window.open(url, '_blank', 'noopener,noreferrer');
+        await openExternalUrl(url);
       }
       return;
     }
