@@ -54,7 +54,12 @@ async function ensureMigrated(): Promise<void> {
   } catch (error) {
     // Log error but don't crash - user can still log in fresh
     console.error('[PageSpace iOS] Keychain migration failed:', error);
-    // Mark as migrated to prevent retry loop
+    // Persist migration flag to prevent retry loops on app restart
+    try {
+      await Preferences.set({ key: MIGRATED_KEY, value: 'true' });
+    } catch (prefError) {
+      console.error('[PageSpace iOS] Failed to persist migration flag:', prefError);
+    }
     migrationComplete = true;
   }
 }

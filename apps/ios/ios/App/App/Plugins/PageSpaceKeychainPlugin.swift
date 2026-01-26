@@ -42,7 +42,10 @@ public class PageSpaceKeychainPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Missing key or value")
             return
         }
-        let data = value.data(using: .utf8)!
+        guard let data = value.data(using: .utf8) else {
+            call.reject("Failed to encode value")
+            return
+        }
         let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

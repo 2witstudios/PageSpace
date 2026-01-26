@@ -1,5 +1,3 @@
-CAPACITOR_DEBUG = true
-
 // Development team - contributors should override this in their local environment
 // or create a local.xcconfig file that is git-ignored
 DEVELOPMENT_TEAM = M96WTV3CKX

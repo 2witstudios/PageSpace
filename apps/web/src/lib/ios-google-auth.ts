@@ -179,6 +179,7 @@ export async function clearStoredSession(): Promise<void> {
   try {
     const { PageSpaceKeychain } = await import('./keychain-plugin');
     await PageSpaceKeychain.remove({ key: 'pagespace_session' });
+    await PageSpaceKeychain.remove({ key: 'pagespace_csrf' });
   } catch (error) {
     console.error('[iOS Google Auth] Failed to clear session:', error);
   }
