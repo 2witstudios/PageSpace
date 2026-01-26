@@ -1,4 +1,7 @@
-import React from 'react';
+'use client';
+
+import React, { MouseEvent } from 'react';
+import { useRouter } from 'next/navigation';
 
 // Define the structure for message parts
 export interface MessagePart {
@@ -18,6 +21,14 @@ interface MessagePartRendererProps {
 }
 
 const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }) => {
+  const router = useRouter();
+
+  // Handle mention link clicks - use router.push to stay in WebView on Capacitor
+  const handleMentionClick = (e: MouseEvent<HTMLAnchorElement>, pageId: string) => {
+    e.preventDefault();
+    router.push(`/p/${pageId}`);
+  };
+
   switch (part.type) {
     case 'text':
       // Check if text contains mentions in markdown-typed format
@@ -39,6 +50,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
             <a
               key={`${index}-mention-${textMatch.index}`}
               href={`/p/${id}`}
+              onClick={(e) => handleMentionClick(e, id)}
               className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
             >
               @{label}
@@ -69,7 +81,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
       }
 
       return <span key={index}>{textElements}</span>;
-    
+
     case 'rich-text':
       const textContent = typeof part.content === 'string'
         ? part.content
@@ -92,6 +104,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
             <a
               key={`${index}-mention-${id}`}
               href={`/p/${id}`}
+              onClick={(e) => handleMentionClick(e, id)}
               className="bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary px-1 rounded hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors no-underline"
             >
               @{label}
@@ -117,7 +130,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
       }
 
       return <div key={index} className="whitespace-pre-wrap">{elements}</div>;
-    
+
     case 'tool-invocation':
       return (
         <div
@@ -132,7 +145,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
           </pre>
         </div>
       );
-    
+
     default:
       console.warn('Unknown message part type:', part);
       return null;
