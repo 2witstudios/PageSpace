@@ -5,7 +5,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import { loggers } from '@pagespace/lib/server';
 import { db, users, eq } from '@pagespace/db';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import React from 'react';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };

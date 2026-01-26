@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
