@@ -116,8 +116,9 @@ function SignInForm() {
           }
 
           toast.success("Welcome! You've been signed in successfully.");
-          // Use window.location.href for Capacitor WebView - router.replace doesn't work reliably
-          window.location.href = result.isNewUser ? '/dashboard?welcome=true' : '/dashboard';
+          // Use absolute URL for Capacitor iOS WKWebView - relative URLs don't navigate reliably
+          const dashboardUrl = `${window.location.origin}/dashboard`;
+          window.location.href = result.isNewUser ? `${dashboardUrl}?welcome=true` : dashboardUrl;
         } else {
           // Don't show error for cancellation
           if (result.error !== 'Sign-in cancelled') {
