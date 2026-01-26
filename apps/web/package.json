@@ -106,9 +106,10 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
-    "@capgo/capacitor-social-login": "^7.0.5",
+    "@capacitor/app": "^7.1.1",
     "@capacitor/core": "^7.0.0",
     "@capacitor/preferences": "^7.0.0",
+    "@capgo/capacitor-social-login": "^7.0.5",
     "@eslint/eslintrc": "^3",
     "@next/eslint-plugin-next": "15.3.7",
     "@tailwindcss/postcss": "^4",

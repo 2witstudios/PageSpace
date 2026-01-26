@@ -23,6 +23,7 @@ export interface GoogleAuthResult {
 type GoogleNativeAuthResponse = {
   sessionToken?: string;
   csrfToken?: string | null;
+  deviceToken?: string;
   isNewUser?: boolean;
   user?: GoogleAuthResult['user'];
 };
@@ -31,6 +32,7 @@ type StoredSession = {
   sessionToken: string;
   csrfToken: string | null;
   deviceId: string;
+  deviceToken: string | null;
 };
 
 const IOS_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID;
@@ -106,7 +108,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
       throw new Error(errorData.error || 'Authentication failed');
     }
 
-    const { sessionToken, csrfToken, isNewUser, user } =
+    const { sessionToken, csrfToken, deviceToken, isNewUser, user } =
       (await response.json()) as GoogleNativeAuthResponse;
 
     if (!sessionToken) {
@@ -120,6 +122,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
         sessionToken,
         csrfToken: csrfToken || null,
         deviceId,
+        deviceToken: deviceToken || null,
       }),
     });
 
@@ -172,6 +175,7 @@ export async function getStoredSession(): Promise<StoredSession | null> {
       sessionToken: parsed.sessionToken,
       csrfToken: parsed.csrfToken ?? null,
       deviceId: parsed.deviceId,
+      deviceToken: parsed.deviceToken ?? null,
     };
   } catch {
     return null;

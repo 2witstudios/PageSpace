@@ -1,6 +1,6 @@
 import { App, type URLOpenListenerEvent } from '@capacitor/app';
 import { SplashScreen } from '@capacitor/splash-screen';
-import { getSessionToken, storeSession, getOrCreateDeviceId } from './auth-bridge';
+import { storeSession, getOrCreateDeviceId } from './auth-bridge';
 
 type DeepLinkHandler = (url: string) => void;
 
@@ -8,17 +8,11 @@ let deepLinkHandler: DeepLinkHandler | null = null;
 
 /**
  * Set up app lifecycle event handlers.
- * Handles app state changes, deep links, and splash screen.
+ * Handles deep links, and splash screen.
+ * Note: App state changes (foreground/background) are handled by auth-fetch.ts
+ * for consistent session refresh logic across platforms.
  */
 export function setupAppLifecycle(): void {
-  // Handle app state changes (foreground/background)
-  App.addListener('appStateChange', async ({ isActive }) => {
-    if (isActive) {
-      // App resumed from background - validate session
-      await checkSessionValidity();
-    }
-  });
-
   // Handle deep links (OAuth callbacks, universal links)
   App.addListener('appUrlOpen', (event: URLOpenListenerEvent) => {
     handleDeepLink(event.url);
@@ -33,21 +27,6 @@ export function setupAppLifecycle(): void {
       });
     });
   }
-}
-
-/**
- * Check if the current session is still valid.
- * Called when app resumes from background.
- */
-async function checkSessionValidity(): Promise<void> {
-  const token = await getSessionToken();
-  if (!token) {
-    // No session - user needs to log in
-    return;
-  }
-
-  // Session exists - web app will handle validation on next API call
-  // Server returns 401 for invalid tokens, triggering re-auth
 }
 
 /**
@@ -136,7 +115,7 @@ async function handleAuthExchange(url: URL): Promise<void> {
       throw new Error(`Exchange failed: ${response.status}`);
     }
 
-    const { sessionToken, csrfToken } = await response.json();
+    const { sessionToken, csrfToken, deviceToken } = await response.json();
 
     if (!sessionToken) {
       throw new Error('No session token received from exchange');
@@ -150,6 +129,7 @@ async function handleAuthExchange(url: URL): Promise<void> {
       sessionToken,
       csrfToken: csrfToken || null,
       deviceId,
+      deviceToken: deviceToken || null,
     });
 
     console.log('[Auth] Tokens stored successfully, navigating to app');
