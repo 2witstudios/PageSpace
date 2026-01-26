@@ -73,6 +73,7 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/auth/google') ||
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
+      pathname === '/api/cron' ||
       pathname.startsWith('/api/cron/')
     ) {
       const { response } = createSecureResponse(isProduction, req, isAPIRoute);
