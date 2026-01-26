@@ -12,6 +12,12 @@ export interface GoogleAuthResult {
   success: boolean;
   error?: string;
   isNewUser?: boolean;
+  user?: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    image?: string | null;
+  };
 }
 
 const IOS_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID;
@@ -87,7 +93,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
       throw new Error(errorData.error || 'Authentication failed');
     }
 
-    const { sessionToken, csrfToken, isNewUser } = await response.json();
+    const { sessionToken, csrfToken, isNewUser, user } = await response.json();
 
     if (!sessionToken) {
       throw new Error('No session token received from server');
@@ -105,7 +111,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
 
     console.log('[iOS Google Auth] Sign-in successful, tokens stored');
 
-    return { success: true, isNewUser };
+    return { success: true, isNewUser, user };
   } catch (error) {
     console.error('[iOS Google Auth] Sign-in failed:', error);
 

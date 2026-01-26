@@ -116,9 +116,18 @@ function SignInForm() {
           }
 
           toast.success("Welcome! You've been signed in successfully.");
-          // Use absolute URL for Capacitor iOS WKWebView - relative URLs don't navigate reliably
-          const dashboardUrl = `${window.location.origin}/dashboard`;
-          window.location.href = result.isNewUser ? `${dashboardUrl}?welcome=true` : dashboardUrl;
+
+          // Directly set auth state - no API call needed
+          // This is synchronous and prevents race conditions where the dashboard
+          // would check auth before the async loadSession() completes
+          const { useAuthStore } = await import('@/stores/useAuthStore');
+          if (result.user) {
+            useAuthStore.getState().setUser(result.user);
+          }
+
+          // Use Next.js router for client-side navigation
+          // This works reliably in WKWebView unlike window.location.href
+          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
         } else {
           // Don't show error for cancellation
           if (result.error !== 'Sign-in cancelled') {

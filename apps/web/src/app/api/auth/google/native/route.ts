@@ -7,6 +7,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -202,10 +203,26 @@ export async function POST(req: Request) {
       isNewUser,
     });
 
-    return Response.json({
+    // Set session cookie so middleware recognizes the authenticated session
+    const headers = new Headers();
+    appendSessionCookie(headers, sessionToken);
+
+    return new Response(JSON.stringify({
       sessionToken,
       csrfToken,
       isNewUser,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image,
+      },
+    }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Set-Cookie': headers.get('Set-Cookie') || '',
+      },
     });
   } catch (error) {
     loggers.auth.error('Native Google auth error', error as Error, { clientIP });
