@@ -99,7 +99,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   }
 
   return (
-    <div key={pageId} className="h-full transition-opacity duration-150">
+    <div className="h-full transition-opacity duration-150">
       {pageComponent}
     </div>
   );
@@ -177,17 +177,21 @@ export default function CenterPanel() {
         </div>
       )}
 
-      {/* PageContent - renders when viewing a page or settings */}
-      {showPageContent && (
-        <div className="h-full flex flex-col z-10">
-          <OptimizedViewHeader pageId={activePageId} />
-          <div className="flex-1 min-h-0 relative overflow-hidden">
-            <CustomScrollArea className="h-full">
-              <PageContent pageId={activePageId} />
-            </CustomScrollArea>
-          </div>
+      {/* PageContent - always rendered, uses CSS visibility to prevent remounting */}
+      <div
+        className={cn(
+          "h-full flex-col z-10",
+          showPageContent ? "flex" : "hidden pointer-events-none"
+        )}
+        aria-hidden={!showPageContent}
+      >
+        <OptimizedViewHeader pageId={activePageId} />
+        <div className="flex-1 min-h-0 relative overflow-hidden">
+          <CustomScrollArea className="h-full">
+            <PageContent pageId={activePageId} />
+          </CustomScrollArea>
         </div>
-      )}
+      </div>
     </div>
   );
 }
