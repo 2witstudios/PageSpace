@@ -56,7 +56,7 @@ function SheetContent({
 }) {
   return (
     <SheetPortal forceMount={forceMount}>
-      <SheetOverlay forceMount={forceMount} />
+      <SheetOverlay />
       <SheetPrimitive.Content
         forceMount={forceMount}
         data-slot="sheet-content"
