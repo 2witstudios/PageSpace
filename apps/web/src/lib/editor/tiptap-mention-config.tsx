@@ -126,13 +126,26 @@ const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListP
   );
 });
 
+/**
+ * Dispatch a navigation event for internal links
+ * This allows parent React components to handle navigation with router.push()
+ */
+function dispatchInternalNavigation(href: string): void {
+  const event = new CustomEvent('pagespace:navigate', {
+    detail: { href },
+    bubbles: true,
+    cancelable: true
+  });
+  document.dispatchEvent(event);
+}
+
 const PageMentionNode = Mention.extend({
   name: 'pageMention',
-  
+
   inline: true,
   atom: true,
   selectable: false,
-  
+
   addAttributes() {
     return {
       id: { default: null },
@@ -148,24 +161,25 @@ const PageMentionNode = Mention.extend({
       const href = node.attrs.driveId
         ? `/dashboard/${node.attrs.driveId}/${node.attrs.id}`
         : `/dashboard/`;
-      
-      // Set up link attributes
+
+      // Set up link attributes - NO target="_blank" to stay in WebView on Capacitor
       dom.href = href;
-      dom.target = '_blank';
       dom.rel = 'noopener noreferrer nofollow';
       dom.className = 'mention';
       dom.contentEditable = 'false';
       dom.setAttribute('data-mention-type', 'page');
       dom.setAttribute('data-page-id', node.attrs.id);
-      
+
       // Set content
       dom.textContent = `@${node.attrs.label}`;
-      
-      // Handle click events to ensure proper link behavior
+
+      // Handle click events - dispatch navigation event for React router handling
+      // Falls back to window.location for non-React contexts
       dom.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        window.open(href, '_blank', 'noopener,noreferrer');
+        // Dispatch event for parent component to handle with router.push()
+        dispatchInternalNavigation(href);
       });
 
       // Prevent selection on click
@@ -195,7 +209,7 @@ export const PageMention = PageMentionNode.configure({
       {
         ...options.HTMLAttributes,
         href: href,
-        target: '_blank',
+        // NO target="_blank" - stays in WebView on Capacitor iOS
         rel: 'noopener noreferrer nofollow',
         'data-mention-type': 'page',
         'data-page-id': node.attrs.id,

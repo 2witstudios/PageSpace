@@ -5,6 +5,7 @@ import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import React, { useCallback, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
 import { Placeholder, CharacterCount } from '@tiptap/extensions';
 import { TextStyleKit } from '@tiptap/extension-text-style';
@@ -12,6 +13,7 @@ import { TableKit } from '@tiptap/extension-table';
 import { formatHtml } from '@/lib/editor/prettier';
 import { PageMention } from '@/lib/editor/tiptap-mention-config';
 import { PaginationPlus } from '@/lib/editor/pagination';
+import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 
 interface RichEditorProps {
   value: string;
@@ -23,6 +25,17 @@ interface RichEditorProps {
 }
 
 const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly = false, isPaginated = false }: RichEditorProps) => {
+  const router = useRouter();
+
+  // Subscribe to navigation events from TipTap mentions
+  // This enables mobile-aware navigation (stays in WebView on Capacitor)
+  useEffect(() => {
+    const unsubscribe = subscribeToNavigationEvents((href) => {
+      router.push(href);
+    });
+    return unsubscribe;
+  }, [router]);
+
   // Formatting timer - CRITICAL for AI editability (2500ms)
   // Prettier formats HTML so AI can reliably edit structured content
   // Uses silent update via onFormatChange to avoid marking as dirty

@@ -20,7 +20,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-vi.mock('../use-auth', () => ({
+vi.mock('@/hooks/useAuth', () => ({
   useAuth: vi.fn(() => ({ user: { id: 'user-123' } })),
 }));
 
@@ -34,16 +34,15 @@ describe('usePermissions', () => {
   });
 
   describe('SWR editing protection', () => {
+    let capturedConfig: { isPaused?: () => boolean; onSuccess?: (data: unknown, key: string, config: never) => void };
+
     it('given user is editing a document, should pause permission revalidation', () => {
       // Arrange: User is actively editing
       vi.mocked(useEditingStore).mockReturnValue(true); // isAnyActive returns true
 
-      // Mock SWR and trigger onSuccess to set hasLoadedRef.current = true
+      // Mock SWR - capture config but don't call onSuccess yet (effects need to run first)
       vi.mocked(useSWR).mockImplementation((key, fetcher, config) => {
-        // Trigger onSuccess to simulate initial load completed
-        if (config?.onSuccess) {
-          config.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, key as string, {} as never);
-        }
+        capturedConfig = config as typeof capturedConfig;
         return {
           data: { canView: true, canEdit: true, canShare: true, canDelete: true },
           error: undefined,
@@ -53,29 +52,26 @@ describe('usePermissions', () => {
         } as SWRResponse;
       });
 
-      // Act: Render hook
+      // Act: Render hook (useEffect resets hasLoadedRef to false for new pageId)
       renderHook(() => usePermissions('page-123'));
 
-      // Assert: SWR was called with isPaused function
-      expect(useSWR).toHaveBeenCalled();
-      const swrCall = vi.mocked(useSWR).mock.calls[0];
-      const swrConfig = swrCall[2] as { isPaused?: () => boolean };
+      // Simulate SWR calling onSuccess after initial render/effects complete
+      if (capturedConfig?.onSuccess) {
+        capturedConfig.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, '/api/pages/page-123/permissions/check', {} as never);
+      }
 
-      // The isPaused function should exist and return true when editing (after initial load)
-      expect(swrConfig.isPaused).toBeDefined();
-      expect(swrConfig.isPaused!()).toBe(true);
+      // Assert: isPaused should return true when editing (after initial load)
+      expect(capturedConfig.isPaused).toBeDefined();
+      expect(capturedConfig.isPaused!()).toBe(true);
     });
 
     it('given user is in AI streaming session, should pause permission revalidation', () => {
       // Arrange: AI streaming is active
       vi.mocked(useEditingStore).mockReturnValue(true); // isAnyActive returns true
 
-      // Mock SWR and trigger onSuccess to set hasLoadedRef.current = true
+      // Mock SWR - capture config but don't call onSuccess yet
       vi.mocked(useSWR).mockImplementation((key, fetcher, config) => {
-        // Trigger onSuccess to simulate initial load completed
-        if (config?.onSuccess) {
-          config.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, key as string, {} as never);
-        }
+        capturedConfig = config as typeof capturedConfig;
         return {
           data: { canView: true, canEdit: true, canShare: true, canDelete: true },
           error: undefined,
@@ -88,24 +84,23 @@ describe('usePermissions', () => {
       // Act: Render hook
       renderHook(() => usePermissions('page-123'));
 
-      // Assert: SWR isPaused returns true (after initial load)
-      const swrCall = vi.mocked(useSWR).mock.calls[0];
-      const swrConfig = swrCall[2] as { isPaused?: () => boolean };
+      // Simulate SWR calling onSuccess after initial render/effects complete
+      if (capturedConfig?.onSuccess) {
+        capturedConfig.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, '/api/pages/page-123/permissions/check', {} as never);
+      }
 
-      expect(swrConfig.isPaused).toBeDefined();
-      expect(swrConfig.isPaused!()).toBe(true);
+      // Assert: SWR isPaused returns true (after initial load)
+      expect(capturedConfig.isPaused).toBeDefined();
+      expect(capturedConfig.isPaused!()).toBe(true);
     });
 
     it('given user is not editing or streaming, should allow permission revalidation', () => {
       // Arrange: No active editing/streaming
       vi.mocked(useEditingStore).mockReturnValue(false); // isAnyActive returns false
 
-      // Mock SWR and trigger onSuccess to set hasLoadedRef.current = true
+      // Mock SWR - capture config but don't call onSuccess yet
       vi.mocked(useSWR).mockImplementation((key, fetcher, config) => {
-        // Trigger onSuccess to simulate initial load completed
-        if (config?.onSuccess) {
-          config.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, key as string, {} as never);
-        }
+        capturedConfig = config as typeof capturedConfig;
         return {
           data: { canView: true, canEdit: true, canShare: true, canDelete: true },
           error: undefined,
@@ -118,12 +113,14 @@ describe('usePermissions', () => {
       // Act: Render hook
       renderHook(() => usePermissions('page-123'));
 
-      // Assert: SWR isPaused returns false (hasLoadedRef.current=true && isAnyActive=false => false)
-      const swrCall = vi.mocked(useSWR).mock.calls[0];
-      const swrConfig = swrCall[2] as { isPaused?: () => boolean };
+      // Simulate SWR calling onSuccess after initial render/effects complete
+      if (capturedConfig?.onSuccess) {
+        capturedConfig.onSuccess({ canView: true, canEdit: true, canShare: true, canDelete: true }, '/api/pages/page-123/permissions/check', {} as never);
+      }
 
-      expect(swrConfig.isPaused).toBeDefined();
-      expect(swrConfig.isPaused!()).toBe(false);
+      // Assert: SWR isPaused returns false (hasLoadedRef.current=true && isAnyActive=false => false)
+      expect(capturedConfig.isPaused).toBeDefined();
+      expect(capturedConfig.isPaused!()).toBe(false);
     });
   });
 });

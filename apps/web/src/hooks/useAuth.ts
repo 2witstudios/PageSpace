@@ -223,6 +223,19 @@ export function useAuth(): {
         clearSessionCache();
       }
 
+      // iOS: Clear session from Keychain
+      if (typeof window !== 'undefined') {
+        const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
+        if (isCapacitorApp() && getPlatform() === 'ios') {
+          try {
+            const { clearStoredSession } = await import('@/lib/ios-google-auth');
+            await clearStoredSession();
+          } catch (err) {
+            console.error('Failed to clear iOS Keychain session', err);
+          }
+        }
+      }
+
       // Clear device token from localStorage (web platform)
       if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
         try {

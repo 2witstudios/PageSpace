@@ -1,0 +1,5 @@
+#include? "local.xcconfig"
+CAPACITOR_DEBUG = true
+
+// Development team - contributors should override this in local.xcconfig
+DEVELOPMENT_TEAM =

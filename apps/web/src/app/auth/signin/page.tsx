@@ -100,7 +100,23 @@ function SignInForm() {
         const result = await nativeSignIn();
 
         if (result.success) {
+          // Import auth store for state updates
+          const { useAuthStore } = await import('@/stores/useAuthStore');
+
+          // Clear authFailedPermanently flag to allow auth validation
+          useAuthStore.getState().setAuthFailedPermanently(false);
+
           toast.success("Welcome! You've been signed in successfully.");
+
+          // Directly set auth state - no API call needed
+          // This is synchronous and prevents race conditions where the dashboard
+          // would check auth before the async loadSession() completes
+          if (result.user) {
+            useAuthStore.getState().setUser(result.user);
+          }
+
+          // Use Next.js router for client-side navigation
+          // This works reliably in WKWebView unlike window.location.href
           router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
         } else {
           // Don't show error for cancellation
