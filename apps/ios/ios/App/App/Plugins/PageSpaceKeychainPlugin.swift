@@ -58,7 +58,7 @@ public class PageSpaceKeychainPlugin: CAPPlugin, CAPBridgedPlugin {
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
             kSecAttrSynchronizable as String: false,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         if status == errSecSuccess {

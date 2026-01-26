@@ -20,6 +20,19 @@ export interface GoogleAuthResult {
   };
 }
 
+type GoogleNativeAuthResponse = {
+  sessionToken?: string;
+  csrfToken?: string | null;
+  isNewUser?: boolean;
+  user?: GoogleAuthResult['user'];
+};
+
+type StoredSession = {
+  sessionToken: string;
+  csrfToken: string | null;
+  deviceId: string;
+};
+
 const IOS_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID;
 
 /**
@@ -93,7 +106,8 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
       throw new Error(errorData.error || 'Authentication failed');
     }
 
-    const { sessionToken, csrfToken, isNewUser, user } = await response.json();
+    const { sessionToken, csrfToken, isNewUser, user } =
+      (await response.json()) as GoogleNativeAuthResponse;
 
     if (!sessionToken) {
       throw new Error('No session token received from server');
@@ -140,11 +154,7 @@ export function isNativeGoogleAuthAvailable(): boolean {
  * Retrieve stored session from iOS Keychain.
  * Returns the full session object including sessionToken, csrfToken, and deviceId.
  */
-export async function getStoredSession(): Promise<{
-  sessionToken: string;
-  csrfToken: string | null;
-  deviceId: string;
-} | null> {
+export async function getStoredSession(): Promise<StoredSession | null> {
   if (!isCapacitorApp() || getPlatform() !== 'ios') {
     return null;
   }
@@ -153,7 +163,16 @@ export async function getStoredSession(): Promise<{
     const { PageSpaceKeychain } = await import('./keychain-plugin');
     const { value } = await PageSpaceKeychain.get({ key: 'pagespace_session' });
     if (!value) return null;
-    return JSON.parse(value);
+
+    const parsed = JSON.parse(value) as Partial<StoredSession>;
+    if (typeof parsed.sessionToken !== 'string' || typeof parsed.deviceId !== 'string') {
+      return null;
+    }
+    return {
+      sessionToken: parsed.sessionToken,
+      csrfToken: parsed.csrfToken ?? null,
+      deviceId: parsed.deviceId,
+    };
   } catch {
     return null;
   }
