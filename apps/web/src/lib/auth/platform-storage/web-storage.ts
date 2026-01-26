@@ -9,14 +9,17 @@ export class WebStorage implements PlatformStorage {
 
   async getStoredSession(): Promise<StoredSession | null> {
     const deviceToken = localStorage.getItem('deviceToken');
-    const deviceId = localStorage.getItem('deviceId');
-    if (!deviceId) return null;
+    // Return session if deviceToken exists - deviceId is optional for web
+    if (!deviceToken) return null;
+    // Use browser_device_id key to match existing device-fingerprint.ts storage
+    const deviceId =
+      localStorage.getItem('browser_device_id') || localStorage.getItem('deviceId') || '';
     return { sessionToken: '', csrfToken: null, deviceId, deviceToken };
   }
 
   async storeSession(session: StoredSession): Promise<void> {
     if (session.deviceToken) localStorage.setItem('deviceToken', session.deviceToken);
-    if (session.deviceId) localStorage.setItem('deviceId', session.deviceId);
+    if (session.deviceId) localStorage.setItem('browser_device_id', session.deviceId);
   }
 
   async clearSession(): Promise<void> {
@@ -24,10 +27,11 @@ export class WebStorage implements PlatformStorage {
   }
 
   async getDeviceId(): Promise<string> {
-    let id = localStorage.getItem('deviceId');
+    // Check both keys for backwards compatibility
+    let id = localStorage.getItem('browser_device_id') || localStorage.getItem('deviceId');
     if (!id) {
       id = crypto.randomUUID();
-      localStorage.setItem('deviceId', id);
+      localStorage.setItem('browser_device_id', id);
     }
     return id;
   }
