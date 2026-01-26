@@ -2,7 +2,23 @@ import type { NextFunction, Request, Response } from 'express';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions';
 
-export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
+/**
+ * Authentication is ALWAYS required in production.
+ * In development only, it can be explicitly disabled with PROCESSOR_AUTH_REQUIRED=false.
+ */
+export const AUTH_REQUIRED = (() => {
+  const wantsDisabled = process.env.PROCESSOR_AUTH_REQUIRED === 'false';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+
+  if (wantsDisabled && !isDevelopment) {
+    throw new Error(
+      'PROCESSOR_AUTH_REQUIRED=false is only allowed in development mode. ' +
+      'Authentication cannot be disabled in production.'
+    );
+  }
+
+  return !wantsDisabled;
+})();
 
 function respondUnauthorized(res: Response, message = 'Authentication required'): void {
   res.status(401).json({ error: message });

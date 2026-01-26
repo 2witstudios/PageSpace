@@ -256,27 +256,43 @@ async function checkDistributedRateLimit(
 
 ---
 
-### 6. PROCESSOR_AUTH_REQUIRED Can Be Disabled
+### 6. ~~PROCESSOR_AUTH_REQUIRED Can Be Disabled~~ (RESOLVED)
 
-**File:** `apps/processor/src/middleware/auth.ts:24`
+**File:** `apps/processor/src/middleware/auth.ts:5-17`
 
-**Description:** Setting `PROCESSOR_AUTH_REQUIRED=false` completely disables authentication for the processor service. This should never be possible in production.
+**Status:** RESOLVED (2026-01-26)
 
+**Original Issue:** Setting `PROCESSOR_AUTH_REQUIRED=false` could completely disable authentication for the processor service in production.
+
+**Implementation:**
 ```typescript
-export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
-```
-
-**Recommended Hardening:**
-```typescript
-// Fail if auth is disabled in production
+/**
+ * Authentication is ALWAYS required in production.
+ * In development only, it can be explicitly disabled with PROCESSOR_AUTH_REQUIRED=false.
+ */
 export const AUTH_REQUIRED = (() => {
-  const disabled = process.env.PROCESSOR_AUTH_REQUIRED === 'false';
-  if (disabled && process.env.NODE_ENV === 'production') {
-    throw new Error('PROCESSOR_AUTH_REQUIRED cannot be disabled in production');
+  const wantsDisabled = process.env.PROCESSOR_AUTH_REQUIRED === 'false';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+
+  if (wantsDisabled && !isDevelopment) {
+    throw new Error(
+      'PROCESSOR_AUTH_REQUIRED=false is only allowed in development mode. ' +
+      'Authentication cannot be disabled in production.'
+    );
   }
-  return !disabled;
+
+  return !wantsDisabled;
 })();
 ```
+
+**Behavior:**
+- Missing env var: Auth REQUIRED (secure default)
+- `PROCESSOR_AUTH_REQUIRED=true`: Auth REQUIRED
+- `PROCESSOR_AUTH_REQUIRED=false` + `NODE_ENV=production`: THROWS ERROR (fails fast)
+- `PROCESSOR_AUTH_REQUIRED=false` + `NODE_ENV=development`: Auth disabled (dev convenience)
+- `PROCESSOR_AUTH_REQUIRED=false` + no NODE_ENV: THROWS ERROR (fail-safe)
+
+**Tests:** `apps/processor/src/middleware/__tests__/auth.test.ts`
 
 ---
 
@@ -523,9 +539,9 @@ Before implementing security hardening, ensure infrastructure is prepared:
    - Ensure all API keys use `encryptedApiKey` column
    - Add encryption for any plaintext secrets
 
-7. **Remove Auth Disable Flag**
-   - Make PROCESSOR_AUTH_REQUIRED=false fail in production
-   - Add startup validation
+7. ~~**Remove Auth Disable Flag**~~ COMPLETED (2026-01-26)
+   - ~~Make PROCESSOR_AUTH_REQUIRED=false fail in production~~
+   - ~~Add startup validation~~
 
 8. **Implement Timing-Safe Comparisons**
    - Update all secret comparisons to use crypto.timingSafeEqual
