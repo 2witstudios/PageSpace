@@ -5,11 +5,20 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useAccessRevocation } from '../useAccessRevocation';
+
+// Use vi.hoisted to ensure mock variables are available before mock factories run
+const { mockPush, mockToast, mockSocket } = vi.hoisted(() => ({
+  mockPush: vi.fn(),
+  mockToast: Object.assign(vi.fn(), { error: vi.fn() }),
+  mockSocket: {
+    on: vi.fn(),
+    off: vi.fn(),
+  },
+}));
+
+const mockPathname = '/drives/test-drive/pages/test-page';
 
 // Mock the router
-const mockPush = vi.fn();
-const mockPathname = '/drives/test-drive/pages/test-page';
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: mockPush,
@@ -19,17 +28,11 @@ vi.mock('next/navigation', () => ({
 }));
 
 // Mock toast notifications
-const mockToast = vi.fn();
 vi.mock('sonner', () => ({
   toast: mockToast,
 }));
 
 // Mock socket store
-const mockSocket = {
-  on: vi.fn(),
-  off: vi.fn(),
-};
-
 vi.mock('@/stores/useSocketStore', () => ({
   useSocketStore: vi.fn((selector) => {
     if (typeof selector === 'function') {
@@ -38,6 +41,8 @@ vi.mock('@/stores/useSocketStore', () => ({
     return mockSocket;
   }),
 }));
+
+import { useAccessRevocation } from '../useAccessRevocation';
 
 describe('useAccessRevocation', () => {
   beforeEach(() => {
@@ -93,7 +98,7 @@ describe('useAccessRevocation', () => {
       });
 
       // Should show toast
-      expect(mockToast).toHaveBeenCalled();
+      expect(mockToast.error).toHaveBeenCalled();
 
       // Should redirect to dashboard
       expect(mockPush).toHaveBeenCalledWith('/dashboard');
@@ -117,7 +122,7 @@ describe('useAccessRevocation', () => {
         });
       });
 
-      expect(mockToast).toHaveBeenCalled();
+      expect(mockToast.error).toHaveBeenCalled();
     });
 
     it('given activity room revocation, should not show notification (silent)', () => {
@@ -138,7 +143,7 @@ describe('useAccessRevocation', () => {
 
       // Activity room revocations are silent (no toast for user)
       // The main drive room revocation will handle the notification
-      expect(mockToast).not.toHaveBeenCalled();
+      expect(mockToast.error).not.toHaveBeenCalled();
     });
   });
 });
