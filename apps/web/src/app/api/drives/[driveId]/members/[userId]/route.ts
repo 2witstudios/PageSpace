@@ -11,7 +11,12 @@ import {
   invalidateDrivePermissions,
 } from '@pagespace/lib/server';
 import { createDriveNotification } from '@pagespace/lib';
-import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import {
+  broadcastDriveMemberEvent,
+  createDriveMemberEventPayload,
+  kickUserFromDrive,
+  kickUserFromDriveActivity,
+} from '@/lib/websocket';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
 
@@ -307,6 +312,13 @@ export async function DELETE(
         driveName: access.drive.name,
       })
     );
+
+    // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
+    // This ensures the user stops receiving updates even if their socket is still connected
+    await Promise.all([
+      kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
+      kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
+    ]);
 
     // Invalidate permission caches so removed user loses access immediately
     await Promise.all([
