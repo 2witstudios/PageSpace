@@ -16,7 +16,7 @@ const { mockPush, mockToast, mockSocket } = vi.hoisted(() => ({
   },
 }));
 
-const mockPathname = '/drives/test-drive/pages/test-page';
+const mockPathname = '/drives/test-drive-id/pages/test-page-id';
 
 // Mock the router
 vi.mock('next/navigation', () => ({
