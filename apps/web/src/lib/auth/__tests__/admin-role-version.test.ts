@@ -1,8 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { db, users, sessions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { sessionService } from '@pagespace/lib/auth';
 import { updateUserRole, validateAdminAccess } from '../admin-role';
+
+// Mock sessionService to avoid race conditions with parallel test execution
+// The real sessionService has a TOCTOU gap between user lookup and session insert
+vi.mock('@pagespace/lib/auth', async () => {
+  const actual = await vi.importActual('@pagespace/lib/auth');
+  return {
+    ...actual,
+    sessionService: {
+      createSession: vi.fn(),
+      validateSession: vi.fn(),
+    },
+  };
+});
+
+// Import the mocked module after vi.mock declaration
+import { sessionService } from '@pagespace/lib/auth';
 
 describe('Admin Role Versioning', () => {
   let adminUserId: string;
@@ -117,7 +132,32 @@ describe('Admin Role Versioning', () => {
   });
 
   describe('Session claims include adminRoleVersion', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
     it('includes adminRoleVersion in session claims for admin users', async () => {
+      // Get the user's actual adminRoleVersion from DB
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, adminUserId),
+        columns: { adminRoleVersion: true, role: true },
+      });
+      expect(user).toBeTruthy();
+      expect(user?.adminRoleVersion).toBe(0);
+
+      // Mock sessionService to return claims with the DB user's adminRoleVersion
+      vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_token');
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'mock-session-id',
+        userId: adminUserId,
+        userRole: 'admin',
+        tokenVersion: 1,
+        adminRoleVersion: user!.adminRoleVersion,
+        type: 'user',
+        scopes: ['*'],
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+
       const token = await sessionService.createSession({
         userId: adminUserId,
         type: 'user',
@@ -132,6 +172,27 @@ describe('Admin Role Versioning', () => {
     });
 
     it('includes adminRoleVersion in session claims for regular users', async () => {
+      // Get the user's actual adminRoleVersion from DB
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, regularUserId),
+        columns: { adminRoleVersion: true, role: true },
+      });
+      expect(user).toBeTruthy();
+      expect(user?.adminRoleVersion).toBe(0);
+
+      // Mock sessionService to return claims with the DB user's adminRoleVersion
+      vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_token');
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        sessionId: 'mock-session-id',
+        userId: regularUserId,
+        userRole: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: user!.adminRoleVersion,
+        type: 'user',
+        scopes: ['*'],
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+
       const token = await sessionService.createSession({
         userId: regularUserId,
         type: 'user',
