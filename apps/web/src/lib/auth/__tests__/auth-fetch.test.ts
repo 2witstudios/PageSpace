@@ -15,6 +15,23 @@ vi.mock('@/lib/analytics/device-fingerprint', () => ({
   getOrCreateDeviceId: () => 'mock-device-id-12345',
 }));
 
+// Mock platform storage to avoid dynamic require issues in tests
+vi.mock('@/lib/auth/platform-storage', () => ({
+  getPlatformStorage: () => ({
+    platform: 'web',
+    getSessionToken: vi.fn().mockResolvedValue(null),
+    getStoredSession: vi.fn().mockResolvedValue(null),
+    storeSession: vi.fn().mockResolvedValue(undefined),
+    clearSession: vi.fn().mockResolvedValue(undefined),
+    getDeviceId: vi.fn().mockResolvedValue('mock-device-id'),
+    getDeviceInfo: vi.fn().mockResolvedValue({ deviceId: 'mock-device-id', userAgent: 'test-agent' }),
+    usesBearer: vi.fn().mockReturnValue(false),
+    supportsCSRF: vi.fn().mockReturnValue(true),
+    dispatchAuthEvent: vi.fn(),
+  }),
+  resetPlatformStorage: vi.fn(),
+}));
+
 // Reset modules before each test to get fresh AuthFetch instance
 beforeEach(() => {
   vi.resetModules();
