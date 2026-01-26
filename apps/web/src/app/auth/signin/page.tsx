@@ -100,27 +100,17 @@ function SignInForm() {
         const result = await nativeSignIn();
 
         if (result.success) {
-          // Clear authFailedPermanently flag directly in localStorage
-          // This prevents dashboard from skipping auth validation
-          try {
-            const stored = localStorage.getItem('auth-storage');
-            if (stored) {
-              const parsed = JSON.parse(stored);
-              if (parsed.state?.authFailedPermanently) {
-                parsed.state.authFailedPermanently = false;
-                localStorage.setItem('auth-storage', JSON.stringify(parsed));
-              }
-            }
-          } catch {
-            // Ignore localStorage errors
-          }
+          // Import auth store for state updates
+          const { useAuthStore } = await import('@/stores/useAuthStore');
+
+          // Clear authFailedPermanently flag to allow auth validation
+          useAuthStore.getState().setAuthFailedPermanently(false);
 
           toast.success("Welcome! You've been signed in successfully.");
 
           // Directly set auth state - no API call needed
           // This is synchronous and prevents race conditions where the dashboard
           // would check auth before the async loadSession() completes
-          const { useAuthStore } = await import('@/stores/useAuthStore');
           if (result.user) {
             useAuthStore.getState().setUser(result.user);
           }
