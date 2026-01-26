@@ -4,77 +4,6 @@ import { EnforcedAuthContext } from '@pagespace/lib/permissions';
 
 export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
 
-function collectCandidateUrls(req: Request): string[] {
-  const rawValues: Array<string | undefined | null> = [
-    req.baseUrl,
-    req.originalUrl,
-    req.path,
-    (req as any).url,
-  ];
-
-  const queryParamUrls: string[] = [];
-  const hasAvatarQuery = req.originalUrl?.includes('/api/avatar/upload');
-  if (hasAvatarQuery) {
-    queryParamUrls.push('/api/avatar/upload');
-    queryParamUrls.push('api/avatar/upload');
-  }
-
-  return [...rawValues, ...queryParamUrls]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .map((value) => value.toLowerCase());
-}
-
-function inferScope(req: Request): string | null {
-  const method = req.method.toUpperCase();
-  const candidateUrls = collectCandidateUrls(req);
-
-  const originalUrl = req.originalUrl?.toLowerCase() ?? '';
-  if (originalUrl.includes('/api/avatar/')) {
-    return 'avatars:write';
-  }
-
-  const matches = (url: string, prefix: string) =>
-    url === prefix || url.startsWith(`${prefix}/`) || url.startsWith(`${prefix}?`);
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/avatar') || matches(url, 'api/avatar') || matches(url, '/avatar')) {
-      return 'avatars:write';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/upload') || matches(url, 'api/upload')) {
-      return 'files:write';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/optimize') || matches(url, 'api/optimize')) {
-      return method === 'GET' ? 'files:read' : 'files:optimize';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/ingest') || matches(url, 'api/ingest')) {
-      return 'files:ingest';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/cache') || matches(url, 'cache')) {
-      return 'files:read';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/queue') || matches(url, 'api/queue') || matches(url, '/api/job') || matches(url, 'api/job')) {
-      return 'queue:read';
-    }
-  }
-
-  return null;
-}
-
 function respondUnauthorized(res: Response, message = 'Authentication required'): void {
   res.status(401).json({ error: message });
 }
@@ -115,23 +44,9 @@ export async function authenticateService(req: Request, res: Response, next: Nex
     }
 
     // Build enforced auth context from validated session
+    // Scope checking is done by requireScope() middleware on each route
     const context = EnforcedAuthContext.fromSession(claims);
     req.auth = context;
-
-    // Check inferred scope if applicable
-    const inferredScope = inferScope(req);
-    if (inferredScope && !context.hasScope(inferredScope)) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('Scope inference failed', {
-          required: inferredScope,
-          userId: claims.userId,
-          resourceBinding: context.resourceBinding,
-          urls: collectCandidateUrls(req),
-        });
-      }
-      respondForbidden(res, 'Insufficient scopes', inferredScope);
-      return;
-    }
 
     next();
   } catch (error) {
@@ -158,7 +73,7 @@ export function requireScope(scope: string) {
         console.warn('Scope assertion failed', {
           required: scope,
           userId: auth.userId,
-          urls: collectCandidateUrls(req),
+          path: req.path,
         });
       }
       respondForbidden(res, `Missing required scope: ${scope}`, scope);
