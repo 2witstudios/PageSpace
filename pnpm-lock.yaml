@@ -113,31 +113,31 @@ importers:
   apps/ios:
     dependencies:
       '@capacitor/app':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.1.1(@capacitor/core@7.4.5)
       '@capacitor/browser':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.0.3(@capacitor/core@7.4.5)
       '@capacitor/core':
-        specifier: ^7.0.0
+        specifier: ^7.4.5
         version: 7.4.5
       '@capacitor/ios':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.4.5(@capacitor/core@7.4.5)
       '@capacitor/keyboard':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.0.4(@capacitor/core@7.4.5)
       '@capacitor/preferences':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.0.3(@capacitor/core@7.4.5)
       '@capacitor/splash-screen':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.0.4(@capacitor/core@7.4.5)
       '@capacitor/status-bar':
-        specifier: ^7.0.0
+        specifier: ^7.0.3
         version: 7.0.4(@capacitor/core@7.4.5)
       '@capgo/capacitor-social-login':
-        specifier: ^7.0.5
+        specifier: ^7.20.0
         version: 7.20.0(@capacitor/core@7.4.5)
     devDependencies:
       '@capacitor/cli':
