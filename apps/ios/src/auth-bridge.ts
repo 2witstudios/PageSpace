@@ -13,6 +13,8 @@ export interface StoredAuthSession {
   csrfToken?: string | null;
   /** Device identifier for this installation */
   deviceId?: string | null;
+  /** Device token for session recovery */
+  deviceToken?: string | null;
 }
 
 let migrationComplete = false;
