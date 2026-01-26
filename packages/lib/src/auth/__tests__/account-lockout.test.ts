@@ -78,7 +78,7 @@ describe('account-lockout', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         failedLoginAttempts: 3,
         lockedUntil: null,
-      });
+      } as never);
 
       const status = await getAccountLockoutStatus('user-123');
 
@@ -91,7 +91,7 @@ describe('account-lockout', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         failedLoginAttempts: 10,
         lockedUntil: new Date(Date.now() - 1000), // 1 second ago
-      });
+      } as never);
 
       const status = await getAccountLockoutStatus('user-123');
 
@@ -103,7 +103,7 @@ describe('account-lockout', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         failedLoginAttempts: 10,
         lockedUntil: futureDate,
-      });
+      } as never);
 
       const status = await getAccountLockoutStatus('user-123');
 
@@ -127,7 +127,7 @@ describe('account-lockout', () => {
       const futureDate = new Date(Date.now() + 10 * 60 * 1000);
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         lockedUntil: futureDate,
-      });
+      } as never);
 
       const result = await isAccountLockedByEmail('locked@example.com');
 
@@ -210,7 +210,7 @@ describe('account-lockout', () => {
     });
 
     it('records attempt for existing user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'user-123' });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'user-123' } as never);
       const mockUpdate = vi.fn().mockReturnValue({
         set: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
