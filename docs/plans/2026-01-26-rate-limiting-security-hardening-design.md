@@ -12,7 +12,7 @@ This design addresses security gaps in rate limiting by adding:
 
 ## Background
 
-The existing distributed rate limiting infrastructure already implements fail-closed behavior in production when Redis is unavailable. However, several endpoints lacked rate limiting protection, and there was no persistent account lockout mechanism.
+The existing distributed rate-limiting infrastructure already implements fail-closed behavior in production when Redis is unavailable. However, several endpoints lacked rate-limiting protection, and there was no persistent account lockout mechanism.
 
 ## Design Decisions
 
