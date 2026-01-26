@@ -6,6 +6,7 @@ import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
 import RightPanel from "@/components/layout/right-sidebar";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
+import { TabBar } from "@/components/layout/tabs";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useResponsivePanels } from "@/hooks/useResponsivePanels";
@@ -172,6 +173,9 @@ function Layout({ children }: LayoutProps) {
             onToggleLeftPanel={handleLeftPanelToggle}
             onToggleRightPanel={handleRightPanelToggle}
           />
+
+          {/* TabBar: auto-hides when <=1 tab, accordion from TopBar */}
+          <TabBar />
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {!shouldOverlaySidebars && leftSidebarOpen && (
