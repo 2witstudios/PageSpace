@@ -103,11 +103,29 @@ export async function recordFailedLoginAttempt(
   userId: string
 ): Promise<AccountLockoutResult> {
   try {
-    // Atomically increment failed attempts and check if we need to lock
+    // First check if there's an expired lockout that needs to be reset
+    const currentUser = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: {
+        lockedUntil: true,
+        failedLoginAttempts: true,
+      },
+    });
+
+    if (!currentUser) {
+      return { success: false, error: 'User not found' };
+    }
+
+    // If lockout has expired, reset the counter before incrementing
+    const now = new Date();
+    const lockoutExpired = currentUser.lockedUntil !== null && currentUser.lockedUntil <= now;
+
+    // Atomically update: reset to 1 if expired, otherwise increment
     const result = await db
       .update(users)
       .set({
-        failedLoginAttempts: sql`${users.failedLoginAttempts} + 1`,
+        failedLoginAttempts: lockoutExpired ? 1 : sql`${users.failedLoginAttempts} + 1`,
+        lockedUntil: lockoutExpired ? null : undefined, // Clear expired lockout
       })
       .where(eq(users.id, userId))
       .returning({

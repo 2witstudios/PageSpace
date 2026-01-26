@@ -138,6 +138,12 @@ describe('account-lockout', () => {
 
   describe('recordFailedLoginAttempt', () => {
     it('increments failed attempts', async () => {
+      // Mock the initial findFirst to check for expired lockout
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+        lockedUntil: null,
+        failedLoginAttempts: 4,
+      } as never);
+
       const mockUpdate = vi.fn().mockReturnValue({
         set: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -157,14 +163,8 @@ describe('account-lockout', () => {
     });
 
     it('returns error for non-existent user', async () => {
-      const mockUpdate = vi.fn().mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
-      vi.mocked(db.update).mockImplementation(mockUpdate);
+      // Mock findFirst returning undefined (user not found)
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined);
 
       const result = await recordFailedLoginAttempt('non-existent');
 
@@ -173,6 +173,12 @@ describe('account-lockout', () => {
     });
 
     it('locks account when reaching threshold', async () => {
+      // Mock the initial findFirst
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+        lockedUntil: null,
+        failedLoginAttempts: 9,
+      } as never);
+
       const mockSetForLock = vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       });
@@ -198,6 +204,36 @@ describe('account-lockout', () => {
       expect(result.lockedUntil).toBeDefined();
       expect(result.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
     });
+
+    it('resets counter when lockout has expired', async () => {
+      // Mock the initial findFirst with an expired lockout
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+        lockedUntil: new Date(Date.now() - 1000), // 1 second ago (expired)
+        failedLoginAttempts: 10,
+      } as never);
+
+      const mockSet = vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{
+            failedLoginAttempts: 1, // Reset to 1 (not 11)
+            email: 'test@example.com',
+          }]),
+        }),
+      });
+      vi.mocked(db.update).mockReturnValue({
+        set: mockSet,
+      } as never);
+
+      const result = await recordFailedLoginAttempt('user-123');
+
+      expect(result.success).toBe(true);
+      expect(result.lockedUntil).toBeUndefined(); // Should not be locked (only 1 attempt)
+      // Verify the set was called with reset value
+      expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({
+        failedLoginAttempts: 1,
+        lockedUntil: null,
+      }));
+    });
   });
 
   describe('recordFailedLoginAttemptByEmail', () => {
@@ -210,7 +246,11 @@ describe('account-lockout', () => {
     });
 
     it('records attempt for existing user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'user-123' } as never);
+      // First call: find user by email, second call: check lockout status
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce({ id: 'user-123' } as never)
+        .mockResolvedValueOnce({ lockedUntil: null, failedLoginAttempts: 0 } as never);
+
       const mockUpdate = vi.fn().mockReturnValue({
         set: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({

@@ -1,4 +1,4 @@
-# Rate Limiting Security Hardening Design
+# Rate-Limiting Security Hardening Design
 
 **Date:** 2026-01-26
 **Status:** Implemented
