@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -19,6 +20,25 @@ export async function POST(request: Request) {
                    'unknown';
 
   try {
+    // Rate limit by IP address
+    const rateLimitResult = await checkDistributedRateLimit(
+      `contact:${clientIP}`,
+      DISTRIBUTED_RATE_LIMITS.CONTACT_FORM
+    );
+
+    if (!rateLimitResult.allowed) {
+      loggers.api.warn('Contact form rate limit exceeded', { ip: clientIP });
+      return Response.json(
+        { error: 'Too many contact submissions. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitResult.retryAfter || 3600),
+          },
+        }
+      );
+    }
+
     // Authenticate request (optional - allows unauthenticated contact forms)
     let userId: string | undefined;
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
