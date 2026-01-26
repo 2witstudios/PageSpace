@@ -105,7 +105,6 @@ export function useAccessRevocation() {
       }
 
       // Prevent duplicate handling for the same room in quick succession
-      const roomKey = `${room}:${Date.now()}`;
       if (handledRooms.current.has(room)) {
         return;
       }
