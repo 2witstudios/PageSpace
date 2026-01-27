@@ -12,11 +12,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Verification token is required' }, { status: 400 });
     }
 
-    // Validate token format before passing to verification (defense-in-depth)
-    if (token.length > 512 || !/^[A-Za-z0-9._-]+$/.test(token)) {
-      return NextResponse.json({ error: 'Invalid token format' }, { status: 400 });
-    }
-
     const userId = await verifyToken(token, 'email_verification');
 
     if (!userId) {

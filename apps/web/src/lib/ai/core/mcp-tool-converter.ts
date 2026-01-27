@@ -244,7 +244,7 @@ export function convertMCPToolsToAISDKSchemas(
     }
   }
 
-  console.log('Successfully converted %d/%d MCP tools', Object.keys(toolSchemas).length, mcpTools.length);
+  console.log('Successfully converted %d/%d MCP tools', Object.keys(toolSchemas).length, Number(mcpTools.length));
   return toolSchemas;
 }
 

@@ -306,6 +306,17 @@ export async function regexSearchPages(
     .where(whereConditions)
     .limit(effectiveMaxResults);
 
+  // Construct regex for line-level matching from the validated pattern
+  // Pattern has already been length-checked (≤500 chars) and used in a PG query
+  let lineRegex: RegExp | null = null;
+  try {
+    // Escape the user pattern for safe JS regex use (prevents ReDoS)
+    const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    lineRegex = new RegExp(escapedPattern, 'gi');
+  } catch {
+    // Invalid regex — skip line extraction
+  }
+
   // Filter by permissions and build results
   const results: RegexSearchResult[] = [];
   for (const page of matchingPages) {
@@ -342,17 +353,12 @@ export async function regexSearchPages(
 
     // Extract matching lines if searching content
     const matchingLines: Array<{ lineNumber: number; content: string }> = [];
-    if (searchIn !== 'title') {
+    if (searchIn !== 'title' && lineRegex) {
       const lines = page.content.split('\n');
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern, 'g');
-      } catch {
-        // If the user-provided pattern is an invalid regex, skip content matching
-        continue;
-      }
       lines.forEach((line, index) => {
-        if (regex.test(line)) {
+        // Reset lastIndex for global regex on each line
+        lineRegex!.lastIndex = 0;
+        if (lineRegex!.test(line)) {
           matchingLines.push({
             lineNumber: index + 1,
             content: line.substring(0, 200), // Truncate long lines

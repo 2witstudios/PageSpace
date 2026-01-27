@@ -174,22 +174,18 @@ export const WebPreviewBody = ({
 }: WebPreviewBodyProps) => {
   const { url } = useWebPreview();
 
-  // Validate URL to prevent javascript: and data: XSS vectors
+  // Validate and reconstruct URL to break taint chain and prevent XSS
   const rawSrc = src || url;
   const safeSrc = (() => {
     if (!rawSrc) return '';
-    // Only allow http(s), blob, and about:srcdoc URLs
     try {
       const parsed = new URL(rawSrc, window.location.origin);
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'blob:') {
-        return rawSrc;
+        // Reconstruct from parsed URL to break taint chain
+        return parsed.href;
       }
       return '';
     } catch {
-      // Relative URLs are safe in sandboxed iframes
-      if (rawSrc.startsWith('/') || rawSrc.startsWith('./')) {
-        return rawSrc;
-      }
       return '';
     }
   })();

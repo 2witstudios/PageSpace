@@ -133,15 +133,12 @@ router.post('/batch', async (req, res) => {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
-    const results: any = {};
+    const resultsMap = new Map<string, any>();
     const jobIds: string[] = [];
 
     for (const preset of presets) {
-      // Validate preset is a known key (prevents prototype pollution and property injection)
+      // Validate preset is a known key in IMAGE_PRESETS (rejects unknown/dangerous keys)
       if (typeof preset !== 'string' || !Object.prototype.hasOwnProperty.call(IMAGE_PRESETS, preset)) {
-        if (typeof preset === 'string' && preset !== '__proto__' && preset !== 'constructor' && preset !== 'prototype') {
-          results[preset] = { error: 'Invalid preset' };
-        }
         continue;
       }
 
@@ -149,11 +146,11 @@ router.post('/batch', async (req, res) => {
       const cached = await contentStore.cacheExists(contentHash, preset);
 
       if (cached) {
-        results[preset] = {
+        resultsMap.set(preset, {
           cached: true,
           url: await contentStore.getCacheUrl(contentHash, preset),
           status: 'completed'
-        };
+        });
       } else {
         // Queue for processing
         const jobId = await queueManager.addJob('image-optimize', {
@@ -163,13 +160,15 @@ router.post('/batch', async (req, res) => {
         });
 
         jobIds.push(jobId);
-        results[preset] = {
+        resultsMap.set(preset, {
           cached: false,
           jobId,
           status: 'queued'
-        };
+        });
       }
     }
+
+    const results = Object.fromEntries(resultsMap);
 
     res.json({
       success: true,

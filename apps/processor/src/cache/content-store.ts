@@ -301,16 +301,22 @@ export class ContentStore {
     };
 
     const metadataPath = this.getCacheMetadataPath(normalizedHash);
-    let metadata: Record<string, CacheEntry> = {};
+    let metadata: Record<string, CacheEntry> = Object.create(null);
 
     try {
       const existing = await fs.readFile(metadataPath, 'utf-8');
-      metadata = JSON.parse(existing);
+      const parsed = JSON.parse(existing);
+      // Copy only safe keys to null-prototype object
+      for (const key of Object.keys(parsed)) {
+        if (isSafePropertyKey(key) && isValidPreset(key)) {
+          metadata[key] = parsed[key];
+        }
+      }
     } catch {
       // File doesn't exist yet
     }
 
-    if (isSafePropertyKey(preset)) {
+    if (isValidPreset(preset)) {
       metadata[preset] = entry;
     }
     await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
