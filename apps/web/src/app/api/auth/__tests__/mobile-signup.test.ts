@@ -27,13 +27,11 @@ vi.mock('@pagespace/db', () => ({
     },
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockReturnValue({
-          then: vi.fn(),
-        }),
+        returning: vi.fn().mockResolvedValue([]),
       }),
     }),
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -43,11 +41,11 @@ vi.mock('bcryptjs', () => ({
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'test-user-id-123'),
+  createId: vi.fn(() => 'pfh0haxfpzowht3oi213cqos'),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  slugify: vi.fn((name) => name.toLowerCase().replace(/\s+/g, '-')),
+  slugify: vi.fn((name: string) => name.toLowerCase().replace(/\s+/g, '-')),
   createNotification: vi.fn().mockResolvedValue(undefined),
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
     deviceToken: 'mock-device-token',
@@ -68,8 +66,8 @@ vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock-session-token'),
     validateSession: vi.fn().mockResolvedValue({
-      sessionId: 'session-id-123',
-      userId: 'test-user-id-123',
+      sessionId: 'sfh0haxfpzowht3oi213ses1',
+      userId: 'pfh0haxfpzowht3oi213cqos',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
@@ -134,7 +132,7 @@ import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 
 describe('/api/auth/mobile/signup', () => {
   const mockNewUser = {
-    id: 'test-user-id-123',
+    id: 'pfh0haxfpzowht3oi213cqos',
     email: 'newuser@example.com',
     name: 'New User',
     image: null,
@@ -145,10 +143,10 @@ describe('/api/auth/mobile/signup', () => {
   };
 
   const mockDrive = {
-    id: 'drive-id-123',
+    id: 'mfh0haxfpzowht3oi213cqdr',
     name: 'Getting Started',
     slug: 'getting-started',
-    ownerId: 'test-user-id-123',
+    ownerId: 'pfh0haxfpzowht3oi213cqos',
   };
 
   const validSignupPayload = {
@@ -169,27 +167,23 @@ describe('/api/auth/mobile/signup', () => {
     (db.query.users.findFirst as Mock).mockResolvedValue(null); // No existing user
     (db.insert as Mock).mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockReturnValue({
-          then: vi.fn((cb) => Promise.resolve(cb([mockNewUser]))),
-        }),
+        returning: vi.fn().mockResolvedValue([mockNewUser]),
       }),
     });
   });
 
   describe('successful mobile signup', () => {
     it('returns 201 with user data and tokens', async () => {
-      // Setup for drive creation
-      let driveInsertCallback: ((results: typeof mockDrive[]) => typeof mockDrive) | null = null;
+      // Setup for drive creation - alternate between user and drive results
+      let insertCallCount = 0;
       (db.insert as Mock).mockImplementation(() => ({
         values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockReturnValue({
-            then: vi.fn((cb) => {
-              if (!driveInsertCallback) {
-                driveInsertCallback = cb;
-                return Promise.resolve(cb([mockNewUser]));
-              }
-              return Promise.resolve(cb([mockDrive]));
-            }),
+          returning: vi.fn().mockImplementation(() => {
+            insertCallCount++;
+            if (insertCallCount === 1) {
+              return Promise.resolve([mockNewUser]);
+            }
+            return Promise.resolve([mockDrive]);
           }),
         }),
       }));
@@ -235,7 +229,7 @@ describe('/api/auth/mobile/signup', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: 'test-user-id-123',
+          userId: 'pfh0haxfpzowht3oi213cqos',
           deviceId: 'ios-device-456',
           platform: 'ios',
           deviceName: 'iPhone 15 Pro',
@@ -285,7 +279,7 @@ describe('/api/auth/mobile/signup', () => {
 
       expect(createNotification).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: 'test-user-id-123',
+          userId: 'pfh0haxfpzowht3oi213cqos',
           type: 'EMAIL_VERIFICATION_REQUIRED',
         })
       );
@@ -320,7 +314,7 @@ describe('/api/auth/mobile/signup', () => {
 
       expect(logAuthEvent).toHaveBeenCalledWith(
         'signup',
-        'test-user-id-123',
+        'pfh0haxfpzowht3oi213cqos',
         validSignupPayload.email,
         '192.168.1.1'
       );
@@ -336,7 +330,7 @@ describe('/api/auth/mobile/signup', () => {
       await POST(request);
 
       expect(trackAuthEvent).toHaveBeenCalledWith(
-        'test-user-id-123',
+        'pfh0haxfpzowht3oi213cqos',
         'signup',
         expect.objectContaining({
           platform: 'ios',

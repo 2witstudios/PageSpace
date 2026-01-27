@@ -200,15 +200,16 @@ describe('ui-setup', () => {
 
       await uiSetup.cleanupKeyboardListeners();
 
-      // After cleanup, simulating events should not affect DOM
+      // Set known DOM state to verify it remains unchanged after events
       document.body.style.setProperty('--keyboard-height', '999px');
-      document.body.classList.add('keyboard-open');
+      document.body.classList.remove('keyboard-open');
 
-      // These should not change state after cleanup
+      // Simulate keyboard events after cleanup
       simulateKeyboardShow(100);
 
-      // The listener was removed, so new listeners added in simulate won't match
-      // and the event won't fire on the old handlers
+      // Listeners were removed, so DOM should remain unchanged
+      expect(document.body.style.getPropertyValue('--keyboard-height')).toBe('999px');
+      expect(document.body.classList.contains('keyboard-open')).toBe(false);
     });
 
     it('can be called multiple times safely', async () => {

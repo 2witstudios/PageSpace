@@ -23,14 +23,14 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn().mockResolvedValue({
     success: true,
     newToken: 'new-device-token',
-    deviceTokenId: 'device-token-id-123',
+    deviceTokenId: 'dfh0haxfpzowht3oi213dtk1',
   }),
 }));
 
@@ -55,8 +55,8 @@ vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_refreshed-token'),
     validateSession: vi.fn().mockResolvedValue({
-      sessionId: 'new-session-id',
-      userId: 'test-user-id',
+      sessionId: 'nfh0haxfpzowht3oi213ses2',
+      userId: 'rfh0haxfpzowht3oi213ref1',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
@@ -100,14 +100,14 @@ import { getClientIP } from '@/lib/auth';
 
 describe('/api/auth/mobile/refresh', () => {
   const mockUser = {
-    id: 'test-user-id',
+    id: 'rfh0haxfpzowht3oi213ref1',
     tokenVersion: 0,
     role: 'user' as const,
   };
 
   const mockDeviceRecord = {
-    id: 'device-token-id-123',
-    userId: 'test-user-id',
+    id: 'dfh0haxfpzowht3oi213dtk1',
+    userId: 'rfh0haxfpzowht3oi213ref1',
     deviceId: 'ios-device-123',
     platform: 'ios',
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
@@ -134,8 +134,8 @@ describe('/api/auth/mobile/refresh', () => {
     (updateDeviceTokenActivity as Mock).mockResolvedValue(undefined);
     (sessionService.createSession as Mock).mockResolvedValue('ps_sess_refreshed-token');
     (sessionService.validateSession as Mock).mockResolvedValue({
-      sessionId: 'new-session-id',
-      userId: 'test-user-id',
+      sessionId: 'nfh0haxfpzowht3oi213ses2',
+      userId: 'rfh0haxfpzowht3oi213ref1',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
@@ -145,7 +145,7 @@ describe('/api/auth/mobile/refresh', () => {
     (atomicDeviceTokenRotation as Mock).mockResolvedValue({
       success: true,
       newToken: 'new-device-token',
-      deviceTokenId: 'device-token-id-123',
+      deviceTokenId: 'dfh0haxfpzowht3oi213dtk1',
     });
     (getClientIP as Mock).mockReturnValue('192.168.1.1');
   });

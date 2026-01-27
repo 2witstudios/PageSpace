@@ -431,28 +431,30 @@ describe('lifecycle', () => {
 
   describe('splash screen auto-hide', () => {
     it('hides splash on window load via requestAnimationFrame', async () => {
+      // Spy on addEventListener before setup to capture the load handler deterministically
+      const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
+
       lifecycle.setupAppLifecycle();
 
-      // Get the load event handler
-      const addEventListenerCalls = (window.addEventListener as unknown as { mock: { calls: [string, Function][] } }).mock?.calls;
-      const loadHandler = addEventListenerCalls?.find(
+      // Extract the load handler from the spy
+      const loadCall = addEventListenerSpy.mock.calls.find(
         (call) => call[0] === 'load'
-      )?.[1];
+      );
+      expect(loadCall).toBeDefined();
+      const loadHandler = loadCall![1] as () => void;
 
-      if (loadHandler) {
-        // Mock requestAnimationFrame
-        const rafSpy = vi.spyOn(window, 'requestAnimationFrame');
-        rafSpy.mockImplementation((cb) => {
-          cb(0);
-          return 0;
-        });
+      // Mock requestAnimationFrame
+      const rafSpy = vi.spyOn(window, 'requestAnimationFrame');
+      rafSpy.mockImplementation((cb) => {
+        cb(0);
+        return 0;
+      });
 
-        loadHandler();
+      loadHandler();
 
-        await vi.waitFor(() => {
-          expect(mockSplashScreen.hide).toHaveBeenCalled();
-        });
-      }
+      await vi.waitFor(() => {
+        expect(mockSplashScreen.hide).toHaveBeenCalled();
+      });
     });
   });
 

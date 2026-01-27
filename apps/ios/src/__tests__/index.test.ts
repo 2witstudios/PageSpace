@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { mockStatusBar, mockKeyboardListeners, consoleSpy } from './setup';
+import { mockStatusBar, mockAppListeners, consoleSpy } from './setup';
 import type { StoredAuthSession } from '../auth-bridge';
 
 // Re-import to get fresh module state for each test
@@ -145,8 +145,9 @@ describe('index (iOS bridge entry point)', () => {
       it('calls setupAppLifecycle', async () => {
         await indexModule.initializeIOSBridge();
 
-        // Verify lifecycle setup occurred by checking keyboard listeners exist
-        expect(mockKeyboardListeners.size).toBeGreaterThan(0);
+        // Verify lifecycle setup occurred by checking appUrlOpen listener registration
+        expect(mockAppListeners.has('appUrlOpen')).toBe(true);
+        expect(mockAppListeners.get('appUrlOpen')?.length).toBeGreaterThan(0);
       });
 
       it('adds platform class to document', async () => {

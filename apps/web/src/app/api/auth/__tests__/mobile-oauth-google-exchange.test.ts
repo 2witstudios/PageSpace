@@ -40,8 +40,8 @@ vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_oauth-token'),
     validateSession: vi.fn().mockResolvedValue({
-      sessionId: 'oauth-session-id',
-      userId: 'oauth-user-id',
+      sessionId: 'sfh0haxfpzowht3oi213oas1',
+      userId: 'ofh0haxfpzowht3oi213oau1',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
@@ -99,7 +99,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
   };
 
   const mockUser = {
-    id: 'oauth-user-id',
+    id: 'ofh0haxfpzowht3oi213oau1',
     email: 'oauth@example.com',
     name: 'OAuth User',
     image: 'https://example.com/avatar.png',
@@ -136,8 +136,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
     (sessionService.createSession as Mock).mockResolvedValue('ps_sess_oauth-token');
     (sessionService.validateSession as Mock).mockResolvedValue({
-      sessionId: 'oauth-session-id',
-      userId: 'oauth-user-id',
+      sessionId: 'sfh0haxfpzowht3oi213oas1',
+      userId: 'ofh0haxfpzowht3oi213oau1',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
