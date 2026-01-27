@@ -6,8 +6,20 @@
  * Re-verify permission before allowing document updates, etc.
  */
 
-import { describe, it, expect } from 'vitest';
-import { shouldReauthorize, isSensitiveEvent, SensitiveEventType } from '../per-event-auth';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { shouldReauthorize, isSensitiveEvent, reauthorizePageAccess, SensitiveEventType } from '../per-event-auth';
+
+vi.mock('@pagespace/lib/logger-config', () => {
+  const noop = vi.fn();
+  const logger = { info: noop, warn: noop, error: noop, debug: noop, fatal: noop };
+  return { loggers: { realtime: logger, api: logger, security: logger } };
+});
+
+vi.mock('@pagespace/lib/permissions-cached', () => ({
+  getUserAccessLevel: vi.fn(),
+}));
+
+import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
 
 describe('Per-Event Authorization', () => {
   describe('isSensitiveEvent', () => {
@@ -93,5 +105,62 @@ describe('SensitiveEventType', () => {
     sensitiveEvents.forEach(event => {
       expect(isSensitiveEvent(event)).toBe(true);
     });
+  });
+});
+
+describe('reauthorizePageAccess', () => {
+  const mockedGetUserAccessLevel = vi.mocked(getUserAccessLevel);
+
+  beforeEach(() => {
+    mockedGetUserAccessLevel.mockReset();
+  });
+
+  it('calls getUserAccessLevel with bypassCache: true', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: false,
+      canDelete: false,
+    });
+
+    await reauthorizePageAccess('user-1', 'page-1', 'edit');
+
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
+  });
+
+  it('given revoked user (null permissions), should return authorized: false', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue(null);
+
+    const result = await reauthorizePageAccess('user-revoked', 'page-1', 'edit');
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('No access to this page');
+  });
+
+  it('given user with view-only access requesting edit, should return authorized: false', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const result = await reauthorizePageAccess('user-viewer', 'page-1', 'edit');
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('Requires edit permission');
+  });
+
+  it('given user with edit access, should return authorized: true', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const result = await reauthorizePageAccess('user-editor', 'page-1', 'edit');
+
+    expect(result.authorized).toBe(true);
   });
 });

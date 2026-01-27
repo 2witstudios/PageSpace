@@ -575,16 +575,32 @@ export async function canUserDeletePage(
  * Invalidate cache when user permissions change
  */
 export async function invalidateUserPermissions(userId: string): Promise<void> {
-  await getPermissionCache().invalidateUserCache(userId);
-  loggers.api.info(`[PERMISSIONS] Invalidated cache for user ${userId}`);
+  try {
+    await getPermissionCache().invalidateUserCache(userId);
+    loggers.security.info(`[PERMISSIONS] Invalidated cache for user`, { userId });
+  } catch (error) {
+    loggers.security.error('[PERMISSIONS] Failed to invalidate user cache — stale permissions may persist for up to 60s', {
+      userId,
+      staleTTLSeconds: 60,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
  * Invalidate cache when drive permissions change
  */
 export async function invalidateDrivePermissions(driveId: string): Promise<void> {
-  await getPermissionCache().invalidateDriveCache(driveId);
-  loggers.api.info(`[PERMISSIONS] Invalidated cache for drive ${driveId}`);
+  try {
+    await getPermissionCache().invalidateDriveCache(driveId);
+    loggers.security.info(`[PERMISSIONS] Invalidated cache for drive`, { driveId });
+  } catch (error) {
+    loggers.security.error('[PERMISSIONS] Failed to invalidate drive cache — stale permissions may persist for up to 60s', {
+      driveId,
+      staleTTLSeconds: 60,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
