@@ -61,7 +61,7 @@ describe('permissions system', () => {
       })
     })
 
-    it('returns null for non-existent page (valid UUID)', async () => {
+    it('returns null for non-existent page (valid CUID2)', async () => {
       // Use a valid CUID2 that doesn't exist in DB
       const nonExistentPageId = createId()
       const access = await getUserAccessLevel(testUser.id, nonExistentPageId)
@@ -199,8 +199,8 @@ describe('permissions system', () => {
       expect(canView).toBe(true)
     })
 
-    it('returns false for non-existent page (valid UUID)', async () => {
-      const nonExistentPageId = '00000000-0000-4000-8000-000000000000'
+    it('returns false for non-existent page (valid CUID2)', async () => {
+      const nonExistentPageId = createId()
       const canView = await canUserViewPage(testUser.id, nonExistentPageId)
       expect(canView).toBe(false)
     })

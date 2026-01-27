@@ -50,8 +50,8 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
  * Get user access level for a page
  * Simple permission check - no inheritance, direct permissions only
  *
- * @param userId - User ID to check permissions for (must be valid UUID)
- * @param pageId - Page ID to check permissions on (must be valid UUID)
+ * @param userId - User ID to check permissions for (must be valid CUID2)
+ * @param pageId - Page ID to check permissions on (must be valid CUID2)
  * @param options.silent - If false, log debug messages (default: true)
  * @returns Permission object or null if no access/invalid input
  */
