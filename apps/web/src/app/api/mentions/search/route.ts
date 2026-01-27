@@ -256,7 +256,10 @@ export async function GET(request: Request) {
         const drive = driveResults[0];
         
         if (!drive) {
-          return new NextResponse('Drive not found', { status: 404 });
+          return NextResponse.json(
+            { error: 'Drive not found' },
+            { status: 404 }
+          );
         }
 
         // Add the drive owner
@@ -321,6 +324,9 @@ export async function GET(request: Request) {
     return NextResponse.json(finalSuggestions);
   } catch (error) {
     loggers.api.error('[MENTIONS_SEARCH_GET]', error as Error);
-    return new NextResponse('Internal Server Error', { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }
