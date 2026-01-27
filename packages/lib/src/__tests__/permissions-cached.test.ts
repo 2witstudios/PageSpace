@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { getUserAccessLevel } from '../permissions/permissions-cached'
-import { grantPagePermissions } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
 import { db, users } from '@pagespace/db'
 import { PermissionCache } from '../services/permission-cache'
@@ -65,11 +64,10 @@ describe('cached permissions system', () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' })
 
       // Create explicit permission with limited access
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       // Drive admin should still have full access (admin overrides explicit permissions)
@@ -93,11 +91,10 @@ describe('cached permissions system', () => {
     })
 
     it('returns specific permissions when granted to non-admin user', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, testPage.id)

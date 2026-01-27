@@ -63,6 +63,24 @@ export {
   getUserAccessiblePagesInDriveWithDetails,
   getUserAccessiblePagesInDrive,
   isDriveOwnerOrAdmin,
-  grantPagePermissions,
-  revokePagePermissions,
 } from './permissions/permissions';
+
+// Zero-trust permission mutations (replaces old grantPagePermissions/revokePagePermissions)
+export {
+  grantPagePermission,
+  revokePagePermission,
+  type GrantResult,
+  type RevokeResult,
+  type PermissionMutationError,
+} from './permissions/permission-mutations';
+export {
+  GrantInputSchema,
+  RevokeInputSchema,
+  PermissionFlagsSchema,
+  type GrantInput,
+  type RevokeInput,
+  type PermissionFlags,
+} from './permissions/schemas';
+
+// Enforced auth context
+export { EnforcedAuthContext } from './permissions/enforced-context';

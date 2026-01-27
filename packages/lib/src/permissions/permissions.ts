@@ -1,6 +1,5 @@
 import { db, and, eq } from '@pagespace/db';
 import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
-import { permissionCache } from '../services/permission-cache';
 import { loggers } from '../logging/logger-config';
 
 /**
@@ -436,95 +435,6 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     }
   }));
 }
-
-/**
- * Grant permissions to a user for a page
- */
-export async function grantPagePermissions(
-  pageId: string,
-  userId: string,
-  permissions: {
-    canView: boolean;
-    canEdit: boolean;
-    canShare: boolean;
-    canDelete?: boolean;
-  },
-  grantedBy: string
-): Promise<void> {
-  const pageRecord = await db.select({ driveId: pages.driveId })
-    .from(pages)
-    .where(eq(pages.id, pageId))
-    .limit(1);
-
-  const driveId = pageRecord[0]?.driveId;
-
-  // Check if permission already exists
-  const existing = await db.select()
-    .from(pagePermissions)
-    .where(and(
-      eq(pagePermissions.pageId, pageId),
-      eq(pagePermissions.userId, userId)
-    ))
-    .limit(1);
-
-  if (existing.length > 0) {
-    // Update existing permission
-    await db.update(pagePermissions)
-      .set({
-        canView: permissions.canView,
-        canEdit: permissions.canEdit,
-        canShare: permissions.canShare,
-        canDelete: permissions.canDelete || false,
-        grantedBy,
-        grantedAt: new Date(),
-      })
-      .where(eq(pagePermissions.id, existing[0].id));
-  } else {
-    // Create new permission
-    await db.insert(pagePermissions)
-      .values({
-        pageId,
-        userId,
-        canView: permissions.canView,
-        canEdit: permissions.canEdit,
-        canShare: permissions.canShare,
-        canDelete: permissions.canDelete || false,
-        grantedBy,
-      });
-  }
-
-  await Promise.all([
-    permissionCache.invalidateUserCache(userId),
-    driveId ? permissionCache.invalidateDriveCache(driveId) : Promise.resolve()
-  ]);
-}
-
-/**
- * Revoke all permissions for a user on a page
- */
-export async function revokePagePermissions(
-  pageId: string,
-  userId: string
-): Promise<void> {
-  const pageRecord = await db.select({ driveId: pages.driveId })
-    .from(pages)
-    .where(eq(pages.id, pageId))
-    .limit(1);
-
-  const driveId = pageRecord[0]?.driveId;
-
-  await db.delete(pagePermissions)
-    .where(and(
-      eq(pagePermissions.pageId, pageId),
-      eq(pagePermissions.userId, userId)
-    ));
-
-  await Promise.all([
-    permissionCache.invalidateUserCache(userId),
-    driveId ? permissionCache.invalidateDriveCache(driveId) : Promise.resolve()
-  ]);
-}
-
 
 /**
  * Check if user has access to a drive by drive ID
