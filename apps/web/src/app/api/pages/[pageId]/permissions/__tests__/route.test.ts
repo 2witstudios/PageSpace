@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, DELETE } from '../route';
-import type { SessionAuthResult, AuthError, EnforcedAuthResult, EnforcedAuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError, EnforcedAuthResult, EnforcedAuthError, EnforcedAuthSuccess } from '@/lib/auth';
 import type {
   GetPermissionsResult,
   PermissionEntry,
@@ -88,7 +88,7 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const mockEnforcedAuth = (userId: string): EnforcedAuthResult => ({
+const mockEnforcedAuth = (userId: string): EnforcedAuthSuccess => ({
   ctx: {
     userId,
     sessionId: 'test-session-id',
@@ -96,7 +96,7 @@ const mockEnforcedAuth = (userId: string): EnforcedAuthResult => ({
     tokenVersion: 0,
     adminRoleVersion: 0,
     scopes: ['*'],
-  } as EnforcedAuthResult['ctx'],
+  } as EnforcedAuthSuccess['ctx'],
 });
 
 const mockAuthError = (status = 401): AuthError => ({
