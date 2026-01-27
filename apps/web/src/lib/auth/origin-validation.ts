@@ -178,23 +178,23 @@ export function requiresOriginValidation(request: Request): boolean {
 
 /**
  * Validation mode for middleware origin checks
- * - 'warn': Log warnings but don't block requests (default for initial rollout)
- * - 'block': Block requests with invalid origins
+ * - 'block': Block requests with invalid origins (default - secure by default)
+ * - 'warn': Log warnings but don't block requests (opt-in for debugging)
  */
 export type OriginValidationMode = 'warn' | 'block';
 
 /**
  * Gets the origin validation mode from environment configuration
- * Defaults to 'warn' for safe initial rollout
+ * Defaults to 'block' - misconfigured origins must not silently pass
  *
  * @returns The configured validation mode
  */
 function getOriginValidationMode(): OriginValidationMode {
   const mode = process.env.ORIGIN_VALIDATION_MODE;
-  if (mode === 'block') {
-    return 'block';
+  if (mode === 'warn') {
+    return 'warn';
   }
-  return 'warn'; // Default to warn mode for safety
+  return 'block';
 }
 
 /**
@@ -215,8 +215,8 @@ export interface MiddlewareOriginValidationResult {
  * Validates origin for middleware with configurable mode (warn-only or blocking)
  *
  * This is designed for use in Next.js middleware to provide application-wide
- * origin validation as an additional security layer. By default, it operates
- * in warning-only mode to avoid breaking changes during initial rollout.
+ * origin validation as an additional security layer. By default, it blocks
+ * requests with invalid origins. Set ORIGIN_VALIDATION_MODE=warn to log-only.
  *
  * Key behaviors:
  * - Skips validation for safe methods (GET, HEAD, OPTIONS)
