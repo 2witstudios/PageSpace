@@ -38,9 +38,7 @@ export async function openExternalUrl(url: string): Promise<void> {
   if (isCapacitorApp()) {
     try {
       // Dynamic import - @capacitor/browser is only available in the iOS/Android app
-      // Use variable to prevent Vite's static import analysis at test time
-      const modulePath = '@capacitor/browser';
-      const browserModule = await import(/* @vite-ignore */ modulePath) as { Browser: CapacitorBrowser };
+      const browserModule = await import(/* webpackIgnore: true */ '@capacitor/browser') as { Browser: CapacitorBrowser };
       await browserModule.Browser.open({ url });
     } catch {
       // Fallback if Browser plugin isn't available
