@@ -422,6 +422,94 @@ describe('permission-cache', () => {
     })
   })
 
+  describe('cache metrics', () => {
+    beforeEach(() => {
+      cache.resetMetrics()
+    })
+
+    it('tracks hits when cache returns valid entry', async () => {
+      await cache.setPagePermission(testUserId, testPageId, testDriveId, testPermission, false)
+
+      await cache.getPagePermission(testUserId, testPageId)
+
+      const { metrics } = cache.getCacheStats()
+      expect(metrics.hits).toBe(1)
+      expect(metrics.misses).toBe(0)
+    })
+
+    it('tracks misses when cache returns null', async () => {
+      await cache.getPagePermission('nonexistent', 'page_999')
+
+      const { metrics } = cache.getCacheStats()
+      expect(metrics.misses).toBe(1)
+      expect(metrics.hits).toBe(0)
+    })
+
+    it('tracks invalidation count', async () => {
+      await cache.setPagePermission(testUserId, testPageId, testDriveId, testPermission, false)
+
+      await cache.invalidateUserCache(testUserId)
+
+      const { metrics } = cache.getCacheStats()
+      expect(metrics.invalidations).toBe(1)
+    })
+
+    it('tracks TTL expirations on access', async () => {
+      await cache.setPagePermission(testUserId, testPageId, testDriveId, testPermission, false, 1)
+
+      await new Promise(resolve => setTimeout(resolve, 1100))
+
+      await cache.getPagePermission(testUserId, testPageId)
+
+      const { metrics } = cache.getCacheStats()
+      expect(metrics.ttlExpirations).toBe(1)
+      expect(metrics.misses).toBe(1)
+    })
+
+    it('resets metrics correctly', async () => {
+      await cache.getPagePermission('nonexistent', 'page_999')
+      expect(cache.getCacheStats().metrics.misses).toBe(1)
+
+      cache.resetMetrics()
+
+      const { metrics } = cache.getCacheStats()
+      expect(metrics.hits).toBe(0)
+      expect(metrics.misses).toBe(0)
+      expect(metrics.invalidations).toBe(0)
+      expect(metrics.invalidationFailures).toBe(0)
+      expect(metrics.ttlExpirations).toBe(0)
+      expect(metrics.redisErrors).toBe(0)
+    })
+
+    it('tracks batch operation hits and misses', async () => {
+      await cache.setPagePermission(testUserId, 'page_1', testDriveId, testPermission, false)
+      await cache.setPagePermission(testUserId, 'page_2', testDriveId, testPermission, false)
+
+      cache.resetMetrics()
+
+      await cache.getBatchPagePermissions(testUserId, ['page_1', 'page_2', 'page_uncached'])
+
+      const { metrics } = cache.getCacheStats()
+      expect(metrics.hits).toBe(2)
+      expect(metrics.misses).toBe(1)
+    })
+
+    it('invalidation clears cache and subsequent access misses', async () => {
+      await cache.setPagePermission(testUserId, testPageId, testDriveId, testPermission, false)
+
+      cache.resetMetrics()
+      await cache.getPagePermission(testUserId, testPageId)
+      expect(cache.getCacheStats().metrics.hits).toBe(1)
+
+      await cache.invalidateUserCache(testUserId)
+
+      cache.resetMetrics()
+      const result = await cache.getPagePermission(testUserId, testPageId)
+      expect(result).toBeNull()
+      expect(cache.getCacheStats().metrics.misses).toBe(1)
+    })
+  })
+
   describe('edge cases', () => {
     it('handles rapid sequential operations', async () => {
       const operations = []
