@@ -77,10 +77,12 @@
   - [x] All tests compile
 
 ### Phase 6: PR
-- [ ] **Create PR**
-  - [ ] All CI checks passing
-  - [ ] All review comments addressed
-  - [ ] Complete description with checklist
+- [x] **Create PR** (#257)
+  - [x] PR created with complete description
+  - [x] Addressed Codex review: UUID → CUID2 validation (database uses CUID2 IDs)
+  - [x] Addressed CodeRabbit review: Race condition fix using insert-first pattern with `onConflictDoNothing`
+  - [x] Merged real-time kick functionality from master (permission revocation kicks user from rooms)
+  - [ ] Waiting for final CI checks
 
 ## File Paths
 
@@ -104,6 +106,9 @@
 4. **Result types (not exceptions)** - Authorization failures are expected, not exceptional
 5. **PAGE_NOT_ACCESSIBLE** - Intentionally ambiguous to prevent info leakage
 6. **Idempotent revoke** - "Permission no longer exists" is success
+7. **CUID2 validation** - Uses official `isCuid` validator (database uses CUID2 IDs, not UUIDs)
+8. **Insert-first upsert** - Uses `onConflictDoNothing` to prevent race conditions in concurrent grants
+9. **Real-time kick on revoke** - When permission is revoked, user is immediately kicked from WebSocket rooms
 
 ### Testing Strategy
 - TDD approach where feasible
