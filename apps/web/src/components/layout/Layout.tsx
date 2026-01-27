@@ -16,6 +16,7 @@ import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
+import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { useRouter, usePathname } from "next/navigation";
 import { isCapacitorApp } from "@/lib/capacitor-bridge";
 import { useCallback, useEffect, useState } from "react";
@@ -61,6 +62,9 @@ function Layout({ children }: LayoutProps) {
 
   // Monitor performance
   usePerformanceMonitor();
+
+  // Initialize iOS keyboard listeners (sets --keyboard-height CSS var)
+  useIOSKeyboardInit();
 
   useEffect(() => {
     if (!isSheetBreakpoint) {
