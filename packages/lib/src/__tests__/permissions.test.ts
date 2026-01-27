@@ -60,9 +60,55 @@ describe('permissions system', () => {
       })
     })
 
-    it('returns null for non-existent page', async () => {
-      const access = await getUserAccessLevel(testUser.id, 'non-existent-page')
+    it('returns null for non-existent page (valid UUID)', async () => {
+      // Use a valid UUID format that doesn't exist in DB
+      const nonExistentPageId = '00000000-0000-4000-8000-000000000000'
+      const access = await getUserAccessLevel(testUser.id, nonExistentPageId)
       expect(access).toBeNull()
+    })
+
+    describe('ID validation', () => {
+      it('returns null for empty userId', async () => {
+        const access = await getUserAccessLevel('', testPage.id)
+        expect(access).toBeNull()
+      })
+
+      it('returns null for empty pageId', async () => {
+        const access = await getUserAccessLevel(testUser.id, '')
+        expect(access).toBeNull()
+      })
+
+      it('returns null for non-UUID userId', async () => {
+        const access = await getUserAccessLevel('not-a-uuid', testPage.id)
+        expect(access).toBeNull()
+      })
+
+      it('returns null for non-UUID pageId', async () => {
+        const access = await getUserAccessLevel(testUser.id, 'not-a-uuid')
+        expect(access).toBeNull()
+      })
+
+      it('returns null for excessively long userId', async () => {
+        const longId = 'a'.repeat(1000)
+        const access = await getUserAccessLevel(longId, testPage.id)
+        expect(access).toBeNull()
+      })
+
+      it('returns null for excessively long pageId', async () => {
+        const longId = 'a'.repeat(1000)
+        const access = await getUserAccessLevel(testUser.id, longId)
+        expect(access).toBeNull()
+      })
+
+      it('returns null for null userId', async () => {
+        const access = await getUserAccessLevel(null as unknown as string, testPage.id)
+        expect(access).toBeNull()
+      })
+
+      it('returns null for undefined pageId', async () => {
+        const access = await getUserAccessLevel(testUser.id, undefined as unknown as string)
+        expect(access).toBeNull()
+      })
     })
 
     it('grants full access to drive owner even with explicit lower permissions', async () => {
@@ -152,8 +198,14 @@ describe('permissions system', () => {
       expect(canView).toBe(true)
     })
 
-    it('returns false for non-existent page', async () => {
-      const canView = await canUserViewPage(testUser.id, 'non-existent')
+    it('returns false for non-existent page (valid UUID)', async () => {
+      const nonExistentPageId = '00000000-0000-4000-8000-000000000000'
+      const canView = await canUserViewPage(testUser.id, nonExistentPageId)
+      expect(canView).toBe(false)
+    })
+
+    it('returns false for invalid pageId', async () => {
+      const canView = await canUserViewPage(testUser.id, 'invalid')
       expect(canView).toBe(false)
     })
   })
