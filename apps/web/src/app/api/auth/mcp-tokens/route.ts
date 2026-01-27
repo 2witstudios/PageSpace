@@ -28,11 +28,9 @@ export async function POST(req: NextRequest) {
     // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
     const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
-    // Store ONLY the hash in the database - never store plaintext tokens
-    // The 'token' column stores the hash to satisfy the NOT NULL + UNIQUE constraints
+    // Store ONLY the hash in the database
     const [newToken] = await db.insert(mcpTokens).values({
       userId,
-      token: tokenHash, // Store hash, NOT plaintext
       tokenHash,
       tokenPrefix,
       name,

@@ -212,7 +212,6 @@ export async function atomicDeviceTokenRotation(
         "userId",
         "deviceId",
         platform,
-        token,
         "tokenHash",
         "tokenPrefix",
         "tokenVersion",
@@ -230,7 +229,6 @@ export async function atomicDeviceTokenRotation(
         ${row.userId},
         ${row.deviceId},
         ${row.platform},
-        ${newTokenHash},
         ${newTokenHash},
         ${newTokenPrefix},
         ${row.userTokenVersion},
@@ -383,8 +381,8 @@ export async function atomicValidateOrCreateDeviceToken(params: {
       const refreshedExpiresAt = new Date();
       refreshedExpiresAt.setDate(refreshedExpiresAt.getDate() + 90);
 
-      // Update token, hash, tokenVersion, and expiration
-      await tx.execute(sql`UPDATE device_tokens SET "token" = ${newTokenHash}, "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "tokenVersion" = ${tokenVersion}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
+      // Update hash, tokenVersion, and expiration
+      await tx.execute(sql`UPDATE device_tokens SET "tokenHash" = ${newTokenHash}, "tokenPrefix" = ${newTokenPrefix}, "tokenVersion" = ${tokenVersion}, "expiresAt" = ${refreshedExpiresAt}, "lastUsedAt" = NOW(), "lastIpAddress" = COALESCE(${ipAddress || null}, "lastIpAddress") WHERE id = ${existingActive.id}`);
 
       return {
         deviceToken: regeneratedToken,
@@ -420,7 +418,6 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         "userId",
         "deviceId",
         platform,
-        token,
         "tokenHash",
         "tokenPrefix",
         "tokenVersion",
@@ -437,7 +434,6 @@ export async function atomicValidateOrCreateDeviceToken(params: {
         ${userId},
         ${deviceId},
         ${platform},
-        ${newTokenHash},
         ${newTokenHash},
         ${newTokenPrefix},
         ${tokenVersion},

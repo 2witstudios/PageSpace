@@ -62,8 +62,7 @@ export async function createDeviceTokenRecord(
     userId,
     deviceId,
     platform,
-    tokenVersion, // Store tokenVersion in record for validation
-    token: tokenHashValue,       // Store hash, NOT plaintext
+    tokenVersion,
     tokenHash: tokenHashValue,
     tokenPrefix: getTokenPrefix(token),
     expiresAt,
