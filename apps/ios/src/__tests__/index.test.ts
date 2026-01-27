@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { mockStatusBar, mockKeyboardListeners, consoleSpy } from './setup';
+import type { StoredAuthSession } from '../auth-bridge';
 
 // Re-import to get fresh module state for each test
 let indexModule: typeof import('../index');
@@ -66,7 +67,7 @@ describe('index (iOS bridge entry point)', () => {
       it('exports StoredAuthSession type (type export verified by usage)', () => {
         // Type exports are verified at compile time
         // We verify the interface is usable
-        const session: indexModule.StoredAuthSession = {
+        const session: StoredAuthSession = {
           sessionToken: 'test',
           csrfToken: 'csrf',
           deviceId: 'device',

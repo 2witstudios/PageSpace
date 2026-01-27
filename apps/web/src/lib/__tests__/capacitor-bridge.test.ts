@@ -12,9 +12,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Store original window
-const originalWindow = globalThis.window;
-
 // Mock Capacitor global
 interface MockCapacitor {
   isNativePlatform: () => boolean;

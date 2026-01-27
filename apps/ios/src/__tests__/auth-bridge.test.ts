@@ -17,6 +17,7 @@ import {
 } from './setup';
 import { PageSpaceKeychain } from '../keychain-plugin';
 import { Preferences } from '@capacitor/preferences';
+import type { StoredAuthSession } from '../auth-bridge';
 
 // Re-import to get fresh module state for each test
 let authBridge: typeof import('../auth-bridge');
@@ -98,7 +99,7 @@ describe('auth-bridge', () => {
   });
 
   describe('storeSession', () => {
-    const validSession: authBridge.StoredAuthSession = {
+    const validSession: StoredAuthSession = {
       sessionToken: 'ps_sess_test123',
       csrfToken: 'csrf_token_abc',
       deviceId: 'device-123',
@@ -120,7 +121,7 @@ describe('auth-bridge', () => {
       });
 
       it('stores session with minimal fields', async () => {
-        const minimalSession: authBridge.StoredAuthSession = {
+        const minimalSession: StoredAuthSession = {
           sessionToken: 'ps_sess_minimal',
         };
 
@@ -171,7 +172,7 @@ describe('auth-bridge', () => {
   describe('getSession', () => {
     describe('happy path', () => {
       it('retrieves stored session from keychain', async () => {
-        const session: authBridge.StoredAuthSession = {
+        const session: StoredAuthSession = {
           sessionToken: 'ps_sess_test',
           csrfToken: 'csrf_123',
           deviceId: 'device_abc',
@@ -191,7 +192,7 @@ describe('auth-bridge', () => {
       });
 
       it('handles session with null optional fields', async () => {
-        const session: authBridge.StoredAuthSession = {
+        const session: StoredAuthSession = {
           sessionToken: 'ps_sess_test',
           csrfToken: null,
           deviceId: null,
@@ -538,7 +539,7 @@ describe('auth-bridge', () => {
 
   describe('StoredAuthSession interface', () => {
     it('supports all optional fields as undefined', async () => {
-      const session: authBridge.StoredAuthSession = {
+      const session: StoredAuthSession = {
         sessionToken: 'required_token',
         csrfToken: undefined,
         deviceId: undefined,
@@ -553,7 +554,7 @@ describe('auth-bridge', () => {
     });
 
     it('preserves all fields through store/retrieve cycle', async () => {
-      const session: authBridge.StoredAuthSession = {
+      const session: StoredAuthSession = {
         sessionToken: 'ps_sess_full',
         csrfToken: 'csrf_full',
         deviceId: 'device_full',
