@@ -234,52 +234,54 @@ export async function grantPagePermission(
     };
   }
 
-  // 6. Transaction - upsert permission
+  // 6. Transaction - upsert permission (insert-first to prevent race conditions)
   const result = await db.transaction(async (tx) => {
-    // Check if permission already exists
-    const existing = await tx
-      .select({ id: pagePermissions.id })
-      .from(pagePermissions)
+    const newId = createId();
+
+    // Attempt insert first - onConflictDoNothing handles race conditions
+    const inserted = await tx
+      .insert(pagePermissions)
+      .values({
+        id: newId,
+        pageId,
+        userId: targetUserId,
+        canView: permissions.canView,
+        canEdit: permissions.canEdit,
+        canShare: permissions.canShare,
+        canDelete: permissions.canDelete,
+        grantedBy: ctx.userId,
+        grantedAt: new Date(),
+      })
+      .onConflictDoNothing({
+        target: [pagePermissions.pageId, pagePermissions.userId],
+      })
+      .returning({ id: pagePermissions.id });
+
+    if (inserted.length > 0) {
+      // Insert succeeded - new permission created
+      return { permissionId: inserted[0].id, isUpdate: false };
+    }
+
+    // Conflict occurred - update existing permission
+    const [updated] = await tx
+      .update(pagePermissions)
+      .set({
+        canView: permissions.canView,
+        canEdit: permissions.canEdit,
+        canShare: permissions.canShare,
+        canDelete: permissions.canDelete,
+        grantedBy: ctx.userId,
+        grantedAt: new Date(),
+      })
       .where(
         and(
           eq(pagePermissions.pageId, pageId),
           eq(pagePermissions.userId, targetUserId)
         )
       )
-      .limit(1);
+      .returning({ id: pagePermissions.id });
 
-    if (existing.length > 0) {
-      // Update existing permission
-      await tx
-        .update(pagePermissions)
-        .set({
-          canView: permissions.canView,
-          canEdit: permissions.canEdit,
-          canShare: permissions.canShare,
-          canDelete: permissions.canDelete,
-          grantedBy: ctx.userId,
-          grantedAt: new Date(),
-        })
-        .where(eq(pagePermissions.id, existing[0].id));
-
-      return { permissionId: existing[0].id, isUpdate: true };
-    }
-
-    // Create new permission
-    const newId = createId();
-    await tx.insert(pagePermissions).values({
-      id: newId,
-      pageId,
-      userId: targetUserId,
-      canView: permissions.canView,
-      canEdit: permissions.canEdit,
-      canShare: permissions.canShare,
-      canDelete: permissions.canDelete,
-      grantedBy: ctx.userId,
-      grantedAt: new Date(),
-    });
-
-    return { permissionId: newId, isUpdate: false };
+    return { permissionId: updated.id, isUpdate: true };
   });
 
   // 7. Cache invalidation
