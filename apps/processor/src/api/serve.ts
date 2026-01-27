@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
-import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
+import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../cache/content-store';
 import { assertFileAccess, checkFileAccess } from '../services/rbac';
 import { db, files, pages, eq } from '@pagespace/db';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
@@ -135,6 +135,10 @@ router.get('/:contentHash/:preset', async (req, res) => {
 
     if (!isValidContentHash(contentHash)) {
       return res.status(400).json({ error: 'Invalid content hash' });
+    }
+
+    if (!isValidPreset(preset)) {
+      return res.status(400).json({ error: 'Invalid preset name' });
     }
 
     const userId = auth.userId;
