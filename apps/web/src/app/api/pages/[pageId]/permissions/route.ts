@@ -6,6 +6,7 @@ import { loggers, getActorInfo } from '@pagespace/lib/server';
 import { logPermissionActivity } from '@pagespace/lib';
 import { permissionManagementService } from '@/services/api';
 import { db, pages, pagePermissions, eq, and } from '@pagespace/db';
+import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -186,6 +187,12 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       {},
       currentUserId
     );
+
+    // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
+    await Promise.all([
+      kickUserFromPage(pageId, userId, 'permission_revoked'),
+      kickUserFromPageActivity(pageId, userId, 'permission_revoked'),
+    ]);
 
     // Log to activity audit trail with actor info
     const page = await db.query.pages.findFirst({

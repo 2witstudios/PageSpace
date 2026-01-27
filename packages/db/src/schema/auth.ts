@@ -29,6 +29,9 @@ export const users = pgTable('users', {
   stripeCustomerId: text('stripeCustomerId').unique(),
   subscriptionTier: text('subscriptionTier').default('free').notNull(), // 'free' | 'pro' | 'founder' | 'business'
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
+  // Account lockout fields
+  failedLoginAttempts: integer('failedLoginAttempts').default(0).notNull(),
+  lockedUntil: timestamp('lockedUntil', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });

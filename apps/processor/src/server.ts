@@ -83,6 +83,16 @@ app.get(
   }
 );
 
+// Default-deny catch-all for protected API routes
+// Any request to /api/* or /cache/* that wasn't matched by explicit routes above
+// MUST be rejected to prevent authorization bypass on unrecognized endpoints
+app.use('/api', authenticateService, (req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+app.use('/cache', authenticateService, (req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+
 // Error handling
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Error:', err);

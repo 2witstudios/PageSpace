@@ -13,6 +13,8 @@ import {
 } from './validation';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
+import { socketRegistry } from './socket-registry';
+import { handleKickRequest } from './kick-handler';
 
 dotenv.config({ path: '../../.env' });
 
@@ -254,6 +256,31 @@ function validateAndLogWebSocketOrigin(
 }
 
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
+    // Helper to verify signature (shared by broadcast and kick)
+    const verifySignature = (signatureHeader: string | undefined, body: string): boolean => {
+        if (!signatureHeader) {
+            loggers.realtime.warn('Request missing signature header', {
+                url: req.url,
+                ip: req.socket.remoteAddress,
+                userAgent: req.headers['user-agent']
+            });
+            return false;
+        }
+
+        if (!verifyBroadcastSignature(signatureHeader, body)) {
+            loggers.realtime.error('Request signature verification failed', {
+                url: req.url,
+                ip: req.socket.remoteAddress,
+                userAgent: req.headers['user-agent'],
+                hasSignature: !!signatureHeader,
+                bodyLength: body.length
+            });
+            return false;
+        }
+
+        return true;
+    };
+
     if (req.method === 'POST' && req.url === '/api/broadcast') {
         let body = '';
         req.on('data', chunk => {
@@ -261,25 +288,8 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         });
         req.on('end', () => {
             try {
-                // Verify HMAC signature before processing
                 const signatureHeader = req.headers['x-broadcast-signature'] as string;
-                if (!signatureHeader) {
-                    loggers.realtime.warn('Broadcast request missing signature header', {
-                        ip: req.socket.remoteAddress,
-                        userAgent: req.headers['user-agent']
-                    });
-                    res.writeHead(401, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Authentication required' }));
-                    return;
-                }
-
-                if (!verifyBroadcastSignature(signatureHeader, body)) {
-                    loggers.realtime.error('Broadcast request signature verification failed', {
-                        ip: req.socket.remoteAddress,
-                        userAgent: req.headers['user-agent'],
-                        hasSignature: !!signatureHeader,
-                        bodyLength: body.length
-                    });
+                if (!verifySignature(signatureHeader, body)) {
                     res.writeHead(401, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Authentication failed' }));
                     return;
@@ -309,6 +319,24 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
+        });
+    } else if (req.method === 'POST' && req.url === '/api/kick') {
+        // Kick API: Remove user from rooms on permission revocation
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            const result = handleKickRequest(io, body);
+            res.writeHead(result.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result.body));
         });
     } else {
         res.writeHead(404);
@@ -404,15 +432,26 @@ io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
   const user = socket.data.user;
 
+  // Register socket in the registry for permission revocation tracking
+  if (user?.id) {
+    socketRegistry.registerSocket(user.id, socket.id);
+  }
+
   // Auto-join user's notification room and task room
   if (user?.id) {
     const notificationRoom = `notifications:${user.id}`;
     const taskRoom = `user:${user.id}:tasks`;
+    const userDrivesRoom = `user:${user.id}:drives`;
     socket.join(notificationRoom);
     socket.join(taskRoom);
-    loggers.realtime.debug('User joined notification and task rooms', { 
-      userId: user.id, 
-      rooms: [notificationRoom, taskRoom] 
+    socket.join(userDrivesRoom);
+    // Track in registry (these are always-on rooms, not permission-gated)
+    socketRegistry.trackRoomJoin(socket.id, notificationRoom);
+    socketRegistry.trackRoomJoin(socket.id, taskRoom);
+    socketRegistry.trackRoomJoin(socket.id, userDrivesRoom);
+    loggers.realtime.debug('User joined notification, task, and drives rooms', {
+      userId: user.id,
+      rooms: [notificationRoom, taskRoom, userDrivesRoom]
     });
   }
 
@@ -432,6 +471,7 @@ io.on('connection', (socket: AuthSocket) => {
       const accessLevel = await getUserAccessLevel(user.id, pageId);
       if (accessLevel) {
         socket.join(pageId);
+        socketRegistry.trackRoomJoin(socket.id, pageId);
         loggers.realtime.debug('User joined channel', { userId: user.id, channelId: pageId });
       } else {
         loggers.realtime.warn('User denied access to channel', { userId: user.id, channelId: pageId });
@@ -460,6 +500,7 @@ io.on('connection', (socket: AuthSocket) => {
       if (hasAccess) {
         const driveRoom = `drive:${driveId}`;
         socket.join(driveRoom);
+        socketRegistry.trackRoomJoin(socket.id, driveRoom);
         loggers.realtime.debug('User joined drive room', { userId: user.id, room: driveRoom });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
@@ -508,6 +549,7 @@ io.on('connection', (socket: AuthSocket) => {
 
       const room = `dm:${conversationId}`;
       socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
       loggers.realtime.debug('User joined DM room', { userId, room });
     } catch (error) {
       loggers.realtime.error('Error joining DM conversation', error as Error, { conversationId });
@@ -529,6 +571,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     const room = `dm:${conversationId}`;
     socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
     loggers.realtime.debug('User left DM room', { userId, room });
   });
 
@@ -546,14 +589,16 @@ io.on('connection', (socket: AuthSocket) => {
 
     const driveRoom = `drive:${driveId}`;
     socket.leave(driveRoom);
+    socketRegistry.trackRoomLeave(socket.id, driveRoom);
     loggers.realtime.debug('User left drive room', { userId: user.id, room: driveRoom });
   });
 
   socket.on('join_global_drives', () => {
     if (!user?.id) return;
-    
+
     const globalDrivesRoom = 'global:drives';
     socket.join(globalDrivesRoom);
+    socketRegistry.trackRoomJoin(socket.id, globalDrivesRoom);
     loggers.realtime.debug('User joined global drives room', { userId: user.id, room: globalDrivesRoom });
   });
 
@@ -562,6 +607,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     const globalDrivesRoom = 'global:drives';
     socket.leave(globalDrivesRoom);
+    socketRegistry.trackRoomLeave(socket.id, globalDrivesRoom);
     loggers.realtime.debug('User left global drives room', { userId: user.id, room: globalDrivesRoom });
   });
 
@@ -583,6 +629,7 @@ io.on('connection', (socket: AuthSocket) => {
       if (hasAccess) {
         const activityRoom = `activity:drive:${driveId}`;
         socket.join(activityRoom);
+        socketRegistry.trackRoomJoin(socket.id, activityRoom);
         loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity drive', { userId: user.id, driveId });
@@ -609,6 +656,7 @@ io.on('connection', (socket: AuthSocket) => {
       if (accessLevel) {
         const activityRoom = `activity:page:${pageId}`;
         socket.join(activityRoom);
+        socketRegistry.trackRoomJoin(socket.id, activityRoom);
         loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity page', { userId: user.id, pageId });
@@ -632,6 +680,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     const activityRoom = `activity:drive:${driveId}`;
     socket.leave(activityRoom);
+    socketRegistry.trackRoomLeave(socket.id, activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
   });
 
@@ -649,10 +698,13 @@ io.on('connection', (socket: AuthSocket) => {
 
     const activityRoom = `activity:page:${pageId}`;
     socket.leave(activityRoom);
+    socketRegistry.trackRoomLeave(socket.id, activityRoom);
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
   socket.on('disconnect', (reason) => {
+    // Unregister socket from registry (cleans up all room tracking)
+    socketRegistry.unregisterSocket(socket.id);
     loggers.realtime.info('User disconnected', { socketId: socket.id, reason });
   });
 });

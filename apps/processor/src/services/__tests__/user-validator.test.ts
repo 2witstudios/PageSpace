@@ -64,6 +64,8 @@ describe('validateServiceUser', () => {
         currentAiModel: 'glm-4.5-air',
         activeUploads: 0,
         lastStorageCalculated: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -154,6 +156,8 @@ describe('validateServiceUser', () => {
         currentAiModel: 'glm-4.5-air',
         activeUploads: 0,
         lastStorageCalculated: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
