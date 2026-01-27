@@ -37,8 +37,8 @@ router.post('/', async (req, res) => {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
-    if (!IMAGE_PRESETS[preset]) {
-      return res.status(400).json({ 
+    if (typeof preset !== 'string' || !Object.prototype.hasOwnProperty.call(IMAGE_PRESETS, preset)) {
+      return res.status(400).json({
         error: 'Invalid preset',
         validPresets: Object.keys(IMAGE_PRESETS)
       });
@@ -137,14 +137,17 @@ router.post('/batch', async (req, res) => {
     const jobIds: string[] = [];
 
     for (const preset of presets) {
-      if (!IMAGE_PRESETS[preset]) {
-        results[preset] = { error: 'Invalid preset' };
+      // Validate preset is a known key (prevents prototype pollution and property injection)
+      if (typeof preset !== 'string' || !Object.prototype.hasOwnProperty.call(IMAGE_PRESETS, preset)) {
+        if (typeof preset === 'string' && preset !== '__proto__' && preset !== 'constructor' && preset !== 'prototype') {
+          results[preset] = { error: 'Invalid preset' };
+        }
         continue;
       }
 
       // Check cache first
       const cached = await contentStore.cacheExists(contentHash, preset);
-      
+
       if (cached) {
         results[preset] = {
           cached: true,
@@ -158,7 +161,7 @@ router.post('/batch', async (req, res) => {
           preset,
           fileId
         });
-        
+
         jobIds.push(jobId);
         results[preset] = {
           cached: false,

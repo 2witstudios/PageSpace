@@ -285,7 +285,7 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
     });
 
     if (!user?.email) {
-      console.warn(`Cannot send email notification: user ${data.userId} has no email`);
+      console.warn('Cannot send email notification: user %s has no email', String(data.userId).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 100));
       return;
     }
 

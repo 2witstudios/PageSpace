@@ -353,10 +353,14 @@ export class FileProcessor {
       const base64Image = buffer.toString('base64');
       const dataUrl = `data:${mimeType};base64,${base64Image}`;
       
+      // Hardcoded API endpoints - never constructed from user input
+      const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions' as const;
+      const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages' as const;
+
       // Try OpenAI first if available
       if (openaiKey) {
         try {
-          const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          const response = await fetch(OPENAI_API_URL, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -410,7 +414,7 @@ export class FileProcessor {
       // Try Anthropic if OpenAI failed or unavailable
       if (anthropicKey) {
         try {
-          const response = await fetch('https://api.anthropic.com/v1/messages', {
+          const response = await fetch(ANTHROPIC_API_URL, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

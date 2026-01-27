@@ -172,8 +172,18 @@ function isStaticAsset(pathname) {
   return staticExtensions.some((ext) => pathname.endsWith(ext));
 }
 
-// Listen for messages from the app
+// Listen for messages from the app with origin verification
 self.addEventListener('message', (event) => {
+  // Verify the message comes from a trusted origin
+  if (event.origin && event.origin !== self.location.origin) {
+    return;
+  }
+
+  // Validate message source is a WindowClient (browser tab)
+  if (event.source && !('visibilityState' in event.source)) {
+    return;
+  }
+
   if (event.data?.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }

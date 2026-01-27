@@ -155,10 +155,19 @@ export async function GET(request: Request) {
       }
 
       case 'entry': {
-        // Verify specific entry
+        // Verify specific entry - validate entryId format before passing to query
         if (!entryId) {
           return Response.json(
             { error: 'entryId parameter is required for mode=entry' },
+            { status: 400 }
+          );
+        }
+
+        // Validate entryId is a valid UUID or numeric ID format
+        const ENTRY_ID_PATTERN = /^[a-f0-9-]{1,64}$/i;
+        if (!ENTRY_ID_PATTERN.test(entryId)) {
+          return Response.json(
+            { error: 'Invalid entryId format' },
             { status: 400 }
           );
         }

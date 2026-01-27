@@ -13,9 +13,8 @@ describe('Path Validator - Traversal Prevention', () => {
   let testBaseDir: string;
 
   beforeEach(async () => {
-    // Create a temporary test directory
-    testBaseDir = join(tmpdir(), `path-validator-test-${Date.now()}`);
-    await fs.mkdir(testBaseDir, { recursive: true });
+    // Create a secure temporary test directory using mkdtemp
+    testBaseDir = await fs.mkdtemp(join(tmpdir(), 'path-validator-test-'));
   });
 
   afterEach(async () => {

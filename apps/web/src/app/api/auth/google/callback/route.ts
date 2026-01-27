@@ -50,19 +50,19 @@ export async function GET(req: Request) {
     const error = searchParams.get('error');
 
     if (error) {
-      loggers.auth.warn('OAuth error', { error });
+      loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
       let errorParam = 'oauth_error';
       if (error === 'access_denied') {
         errorParam = 'access_denied';
       }
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${errorParam}`, baseUrl));
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
     }
 
     const validation = googleCallbackSchema.safeParse({ code, state });
     if (!validation.success) {
       loggers.auth.warn('Invalid OAuth callback parameters', validation.error);
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
       return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
     }
 

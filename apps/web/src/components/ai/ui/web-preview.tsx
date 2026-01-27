@@ -174,12 +174,32 @@ export const WebPreviewBody = ({
 }: WebPreviewBodyProps) => {
   const { url } = useWebPreview();
 
+  // Validate URL to prevent javascript: and data: XSS vectors
+  const rawSrc = src || url;
+  const safeSrc = (() => {
+    if (!rawSrc) return '';
+    // Only allow http(s), blob, and about:srcdoc URLs
+    try {
+      const parsed = new URL(rawSrc, window.location.origin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'blob:') {
+        return rawSrc;
+      }
+      return '';
+    } catch {
+      // Relative URLs are safe in sandboxed iframes
+      if (rawSrc.startsWith('/') || rawSrc.startsWith('./')) {
+        return rawSrc;
+      }
+      return '';
+    }
+  })();
+
   return (
     <div className="flex-1">
       <iframe
         className={cn("size-full", className)}
         sandbox="allow-scripts allow-forms allow-popups allow-presentation"
-        src={src || url}
+        src={safeSrc}
         title="Preview"
         {...props}
       />

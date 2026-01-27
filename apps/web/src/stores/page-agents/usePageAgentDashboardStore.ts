@@ -123,9 +123,12 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
 
     try {
       const urlParams = new URLSearchParams(window.location.search);
-      const urlAgentId = urlParams.get('agent');
+      const rawAgentId = urlParams.get('agent');
       const cookieAgentId = conversationState.getActiveAgentId();
 
+      // Validate agentId format (UUID or safe identifier) before using
+      const AGENT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+      const urlAgentId = rawAgentId && AGENT_ID_PATTERN.test(rawAgentId) ? rawAgentId : null;
       const agentId = urlAgentId || cookieAgentId;
 
       if (agentId) {

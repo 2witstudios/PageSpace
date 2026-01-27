@@ -254,6 +254,20 @@ export async function regexSearchPages(
   const { searchIn = 'content', maxResults = 50 } = options;
   const effectiveMaxResults = Math.min(maxResults, 100);
 
+  // Validate and limit pattern length to prevent ReDoS
+  if (pattern.length > 500) {
+    return {
+      driveSlug,
+      pattern,
+      searchIn,
+      results: [],
+      totalResults: 0,
+      summary: 'Pattern too long (max 500 characters)',
+      stats: { pagesScanned: 0, pagesWithAccess: 0, documentTypes: [] },
+      nextSteps: ['Shorten your regex pattern to under 500 characters'],
+    };
+  }
+
   // Create regex for PostgreSQL - escape backslashes but preserve regex shortcuts
   const pgPattern = pattern.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
 
@@ -330,7 +344,13 @@ export async function regexSearchPages(
     const matchingLines: Array<{ lineNumber: number; content: string }> = [];
     if (searchIn !== 'title') {
       const lines = page.content.split('\n');
-      const regex = new RegExp(pattern, 'g');
+      let regex: RegExp;
+      try {
+        regex = new RegExp(pattern, 'g');
+      } catch {
+        // If the user-provided pattern is an invalid regex, skip content matching
+        continue;
+      }
       lines.forEach((line, index) => {
         if (regex.test(line)) {
           matchingLines.push({

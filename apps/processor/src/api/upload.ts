@@ -142,6 +142,12 @@ router.post('/single', upload.single('file'), async (req, res) => {
     }
 
     const { path: tempPath, originalname, mimetype, size } = req.file;
+
+    // Verify temp file is within expected upload directory (defense-in-depth)
+    const normalizedTemp = path.resolve(tempPath);
+    if (!normalizedTemp.startsWith(path.resolve(TEMP_UPLOADS_DIR) + path.sep)) {
+      return res.status(400).json({ error: 'Invalid upload file path' });
+    }
     tempFilePath = tempPath;
 
     processorLogger.info('Processing uploaded file', {
@@ -302,8 +308,13 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
     }
     const results = [];
 
-    // Track temp files for cleanup
+    // Track temp files for cleanup - verify each is within expected directory
+    const resolvedUploadDir = path.resolve(TEMP_UPLOADS_DIR) + path.sep;
     for (const file of req.files) {
+      const normalizedPath = path.resolve(file.path);
+      if (!normalizedPath.startsWith(resolvedUploadDir)) {
+        return res.status(400).json({ error: 'Invalid upload file path' });
+      }
       tempFilePaths.push(file.path);
     }
 
@@ -433,6 +444,13 @@ async function getQueuedJobs(contentHash: string, mimeType: string): Promise<any
 export const uploadRouter: ExpressRouter = router;
 
 async function computeFileHash(filePath: string): Promise<string> {
+  // Verify file path is within expected upload directory
+  // TEMP_UPLOADS_DIR is guaranteed non-null by module-level guard (line 19-21)
+  const normalizedPath = path.resolve(filePath);
+  if (!normalizedPath.startsWith(path.resolve(TEMP_UPLOADS_DIR!) + path.sep)) {
+    throw new Error('File path outside expected upload directory');
+  }
+
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
     const stream = createReadStream(filePath);

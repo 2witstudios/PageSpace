@@ -7,6 +7,11 @@
 import { z } from 'zod';
 import type { MCPTool } from '@/types/mcp';
 
+/** Sanitize a value for safe logging - strips control characters and newlines */
+function sanitizeLogValue(value: string): string {
+  return String(value).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 200);
+}
+
 /**
  * Maximum allowed length for tool and server names
  * Prevents excessively long names that could cause issues
@@ -126,6 +131,10 @@ function jsonSchemaToZod(
       if (properties) {
         const zodProperties: Record<string, z.ZodTypeAny> = {};
         for (const [propName, propSchema] of Object.entries(properties)) {
+          // Prevent prototype pollution
+          if (propName === '__proto__' || propName === 'constructor' || propName === 'prototype') {
+            continue;
+          }
           zodProperties[propName] = jsonSchemaToZod(propSchema, propName);
           // Make optional if not in required array
           if (!required.includes(propName)) {
@@ -152,7 +161,7 @@ function jsonSchemaToZod(
 
     default:
       // Fallback for unsupported types
-      console.warn(`Unsupported JSON Schema type "${type}" for property "${propertyName}", using z.unknown()`);
+      console.warn('Unsupported JSON Schema type %s for property %s, using z.unknown()', sanitizeLogValue(String(type)), sanitizeLogValue(propertyName));
       zodSchema = z.unknown();
   }
 
@@ -180,6 +189,10 @@ export function convertMCPToolSchemaToZod(
   const zodProperties: Record<string, z.ZodTypeAny> = {};
 
   for (const [propName, propSchema] of Object.entries(properties)) {
+    // Prevent prototype pollution: skip dangerous property names
+    if (propName === '__proto__' || propName === 'constructor' || propName === 'prototype') {
+      continue;
+    }
     try {
       zodProperties[propName] = jsonSchemaToZod(propSchema as Record<string, unknown>, propName);
 
@@ -189,7 +202,8 @@ export function convertMCPToolSchemaToZod(
       }
     } catch (error) {
       console.warn(
-        `Failed to convert property "${propName}" in MCP tool schema:`,
+        'Failed to convert property %s in MCP tool schema:',
+        sanitizeLogValue(propName),
         error
       );
       // Skip problematic properties
@@ -219,16 +233,18 @@ export function convertMCPToolsToAISDKSchemas(
         parameters: convertMCPToolSchemaToZod(mcpTool.inputSchema),
       };
 
-      console.log(`Converted MCP tool: ${toolName}`);
+      console.log('Converted MCP tool: %s', sanitizeLogValue(toolName));
     } catch (error) {
       console.warn(
-        `Skipping MCP tool "${mcpTool.serverName}.${mcpTool.name}" due to conversion error:`,
+        'Skipping MCP tool %s.%s due to conversion error:',
+        sanitizeLogValue(mcpTool.serverName),
+        sanitizeLogValue(mcpTool.name),
         error
       );
     }
   }
 
-  console.log(`Successfully converted ${Object.keys(toolSchemas).length}/${mcpTools.length} MCP tools`);
+  console.log('Successfully converted %d/%d MCP tools', Object.keys(toolSchemas).length, mcpTools.length);
   return toolSchemas;
 }
 
