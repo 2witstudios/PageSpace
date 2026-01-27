@@ -5,11 +5,9 @@ import {
   canUserEditPage,
   canUserSharePage,
   canUserDeletePage,
-  grantPagePermissions,
-  revokePagePermissions
 } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
-import { db, sql, users } from '@pagespace/db'
+import { db, users, pagePermissions, eq, and } from '@pagespace/db'
 
 describe('permissions system', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>
@@ -46,11 +44,10 @@ describe('permissions system', () => {
     })
 
     it('returns specific permissions when granted', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, testPage.id)
@@ -70,11 +67,10 @@ describe('permissions system', () => {
 
     it('grants full access to drive owner even with explicit lower permissions', async () => {
       // Create explicit permission with limited access
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         testUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        otherUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: otherUser.id }
       )
 
       // Drive owner should still have full access
@@ -107,11 +103,10 @@ describe('permissions system', () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' })
 
       // Create explicit permission with limited access
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       // Drive admin should still have full access (admin overrides explicit permissions)
@@ -147,11 +142,10 @@ describe('permissions system', () => {
     })
 
     it('returns true for user with view permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const canView = await canUserViewPage(otherUser.id, testPage.id)
@@ -176,11 +170,10 @@ describe('permissions system', () => {
     })
 
     it('returns true for user with edit permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const canEdit = await canUserEditPage(otherUser.id, testPage.id)
@@ -188,11 +181,10 @@ describe('permissions system', () => {
     })
 
     it('returns false for user with only view permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const canEdit = await canUserEditPage(otherUser.id, testPage.id)
@@ -212,11 +204,10 @@ describe('permissions system', () => {
     })
 
     it('returns true for user with share permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: true, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: true, canDelete: false, grantedBy: testUser.id }
       )
 
       const canShare = await canUserSharePage(otherUser.id, testPage.id)
@@ -224,11 +215,10 @@ describe('permissions system', () => {
     })
 
     it('returns false for user with edit but not share permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const canShare = await canUserSharePage(otherUser.id, testPage.id)
@@ -248,11 +238,10 @@ describe('permissions system', () => {
     })
 
     it('returns true for user with delete permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: true, canDelete: true },
-        testUser.id
+        { canView: true, canEdit: true, canShare: true, canDelete: true, grantedBy: testUser.id }
       )
 
       const canDelete = await canUserDeletePage(otherUser.id, testPage.id)
@@ -260,11 +249,10 @@ describe('permissions system', () => {
     })
 
     it('returns false for user with edit but not delete permission', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const canDelete = await canUserDeletePage(otherUser.id, testPage.id)
@@ -272,13 +260,12 @@ describe('permissions system', () => {
     })
   })
 
-  describe('grantPagePermissions', () => {
+  describe('permission records via factory', () => {
     it('creates new permission record', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, testPage.id)
@@ -288,32 +275,11 @@ describe('permissions system', () => {
       expect(access?.canDelete).toBe(false)
     })
 
-    it('updates existing permission record', async () => {
-      await grantPagePermissions(
-        testPage.id,
-        otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
-      )
-
-      await grantPagePermissions(
-        testPage.id,
-        otherUser.id,
-        { canView: true, canEdit: true, canShare: true, canDelete: false },
-        testUser.id
-      )
-
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
-      expect(access?.canEdit).toBe(true)
-      expect(access?.canShare).toBe(true)
-    })
-
     it('grants delete permission when explicitly specified', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: true, canDelete: true },
-        testUser.id
+        { canView: true, canEdit: true, canShare: true, canDelete: true, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, testPage.id)
@@ -321,11 +287,10 @@ describe('permissions system', () => {
     })
 
     it('allows granting minimal permissions (view-only)', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, testPage.id)
@@ -334,47 +299,29 @@ describe('permissions system', () => {
       expect(access?.canShare).toBe(false)
       expect(access?.canDelete).toBe(false)
     })
-  })
 
-  describe('revokePagePermissions', () => {
-    it('removes permission record', async () => {
-      await grantPagePermissions(
-        testPage.id,
-        otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
-      )
-
-      await revokePagePermissions(testPage.id, otherUser.id)
-
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
-      expect(access).toBeNull()
-    })
-
-    it('succeeds even if no permission exists', async () => {
-      await expect(
-        revokePagePermissions(testPage.id, otherUser.id)
-      ).resolves.not.toThrow()
-    })
-
-    it('does not affect other users permissions', async () => {
+    it('permission deletion does not affect other users', async () => {
       const thirdUser = await factories.createUser()
 
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         thirdUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      await revokePagePermissions(testPage.id, otherUser.id)
+      // Delete otherUser's permission directly
+      await db.delete(pagePermissions).where(
+        and(
+          eq(pagePermissions.pageId, testPage.id),
+          eq(pagePermissions.userId, otherUser.id)
+        )
+      )
 
       const otherAccess = await getUserAccessLevel(otherUser.id, testPage.id)
       const thirdAccess = await getUserAccessLevel(thirdUser.id, testPage.id)
@@ -383,28 +330,6 @@ describe('permissions system', () => {
       expect(thirdAccess).not.toBeNull()
       expect(thirdAccess?.canView).toBe(true)
     })
-
-    it('allows permission to be re-granted after revocation', async () => {
-      await grantPagePermissions(
-        testPage.id,
-        otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
-      )
-
-      await revokePagePermissions(testPage.id, otherUser.id)
-
-      await grantPagePermissions(
-        testPage.id,
-        otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
-      )
-
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
-      expect(access?.canView).toBe(true)
-      expect(access?.canEdit).toBe(false)
-    })
   })
 
   describe('permission inheritance (should not exist)', () => {
@@ -412,11 +337,10 @@ describe('permissions system', () => {
       const parentPage = await factories.createPage(testDrive.id, { type: 'FOLDER' })
       const childPage = await factories.createPage(testDrive.id, { parentId: parentPage.id })
 
-      await grantPagePermissions(
+      await factories.createPagePermission(
         parentPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       // Child page should not inherit parent permissions
@@ -432,11 +356,10 @@ describe('permissions system', () => {
         trashedAt: new Date()
       })
 
-      await grantPagePermissions(
+      await factories.createPagePermission(
         trashedPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, trashedPage.id)
@@ -451,11 +374,10 @@ describe('permissions system', () => {
         aiModel: 'anthropic/claude-3-sonnet'
       })
 
-      await grantPagePermissions(
+      await factories.createPagePermission(
         aiChatPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, aiChatPage.id)

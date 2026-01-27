@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
 import { hashToken, sessionService, type SessionClaims } from '@pagespace/lib/auth';
+import { EnforcedAuthContext } from '@pagespace/lib/server';
 import { getSessionFromCookies } from './cookie-config';
 
 const BEARER_PREFIX = 'Bearer ';
@@ -286,6 +287,86 @@ export async function authenticateRequestWithOptions(
   }
 
   return authResult;
+}
+
+/**
+ * Authenticate a request and return an EnforcedAuthContext.
+ * This is the preferred method for zero-trust permission operations.
+ */
+export interface EnforcedAuthSuccess {
+  ctx: EnforcedAuthContext;
+}
+
+export interface EnforcedAuthError {
+  error: NextResponse;
+}
+
+export type EnforcedAuthResult = EnforcedAuthSuccess | EnforcedAuthError;
+
+export function isEnforcedAuthError(result: EnforcedAuthResult): result is EnforcedAuthError {
+  return 'error' in result;
+}
+
+export async function authenticateWithEnforcedContext(
+  request: Request,
+  options: AuthenticateOptions = { allow: ['session'], requireCSRF: true }
+): Promise<EnforcedAuthResult> {
+  // Note: 'allow' is not used - EnforcedAuthContext only supports session tokens
+  // MCP tokens lack the full session claims needed for EnforcedAuthContext
+  const { requireCSRF = true } = options;
+  const requireOriginValidation = options.requireOriginValidation ?? requireCSRF;
+
+  // Get bearer token or session cookie
+  const bearerToken = getBearerToken(request);
+
+  // Reject MCP tokens - EnforcedAuthContext requires full session claims
+  if (bearerToken?.startsWith(MCP_TOKEN_PREFIX)) {
+    return {
+      error: unauthorized('MCP tokens are not permitted for this endpoint'),
+    };
+  }
+
+  // Try bearer token first (mobile/desktop)
+  if (bearerToken?.startsWith(SESSION_TOKEN_PREFIX)) {
+    const sessionClaims = await validateSessionToken(bearerToken);
+    if (!sessionClaims) {
+      return { error: unauthorized('Invalid or expired session') };
+    }
+    return { ctx: EnforcedAuthContext.fromSession(sessionClaims) };
+  }
+
+  // Try session cookie (web browsers)
+  const cookieHeader = request.headers.get('cookie');
+  const sessionToken = getSessionFromCookies(cookieHeader);
+
+  if (!sessionToken) {
+    return { error: unauthorized('Authentication required') };
+  }
+
+  const sessionClaims = await validateSessionToken(sessionToken);
+  if (!sessionClaims) {
+    return { error: unauthorized('Invalid or expired session') };
+  }
+
+  // Apply origin validation for session-based auth
+  if (requireOriginValidation) {
+    const { validateOrigin } = await import('./origin-validation');
+    const originError = validateOrigin(request);
+    if (originError) {
+      return { error: originError };
+    }
+  }
+
+  // Apply CSRF validation for session-based auth (skip for Bearer token)
+  if (requireCSRF && !bearerToken) {
+    const { validateCSRF } = await import('./csrf-validation');
+    const csrfError = await validateCSRF(request);
+    if (csrfError) {
+      return { error: csrfError };
+    }
+  }
+
+  return { ctx: EnforcedAuthContext.fromSession(sessionClaims) };
 }
 
 // Re-export from other auth modules
