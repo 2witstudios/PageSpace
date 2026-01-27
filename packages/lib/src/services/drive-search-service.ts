@@ -306,18 +306,13 @@ export async function regexSearchPages(
     .where(whereConditions)
     .limit(effectiveMaxResults);
 
-  // Construct regex for line-level matching from the validated pattern.
-  // Pattern has already been length-checked (≤500 chars) and used in a PG query.
-  // NOTE: The pattern is escaped for JS regex to prevent ReDoS. This means
-  // line previews use literal matching (e.g. "foo|bar" matches the literal
-  // string, not "foo" or "bar"). The DB query uses PG regex semantics for
-  // actual result filtering; line extraction is for preview display only.
+  // Use original pattern for line-level matching — consistent with PG regex semantics.
+  // Pattern is length-checked (≤500 chars) and applied per-line (not concatenated).
   let lineRegex: RegExp | null = null;
   try {
-    const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    lineRegex = new RegExp(escapedPattern, 'gi');
+    lineRegex = new RegExp(pattern, 'gi');
   } catch {
-    // Invalid regex — skip line extraction
+    // PG regex syntax may differ from JS — skip line extraction
   }
 
   // Filter by permissions and build results

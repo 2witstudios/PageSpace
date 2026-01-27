@@ -162,6 +162,24 @@ export const WebPreviewUrl = ({
   );
 };
 
+/**
+ * Validate and reconstruct a URL for safe use as an iframe src.
+ * Only allows http, https, and blob protocols. Reconstructs via parsed URL
+ * to break taint chain and prevent XSS.
+ */
+export function sanitizeIframeSrc(rawSrc: string | undefined): string {
+  if (!rawSrc) return '';
+  try {
+    const parsed = new URL(rawSrc, window.location.origin);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'blob:') {
+      return parsed.href;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 export type WebPreviewBodyProps = ComponentProps<"iframe"> & {
   loading?: ReactNode;
 };
@@ -173,22 +191,7 @@ export const WebPreviewBody = ({
   ...props
 }: WebPreviewBodyProps) => {
   const { url } = useWebPreview();
-
-  // Validate and reconstruct URL to break taint chain and prevent XSS
-  const rawSrc = src || url;
-  const safeSrc = (() => {
-    if (!rawSrc) return '';
-    try {
-      const parsed = new URL(rawSrc, window.location.origin);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'blob:') {
-        // Reconstruct from parsed URL to break taint chain
-        return parsed.href;
-      }
-      return '';
-    } catch {
-      return '';
-    }
-  })();
+  const safeSrc = sanitizeIframeSrc(src || url);
 
   return (
     <div className="flex-1">

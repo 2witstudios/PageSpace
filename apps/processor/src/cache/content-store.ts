@@ -8,11 +8,13 @@ export const CONTENT_HASH_REGEX = /^[a-f0-9]{64}$/i;
 
 /**
  * Validate that a preset name is safe for use as a filename and property key.
- * Prevents path traversal and prototype pollution via preset names.
+ * Allows alphanumeric, hyphens, underscores, and dots (for presets like
+ * "extracted-text.txt", "ocr-text.txt", "thumbnail.webp").
+ * Rejects ".." sequences to prevent path traversal.
  */
-const SAFE_PRESET_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
+const SAFE_PRESET_REGEX = /^[a-zA-Z0-9_.\-]{1,64}$/;
 export function isValidPreset(preset: string): boolean {
-  return typeof preset === 'string' && SAFE_PRESET_REGEX.test(preset);
+  return typeof preset === 'string' && SAFE_PRESET_REGEX.test(preset) && !preset.includes('..');
 }
 
 /**
@@ -340,8 +342,14 @@ export class ContentStore {
 
       const metadataPath = this.getCacheMetadataPath(this.normalizeContentHash(contentHash));
       try {
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as Record<string, any>;
-        if (isSafePropertyKey(preset) && Object.prototype.hasOwnProperty.call(metadata, preset)) {
+        const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        const metadata: Record<string, any> = Object.create(null);
+        for (const key of Object.keys(rawParsed)) {
+          if (isSafePropertyKey(key) && isValidPreset(key)) {
+            metadata[key] = rawParsed[key];
+          }
+        }
+        if (isValidPreset(preset) && preset in metadata) {
           metadata[preset].lastAccessed = new Date();
           await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
         }
@@ -517,12 +525,15 @@ export class ContentStore {
       const metadataPath = path.join(dirPath, 'metadata.json');
 
       try {
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
-
-        for (const [preset, entry] of Object.entries(metadata as Record<string, CacheEntry>)) {
-          if (!isSafePropertyKey(preset) || !isValidPreset(preset)) {
-            continue;
+        const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        const metadata: Record<string, CacheEntry> = Object.create(null);
+        for (const key of Object.keys(rawParsed)) {
+          if (isSafePropertyKey(key) && isValidPreset(key)) {
+            metadata[key] = rawParsed[key];
           }
+        }
+
+        for (const [preset, entry] of Object.entries(metadata)) {
           const lastAccessed = new Date(entry.lastAccessed).getTime();
 
           if (now - lastAccessed > maxAgeMs) {

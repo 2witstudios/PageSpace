@@ -96,11 +96,10 @@ router.get('/:contentHash/original', async (req, res) => {
         'Content-Disposition': `attachment; filename="${sanitizedFilename}"`,
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox;"
       });
-      console.warn('[Security] Forcing download for dangerous MIME type:', {
-        contentHash,
-        contentType,
-        filename: sanitizedFilename
-      });
+      console.warn(
+        '[Security] Forcing download for dangerous MIME type: hash=%s type=%s filename=%s',
+        contentHash, contentType, sanitizedFilename
+      );
     } else {
       res.set({
         'Content-Disposition': `inline; filename="${sanitizedFilename}"`,

@@ -154,14 +154,13 @@
       if (rawHash) {
         try {
           const decoded = decodeURIComponent(rawHash);
-          const parsed = new URL(decoded, window.location.origin);
-          // Only allow same-origin or known PageSpace domains
-          const allowedOrigins = [window.location.origin, 'https://pagespace.ai', 'https://app.pagespace.ai'];
-          if (allowedOrigins.includes(parsed.origin) || parsed.origin === window.location.origin) {
-            // Block javascript: and data: schemes
-            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-              targetUrl = parsed.href;
-            }
+          const parsed = new URL(decoded);
+          // Hash is set by Electron main process (loadFile) from getAppUrl() —
+          // trusted source. No origin allowlist: the app URL may be localhost,
+          // a self-hosted domain, or production. Protocol check is sufficient
+          // since this page is only reachable via Electron's loadFile.
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            targetUrl = parsed.href;
           }
         } catch {
           targetUrl = defaultUrl;
