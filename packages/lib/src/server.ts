@@ -59,6 +59,7 @@ export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache'
 
 // Re-export specific functions for backward compatibility
 export {
+  getDriveIdsForUser,
   isUserDriveMember,
   getUserAccessiblePagesInDriveWithDetails,
   getUserAccessiblePagesInDrive,
