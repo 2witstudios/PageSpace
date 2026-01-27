@@ -4,6 +4,11 @@ import { EnforcedAuthContext } from '../enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
 import { factories } from '@pagespace/db/test/factories';
 import { db, users, pagePermissions, eq, and } from '@pagespace/db';
+import { createId } from '@paralleldrive/cuid2';
+
+// Generate fake but valid CUID2 IDs for "non-existent" entity tests
+const nonExistentPageId = createId();
+const nonExistentUserId = createId();
 
 const createMockClaims = (userId: string, overrides: Partial<SessionClaims> = {}): SessionClaims => ({
   sessionId: 'test-session-id',
@@ -41,7 +46,7 @@ describe('permission-mutations zero-trust', () => {
 
   describe('grantPagePermission', () => {
     describe('validation', () => {
-      it('rejects invalid pageId UUID', async () => {
+      it('rejects invalid pageId format', async () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
 
         const result = await grantPagePermission(ctx, {
@@ -56,7 +61,7 @@ describe('permission-mutations zero-trust', () => {
         }
       });
 
-      it('rejects invalid targetUserId UUID', async () => {
+      it('rejects invalid targetUserId format', async () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
 
         const result = await grantPagePermission(ctx, {
@@ -90,7 +95,7 @@ describe('permission-mutations zero-trust', () => {
         const dbSelectSpy = vi.spyOn(db, 'select');
 
         await grantPagePermission(ctx, {
-          pageId: 'invalid-uuid',
+          pageId: 'invalid-id',
           targetUserId: targetUser.id,
           permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
         });
@@ -181,7 +186,7 @@ describe('permission-mutations zero-trust', () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
 
         const result = await grantPagePermission(ctx, {
-          pageId: '00000000-0000-0000-0000-000000000000',
+          pageId: nonExistentPageId,
           targetUserId: targetUser.id,
           permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
         });
@@ -267,7 +272,7 @@ describe('permission-mutations zero-trust', () => {
 
         const result = await grantPagePermission(ctx, {
           pageId: testPage.id,
-          targetUserId: '00000000-0000-0000-0000-000000000000',
+          targetUserId: nonExistentUserId,
           permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
         });
 
@@ -350,7 +355,7 @@ describe('permission-mutations zero-trust', () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(otherUser.id));
 
         const missingResult = await grantPagePermission(ctx, {
-          pageId: '00000000-0000-0000-0000-000000000000',
+          pageId: nonExistentPageId,
           targetUserId: targetUser.id,
           permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
         });
@@ -373,7 +378,7 @@ describe('permission-mutations zero-trust', () => {
 
   describe('revokePagePermission', () => {
     describe('validation', () => {
-      it('rejects invalid pageId UUID', async () => {
+      it('rejects invalid pageId format', async () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
 
         const result = await revokePagePermission(ctx, {
@@ -387,7 +392,7 @@ describe('permission-mutations zero-trust', () => {
         }
       });
 
-      it('rejects invalid targetUserId UUID', async () => {
+      it('rejects invalid targetUserId format', async () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
 
         const result = await revokePagePermission(ctx, {
@@ -437,7 +442,7 @@ describe('permission-mutations zero-trust', () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(testUser.id));
 
         const result = await revokePagePermission(ctx, {
-          pageId: '00000000-0000-0000-0000-000000000000',
+          pageId: nonExistentPageId,
           targetUserId: targetUser.id,
         });
 
@@ -582,7 +587,7 @@ describe('permission-mutations zero-trust', () => {
         const ctx = EnforcedAuthContext.fromSession(createMockClaims(otherUser.id));
 
         const missingResult = await revokePagePermission(ctx, {
-          pageId: '00000000-0000-0000-0000-000000000000',
+          pageId: nonExistentPageId,
           targetUserId: targetUser.id,
         });
 
