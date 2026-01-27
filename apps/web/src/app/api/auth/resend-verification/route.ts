@@ -5,6 +5,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import { loggers } from '@pagespace/lib/server';
 import { db, users, eq } from '@pagespace/db';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import React from 'react';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -25,6 +26,25 @@ export async function POST(request: Request) {
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // Rate limit by email address to prevent email bombing
+    const rateLimitResult = await checkDistributedRateLimit(
+      `email-resend:${user.email.toLowerCase()}`,
+      DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND
+    );
+
+    if (!rateLimitResult.allowed) {
+      loggers.auth.warn('Email resend rate limit exceeded', { email: user.email });
+      return NextResponse.json(
+        { error: 'Too many verification emails requested. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitResult.retryAfter || 3600),
+          },
+        }
+      );
     }
 
     // Check if email is already verified

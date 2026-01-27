@@ -398,6 +398,18 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.SERVICE_TOKEN.maxAttempts).toBe(1000);
       expect(DISTRIBUTED_RATE_LIMITS.SERVICE_TOKEN.windowMs).toBe(60 * 1000);
     });
+
+    it('CONTACT_FORM has 5 attempts per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.maxAttempts).toBe(5);
+      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.windowMs).toBe(60 * 60 * 1000);
+      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.progressiveDelay).toBe(false);
+    });
+
+    it('EMAIL_RESEND has 3 attempts per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.maxAttempts).toBe(3);
+      expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.windowMs).toBe(60 * 60 * 1000);
+      expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.progressiveDelay).toBe(false);
+    });
   });
 
   describe('shutdownRateLimiting', () => {
