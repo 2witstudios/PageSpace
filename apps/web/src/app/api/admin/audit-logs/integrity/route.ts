@@ -5,6 +5,7 @@ import {
   getHashChainStats,
   verifyEntry,
 } from '@pagespace/lib/monitoring/hash-chain-verifier';
+import { isValidId } from '@pagespace/lib/validators';
 import { verifyAdminAuth } from '@/lib/auth';
 
 /**
@@ -163,9 +164,8 @@ export async function GET(request: Request) {
           );
         }
 
-        // Validate entryId is a valid UUID or numeric ID format
-        const ENTRY_ID_PATTERN = /^[a-f0-9-]{1,64}$/i;
-        if (!ENTRY_ID_PATTERN.test(entryId)) {
+        // Validate entryId format (CUID2)
+        if (!isValidId(entryId)) {
           return Response.json(
             { error: 'Invalid entryId format' },
             { status: 400 }

@@ -126,9 +126,8 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       const rawAgentId = urlParams.get('agent');
       const cookieAgentId = conversationState.getActiveAgentId();
 
-      // Validate agentId format (UUID or safe identifier) before using
-      const AGENT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
-      const urlAgentId = rawAgentId && AGENT_ID_PATTERN.test(rawAgentId) ? rawAgentId : null;
+      // Validate agentId format (CUID2: lowercase letter followed by lowercase alphanumeric, max 32 chars)
+      const urlAgentId = rawAgentId && /^[a-z][a-z0-9]{1,31}$/.test(rawAgentId) ? rawAgentId : null;
       const agentId = urlAgentId || cookieAgentId;
 
       if (agentId) {

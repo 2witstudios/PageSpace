@@ -118,6 +118,10 @@ router.post('/batch', async (req, res) => {
       return res.status(400).json({ error: 'contentHash is required' });
     }
 
+    if (!Array.isArray(presets) || !presets.every((p: unknown) => typeof p === 'string')) {
+      return res.status(400).json({ error: 'presets must be an array of strings' });
+    }
+
     if (!isValidContentHash(contentHash)) {
       return res.status(400).json({ error: 'Invalid content hash' });
     }

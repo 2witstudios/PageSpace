@@ -223,7 +223,8 @@ class AuthFetch {
    */
   private validateRequestUrl(url: string): void {
     // Allow relative URLs (most common case for API calls)
-    if (url.startsWith('/')) {
+    // Block protocol-relative URLs (//evil.com) which resolve to attacker-controlled hosts
+    if (url.startsWith('/') && !url.startsWith('//')) {
       return;
     }
 
