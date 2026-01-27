@@ -10,7 +10,10 @@
     "dev": "pnpm exec cap open ios",
     "sync": "pnpm exec cap sync ios",
     "update": "pnpm exec cap update ios",
-    "add-platform": "pnpm exec cap add ios"
+    "add-platform": "pnpm exec cap add ios",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@capacitor/app": "^7.0.3",
@@ -25,7 +28,10 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "jsdom": "^25.0.1",
     "typescript": "^5.8.3",
+    "vitest": "^2.1.0",
     "web": "workspace:*"
   }
 }
