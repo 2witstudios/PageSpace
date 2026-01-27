@@ -10,7 +10,6 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import {
-  isUUID,
   isCUID2,
   isNotTooLong,
   validatePageId,
@@ -119,13 +118,6 @@ describe('isCUID2', () => {
       const result = isCUID2('550e8400-e29b-41d4-a716-446655440000');
       expect(result).toBe(false);
     });
-  });
-});
-
-// isUUID is an alias for isCUID2 for backward compatibility
-describe('isUUID (alias for isCUID2)', () => {
-  it('should be the same function as isCUID2', () => {
-    expect(isUUID).toBe(isCUID2);
   });
 });
 

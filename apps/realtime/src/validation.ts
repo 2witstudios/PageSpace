@@ -35,9 +35,6 @@ export const isCUID2 = (input: unknown): input is string => {
   return CUID2_REGEX.test(input);
 };
 
-// Alias for backward compatibility in tests
-export const isUUID = isCUID2;
-
 /**
  * Higher-order function: creates a length validator
  * Pure - returns a predicate function
