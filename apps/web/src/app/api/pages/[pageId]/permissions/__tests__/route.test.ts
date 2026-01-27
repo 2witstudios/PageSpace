@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, DELETE } from '../route';
-import type { SessionAuthResult, AuthError, EnforcedAuthResult, EnforcedAuthError, EnforcedAuthSuccess } from '@/lib/auth';
+import type { SessionAuthResult, AuthError, EnforcedAuthError, EnforcedAuthSuccess } from '@/lib/auth';
 import type {
   GetPermissionsResult,
   PermissionEntry,
