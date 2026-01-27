@@ -1,6 +1,8 @@
 "use client";
 
 import { useAuth } from "@/hooks/useAuth";
+import { useSocket } from "@/hooks/useSocket";
+import { useAccessRevocation } from "@/hooks/useAccessRevocation";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -51,6 +53,11 @@ function Layout({ children }: LayoutProps) {
 
   useResponsivePanels();
 
+  // Initialize socket connection for real-time features
+  useSocket();
+
+  // Handle real-time permission revocation (zero-trust security)
+  useAccessRevocation();
 
   // Monitor performance
   usePerformanceMonitor();

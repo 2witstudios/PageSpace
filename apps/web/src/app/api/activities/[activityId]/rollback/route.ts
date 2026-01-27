@@ -5,7 +5,18 @@ import { executeRollback, previewRollback, getActivityById } from '@/services/ap
 import type { RollbackContext } from '@pagespace/lib/permissions';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload, broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
+import {
+  broadcastPageEvent,
+  createPageEventPayload,
+  broadcastDriveEvent,
+  createDriveEventPayload,
+  broadcastDriveMemberEvent,
+  createDriveMemberEventPayload,
+  kickUserFromDrive,
+  kickUserFromDriveActivity,
+  kickUserFromPage,
+  kickUserFromPageActivity,
+} from '@/lib/websocket';
 import { db } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -152,6 +163,24 @@ export async function POST(
             driveName: activity.resourceTitle ?? undefined,
           })
         );
+
+        // CRITICAL: If member was removed via rollback, kick from real-time rooms
+        if (memberOperation === 'member_removed') {
+          await Promise.all([
+            kickUserFromDrive(activity.driveId, targetUserId, 'member_removed', activity.resourceTitle ?? undefined),
+            kickUserFromDriveActivity(activity.driveId, targetUserId, 'member_removed'),
+          ]);
+        }
+      }
+    } else if (activity.resourceType === 'permission' && activity.pageId) {
+      // Permission rollbacks - if revoking access, kick from page rooms
+      const targetUserId = (activity.metadata as Record<string, unknown>)?.targetUserId as string | undefined;
+      if (targetUserId && activity.operation === 'permission_grant') {
+        // Rolling back a permission grant = revoking access
+        await Promise.all([
+          kickUserFromPage(activity.pageId, targetUserId, 'permission_revoked'),
+          kickUserFromPageActivity(activity.pageId, targetUserId, 'permission_revoked'),
+        ]);
       }
     } else if (activity.resourceType === 'role' && activity.driveId) {
       // Fix 16: Role changes affect all drive members - broadcast drive update
