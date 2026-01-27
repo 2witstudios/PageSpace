@@ -109,6 +109,17 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 | 74 | js/client-side-request-forgery | medium | auth-fetch.ts:225 | CWE-918 | `validateRequestUrl()` - origin + protocol validation | Validate all request URLs against allowlist | FIXED |
 | 75 | js/file-system-race | high | avatar/[userId]/[filename]/route.ts:54 | CWE-367 | Atomic `readFile` with try/catch replacing stat-then-read | Never check-then-use - perform operations atomically | FIXED |
 
+### Round 2: Alerts introduced by initial fixes (76-81)
+
+| Alert | Rule | Severity | File | CWE | Root Cause | Fix | Status |
+|-------|------|----------|------|-----|-----------|-----|--------|
+| 76 | js/xss-through-dom | high | web-preview.tsx:202 | CWE-079 | Initial fix passed validated but still-tainted URL to iframe src | Reconstruct URL via `parsed.href` to break taint chain | FIXED |
+| 77 | js/regex-injection | high | drive-search-service.ts:349 | CWE-730 | Length limit didn't prevent user pattern in `new RegExp()` | Escape user pattern for JS line matching; PG handles actual regex | FIXED |
+| 78 | js/remote-property-injection | high | optimize.ts:143 | CWE-250 | `__proto__` check still left user-controlled key in `results[preset]` | Replaced plain object with `Map`, convert via `Object.fromEntries` | FIXED |
+| 79 | js/remote-property-injection | high | content-store.ts:314 | CWE-1321 | `isSafePropertyKey()` alone didn't break CodeQL taint flow | Use `Object.create(null)` + `isValidPreset()` allowlist for all keys | FIXED |
+| 80 | js/user-controlled-bypass | high | verify-email/route.ts:16 | CWE-807 | Unnecessary format check created new alert (false positive fix) | Reverted — `verifyToken()` already validates cryptographically | REVERTED |
+| 81 | js/log-injection | medium | mcp-tool-converter.ts:247 | CWE-117 | `mcpTools.length` tainted as user-controlled array property | Coerce through `Number()` to break taint chain | FIXED |
+
 ---
 
 ### Files Modified (25 files)
