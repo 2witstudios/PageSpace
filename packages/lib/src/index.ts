@@ -46,6 +46,9 @@ export * from './notifications';
 // Sheets
 export * from './sheets';
 
+// ID Validators
+export * from './validators';
+
 // Auth and security utilities (server-only)
 export * from './auth/device-auth-utils';
 export { secureCompare } from './auth/secure-compare';

@@ -1,6 +1,7 @@
 import { db, and, eq } from '@pagespace/db';
 import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
 import { loggers } from '../logging/logger-config';
+import { parseUserId, parsePageId } from '../validators';
 
 /**
  * Get all drive IDs that a user has access to
@@ -48,17 +49,42 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
 /**
  * Get user access level for a page
  * Simple permission check - no inheritance, direct permissions only
+ *
+ * @param userId - User ID to check permissions for (must be valid CUID2)
+ * @param pageId - Page ID to check permissions on (must be valid CUID2)
+ * @param options.silent - If false, log debug messages (default: true)
+ * @returns Permission object or null if no access/invalid input
  */
 export async function getUserAccessLevel(
-  userId: string,
-  pageId: string,
+  userId: unknown,
+  pageId: unknown,
   options: { silent?: boolean } = {}
 ): Promise<{ canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean } | null> {
   const { silent = true } = options; // Default to silent for better performance
 
+  // Validate IDs before any DB access
+  const userIdResult = parseUserId(userId);
+  if (!userIdResult.success) {
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] Invalid userId: ${userIdResult.error.message}`);
+    }
+    return null;
+  }
+
+  const pageIdResult = parsePageId(pageId);
+  if (!pageIdResult.success) {
+    if (!silent) {
+      loggers.api.debug(`[PERMISSIONS] Invalid pageId: ${pageIdResult.error.message}`);
+    }
+    return null;
+  }
+
+  const validUserId = userIdResult.data;
+  const validPageId = pageIdResult.data;
+
   try {
     if (!silent) {
-      loggers.api.debug(`[PERMISSIONS] Checking access for userId: ${userId}, pageId: ${pageId}`);
+      loggers.api.debug(`[PERMISSIONS] Checking access for userId: ${validUserId}, pageId: ${validPageId}`);
     }
 
     // 1. Get the page and its drive
@@ -69,12 +95,12 @@ export async function getUserAccessLevel(
     })
     .from(pages)
     .leftJoin(drives, eq(pages.driveId, drives.id))
-    .where(eq(pages.id, pageId))
+    .where(eq(pages.id, validPageId))
     .limit(1);
 
     if (page.length === 0) {
       if (!silent) {
-        loggers.api.debug(`[PERMISSIONS] Page not found: ${pageId}`);
+        loggers.api.debug(`[PERMISSIONS] Page not found: ${validPageId}`);
       }
       return null; // Page not found
     }
@@ -86,7 +112,7 @@ export async function getUserAccessLevel(
     }
 
     // 2. Check if user is drive owner (has all permissions)
-    if (pageData.driveOwnerId === userId) {
+    if (pageData.driveOwnerId === validUserId) {
       if (!silent) {
         loggers.api.debug(`[PERMISSIONS] User is drive owner - granting full access`);
       }
@@ -104,7 +130,7 @@ export async function getUserAccessLevel(
         .from(driveMembers)
         .where(and(
           eq(driveMembers.driveId, pageData.driveId),
-          eq(driveMembers.userId, userId),
+          eq(driveMembers.userId, validUserId),
           eq(driveMembers.role, 'ADMIN')
         ))
         .limit(1);
@@ -130,8 +156,8 @@ export async function getUserAccessLevel(
     const permission = await db.select()
       .from(pagePermissions)
       .where(and(
-        eq(pagePermissions.pageId, pageId),
-        eq(pagePermissions.userId, userId)
+        eq(pagePermissions.pageId, validPageId),
+        eq(pagePermissions.userId, validUserId)
       ))
       .limit(1);
 
@@ -155,8 +181,8 @@ export async function getUserAccessLevel(
 
   } catch (error) {
     loggers.api.error('[PERMISSIONS] Error checking user access level', {
-      userId,
-      pageId,
+      userId: validUserId,
+      pageId: validPageId,
       error: error instanceof Error ? error.message : String(error)
     });
     return null; // Deny access on error

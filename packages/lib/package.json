@@ -212,6 +212,11 @@
       "types": "./dist/notifications/notifications.d.ts",
       "import": "./dist/notifications/notifications.js",
       "require": "./dist/notifications/notifications.js"
+    },
+    "./validators": {
+      "types": "./dist/validators/index.d.ts",
+      "import": "./dist/validators/index.js",
+      "require": "./dist/validators/index.js"
     }
   },
   "typesVersions": {
@@ -332,6 +337,9 @@
       ],
       "notifications": [
         "./dist/notifications/notifications.d.ts"
+      ],
+      "validators": [
+        "./dist/validators/index.d.ts"
       ]
     }
   },
