@@ -6,7 +6,7 @@
  * Re-verify permission before allowing document updates, etc.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { shouldReauthorize, isSensitiveEvent, SensitiveEventType } from '../per-event-auth';
 
 describe('Per-Event Authorization', () => {
@@ -58,6 +58,16 @@ describe('Per-Event Authorization', () => {
         eventType: 'activity_logged',
         roomType: 'activity',
         resourceId: 'drive-123',
+      });
+
+      expect(result).toBe(false);
+    });
+
+    it('given notification room event, should NOT require re-auth (user-specific room)', () => {
+      const result = shouldReauthorize({
+        eventType: 'document_update',
+        roomType: 'notification',
+        resourceId: 'user-123',
       });
 
       expect(result).toBe(false);
