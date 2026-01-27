@@ -1,5 +1,5 @@
 {
-  "id": "ff3a3f39-f4df-4bd0-a266-04da04a55b9d",
+  "id": "fdfa1da8-7cd2-4ea6-a65f-145593275142",
   "prevId": "49eb8c80-f4d3-4ad7-a37b-081bdecc6685",
   "version": "7",
   "dialect": "postgresql",
@@ -723,6 +723,19 @@
         },
         "tosAcceptedAt": {
           "name": "tosAcceptedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failedLoginAttempts": {
+          "name": "failedLoginAttempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lockedUntil": {
+          "name": "lockedUntil",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
