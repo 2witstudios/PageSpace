@@ -4,7 +4,13 @@ import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissio
 import { sessionService } from '@pagespace/lib/auth';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, dmConversations, socketTokens } from '@pagespace/db';
+import { db, eq, gt, and, or, dmConversations, socketTokens } from '@pagespace/db';
+import {
+  validatePageId,
+  validateDriveId,
+  validateConversationId,
+  emitValidationError,
+} from './validation';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
 
@@ -410,8 +416,17 @@ io.on('connection', (socket: AuthSocket) => {
     });
   }
 
-  socket.on('join_channel', async (pageId: string) => {
+  socket.on('join_channel', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_channel payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_channel', validation.error);
+      return;
+    }
+    const pageId = validation.value;
 
     try {
       const accessLevel = await getUserAccessLevel(user.id, pageId);
@@ -428,8 +443,17 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('join_drive', async (driveId: string) => {
+  socket.on('join_drive', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
 
     try {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
@@ -446,21 +470,39 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Join a direct message conversation room after membership verification
-  socket.on('join_dm_conversation', async (conversationId: string) => {
+  // Security: Uses filter-in-query pattern - authorization is part of the query, not post-query
+  socket.on('join_dm_conversation', async (payload: unknown) => {
     const userId = user?.id;
-    if (!userId || !conversationId) return;
+    if (!userId) return;
+
+    // Validate payload before any DB query
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_dm_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_dm_conversation', validation.error);
+      return;
+    }
+    const conversationId = validation.value;
 
     try {
+      // Filter-in-query: Authorization is part of the WHERE clause
+      // Only returns a row if the user is a participant
       const [conversation] = await db
-        .select()
+        .select({ id: dmConversations.id })
         .from(dmConversations)
         .where(
-          eq(dmConversations.id, conversationId as string)
+          and(
+            eq(dmConversations.id, conversationId),
+            or(
+              eq(dmConversations.participant1Id, userId),
+              eq(dmConversations.participant2Id, userId)
+            )
+          )
         )
         .limit(1);
 
-      if (!conversation || (conversation.participant1Id !== userId && conversation.participant2Id !== userId)) {
-        loggers.realtime.warn('DM join denied: not a participant', { userId, conversationId });
+      if (!conversation) {
+        loggers.realtime.warn('DM join denied: not a participant or not found', { userId, conversationId });
         return;
       }
 
@@ -472,18 +514,36 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('leave_dm_conversation', (conversationId: string) => {
+  socket.on('leave_dm_conversation', (payload: unknown) => {
     const userId = user?.id;
-    if (!userId || !conversationId) return;
+    if (!userId) return;
+
+    // Validate payload - leave operations still need format validation
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_dm_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_dm_conversation', validation.error);
+      return;
+    }
+    const conversationId = validation.value;
 
     const room = `dm:${conversationId}`;
     socket.leave(room);
     loggers.realtime.debug('User left DM room', { userId, room });
   });
 
-  socket.on('leave_drive', (driveId: string) => {
+  socket.on('leave_drive', (payload: unknown) => {
     if (!user?.id) return;
-    
+
+    // Validate payload
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
+
     const driveRoom = `drive:${driveId}`;
     socket.leave(driveRoom);
     loggers.realtime.debug('User left drive room', { userId: user.id, room: driveRoom });
@@ -506,8 +566,17 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Activity channel handlers - for real-time activity feed updates
-  socket.on('join_activity_drive', async (driveId: string) => {
+  socket.on('join_activity_drive', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_activity_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_activity_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
 
     try {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
@@ -523,8 +592,17 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('join_activity_page', async (pageId: string) => {
+  socket.on('join_activity_page', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_activity_page payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_activity_page', validation.error);
+      return;
+    }
+    const pageId = validation.value;
 
     try {
       const accessLevel = await getUserAccessLevel(user.id, pageId);
@@ -540,16 +618,34 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('leave_activity_drive', (driveId: string) => {
+  socket.on('leave_activity_drive', (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_activity_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_activity_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
 
     const activityRoom = `activity:drive:${driveId}`;
     socket.leave(activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
   });
 
-  socket.on('leave_activity_page', (pageId: string) => {
+  socket.on('leave_activity_page', (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_activity_page payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_activity_page', validation.error);
+      return;
+    }
+    const pageId = validation.value;
 
     const activityRoom = `activity:page:${pageId}`;
     socket.leave(activityRoom);
