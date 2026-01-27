@@ -180,7 +180,8 @@ export function logSecurityEvent(
   event: 'rate_limit' | 'invalid_token' | 'unauthorized' | 'suspicious_activity' |
          'login_csrf_missing' | 'login_csrf_mismatch' | 'login_csrf_invalid' |
          'signup_csrf_missing' | 'signup_csrf_mismatch' | 'signup_csrf_invalid' |
-         'origin_validation_failed' | 'origin_validation_warning',
+         'origin_validation_failed' | 'origin_validation_warning' |
+         'account_locked_login_attempt',
   details: Record<string, any>
 ): void {
   loggers.security.warn(`Security event: ${event}`, details);
