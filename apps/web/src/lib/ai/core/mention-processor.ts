@@ -31,7 +31,8 @@ export interface ProcessedMessage {
  */
 export function processMentionsInMessage(content: string): ProcessedMessage {
   // Regex to match @[Label](id:type) format
-  const mentionRegex = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
+  // Uses atomic-style grouping with possessive-like character classes to prevent ReDoS
+  const mentionRegex = /@\[([^\]]{1,500})\]\(([^:)]{1,200}):([^)]{1,200})\)/g;
   
   const pageIds: string[] = [];
   const mentions: ProcessedMention[] = [];
@@ -141,7 +142,7 @@ ${instructions}
  * @returns True if the message contains @mentions
  */
 export function hasMentions(content: string): boolean {
-  const mentionRegex = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/;
+  const mentionRegex = /@\[([^\]]{1,500})\]\(([^:)]{1,200}):([^)]{1,200})\)/;
   return mentionRegex.test(content);
 }
 
@@ -153,7 +154,7 @@ export function hasMentions(content: string): boolean {
  * @returns Array of page IDs
  */
 export function extractPageIds(content: string): string[] {
-  const mentionRegex = /@\[([^\]]+)\]\(([^:]+):page\)/g;
+  const mentionRegex = /@\[([^\]]{1,500})\]\(([^:)]{1,200}):page\)/g;
   const pageIds: string[] = [];
   
   let match;

@@ -3,6 +3,7 @@ import multer from 'multer';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { hasAuthScope } from '../middleware/auth';
+import { rateLimitUpload } from '../middleware/rate-limit';
 import { processorLogger } from '../logger';
 import {
   DEFAULT_IMAGE_EXTENSION,
@@ -13,6 +14,9 @@ import {
 } from '../utils/security';
 
 const router: Router = Router();
+
+// Apply rate limiting to all avatar endpoints
+router.use(rateLimitUpload);
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();

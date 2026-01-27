@@ -6,6 +6,38 @@ import { CacheEntry } from '../types';
 
 export const CONTENT_HASH_REGEX = /^[a-f0-9]{64}$/i;
 
+/**
+ * Validate that a preset name is safe for use as a filename and property key.
+ * Allows alphanumeric, hyphens, underscores, and dots (for presets like
+ * "extracted-text.txt", "ocr-text.txt", "thumbnail.webp").
+ * Rejects ".." sequences to prevent path traversal.
+ */
+const SAFE_PRESET_REGEX = /^[a-zA-Z0-9_.\-]{1,64}$/;
+export function isValidPreset(preset: string): boolean {
+  return typeof preset === 'string' && SAFE_PRESET_REGEX.test(preset) && !preset.includes('..');
+}
+
+/**
+ * Prototype-pollution-safe property keys that must never be used as dynamic keys.
+ */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isSafePropertyKey(key: string): boolean {
+  return !FORBIDDEN_KEYS.has(key);
+}
+
+/**
+ * Assert that a resolved path is contained within the expected base directory.
+ * Prevents path traversal even if upstream validation is bypassed.
+ */
+function assertPathWithin(resolvedPath: string, baseDir: string): void {
+  const normalizedResolved = path.resolve(resolvedPath);
+  const normalizedBase = path.resolve(baseDir);
+  if (!normalizedResolved.startsWith(normalizedBase + path.sep) && normalizedResolved !== normalizedBase) {
+    throw new Error('Path escapes base directory');
+  }
+}
+
 export function isValidContentHash(contentHash: string): boolean {
   return typeof contentHash === 'string' && CONTENT_HASH_REGEX.test(contentHash);
 }
@@ -72,19 +104,30 @@ export class ContentStore {
   }
 
   private getCacheFilePath(normalizedHash: string, preset: string): string {
-    return path.join(this.getCacheDir(normalizedHash), `${preset}.jpg`);
+    if (!isValidPreset(preset)) {
+      throw new Error('Invalid preset name');
+    }
+    const filePath = path.join(this.getCacheDir(normalizedHash), `${preset}.jpg`);
+    assertPathWithin(filePath, this.cachePath);
+    return filePath;
   }
 
   private getCacheMetadataPath(normalizedHash: string): string {
-    return path.join(this.getCacheDir(normalizedHash), 'metadata.json');
+    const metadataPath = path.join(this.getCacheDir(normalizedHash), 'metadata.json');
+    assertPathWithin(metadataPath, this.cachePath);
+    return metadataPath;
   }
 
   private getOriginalFilePath(normalizedHash: string): string {
-    return path.join(this.getOriginalDir(normalizedHash), 'original');
+    const filePath = path.join(this.getOriginalDir(normalizedHash), 'original');
+    assertPathWithin(filePath, this.storagePath);
+    return filePath;
   }
 
   private getOriginalMetadataPath(normalizedHash: string): string {
-    return path.join(this.getOriginalDir(normalizedHash), 'metadata.json');
+    const metadataPath = path.join(this.getOriginalDir(normalizedHash), 'metadata.json');
+    assertPathWithin(metadataPath, this.storagePath);
+    return metadataPath;
   }
 
   async initialize(): Promise<void> {
@@ -260,16 +303,24 @@ export class ContentStore {
     };
 
     const metadataPath = this.getCacheMetadataPath(normalizedHash);
-    let metadata: Record<string, CacheEntry> = {};
+    let metadata: Record<string, CacheEntry> = Object.create(null);
 
     try {
       const existing = await fs.readFile(metadataPath, 'utf-8');
-      metadata = JSON.parse(existing);
+      const parsed = JSON.parse(existing);
+      // Copy only safe keys to null-prototype object
+      for (const key of Object.keys(parsed)) {
+        if (isSafePropertyKey(key) && isValidPreset(key)) {
+          metadata[key] = parsed[key];
+        }
+      }
     } catch {
       // File doesn't exist yet
     }
 
-    metadata[preset] = entry;
+    if (isValidPreset(preset)) {
+      metadata[preset] = entry;
+    }
     await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
     return entry;
@@ -291,8 +342,14 @@ export class ContentStore {
 
       const metadataPath = this.getCacheMetadataPath(this.normalizeContentHash(contentHash));
       try {
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as Record<string, any>;
-        if (metadata[preset]) {
+        const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        const metadata: Record<string, any> = Object.create(null);
+        for (const key of Object.keys(rawParsed)) {
+          if (isSafePropertyKey(key) && isValidPreset(key)) {
+            metadata[key] = rawParsed[key];
+          }
+        }
+        if (isValidPreset(preset) && preset in metadata) {
           metadata[preset].lastAccessed = new Date();
           await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
         }
@@ -429,6 +486,9 @@ export class ContentStore {
         if (!value || typeof value !== 'object') {
           continue;
         }
+        if (!isSafePropertyKey(preset) || !isValidPreset(preset)) {
+          continue;
+        }
 
         entries[preset] = {
           contentHash: normalizedHash,
@@ -457,17 +517,28 @@ export class ContentStore {
     const contentDirs = await fs.readdir(this.cachePath);
 
     for (const contentHash of contentDirs) {
+      if (!isValidContentHash(contentHash)) {
+        continue;
+      }
       const dirPath = path.join(this.cachePath, contentHash);
+      assertPathWithin(dirPath, this.cachePath);
       const metadataPath = path.join(dirPath, 'metadata.json');
 
       try {
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+        const metadata: Record<string, CacheEntry> = Object.create(null);
+        for (const key of Object.keys(rawParsed)) {
+          if (isSafePropertyKey(key) && isValidPreset(key)) {
+            metadata[key] = rawParsed[key];
+          }
+        }
 
-        for (const [preset, entry] of Object.entries(metadata as Record<string, CacheEntry>)) {
+        for (const [preset, entry] of Object.entries(metadata)) {
           const lastAccessed = new Date(entry.lastAccessed).getTime();
 
           if (now - lastAccessed > maxAgeMs) {
             const filePath = path.join(dirPath, `${preset}.jpg`);
+            assertPathWithin(filePath, this.cachePath);
             try {
               await fs.unlink(filePath);
               delete metadata[preset];
