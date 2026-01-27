@@ -96,7 +96,7 @@ const mockEnforcedAuth = (userId: string): EnforcedAuthSuccess => ({
     tokenVersion: 0,
     adminRoleVersion: 0,
     scopes: ['*'],
-  } as EnforcedAuthSuccess['ctx'],
+  } as unknown as EnforcedAuthSuccess['ctx'],
 });
 
 const mockAuthError = (status = 401): AuthError => ({
