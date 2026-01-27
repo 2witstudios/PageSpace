@@ -82,7 +82,9 @@
   - [x] Addressed Codex review: UUID → CUID2 validation (database uses CUID2 IDs)
   - [x] Addressed CodeRabbit review: Race condition fix using insert-first pattern with `onConflictDoNothing`
   - [x] Merged real-time kick functionality from master (permission revocation kicks user from rooms)
-  - [ ] Waiting for final CI checks
+  - [x] Fixed CI: Added zod dependency to packages/lib
+  - [x] Fixed CI: Updated route tests for zero-trust API
+  - [x] All CI checks passing
 
 ## File Paths
 
