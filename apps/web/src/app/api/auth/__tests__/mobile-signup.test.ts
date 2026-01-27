@@ -115,7 +115,7 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 
-import { db } from '@pagespace/db';
+import { db, drives, userAiSettings } from '@pagespace/db';
 import {
   validateOrCreateDeviceToken,
   logAuthEvent,
@@ -246,8 +246,8 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      // Verify drive creation
-      expect(db.insert).toHaveBeenCalled();
+      // Verify drive creation targeted the drives table
+      expect(db.insert).toHaveBeenCalledWith(drives);
     });
 
     it('sends verification email', async () => {
@@ -747,8 +747,8 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      // Verify AI settings insert was called
-      expect(db.insert).toHaveBeenCalled();
+      // Verify AI settings insert targeted the userAiSettings table
+      expect(db.insert).toHaveBeenCalledWith(userAiSettings);
     });
   });
 });

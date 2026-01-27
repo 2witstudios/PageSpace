@@ -360,7 +360,11 @@ describe('capacitor-bridge', () => {
       expect(capacitorBridge.getPlatform()).toBe('web');
     });
 
-    it('handles Capacitor.isNativePlatform returning truthy non-boolean', async () => {
+    it('coerces truthy non-boolean from isNativePlatform to true', async () => {
+      // The Capacitor global is injected by the native shell and its type shape
+      // is not guaranteed. Our bridge uses Boolean() coercion intentionally so
+      // that any truthy return value (string, number, object) is treated as
+      // "running in native context". This is defensive API design, not a bug.
       (window as Window & { Capacitor?: { isNativePlatform: () => unknown } })
         .Capacitor = {
         isNativePlatform: () => 'yes' as unknown,
@@ -368,7 +372,6 @@ describe('capacitor-bridge', () => {
       vi.resetModules();
       capacitorBridge = await import('../capacitor-bridge');
 
-      // Truthy value should work
       expect(capacitorBridge.isCapacitorApp()).toBe(true);
     });
 

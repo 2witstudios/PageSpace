@@ -363,12 +363,15 @@ describe('ui-setup', () => {
       );
     });
 
-    it('handles negative keyboard heights (defensive)', async () => {
+    it('passes negative keyboard heights through unclamped', async () => {
+      // The Capacitor Keyboard plugin is the authoritative source for height
+      // values. Negative values are theoretically impossible from the OS, but
+      // we intentionally do not clamp them — validation belongs at the plugin
+      // layer, not the UI setup layer. This test documents that behavior.
       await uiSetup.setupIOSUI();
 
       simulateKeyboardShow(-100);
 
-      // Should still set the value (plugin behavior)
       expect(document.body.style.getPropertyValue('--keyboard-height')).toBe(
         '-100px'
       );

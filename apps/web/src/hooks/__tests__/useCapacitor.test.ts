@@ -200,12 +200,12 @@ describe('useCapacitor', () => {
     });
 
     describe('SSR safety', () => {
-      it('handles initial render on server (no window)', async () => {
-        // The hook should handle SSR gracefully
-        // In testing environment, window exists but we can verify initial state
+      it('returns safe defaults before hydration', async () => {
+        // Note: True SSR (no window) cannot be tested under jsdom. This test
+        // verifies the hook's initial synchronous state before the useEffect
+        // runs, which is the same state a server render would produce.
         const { result } = renderHook(() => useCapacitorModule.useCapacitor());
 
-        // Initial state should be safe defaults
         expect(result.current.isNative).toBe(false);
         expect(result.current.platform).toBe('web');
       });
@@ -249,81 +249,9 @@ describe('useCapacitor', () => {
     });
   });
 
-  describe('isCapacitorApp utility function', () => {
-    it('returns true for native iOS app', async () => {
-      setupCapacitorMock(true, 'ios');
-      vi.resetModules();
-      useCapacitorModule = await import('../useCapacitor');
-
-      expect(useCapacitorModule.isCapacitorApp()).toBe(true);
-    });
-
-    it('returns true for native Android app', async () => {
-      setupCapacitorMock(true, 'android');
-      vi.resetModules();
-      useCapacitorModule = await import('../useCapacitor');
-
-      expect(useCapacitorModule.isCapacitorApp()).toBe(true);
-    });
-
-    it('returns false for web', () => {
-      removeCapacitorMock();
-
-      expect(useCapacitorModule.isCapacitorApp()).toBe(false);
-    });
-
-    it('returns false when Capacitor is not native', async () => {
-      setupCapacitorMock(false, 'web');
-      vi.resetModules();
-      useCapacitorModule = await import('../useCapacitor');
-
-      expect(useCapacitorModule.isCapacitorApp()).toBe(false);
-    });
-
-    it('can be called outside of React components', () => {
-      // This is the main use case - calling before React initializes
-      expect(() => useCapacitorModule.isCapacitorApp()).not.toThrow();
-    });
-  });
-
-  describe('getPlatform utility function', () => {
-    it('returns ios for iOS app', async () => {
-      setupCapacitorMock(true, 'ios');
-      vi.resetModules();
-      useCapacitorModule = await import('../useCapacitor');
-
-      expect(useCapacitorModule.getPlatform()).toBe('ios');
-    });
-
-    it('returns android for Android app', async () => {
-      setupCapacitorMock(true, 'android');
-      vi.resetModules();
-      useCapacitorModule = await import('../useCapacitor');
-
-      expect(useCapacitorModule.getPlatform()).toBe('android');
-    });
-
-    it('returns web for browser', () => {
-      removeCapacitorMock();
-
-      expect(useCapacitorModule.getPlatform()).toBe('web');
-    });
-
-    it('returns web when Capacitor.getPlatform returns empty', async () => {
-      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
-        isNativePlatform: vi.fn(() => true),
-        getPlatform: vi.fn(() => ''),
-      };
-      vi.resetModules();
-      useCapacitorModule = await import('../useCapacitor');
-
-      expect(useCapacitorModule.getPlatform()).toBe('web');
-    });
-
-    it('can be called outside of React components', () => {
-      expect(() => useCapacitorModule.getPlatform()).not.toThrow();
-    });
-  });
+  // Note: isCapacitorApp() and getPlatform() utility functions are re-exported
+  // from capacitor-bridge.ts and thoroughly tested in capacitor-bridge.test.ts.
+  // This file focuses on the React hook behavior only.
 
   describe('usage patterns', () => {
     describe('conditional rendering', () => {

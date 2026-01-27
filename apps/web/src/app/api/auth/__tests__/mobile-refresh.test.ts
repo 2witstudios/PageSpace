@@ -470,15 +470,13 @@ describe('/api/auth/mobile/refresh', () => {
     it('uses refresh:device:ip rate limit key', async () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-forwarded-for': '10.0.0.1',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(validRefreshPayload),
       });
 
       await POST(request);
 
+      // IP is resolved by getClientIP mock (returns '192.168.1.1')
       expect(checkDistributedRateLimit).toHaveBeenCalledWith(
         'refresh:device:ip:192.168.1.1',
         DISTRIBUTED_RATE_LIMITS.REFRESH
