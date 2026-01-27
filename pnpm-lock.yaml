@@ -657,6 +657,9 @@ importers:
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
+      zod:
+        specifier: ^4.0.16
+        version: 4.1.11
     devDependencies:
       '@react-email/preview-server':
         specifier: 5.1.1
