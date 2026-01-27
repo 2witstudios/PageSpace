@@ -40,20 +40,18 @@ export const deviceTokens = pgTable('device_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
-  // Token information - SECURITY: token column stores hash, not plaintext
-  token: text('token').unique().notNull(),
-  tokenHash: text('tokenHash'),
-  tokenPrefix: text('tokenPrefix'),
+  // Token storage - hash only (matching sessions table pattern)
+  tokenHash: text('tokenHash').unique().notNull(),
+  tokenPrefix: text('tokenPrefix').notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   lastUsedAt: timestamp('lastUsedAt', { mode: 'date' }),
 
-  // Device identification (fingerprinting)
+  // Device identification
   deviceId: text('deviceId').notNull(),
   platform: platformType('platform').notNull(),
   deviceName: text('deviceName'),
 
-  // Token version for "logout all devices" invalidation
-  // Must match user.tokenVersion for token to be valid
+  // Token version for invalidation
   tokenVersion: integer('tokenVersion').default(0).notNull(),
 
   // Security tracking
@@ -70,19 +68,13 @@ export const deviceTokens = pgTable('device_tokens', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   revokedAt: timestamp('revokedAt', { mode: 'date' }),
   revokedReason: text('revokedReason'),
-  // For grace period handling: links to the new token that replaced this one
   replacedByTokenId: text('replacedByTokenId'),
 }, (table) => {
   return {
     userIdx: index('device_tokens_user_id_idx').on(table.userId),
-    tokenIdx: index('device_tokens_token_idx').on(table.token),
+    tokenHashIdx: index('device_tokens_token_hash_idx').on(table.tokenHash),
     deviceIdx: index('device_tokens_device_id_idx').on(table.deviceId),
     expiresIdx: index('device_tokens_expires_at_idx').on(table.expiresAt),
-    tokenHashPartialIdx: uniqueIndex('device_tokens_token_hash_partial_idx')
-      .on(table.tokenHash)
-      .where(sql`${table.tokenHash} IS NOT NULL`),
-    // Partial unique index: only enforce uniqueness for non-revoked tokens
-    // Expired tokens are automatically revoked before new token creation to prevent conflicts
     activeDeviceIdx: uniqueIndex('device_tokens_active_device_idx')
       .on(table.userId, table.deviceId, table.platform)
       .where(sql`${table.revokedAt} IS NULL`),
@@ -92,9 +84,11 @@ export const deviceTokens = pgTable('device_tokens', {
 export const mcpTokens = pgTable('mcp_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  token: text('token').unique().notNull(),
-  tokenHash: text('tokenHash'),
-  tokenPrefix: text('tokenPrefix'),
+
+  // Token storage - hash only (matching sessions table pattern)
+  tokenHash: text('tokenHash').unique().notNull(),
+  tokenPrefix: text('tokenPrefix').notNull(),
+
   name: text('name').notNull(),
   lastUsed: timestamp('lastUsed', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -102,20 +96,18 @@ export const mcpTokens = pgTable('mcp_tokens', {
 }, (table) => {
   return {
     userIdx: index('mcp_tokens_user_id_idx').on(table.userId),
-    tokenIdx: index('mcp_tokens_token_idx').on(table.token),
-    tokenHashPartialIdx: uniqueIndex('mcp_tokens_token_hash_partial_idx')
-      .on(table.tokenHash)
-      .where(sql`${table.tokenHash} IS NOT NULL`),
+    tokenHashIdx: index('mcp_tokens_token_hash_idx').on(table.tokenHash),
   };
 });
 
 export const verificationTokens = pgTable('verification_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  // SECURITY: token column stores hash, not plaintext
-  token: text('token').unique().notNull(),
-  tokenHash: text('tokenHash'),
-  tokenPrefix: text('tokenPrefix'),
+
+  // Token storage - hash only (matching sessions table pattern)
+  tokenHash: text('tokenHash').unique().notNull(),
+  tokenPrefix: text('tokenPrefix').notNull(),
+
   type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link'
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -123,11 +115,8 @@ export const verificationTokens = pgTable('verification_tokens', {
 }, (table) => {
   return {
     userIdx: index('verification_tokens_user_id_idx').on(table.userId),
-    tokenIdx: index('verification_tokens_token_idx').on(table.token),
+    tokenHashIdx: index('verification_tokens_token_hash_idx').on(table.tokenHash),
     typeIdx: index('verification_tokens_type_idx').on(table.type),
-    tokenHashPartialIdx: uniqueIndex('verification_tokens_token_hash_partial_idx')
-      .on(table.tokenHash)
-      .where(sql`${table.tokenHash} IS NOT NULL`),
   };
 });
 
