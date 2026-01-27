@@ -26,7 +26,7 @@ const config: CapacitorConfig = {
       showSpinner: false,
     },
     Keyboard: {
-      resize: KeyboardResize.Body,
+      resize: KeyboardResize.None,
       resizeOnFullScreen: true,
     },
     StatusBar: {

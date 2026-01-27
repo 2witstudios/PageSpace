@@ -59,6 +59,7 @@
   --safe-area-left: env(safe-area-inset-left, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --keyboard-height: 0px;
+  --app-height: 100dvh;
 
   /* Canvas */
   --background: oklch(0.995 0.002 240);
@@ -697,14 +698,19 @@
 /* iOS Capacitor App Support */
 .capacitor-ios {
   padding-top: var(--safe-area-top);
-  padding-bottom: calc(var(--safe-area-bottom) + var(--keyboard-height));
+  padding-bottom: var(--safe-area-bottom);
   padding-left: var(--safe-area-left);
   padding-right: var(--safe-area-right);
 }
 
-/* Keyboard open state - adjust bottom padding */
+/* When keyboard is open, keyboard covers home indicator - no safe-area needed */
 .capacitor-ios.keyboard-open {
-  padding-bottom: var(--keyboard-height);
+  padding-bottom: 0px;
+}
+
+/* Reduce app height by keyboard height - consumed by Layout.tsx container */
+body.keyboard-open {
+  --app-height: calc(100dvh - var(--keyboard-height, 0px));
 }
 
 /* Safe area utilities for individual components */
@@ -740,16 +746,6 @@
   font-size: 16px !important;
 }
 
-/* Smooth keyboard padding transition for elements that adapt to keyboard */
-.capacitor-ios .keyboard-animate {
-  transition: padding-bottom 0.25s ease-out;
-}
-
-/* Utility for elements that need keyboard-aware bottom positioning */
-.capacitor-ios .keyboard-aware-bottom {
-  padding-bottom: var(--keyboard-height, 0px);
-  transition: padding-bottom 0.25s ease-out;
-}
 
 @media print {
   /* Hide ALL UI chrome - comprehensive selectors */

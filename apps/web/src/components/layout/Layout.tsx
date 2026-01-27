@@ -185,7 +185,10 @@ function Layout({ children }: LayoutProps) {
   return (
     <NavigationProvider>
       <GlobalChatProvider>
-        <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10">
+        <div
+          className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
+          style={{ height: 'var(--app-height, 100dvh)' }}
+        >
           <TopBar
             onToggleLeftPanel={handleLeftPanelToggle}
             onToggleRightPanel={handleRightPanelToggle}

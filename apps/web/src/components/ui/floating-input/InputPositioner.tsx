@@ -78,9 +78,8 @@ export function InputPositioner({
       )}
       style={{
         maxWidth: isCentered ? centeredMaxWidth : undefined,
-        // Add keyboard-aware padding when docked (uses CSS variable set by iOS Capacitor)
         // Using paddingBottom instead of animating bottom to avoid Framer Motion conflicts
-        paddingBottom: !isCentered ? 'calc(1rem + var(--keyboard-height, 0px))' : undefined,
+        paddingBottom: !isCentered ? '1rem' : undefined,
       }}
       initial={false}
       animate={position}
