@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, loggers } from '@pagespace/lib/server';
+import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { pages, users, db, and, eq, ilike, drives, inArray, SQL } from '@pagespace/db';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
+import { z } from 'zod';
 
 /**
  * Escape LIKE pattern metacharacters (%, _) in user input
@@ -79,26 +80,8 @@ function calculateRelevanceScore(title: string, query: string): number {
   return score;
 }
 
-// Helper function to get all drives a user has access to
-async function getUserAccessibleDrives(userId: string): Promise<Array<{id: string, name: string, slug: string}>> {
-  try {
-    // Get drives where user is owner
-    const ownedDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
-      columns: {
-        id: true,
-        name: true,
-        slug: true
-      }
-    });
-
-    loggers.api.debug('[getUserAccessibleDrives] User has access to drives', { userId, driveCount: ownedDrives.length });
-    return ownedDrives;
-  } catch (error) {
-    loggers.api.error('Error getting user accessible drives:', error as Error);
-    return [];
-  }
-}
+// Zod schema for driveId validation
+const driveIdSchema = z.string().min(1, 'driveId must not be empty').max(100);
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
@@ -132,8 +115,20 @@ export async function GET(request: Request) {
     );
   }
 
+  // Validate driveId if provided
+  if (driveId) {
+    const driveIdValidation = driveIdSchema.safeParse(driveId);
+    if (!driveIdValidation.success) {
+      loggers.api.debug('[API] Invalid driveId format', { driveId });
+      return NextResponse.json(
+        { error: 'Invalid driveId format' },
+        { status: 400 }
+      );
+    }
+  }
+
   // Parse requested mention types, default to all types
-  const requestedTypes = typesParam 
+  const requestedTypes = typesParam
     ? typesParam.split(',') as MentionType[]
     : ['page', 'user'];
 
@@ -143,20 +138,39 @@ export async function GET(request: Request) {
     // Get target drive IDs based on search mode
     let targetDriveIds: string[];
     const driveContextMap: Map<string, string> = new Map(); // driveId -> drive name/slug for context
-    
+
     if (crossDrive) {
-      // Cross-drive search: get all accessible drives
-      const accessibleDrives = await getUserAccessibleDrives(userId);
-      targetDriveIds = accessibleDrives.map(d => d.id);
-      
+      // Cross-drive search: get all drives user has access to (owned, member, page permissions)
+      targetDriveIds = await getDriveIdsForUser(userId);
+
       // Build context map for drive disambiguation
-      accessibleDrives.forEach(drive => {
-        driveContextMap.set(drive.id, drive.name || drive.slug);
-      });
-      
+      if (targetDriveIds.length > 0) {
+        const driveInfos = await db.select({
+          id: drives.id,
+          name: drives.name,
+          slug: drives.slug,
+        })
+        .from(drives)
+        .where(inArray(drives.id, targetDriveIds));
+
+        driveInfos.forEach(drive => {
+          driveContextMap.set(drive.id, drive.name || drive.slug || drive.id);
+        });
+      }
+
       loggers.api.debug('[API] Cross-drive search', { driveCount: targetDriveIds.length });
     } else {
-      // Within-drive search: only search the specified drive
+      // Within-drive search: verify user has access to the specified drive
+      const hasAccess = await getUserDriveAccess(userId, driveId!);
+
+      if (!hasAccess) {
+        loggers.api.debug('[API] User does not have access to drive', { userId, driveId });
+        return NextResponse.json(
+          { error: 'Access denied to the specified drive' },
+          { status: 403 }
+        );
+      }
+
       targetDriveIds = [driveId!];
       loggers.api.debug('[API] Within-drive search', { driveId });
     }
