@@ -1,15 +1,10 @@
-import { z } from 'zod'
+import { isCuid } from '@paralleldrive/cuid2'
 
 /**
- * Maximum length for ID strings before UUID validation.
- * UUIDs are 36 characters. Allow some buffer but reject absurdly long strings early.
+ * Maximum length for ID strings before format validation.
+ * CUID2 IDs are ~25 characters. Allow generous buffer but reject absurdly long strings early.
  */
 const MAX_ID_LENGTH = 100
-
-/**
- * UUID regex pattern (case-insensitive)
- */
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 /**
  * Error codes for ID validation failures
@@ -18,7 +13,7 @@ export type IdValidationErrorCode =
   | 'INVALID_TYPE'
   | 'EMPTY_ID'
   | 'ID_TOO_LONG'
-  | 'INVALID_UUID_FORMAT'
+  | 'INVALID_ID_FORMAT'
 
 /**
  * Custom error class for ID validation failures.
@@ -45,23 +40,12 @@ export type IdParseResult =
   | { success: false; error: IdValidationError }
 
 /**
- * Check if a string is a valid UUID format.
- * Pure function - no side effects.
+ * Check if a string is a valid CUID2 format.
+ * Uses the official isCuid validator from @paralleldrive/cuid2.
  */
-export const isValidUuid = (value: string): boolean => {
-  return UUID_REGEX.test(value)
+export const isValidId = (value: string): boolean => {
+  return isCuid(value)
 }
-
-/**
- * Zod schema for UUID validation.
- * Validates format and normalizes to lowercase.
- */
-export const zUuid = z
-  .string()
-  .trim()
-  .max(MAX_ID_LENGTH)
-  .regex(UUID_REGEX, 'Invalid UUID format')
-  .transform((val) => val.toLowerCase())
 
 /**
  * Parse and validate an ID string.
@@ -71,11 +55,11 @@ export const zUuid = z
  * 1. Type check (must be string)
  * 2. Empty check (after trim)
  * 3. Length check (max 100 chars)
- * 4. UUID format check
+ * 4. CUID2 format check
  *
  * @param value - The value to validate (accepts unknown for type safety)
  * @param fieldName - Name of the field for error messages
- * @returns IdParseResult with validated lowercase UUID or error
+ * @returns IdParseResult with validated ID or error
  */
 export const parseId = (value: unknown, fieldName: string): IdParseResult => {
   // Type check
@@ -103,7 +87,7 @@ export const parseId = (value: unknown, fieldName: string): IdParseResult => {
     }
   }
 
-  // Length check (before regex to avoid ReDoS on very long strings)
+  // Length check (before format check to reject absurd inputs early)
   if (trimmed.length > MAX_ID_LENGTH) {
     return {
       success: false,
@@ -115,20 +99,19 @@ export const parseId = (value: unknown, fieldName: string): IdParseResult => {
     }
   }
 
-  // UUID format check
-  if (!isValidUuid(trimmed)) {
+  // CUID2 format check
+  if (!isValidId(trimmed)) {
     return {
       success: false,
       error: new IdValidationError(
-        `${fieldName} must be a valid UUID`,
-        'INVALID_UUID_FORMAT',
+        `${fieldName} must be a valid CUID2 identifier`,
+        'INVALID_ID_FORMAT',
         fieldName
       ),
     }
   }
 
-  // Normalize to lowercase
-  return { success: true, data: trimmed.toLowerCase() }
+  return { success: true, data: trimmed }
 }
 
 /**

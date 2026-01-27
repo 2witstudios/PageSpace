@@ -1,56 +1,48 @@
 import { describe, it, expect } from 'vitest'
+import { createId } from '@paralleldrive/cuid2'
 import {
   parseUserId,
   parsePageId,
   parseDriveId,
   parseId,
   IdValidationError,
-  isValidUuid,
+  isValidId,
 } from '../id-validators'
 
 describe('ID validators', () => {
-  const validUuid = '550e8400-e29b-41d4-a716-446655440000'
-  const anotherValidUuid = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
+  const validCuid = createId()
+  const anotherValidCuid = createId()
 
-  describe('isValidUuid', () => {
-    it('returns true for valid lowercase UUID', () => {
-      expect(isValidUuid(validUuid)).toBe(true)
+  describe('isValidId', () => {
+    it('returns true for a valid CUID2', () => {
+      expect(isValidId(validCuid)).toBe(true)
     })
 
-    it('returns true for valid uppercase UUID', () => {
-      expect(isValidUuid(validUuid.toUpperCase())).toBe(true)
+    it('returns true for another valid CUID2', () => {
+      expect(isValidId(anotherValidCuid)).toBe(true)
     })
 
     it('returns false for empty string', () => {
-      expect(isValidUuid('')).toBe(false)
+      expect(isValidId('')).toBe(false)
     })
 
-    it('returns false for non-UUID string', () => {
-      expect(isValidUuid('not-a-uuid')).toBe(false)
+    it('returns false for a plain string', () => {
+      expect(isValidId('not-a-cuid')).toBe(false)
     })
 
-    it('returns false for UUID without hyphens', () => {
-      expect(isValidUuid('550e8400e29b41d4a716446655440000')).toBe(false)
+    it('returns false for a UUID (wrong format for this project)', () => {
+      expect(isValidId('550e8400-e29b-41d4-a716-446655440000')).toBe(false)
     })
 
-    it('returns false for UUID with wrong length', () => {
-      expect(isValidUuid('550e8400-e29b-41d4-a716')).toBe(false)
-    })
-
-    it('returns false for string with invalid characters', () => {
-      expect(isValidUuid('550e8400-e29b-41d4-a716-44665544000g')).toBe(false)
+    it('returns false for numeric string', () => {
+      expect(isValidId('12345')).toBe(false)
     })
   })
 
   describe('parseId', () => {
-    it('returns success with valid UUID', () => {
-      const result = parseId(validUuid, 'test')
-      expect(result).toEqual({ success: true, data: validUuid.toLowerCase() })
-    })
-
-    it('normalizes UUID to lowercase', () => {
-      const result = parseId(validUuid.toUpperCase(), 'test')
-      expect(result).toEqual({ success: true, data: validUuid.toLowerCase() })
+    it('returns success with valid CUID2', () => {
+      const result = parseId(validCuid, 'test')
+      expect(result).toEqual({ success: true, data: validCuid })
     })
 
     it('returns error for empty string', () => {
@@ -87,11 +79,11 @@ describe('ID validators', () => {
       }
     })
 
-    it('returns error for non-UUID format', () => {
-      const result = parseId('not-a-uuid', 'testId')
+    it('returns error for non-CUID2 format', () => {
+      const result = parseId('not-a-valid-id', 'testId')
       expect(result.success).toBe(false)
       if (!result.success) {
-        expect(result.error.code).toBe('INVALID_UUID_FORMAT')
+        expect(result.error.code).toBe('INVALID_ID_FORMAT')
       }
     })
 
@@ -112,16 +104,19 @@ describe('ID validators', () => {
       }
     })
 
-    it('trims whitespace from valid UUID', () => {
-      const result = parseId(`  ${validUuid}  `, 'test')
-      expect(result).toEqual({ success: true, data: validUuid.toLowerCase() })
+    it('returns error for UUID format (not used in this project)', () => {
+      const result = parseId('550e8400-e29b-41d4-a716-446655440000', 'testId')
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.code).toBe('INVALID_ID_FORMAT')
+      }
     })
   })
 
   describe('parseUserId', () => {
-    it('returns success with valid UUID', () => {
-      const result = parseUserId(validUuid)
-      expect(result).toEqual({ success: true, data: validUuid.toLowerCase() })
+    it('returns success with valid CUID2', () => {
+      const result = parseUserId(validCuid)
+      expect(result).toEqual({ success: true, data: validCuid })
     })
 
     it('returns error with field name userId for invalid input', () => {
@@ -134,9 +129,9 @@ describe('ID validators', () => {
   })
 
   describe('parsePageId', () => {
-    it('returns success with valid UUID', () => {
-      const result = parsePageId(validUuid)
-      expect(result).toEqual({ success: true, data: validUuid.toLowerCase() })
+    it('returns success with valid CUID2', () => {
+      const result = parsePageId(validCuid)
+      expect(result).toEqual({ success: true, data: validCuid })
     })
 
     it('returns error with field name pageId for invalid input', () => {
@@ -149,9 +144,9 @@ describe('ID validators', () => {
   })
 
   describe('parseDriveId', () => {
-    it('returns success with valid UUID', () => {
-      const result = parseDriveId(validUuid)
-      expect(result).toEqual({ success: true, data: validUuid.toLowerCase() })
+    it('returns success with valid CUID2', () => {
+      const result = parseDriveId(validCuid)
+      expect(result).toEqual({ success: true, data: validCuid })
     })
 
     it('returns error with field name driveId for invalid input', () => {

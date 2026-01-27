@@ -8,6 +8,7 @@ import {
 } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
 import { db, users, pagePermissions, eq, and } from '@pagespace/db'
+import { createId } from '@paralleldrive/cuid2'
 
 describe('permissions system', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>
@@ -61,8 +62,8 @@ describe('permissions system', () => {
     })
 
     it('returns null for non-existent page (valid UUID)', async () => {
-      // Use a valid UUID format that doesn't exist in DB
-      const nonExistentPageId = '00000000-0000-4000-8000-000000000000'
+      // Use a valid CUID2 that doesn't exist in DB
+      const nonExistentPageId = createId()
       const access = await getUserAccessLevel(testUser.id, nonExistentPageId)
       expect(access).toBeNull()
     })
