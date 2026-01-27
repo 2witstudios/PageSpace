@@ -8,8 +8,9 @@ import { z } from 'zod';
 import type { MCPTool } from '@/types/mcp';
 
 /** Sanitize a value for safe logging - strips control characters and newlines */
+const CONTROL_CHARS_REGEX = new RegExp('[\\x00-\\x1F\\x7F-\\x9F\\n\\r]', 'g');
 function sanitizeLogValue(value: string): string {
-  return String(value).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 200);
+  return String(value).replace(CONTROL_CHARS_REGEX, '').slice(0, 200);
 }
 
 /**

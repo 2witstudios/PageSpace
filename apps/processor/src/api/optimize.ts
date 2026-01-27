@@ -137,7 +137,11 @@ router.post('/batch', async (req, res) => {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
-    const resultsMap = new Map<string, any>();
+    type BatchPresetResult =
+      | { cached: true; url: string; status: 'completed' }
+      | { cached: false; jobId: string; status: 'queued' };
+
+    const resultsMap = new Map<string, BatchPresetResult>();
     const jobIds: string[] = [];
 
     for (const preset of presets) {

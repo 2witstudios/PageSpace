@@ -25,7 +25,7 @@ Following Eric Elliott's zero-trust philosophy: **Never trust user input. Assume
 | TOCTOU Race (CWE-367) | 75 | Atomic `readFile` with try/catch replacing stat-then-read pattern |
 | Input Validation (CWE-807) | 53-58, 60-63 | Format regex validation, length limits, `encodeURIComponent` |
 | Regex Injection (CWE-730) | 30 | Pattern length limit (500 chars), try/catch for invalid RegExp |
-| Incomplete Sanitization (CWE-116) | 28 | Full regex metachar escaping (`[.*+?^${}()|[\\]\\\/]`) |
+| Incomplete Sanitization (CWE-116) | 28 | Full regex metachar escaping (`[.*+?^${}()\|[\\]\\\/]`) |
 | Insecure Temp Files (CWE-377) | 39 | `fs.mkdtemp()` replacing predictable temp directory names |
 | Session Data Validation (CWE-073) | 35 | Type validation, string checks, 8KB payload size limit |
 

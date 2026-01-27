@@ -174,13 +174,13 @@ function isStaticAsset(pathname) {
 
 // Listen for messages from the app with origin verification
 self.addEventListener('message', (event) => {
-  // Verify the message comes from a trusted origin
-  if (event.origin && event.origin !== self.location.origin) {
+  // Fail-closed: reject messages without a valid same-origin source
+  if (!event.origin || event.origin !== self.location.origin) {
     return;
   }
 
-  // Validate message source is a WindowClient (browser tab)
-  if (event.source && !('visibilityState' in event.source)) {
+  // Fail-closed: reject messages not from a WindowClient (browser tab)
+  if (!event.source || !('visibilityState' in event.source)) {
     return;
   }
 
