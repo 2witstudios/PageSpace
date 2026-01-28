@@ -145,7 +145,11 @@ export async function POST(req: Request) {
           familyName = parsed.data.name.lastName;
         }
       } catch {
-        loggers.auth.warn('Failed to parse Apple user JSON', { userJson });
+        // SECURITY: Never log raw userJson - it contains PII (name, email)
+        loggers.auth.warn('Failed to parse Apple user JSON', {
+          userJsonLength: userJson?.length,
+          parseError: true,
+        });
       }
     }
 

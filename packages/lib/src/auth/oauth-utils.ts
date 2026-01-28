@@ -11,6 +11,7 @@ import { users, drives } from '@pagespace/db';
 import { db, eq, or, count } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { slugify } from '@pagespace/lib/server';
+import { loggers } from '../logging/logger-config';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 
 /**
@@ -61,7 +62,8 @@ export async function verifyGoogleIdToken(idToken: string): Promise<OAuthVerific
       userInfo,
     };
   } catch (error) {
-    console.error('[OAuth] Google ID token verification failed:', error);
+    // SECURITY: Never log token values - only log error type
+    loggers.auth.error('Google ID token verification failed', error as Error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Token verification failed',
@@ -124,7 +126,8 @@ export async function verifyAppleIdToken(idToken: string): Promise<OAuthVerifica
       userInfo,
     };
   } catch (error) {
-    console.error('[OAuth] Apple ID token verification failed:', error);
+    // SECURITY: Never log token values - only log error type
+    loggers.auth.error('Apple ID token verification failed', error as Error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Token verification failed',
