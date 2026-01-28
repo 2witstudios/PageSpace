@@ -169,7 +169,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
     return (
       <>
-        <ConversationContent className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-34">
+        <ConversationContent className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34">
           {isLoadingOlder && LoadingOlderIndicator}
 
           {isLoading ? (

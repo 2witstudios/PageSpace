@@ -714,6 +714,20 @@
   height: 100%;
 }
 
+/* Prevent Radix Dialog scroll-lock from overriding fixed body positioning.
+   react-remove-scroll-bar sets position: relative !important on body[data-scroll-locked],
+   which breaks the Capacitor iOS fixed-body layout by causing the body to flow inside
+   the html element's safe-area padding-top. */
+.capacitor-ios body[data-scroll-locked] {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  overflow: hidden !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+}
+
 /* When keyboard is open, keyboard covers home indicator - no safe-area needed */
 .capacitor-ios.keyboard-open {
   padding-bottom: 0px;

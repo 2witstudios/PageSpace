@@ -17,6 +17,7 @@ import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
+import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useRouter, usePathname } from "next/navigation";
 import { isCapacitorApp } from "@/lib/capacitor-bridge";
 import { useCallback, useEffect, useState } from "react";
@@ -91,6 +92,7 @@ function Layout({ children }: LayoutProps) {
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
   const handleLeftPanelToggle = useCallback(() => {
+    dismissKeyboard();
     if (isSheetBreakpoint) {
       setLeftSheetOpen((open) => {
         const nextOpen = !open;
@@ -127,6 +129,7 @@ function Layout({ children }: LayoutProps) {
   ]);
 
   const handleRightPanelToggle = useCallback(() => {
+    dismissKeyboard();
     if (isSheetBreakpoint) {
       setRightSheetOpen((open) => {
         const nextOpen = !open;
