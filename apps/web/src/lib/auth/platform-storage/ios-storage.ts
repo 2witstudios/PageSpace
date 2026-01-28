@@ -1,4 +1,5 @@
 import type { PlatformStorage, StoredSession } from './types';
+import { createId } from '@paralleldrive/cuid2';
 
 export class IOSStorage implements PlatformStorage {
   readonly platform = 'ios' as const;
@@ -38,7 +39,8 @@ export class IOSStorage implements PlatformStorage {
     const { Preferences } = await import('@capacitor/preferences');
     const { value } = await Preferences.get({ key: 'pagespace_device_id' });
     if (value) return value;
-    const id = crypto.randomUUID();
+    // Use CUID2 for consistency across codebase
+    const id = createId();
     await Preferences.set({ key: 'pagespace_device_id', value: id });
     return id;
   }

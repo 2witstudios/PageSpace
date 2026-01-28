@@ -1,6 +1,6 @@
 import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -9,59 +9,64 @@ import {
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
-import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
-const googleCallbackSchema = z.object({
-  code: z.string().min(1, 'Authorization code is required'),
-  state: z.string().nullish().optional(),
-});
+// Apple sends name info as JSON in the 'user' field (only on first authorization)
+const appleUserSchema = z.object({
+  name: z.object({
+    firstName: z.string().optional(),
+    lastName: z.string().optional(),
+  }).optional(),
+  email: z.string().optional(),
+}).optional();
 
-const client = new OAuth2Client(
-  process.env.GOOGLE_OAUTH_CLIENT_ID,
-  process.env.GOOGLE_OAUTH_CLIENT_SECRET,
-  process.env.GOOGLE_OAUTH_REDIRECT_URI
-);
-
-export async function GET(req: Request) {
+/**
+ * Apple OAuth callback endpoint.
+ * Apple uses response_mode=form_post, so this receives a POST request.
+ */
+export async function POST(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const code = searchParams.get('code');
-    const state = searchParams.get('state');
-    const error = searchParams.get('error');
+    // Parse form data (Apple uses application/x-www-form-urlencoded)
+    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token
+    // We use id_token directly for verification (no token exchange needed)
+    const formData = await req.formData();
+    const idToken = formData.get('id_token') as string | null;
+    const state = formData.get('state') as string | null;
+    const error = formData.get('error') as string | null;
+    const userJson = formData.get('user') as string | null;
 
+    // Handle errors from Apple
     if (error) {
-      loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
+      loggers.auth.warn('Apple OAuth error', { error: String(error).slice(0, 100) });
       let errorParam = 'oauth_error';
-      if (error === 'access_denied') {
+      if (error === 'user_cancelled_authorize') {
         errorParam = 'access_denied';
       }
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
     }
 
-    const validation = googleCallbackSchema.safeParse({ code, state });
-    if (!validation.success) {
-      loggers.auth.warn('Invalid OAuth callback parameters', validation.error);
+    // Validate required fields
+    if (!idToken) {
+      loggers.auth.warn('Apple OAuth callback missing id_token');
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
       return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
     }
 
-    const { code: authCode, state: stateParam } = validation.data;
-
+    // Parse state parameter
     let returnUrl = '/dashboard';
     let platform = 'web';
     let deviceId: string | undefined;
     let deviceName: string | undefined;
 
-    if (stateParam) {
+    if (state) {
       try {
         const stateWithSignature = JSON.parse(
-          Buffer.from(stateParam, 'base64').toString('utf-8')
+          Buffer.from(state, 'base64').toString('utf-8')
         );
 
         if (stateWithSignature.data && stateWithSignature.sig) {
@@ -72,7 +77,7 @@ export async function GET(req: Request) {
             .digest('hex');
 
           if (sig !== expectedSignature) {
-            loggers.auth.warn('OAuth state signature mismatch', { stateParam });
+            loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
             const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
             return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
           }
@@ -82,23 +87,35 @@ export async function GET(req: Request) {
           deviceId = data.deviceId;
           deviceName = data.deviceName;
         } else {
-          returnUrl = stateWithSignature.returnUrl || '/dashboard';
+          // SECURITY: State without signature is invalid - reject and use safe defaults
+          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
+            hasData: !!stateWithSignature.data,
+            hasSig: !!stateWithSignature.sig,
+          });
+          returnUrl = '/dashboard';
+          platform = 'web';
         }
       } catch {
-        returnUrl = stateParam;
+        // SECURITY: Malformed state is invalid - reject and use safe defaults
+        loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
+          stateLength: state?.length,
+        });
+        returnUrl = '/dashboard';
+        platform = 'web';
       }
     }
 
     if (!isSafeReturnUrl(returnUrl)) {
-      loggers.auth.warn('Unsafe returnUrl in OAuth callback - falling back to dashboard', {
+      loggers.auth.warn('Unsafe returnUrl in Apple OAuth callback - falling back to dashboard', {
         returnUrl,
-        hasState: !!stateParam,
+        hasState: !!state,
       });
       returnUrl = '/dashboard';
     }
 
     const clientIP = getClientIP(req);
 
+    // Rate limiting
     const ipRateLimit = await checkDistributedRateLimit(
       `oauth:callback:ip:${clientIP}`,
       DISTRIBUTED_RATE_LIMITS.LOGIN
@@ -108,71 +125,86 @@ export async function GET(req: Request) {
       return NextResponse.redirect(new URL('/auth/signin?error=rate_limit', baseUrl));
     }
 
-    const { tokens } = await client.getToken(authCode);
+    // Verify the ID token with Apple
+    const verificationResult = await verifyAppleIdToken(idToken);
 
-    if (!tokens.id_token) {
-      loggers.auth.error('No ID token received from Google');
+    if (!verificationResult.success || !verificationResult.userInfo) {
+      loggers.auth.error('Apple ID token verification failed', {
+        error: verificationResult.error,
+      });
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
-    const ticket = await client.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: process.env.GOOGLE_OAUTH_CLIENT_ID,
-    });
-
-    const payload = ticket.getPayload();
-    if (!payload) {
-      loggers.auth.error('Invalid Google ID token payload');
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
-    }
-
-    const { sub: googleId, email, name, picture, email_verified } = payload;
+    const { providerId: appleId, email, emailVerified } = verificationResult.userInfo;
 
     if (!email) {
-      loggers.auth.error('Missing required email from Google');
+      loggers.auth.error('Missing required email from Apple');
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
       return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
     }
 
+    // Parse user info (Apple only sends this on first authorization)
+    let givenName: string | undefined;
+    let familyName: string | undefined;
+    if (userJson) {
+      try {
+        const userData = JSON.parse(userJson);
+        const parsed = appleUserSchema.safeParse(userData);
+        if (parsed.success && parsed.data?.name) {
+          givenName = parsed.data.name.firstName;
+          familyName = parsed.data.name.lastName;
+        }
+      } catch {
+        // SECURITY: Never log raw userJson - it contains PII (name, email)
+        loggers.auth.warn('Failed to parse Apple user JSON', {
+          userJsonLength: userJson?.length,
+          parseError: true,
+        });
+      }
+    }
+
+    // Build user name from Apple-provided info
+    const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
     const userName = name || email.split('@')[0] || 'User';
 
+    // Find or create user
     let user = await db.query.users.findFirst({
       where: or(
-        eq(users.googleId, googleId),
+        eq(users.appleId, appleId),
         eq(users.email, email)
       ),
     });
 
     if (user) {
-      if (!user.googleId || !user.name || user.image !== picture) {
-        loggers.auth.info('Updating existing user via Google OAuth', { email });
+      // Update existing user if needed
+      if (!user.appleId || !user.name) {
+        loggers.auth.info('Updating existing user via Apple OAuth', { email });
         await db.update(users)
           .set({
-            googleId: googleId || user.googleId,
-            provider: user.password ? 'both' : 'google',
+            appleId: appleId || user.appleId,
+            provider: user.password ? 'both' : 'apple',
             name: user.name || userName,
-            image: picture || user.image,
-            emailVerified: email_verified ? new Date() : user.emailVerified,
+            emailVerified: emailVerified ? new Date() : user.emailVerified,
           })
           .where(eq(users.id, user.id));
 
         user = await db.query.users.findFirst({
           where: eq(users.id, user.id),
         }) || user;
-        loggers.auth.info('User updated via Google OAuth', { userId: user.id, name: user.name });
+        loggers.auth.info('User updated via Apple OAuth', { userId: user.id, name: user.name });
       }
     } else {
-      loggers.auth.info('Creating new user via Google OAuth', { email });
+      // Create new user
+      loggers.auth.info('Creating new user via Apple OAuth', { email });
       const [newUser] = await db.insert(users).values({
         id: createId(),
         name: userName,
         email,
-        emailVerified: email_verified ? new Date() : null,
-        image: picture || null,
-        googleId,
-        provider: 'google',
+        emailVerified: emailVerified ? new Date() : null,
+        image: null, // Apple doesn't provide profile pictures
+        appleId,
+        provider: 'apple',
         tokenVersion: 0,
         role: 'user',
         storageUsedBytes: 0,
@@ -180,26 +212,27 @@ export async function GET(req: Request) {
       }).returning();
 
       user = newUser;
-      loggers.auth.info('New user created via Google OAuth', { userId: user.id, name: user.name });
+      loggers.auth.info('New user created via Apple OAuth', { userId: user.id, name: user.name });
     }
 
+    // Provision getting started drive for new users
     let provisionedDrive: { driveId: string } | null = null;
     try {
       provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
       if (provisionedDrive) {
         returnUrl = `/dashboard/${provisionedDrive.driveId}`;
       }
-    } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+    } catch (provisionError) {
+      loggers.auth.error('Failed to provision Getting Started drive', provisionError as Error, {
         userId: user.id,
-        provider: 'google',
+        provider: 'apple',
       });
     }
 
     // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
     const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
     if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on Google OAuth login', { userId: user.id, count: revokedCount });
+      loggers.auth.info('Revoked existing sessions on Apple OAuth login', { userId: user.id, count: revokedCount });
     }
 
     // Create new session
@@ -223,23 +256,21 @@ export async function GET(req: Request) {
 
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
-    } catch (error) {
-      loggers.auth.warn('Rate limit reset failed after successful OAuth callback', {
-        error: error instanceof Error ? error.message : String(error),
+    } catch (resetError) {
+      loggers.auth.warn('Rate limit reset failed after successful Apple OAuth callback', {
+        error: resetError instanceof Error ? resetError.message : String(resetError),
       });
     }
 
-    logAuthEvent('login', user.id, email, clientIP, 'Google OAuth');
+    logAuthEvent('login', user.id, email, clientIP, 'Apple OAuth');
     trackAuthEvent(user.id, 'login', {
       email,
       ip: clientIP,
-      provider: 'google',
+      provider: 'apple',
       userAgent: req.headers.get('user-agent')
     });
 
-    // DESKTOP PLATFORM: Redirect with tokens encoded in URL
-    // OAuth callbacks happen via browser redirect from Google, so we can't return JSON
-    // The desktop app (Electron) intercepts the redirect URL and extracts the tokens
+    // DESKTOP PLATFORM: Redirect with tokens encoded via exchange code
     if (platform === 'desktop') {
       if (!deviceId) {
         loggers.auth.error('Desktop OAuth callback missing deviceId', {
@@ -250,7 +281,6 @@ export async function GET(req: Request) {
         return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
       }
 
-      // Generate device token (now opaque ps_dev_* token)
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
         providedDeviceToken: undefined,
         userId: user.id,
@@ -262,40 +292,25 @@ export async function GET(req: Request) {
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
 
-      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
-
-      trackAuthEvent(user.id, 'login', {
-        email,
-        ip: clientIP,
-        provider: 'google-oauth',
-        platform: 'desktop',
-        userAgent: req.headers.get('user-agent'),
-      });
-
-      // SECURE TOKEN HANDOFF: Generate one-time exchange code
-      // Tokens are stored server-side in Redis, only opaque code appears in URL
-      // This prevents token leakage in nginx logs, browser history, referer headers
       const exchangeCode = await createExchangeCode({
         sessionToken,
         csrfToken,
         deviceToken: deviceTokenValue,
-        provider: 'google',
+        provider: 'apple',
         userId: user.id,
         createdAt: Date.now(),
       });
 
-      // Build deep link URL with only the opaque exchange code
-      // Desktop app intercepts this and exchanges code for tokens via POST
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
-      deepLinkUrl.searchParams.set('provider', 'google');
+      deepLinkUrl.searchParams.set('provider', 'apple');
       if (provisionedDrive) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
-      loggers.auth.info('Desktop OAuth deep link redirect', {
+      loggers.auth.info('Desktop Apple OAuth deep link redirect', {
         userId: user.id,
-        provider: 'google',
+        provider: 'apple',
         hasNewUserFlag: !!provisionedDrive,
       });
 
@@ -304,10 +319,8 @@ export async function GET(req: Request) {
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
     if (platform === 'ios') {
-      // Generate deviceId if not provided
       const iosDeviceId = deviceId || createId();
 
-      // Generate device token
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
         providedDeviceToken: undefined,
         userId: user.id,
@@ -319,45 +332,32 @@ export async function GET(req: Request) {
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
 
-      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
-
-      trackAuthEvent(user.id, 'login', {
-        email,
-        ip: clientIP,
-        provider: 'google-oauth',
-        platform: 'ios',
-        userAgent: req.headers.get('user-agent'),
-      });
-
-      // SECURE TOKEN HANDOFF: Generate one-time exchange code
-      // Tokens are stored server-side in Redis, only opaque code appears in URL
       const exchangeCode = await createExchangeCode({
         sessionToken,
         csrfToken,
         deviceToken: deviceTokenValue,
-        provider: 'google',
+        provider: 'apple',
         userId: user.id,
         createdAt: Date.now(),
       });
 
-      // Build deep link URL with only the opaque exchange code
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
-      deepLinkUrl.searchParams.set('provider', 'google');
+      deepLinkUrl.searchParams.set('provider', 'apple');
       if (provisionedDrive) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
-      loggers.auth.info('iOS OAuth deep link redirect', {
+      loggers.auth.info('iOS Apple OAuth deep link redirect', {
         userId: user.id,
-        provider: 'google',
+        provider: 'apple',
         hasNewUserFlag: !!provisionedDrive,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());
     }
 
-    // WEB PLATFORM: Original redirect flow (UNCHANGED)
+    // WEB PLATFORM: Redirect with session cookie
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     const redirectUrl = new URL(returnUrl, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
@@ -369,7 +369,7 @@ export async function GET(req: Request) {
     return NextResponse.redirect(redirectUrl, { headers });
 
   } catch (error) {
-    loggers.auth.error('Google OAuth callback error', error as Error);
+    loggers.auth.error('Apple OAuth callback error', error as Error);
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
     return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
   }

@@ -12,6 +12,7 @@ import { StripeProvider } from '@/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
+import { BillingGuard } from '@/components/billing/BillingGuard';
 import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
@@ -265,6 +266,7 @@ export default function PlanPage() {
     : null;
 
   return (
+    <BillingGuard>
     <div className="container mx-auto p-6 space-y-8">
       {/* Header */}
       <div>
@@ -461,5 +463,6 @@ export default function PlanPage() {
         />
       )}
     </div>
+    </BillingGuard>
   );
 }

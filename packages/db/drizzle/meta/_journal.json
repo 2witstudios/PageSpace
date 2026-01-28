@@ -344,6 +344,13 @@
       "when": 1769523485763,
       "tag": "0048_friendly_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1769632161841,
+      "tag": "0049_lying_shriek",
+      "breakpoints": true
     }
   ]
 }

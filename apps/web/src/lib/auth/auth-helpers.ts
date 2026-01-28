@@ -5,6 +5,29 @@ import {
 } from './index';
 
 /**
+ * Validates that a return URL is a safe same-origin path.
+ * Prevents open redirect attacks by ensuring the URL:
+ * - Is a relative path starting with /
+ * - Does not contain protocol-relative URLs (//evil.com)
+ * - Does not contain backslash tricks (\/evil.com)
+ * - Does not contain encoded sequences that could bypass validation
+ */
+export function isSafeReturnUrl(url: string | undefined): boolean {
+  if (!url) return true; // undefined/empty falls back to /dashboard
+  if (!url.startsWith('/')) return false;
+  if (url.startsWith('//') || url.startsWith('/\\')) return false;
+  if (/[a-z]+:/i.test(url)) return false;
+  try {
+    const decoded = decodeURIComponent(url);
+    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
+    if (/[a-z]+:/i.test(decoded)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Extract client IP address from request headers.
  * Checks x-forwarded-for (proxy), x-real-ip (nginx), falls back to 'unknown'.
  *

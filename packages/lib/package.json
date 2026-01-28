@@ -346,11 +346,11 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
-    "drizzle-orm": "^0.32.2",
-    "zod": "^4.0.16",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
+    "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
+    "drizzle-orm": "^0.32.2",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "ioredis": "^5.8.0",
@@ -360,7 +360,8 @@
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
     "server-only": "^0.0.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^4.0.16"
   },
   "devDependencies": {
     "@react-email/preview-server": "5.1.1",

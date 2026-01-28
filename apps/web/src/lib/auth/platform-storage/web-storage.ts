@@ -1,4 +1,5 @@
 import type { PlatformStorage, StoredSession } from './types';
+import { createId } from '@paralleldrive/cuid2';
 
 export class WebStorage implements PlatformStorage {
   readonly platform = 'web' as const;
@@ -30,7 +31,8 @@ export class WebStorage implements PlatformStorage {
     // Check both keys for backwards compatibility
     let id = localStorage.getItem('browser_device_id') || localStorage.getItem('deviceId');
     if (!id) {
-      id = crypto.randomUUID();
+      // Use CUID2 for consistency across codebase
+      id = createId();
       localStorage.setItem('browser_device_id', id);
     }
     return id;

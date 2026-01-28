@@ -20,6 +20,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard } from 'lucide-react';
 import { useTheme } from "next-themes";
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -36,6 +37,7 @@ export default function UserDropdown() {
   const { isAuthenticated, user, isLoading, actions } = useAuth();
   const router = useRouter();
   const { setTheme } = useTheme();
+  const { showBilling } = useBillingVisibility();
 
   // Check if any editing or streaming is active (state-based)
   const isAnyActive = useEditingStore(state => state.isAnyActive());
@@ -125,12 +127,14 @@ export default function UserDropdown() {
               )}
             </div>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
-            <CreditCard className="mr-2 h-4 w-4" />
-            <span>
-              Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
-            </span>
-          </DropdownMenuItem>
+          {showBilling && (
+            <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
+              <CreditCard className="mr-2 h-4 w-4" />
+              <span>
+                Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
+              </span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={() => router.push('/settings/account')}>
             <LayoutDashboard className="mr-2 h-4 w-4" />
             <span>Account</span>

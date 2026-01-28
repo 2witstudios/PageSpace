@@ -145,6 +145,7 @@ const mockUser: User = {
   provider: 'email',
   image: null,
   googleId: null,
+  appleId: null,
   emailVerified: null,
   currentAiProvider: 'pagespace',
   currentAiModel: 'glm-4.5-air',
