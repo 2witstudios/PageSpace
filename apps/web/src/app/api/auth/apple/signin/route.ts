@@ -7,30 +7,34 @@ import {
 import crypto from 'crypto';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 
-const googleSigninSchema = z.object({
+const appleSigninSchema = z.object({
   returnUrl: z.string().optional(),
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
-  deviceId: z.string().optional(), // For device tracking on all platforms
-  deviceName: z.string().optional(), // Human-readable device name
+  deviceId: z.string().optional(),
+  deviceName: z.string().optional(),
 });
 
 export async function POST(req: Request) {
   try {
     // Validate required OAuth environment variables
-    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_REDIRECT_URI || !process.env.OAUTH_STATE_SECRET) {
-      loggers.auth.error('Missing required OAuth environment variables', {
-        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
-        hasRedirectUri: !!process.env.GOOGLE_OAUTH_REDIRECT_URI,
+    if (
+      !process.env.APPLE_SERVICE_ID ||
+      !process.env.APPLE_REDIRECT_URI ||
+      !process.env.OAUTH_STATE_SECRET
+    ) {
+      loggers.auth.error('Missing required Apple OAuth environment variables', {
+        hasServiceId: !!process.env.APPLE_SERVICE_ID,
+        hasRedirectUri: !!process.env.APPLE_REDIRECT_URI,
         hasStateSecret: !!process.env.OAUTH_STATE_SECRET,
       });
       return Response.json(
-        { error: 'OAuth not configured' },
+        { error: 'Apple OAuth not configured' },
         { status: 500 }
       );
     }
 
     const body = await req.json();
-    const validation = googleSigninSchema.safeParse(body);
+    const validation = appleSigninSchema.safeParse(body);
 
     if (!validation.success) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
@@ -39,9 +43,8 @@ export async function POST(req: Request) {
     const { returnUrl, platform, deviceId, deviceName } = validation.data;
 
     // SECURITY: Validate returnUrl to prevent open redirect attacks
-    // An attacker could set returnUrl to an external domain and capture the deviceToken
     if (!isSafeReturnUrl(returnUrl)) {
-      loggers.auth.warn('Rejected unsafe returnUrl in OAuth signin', {
+      loggers.auth.warn('Rejected unsafe returnUrl in Apple OAuth signin', {
         returnUrl,
         clientIP: getClientIP(req),
       });
@@ -97,23 +100,23 @@ export async function POST(req: Request) {
 
     const stateParam = Buffer.from(stateWithSignature).toString('base64');
 
-    // Generate OAuth URL
+    // Generate Apple OAuth URL
+    // Note: Apple uses response_mode=form_post which POSTs the authorization response
     const params = new URLSearchParams({
-      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
-      redirect_uri: process.env.GOOGLE_OAUTH_REDIRECT_URI!,
-      response_type: 'code',
-      scope: 'openid email profile',
-      access_type: 'offline',
-      prompt: 'consent',
+      client_id: process.env.APPLE_SERVICE_ID!,
+      redirect_uri: process.env.APPLE_REDIRECT_URI!,
+      response_type: 'code id_token',
+      scope: 'name email',
+      response_mode: 'form_post',
       state: stateParam,
     });
 
-    const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    const oauthUrl = `https://appleid.apple.com/auth/authorize?${params.toString()}`;
 
     return Response.json({ url: oauthUrl });
 
   } catch (error) {
-    loggers.auth.error('Google OAuth signin error', error as Error);
+    loggers.auth.error('Apple OAuth signin error', error as Error);
     return Response.json({ error: 'An unexpected error occurred.' }, { status: 500 });
   }
 }
@@ -121,10 +124,10 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     // Validate required OAuth environment variables
-    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_REDIRECT_URI) {
-      loggers.auth.error('Missing required OAuth environment variables for GET', {
-        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
-        hasRedirectUri: !!process.env.GOOGLE_OAUTH_REDIRECT_URI,
+    if (!process.env.APPLE_SERVICE_ID || !process.env.APPLE_REDIRECT_URI) {
+      loggers.auth.error('Missing required Apple OAuth environment variables for GET', {
+        hasServiceId: !!process.env.APPLE_SERVICE_ID,
+        hasRedirectUri: !!process.env.APPLE_REDIRECT_URI,
       });
       const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
       return Response.redirect(new URL('/auth/signin?error=oauth_config', baseUrl).toString());
@@ -144,20 +147,19 @@ export async function GET(req: Request) {
 
     // Generate OAuth URL for direct link access
     const params = new URLSearchParams({
-      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
-      redirect_uri: process.env.GOOGLE_OAUTH_REDIRECT_URI!,
-      response_type: 'code',
-      scope: 'openid email profile',
-      access_type: 'offline',
-      prompt: 'consent',
+      client_id: process.env.APPLE_SERVICE_ID!,
+      redirect_uri: process.env.APPLE_REDIRECT_URI!,
+      response_type: 'code id_token',
+      scope: 'name email',
+      response_mode: 'form_post',
     });
 
-    const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    const oauthUrl = `https://appleid.apple.com/auth/authorize?${params.toString()}`;
 
     return Response.redirect(oauthUrl);
 
   } catch (error) {
-    loggers.auth.error('Google OAuth signin GET error', error as Error);
+    loggers.auth.error('Apple OAuth signin GET error', error as Error);
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
     return Response.redirect(new URL('/auth/signin?error=oauth_error', baseUrl).toString());
   }

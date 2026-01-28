@@ -6,6 +6,7 @@
  */
 
 import { OAuth2Client } from 'google-auth-library';
+import appleSignIn from 'apple-signin-auth';
 import { users, drives } from '@pagespace/db';
 import { db, eq, or, count } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -70,14 +71,65 @@ export async function verifyGoogleIdToken(idToken: string): Promise<OAuthVerific
 
 /**
  * Verify Apple ID token and extract user information
- * TODO: Implement Apple Sign-In verification when needed
+ * Uses Apple's public keys to verify the JWT signature
  */
 export async function verifyAppleIdToken(idToken: string): Promise<OAuthVerificationResult> {
-  // Placeholder for future Apple Sign-In implementation
-  return {
-    success: false,
-    error: 'Apple Sign-In not yet implemented',
-  };
+  try {
+    // Build array of valid client IDs (iOS app + web service ID)
+    const validClientIds: string[] = [];
+    if (process.env.APPLE_CLIENT_ID) {
+      validClientIds.push(process.env.APPLE_CLIENT_ID);
+    }
+    if (process.env.APPLE_SERVICE_ID) {
+      validClientIds.push(process.env.APPLE_SERVICE_ID);
+    }
+
+    if (validClientIds.length === 0) {
+      return {
+        success: false,
+        error: 'Apple Sign-In not configured',
+      };
+    }
+
+    // Verify the ID token with Apple's public keys
+    // The library fetches Apple's public keys and validates the JWT
+    const payload = await appleSignIn.verifyIdToken(idToken, {
+      audience: validClientIds, // Accept tokens from both iOS app and web
+      ignoreExpiration: false,
+    });
+
+    if (!payload || !payload.email) {
+      return {
+        success: false,
+        error: 'Invalid ID token: missing required claims',
+      };
+    }
+
+    // Apple provides 'sub' as the unique user identifier
+    // Note: Apple may provide name only on first sign-in, it's not in the ID token
+    // The name comes from the authorization response, not the token itself
+    const userInfo: OAuthUserInfo = {
+      providerId: payload.sub,
+      email: payload.email,
+      emailVerified: payload.email_verified === 'true' || payload.email_verified === true,
+      // Apple doesn't include name in the ID token - it comes from the auth response
+      // We'll handle this in the native endpoint by accepting name from the request
+      name: undefined,
+      picture: undefined, // Apple doesn't provide profile pictures
+      provider: OAuthProvider.APPLE,
+    };
+
+    return {
+      success: true,
+      userInfo,
+    };
+  } catch (error) {
+    console.error('[OAuth] Apple ID token verification failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Token verification failed',
+    };
+  }
 }
 
 /**
@@ -121,6 +173,8 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     where: or(
       // For Google: check googleId
       provider === OAuthProvider.GOOGLE ? eq(users.googleId, providerId) : undefined,
+      // For Apple: check appleId
+      provider === OAuthProvider.APPLE ? eq(users.appleId, providerId) : undefined,
       // For all providers: check email
       eq(users.email, email)
     ),
@@ -135,6 +189,9 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     // Update provider-specific ID
     if (provider === OAuthProvider.GOOGLE && !user.googleId) {
       updateData.googleId = providerId;
+    }
+    if (provider === OAuthProvider.APPLE && !user.appleId) {
+      updateData.appleId = providerId;
     }
 
     // Update provider field
@@ -171,7 +228,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
       email,
       emailVerified: emailVerified ? new Date() : null,
       image: picture || null,
-      provider: providerDbValue as 'email' | 'google' | 'both',
+      provider: providerDbValue as 'email' | 'google' | 'apple' | 'both',
       tokenVersion: 0,
       role: 'user' as const,
       storageUsedBytes: 0,
@@ -181,6 +238,8 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
     // Add provider-specific ID based on provider
     const newUserData = provider === OAuthProvider.GOOGLE
       ? { ...baseUserData, googleId: providerId }
+      : provider === OAuthProvider.APPLE
+      ? { ...baseUserData, appleId: providerId }
       : baseUserData;
 
     const [newUser] = await db.insert(users)

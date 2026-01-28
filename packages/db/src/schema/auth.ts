@@ -4,7 +4,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
-export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'both']);
+export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple', 'both']);
 export const platformType = pgEnum('PlatformType', ['web', 'desktop', 'ios', 'android']);
 
 export const users = pgTable('users', {
@@ -15,6 +15,7 @@ export const users = pgTable('users', {
   image: text('image'),
   password: text('password'),
   googleId: text('googleId').unique(),
+  appleId: text('appleId').unique(),
   provider: authProvider('provider').default('email').notNull(),
   tokenVersion: integer('tokenVersion').default(0).notNull(),
   role: userRole('role').default('user').notNull(),
