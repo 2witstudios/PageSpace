@@ -7,6 +7,7 @@
  */
 
 import { isCapacitorApp, getPlatform } from './capacitor-bridge';
+import { createId } from '@paralleldrive/cuid2';
 
 export interface AppleAuthResult {
   success: boolean;
@@ -26,13 +27,6 @@ type AppleNativeAuthResponse = {
   deviceToken?: string;
   isNewUser?: boolean;
   user?: AppleAuthResult['user'];
-};
-
-type StoredSession = {
-  sessionToken: string;
-  csrfToken: string | null;
-  deviceId: string;
-  deviceToken: string | null;
 };
 
 const APPLE_CLIENT_ID = 'ai.pagespace.ios';
@@ -77,9 +71,9 @@ export async function signInWithApple(): Promise<AppleAuthResult> {
       throw new Error('No ID token received from Apple');
     }
 
-    // Get or create device ID
+    // Get or create device ID using CUID2 for consistency across codebase
     const { value: existingDeviceId } = await Preferences.get({ key: 'pagespace_device_id' });
-    const deviceId = existingDeviceId || crypto.randomUUID();
+    const deviceId = existingDeviceId || createId();
     if (!existingDeviceId) {
       await Preferences.set({ key: 'pagespace_device_id', value: deviceId });
     }

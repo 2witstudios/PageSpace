@@ -77,7 +77,7 @@ export async function POST(req: Request) {
             .digest('hex');
 
           if (sig !== expectedSignature) {
-            loggers.auth.warn('Apple OAuth state signature mismatch', { state });
+            loggers.auth.warn('Apple OAuth state signature mismatch', { state: state.slice(0, 50) });
             const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
             return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
           }
@@ -87,10 +87,21 @@ export async function POST(req: Request) {
           deviceId = data.deviceId;
           deviceName = data.deviceName;
         } else {
-          returnUrl = stateWithSignature.returnUrl || '/dashboard';
+          // SECURITY: State without signature is invalid - reject and use safe defaults
+          loggers.auth.warn('Apple OAuth state missing signature - using safe defaults', {
+            hasData: !!stateWithSignature.data,
+            hasSig: !!stateWithSignature.sig,
+          });
+          returnUrl = '/dashboard';
+          platform = 'web';
         }
       } catch {
-        returnUrl = state;
+        // SECURITY: Malformed state is invalid - reject and use safe defaults
+        loggers.auth.warn('Apple OAuth state parse failed - using safe defaults', {
+          stateLength: state?.length,
+        });
+        returnUrl = '/dashboard';
+        platform = 'web';
       }
     }
 
@@ -281,16 +292,6 @@ export async function POST(req: Request) {
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
 
-      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
-
-      trackAuthEvent(user.id, 'login', {
-        email,
-        ip: clientIP,
-        provider: 'apple-oauth',
-        platform: 'desktop',
-        userAgent: req.headers.get('user-agent'),
-      });
-
       const exchangeCode = await createExchangeCode({
         sessionToken,
         csrfToken,
@@ -329,16 +330,6 @@ export async function POST(req: Request) {
         deviceName: deviceName || req.headers.get('user-agent') || 'iOS App',
         userAgent: req.headers.get('user-agent') || undefined,
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
-      });
-
-      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
-
-      trackAuthEvent(user.id, 'login', {
-        email,
-        ip: clientIP,
-        provider: 'apple-oauth',
-        platform: 'ios',
-        userAgent: req.headers.get('user-agent'),
       });
 
       const exchangeCode = await createExchangeCode({

@@ -124,10 +124,15 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     // Validate required OAuth environment variables
-    if (!process.env.APPLE_SERVICE_ID || !process.env.APPLE_REDIRECT_URI) {
+    if (
+      !process.env.APPLE_SERVICE_ID ||
+      !process.env.APPLE_REDIRECT_URI ||
+      !process.env.OAUTH_STATE_SECRET
+    ) {
       loggers.auth.error('Missing required Apple OAuth environment variables for GET', {
         hasServiceId: !!process.env.APPLE_SERVICE_ID,
         hasRedirectUri: !!process.env.APPLE_REDIRECT_URI,
+        hasStateSecret: !!process.env.OAUTH_STATE_SECRET,
       });
       const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
       return Response.redirect(new URL('/auth/signin?error=oauth_config', baseUrl).toString());
@@ -145,6 +150,25 @@ export async function GET(req: Request) {
       return Response.redirect(new URL('/auth/signin?error=rate_limit', baseUrl).toString());
     }
 
+    // SECURITY: Create signed state parameter to prevent CSRF attacks
+    const stateData = {
+      returnUrl: '/dashboard',
+      platform: 'web',
+    };
+
+    const statePayload = JSON.stringify(stateData);
+    const signature = crypto
+      .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
+      .update(statePayload)
+      .digest('hex');
+
+    const stateWithSignature = JSON.stringify({
+      data: stateData,
+      sig: signature,
+    });
+
+    const stateParam = Buffer.from(stateWithSignature).toString('base64');
+
     // Generate OAuth URL for direct link access
     const params = new URLSearchParams({
       client_id: process.env.APPLE_SERVICE_ID!,
@@ -152,6 +176,7 @@ export async function GET(req: Request) {
       response_type: 'code id_token',
       scope: 'name email',
       response_mode: 'form_post',
+      state: stateParam,
     });
 
     const oauthUrl = `https://appleid.apple.com/auth/authorize?${params.toString()}`;

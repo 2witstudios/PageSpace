@@ -207,7 +207,7 @@ export async function POST(req: Request) {
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
 
-    return new Response(JSON.stringify({
+    return Response.json({
       sessionToken,
       csrfToken,
       deviceToken,
@@ -218,10 +218,9 @@ export async function POST(req: Request) {
         email: user.email,
         image: user.image,
       },
-    }), {
+    }, {
       status: 200,
       headers: {
-        'Content-Type': 'application/json',
         'Set-Cookie': headers.get('Set-Cookie') || '',
       },
     });

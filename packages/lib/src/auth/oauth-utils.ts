@@ -185,7 +185,14 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo) {
 
   if (user) {
     // Update existing user with OAuth provider ID if not set
-    const updateData: Record<string, any> = {
+    const updateData: Partial<{
+      emailVerified: Date | null;
+      googleId: string;
+      appleId: string;
+      provider: 'email' | 'google' | 'apple' | 'both';
+      name: string;
+      image: string;
+    }> = {
       emailVerified: emailVerified ? new Date() : user.emailVerified,
     };
 
