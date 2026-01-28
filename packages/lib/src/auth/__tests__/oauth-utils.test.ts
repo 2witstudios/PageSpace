@@ -45,9 +45,25 @@ vi.mock('../../logging/logger-config', () => ({
 
 // Import after mocking
 import appleSignIn from 'apple-signin-auth';
+import type { AppleIdTokenType } from 'apple-signin-auth';
 import { OAuth2Client } from 'google-auth-library';
 import { verifyAppleIdToken, verifyGoogleIdToken } from '../oauth-utils';
 import { loggers } from '../../logging/logger-config';
+
+// Helper to create valid Apple token mock with required fields
+const createAppleTokenMock = (overrides: Partial<AppleIdTokenType> = {}): AppleIdTokenType => ({
+  sub: 'apple-user-123',
+  email: 'user@example.com',
+  email_verified: true,
+  iss: 'https://appleid.apple.com',
+  aud: 'ai.pagespace.ios',
+  exp: String(Math.floor(Date.now() / 1000) + 3600),
+  iat: String(Math.floor(Date.now() / 1000)),
+  nonce: 'test-nonce',
+  nonce_supported: true,
+  is_private_email: false,
+  ...overrides,
+});
 
 describe('verifyAppleIdToken', () => {
   const originalEnv = { ...process.env };
@@ -76,11 +92,7 @@ describe('verifyAppleIdToken', () => {
     it('verifyAppleIdToken_onlyClientId_usesClientId', async () => {
       process.env.APPLE_CLIENT_ID = 'ai.pagespace.ios';
 
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-user-123',
-        email: 'user@example.com',
-        email_verified: true,
-      });
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(createAppleTokenMock());
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -95,11 +107,9 @@ describe('verifyAppleIdToken', () => {
       process.env.APPLE_CLIENT_ID = 'ai.pagespace.ios';
       process.env.APPLE_SERVICE_ID = 'ai.pagespace.web';
 
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-user-123',
-        email: 'user@example.com',
-        email_verified: 'true',
-      });
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(
+        createAppleTokenMock({ email_verified: 'true' })
+      );
 
       await verifyAppleIdToken('valid-token');
 
@@ -116,15 +126,7 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_validToken_returnsUserInfo', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-user-123',
-        email: 'user@example.com',
-        email_verified: true,
-        iss: 'https://appleid.apple.com',
-        aud: 'ai.pagespace.ios',
-        exp: Date.now() / 1000 + 3600,
-        iat: Date.now() / 1000,
-      });
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(createAppleTokenMock());
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -140,11 +142,9 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_emailVerifiedAsString_parsesCorrectly', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-user-123',
-        email: 'user@example.com',
-        email_verified: 'true', // Apple sometimes sends as string
-      });
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(
+        createAppleTokenMock({ email_verified: 'true' }) // Apple sometimes sends as string
+      );
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -153,11 +153,9 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_emailVerifiedFalse_parsesCorrectly', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-user-123',
-        email: 'user@example.com',
-        email_verified: false,
-      });
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(
+        createAppleTokenMock({ email_verified: false })
+      );
 
       const result = await verifyAppleIdToken('valid-token');
 
@@ -172,10 +170,10 @@ describe('verifyAppleIdToken', () => {
     });
 
     it('verifyAppleIdToken_missingEmail_returnsError', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-user-123',
-        // No email
-      });
+      // Use type assertion since email is required in type but we're testing missing case
+      const tokenWithoutEmail = { ...createAppleTokenMock() } as any;
+      delete tokenWithoutEmail.email;
+      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(tokenWithoutEmail);
 
       const result = await verifyAppleIdToken('token-without-email');
 
