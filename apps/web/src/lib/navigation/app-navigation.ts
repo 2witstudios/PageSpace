@@ -38,7 +38,7 @@ export async function openExternalUrl(url: string): Promise<void> {
   if (isCapacitorApp()) {
     try {
       // Dynamic import - @capacitor/browser is only available in the iOS/Android app
-      const browserModule = await import(/* webpackIgnore: true */ '@capacitor/browser') as { Browser: CapacitorBrowser };
+      const browserModule = await import('@capacitor/browser') as { Browser: CapacitorBrowser };
       await browserModule.Browser.open({ url });
     } catch {
       // Fallback if Browser plugin isn't available

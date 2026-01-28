@@ -259,6 +259,12 @@ importers:
       '@ai-sdk/xai':
         specifier: ^2.0.8
         version: 2.0.23(zod@4.1.11)
+      '@capacitor/browser':
+        specifier: ^7.0.3
+        version: 7.0.3(@capacitor/core@7.4.5)
+      '@capacitor/keyboard':
+        specifier: ^7.0.4
+        version: 7.0.4(@capacitor/core@7.4.5)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.1(react@19.2.1))(react@19.2.1)

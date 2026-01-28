@@ -60,6 +60,7 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --keyboard-height: 0px;
   --app-height: 100dvh;
+  --safe-bottom-offset: env(safe-area-inset-bottom, 0px);
 
   /* Canvas */
   --background: oklch(0.995 0.002 240);
@@ -701,6 +702,16 @@
   padding-bottom: var(--safe-area-bottom);
   padding-left: var(--safe-area-left);
   padding-right: var(--safe-area-right);
+  overflow: hidden;
+}
+
+.capacitor-ios body {
+  position: fixed;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
 }
 
 /* When keyboard is open, keyboard covers home indicator - no safe-area needed */
@@ -711,6 +722,7 @@
 /* Reduce app height by keyboard height - consumed by Layout.tsx container */
 body.keyboard-open {
   --app-height: calc(100dvh - var(--keyboard-height, 0px));
+  --safe-bottom-offset: 0px;
 }
 
 /* Safe area utilities for individual components */

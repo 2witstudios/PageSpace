@@ -20,9 +20,7 @@ export function useIOSKeyboardInit(): void {
 
     (async () => {
       try {
-        const { Keyboard } = await import(
-          /* webpackIgnore: true */ "@capacitor/keyboard"
-        );
+        const { Keyboard } = await import("@capacitor/keyboard");
 
         if (cancelled) return;
 
@@ -34,6 +32,8 @@ export function useIOSKeyboardInit(): void {
               `${info.keyboardHeight}px`
             );
             document.body.classList.add("keyboard-open");
+            document.documentElement.classList.add("keyboard-open");
+            window.scrollTo(0, 0);
           }
         );
 
@@ -42,6 +42,8 @@ export function useIOSKeyboardInit(): void {
           () => {
             document.body.style.setProperty("--keyboard-height", "0px");
             document.body.classList.remove("keyboard-open");
+            document.documentElement.classList.remove("keyboard-open");
+            window.scrollTo(0, 0);
           }
         );
       } catch (error) {
