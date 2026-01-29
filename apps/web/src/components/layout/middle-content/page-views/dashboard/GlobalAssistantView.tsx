@@ -72,7 +72,7 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
-  const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
+  const { setRightSidebarOpen, setRightSheetOpen } = useLayoutStore();
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -445,12 +445,16 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   const handleOpenActivity = () => {
-    if (!rightSidebarOpen) toggleRightSidebar();
+    // Open both sidebar (desktop) and sheet (mobile) to ensure visibility on all breakpoints
+    setRightSidebarOpen(true);
+    setRightSheetOpen(true);
     setActiveTab('activity');
   };
 
   const handleOpenHistory = () => {
-    if (!rightSidebarOpen) toggleRightSidebar();
+    // Open both sidebar (desktop) and sheet (mobile) to ensure visibility on all breakpoints
+    setRightSidebarOpen(true);
+    setRightSheetOpen(true);
     setActiveTab('history');
   };
 

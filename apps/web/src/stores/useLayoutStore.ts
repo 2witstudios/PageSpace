@@ -9,6 +9,10 @@ interface LayoutState {
   rightSidebarOpen: boolean;
   taskListViewMode: TaskListViewMode;
 
+  // Mobile sheet state (NOT persisted - sheets start closed on page load)
+  leftSheetOpen: boolean;
+  rightSheetOpen: boolean;
+
   // Hydration state
   rehydrated: boolean;
 
@@ -18,6 +22,8 @@ interface LayoutState {
   toggleRightSidebar: () => void;
   setLeftSidebarOpen: (open: boolean) => void;
   setRightSidebarOpen: (open: boolean) => void;
+  setLeftSheetOpen: (open: boolean) => void;
+  setRightSheetOpen: (open: boolean) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
 }
 
@@ -29,6 +35,10 @@ export const useLayoutStore = create<LayoutState>()(
       rightSidebarOpen: false,
       taskListViewMode: 'table',
       rehydrated: false,
+
+      // Mobile sheet state (NOT persisted)
+      leftSheetOpen: false,
+      rightSheetOpen: false,
 
       setRehydrated: () => {
         set({ rehydrated: true });
@@ -52,6 +62,14 @@ export const useLayoutStore = create<LayoutState>()(
 
       setRightSidebarOpen: (open: boolean) => {
         set({ rightSidebarOpen: open });
+      },
+
+      setLeftSheetOpen: (open: boolean) => {
+        set({ leftSheetOpen: open });
+      },
+
+      setRightSheetOpen: (open: boolean) => {
+        set({ rightSheetOpen: open });
       },
     }),
     {
