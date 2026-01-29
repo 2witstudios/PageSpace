@@ -4,11 +4,12 @@ import {
   users,
   eq,
   and,
+  or,
   desc,
   count,
   gte,
   lte,
-  sql,
+  ilike,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { verifyAdminAuth } from '@/lib/auth';
@@ -73,14 +74,21 @@ export async function GET(request: Request) {
     }
 
     if (search) {
-      // Search in resourceTitle, actorEmail, and actorDisplayName
+      // Escape LIKE pattern special characters to prevent pattern injection
+      const escapedSearch = search
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
+      const searchPattern = `%${escapedSearch}%`;
+
+      // Use Drizzle's ilike function for proper parameterization
       conditions.push(
-        sql`(
-          ${activityLogs.resourceTitle} ILIKE ${'%' + search + '%'} OR
-          ${activityLogs.actorEmail} ILIKE ${'%' + search + '%'} OR
-          ${activityLogs.actorDisplayName} ILIKE ${'%' + search + '%'} OR
-          ${activityLogs.resourceId} ILIKE ${'%' + search + '%'}
-        )`
+        or(
+          ilike(activityLogs.resourceTitle, searchPattern),
+          ilike(activityLogs.actorEmail, searchPattern),
+          ilike(activityLogs.actorDisplayName, searchPattern),
+          ilike(activityLogs.resourceId, searchPattern)
+        )
       );
     }
 
