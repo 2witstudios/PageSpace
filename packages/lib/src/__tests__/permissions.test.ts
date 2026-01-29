@@ -7,7 +7,7 @@ import {
   canUserDeletePage,
 } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
-import { db, users, pagePermissions, eq, and } from '@pagespace/db'
+import { db, users, pagePermissions, driveMembers, pages, drives, eq, and } from '@pagespace/db'
 import { createId } from '@paralleldrive/cuid2'
 
 describe('permissions system', () => {
@@ -17,8 +17,11 @@ describe('permissions system', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
 
   beforeEach(async () => {
-    // Clean up test data before each test
-    // Use DELETE to avoid TRUNCATE CASCADE deadlocks with connection pool
+    // Delete in foreign key order to avoid deadlocks from cascade contention
+    await db.delete(pagePermissions)
+    await db.delete(pages)
+    await db.delete(driveMembers)
+    await db.delete(drives)
     await db.delete(users)
 
     testUser = await factories.createUser()

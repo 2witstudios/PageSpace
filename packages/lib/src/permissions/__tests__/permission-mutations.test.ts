@@ -3,7 +3,7 @@ import { grantPagePermission, revokePagePermission } from '../permission-mutatio
 import { EnforcedAuthContext } from '../enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
 import { factories } from '@pagespace/db/test/factories';
-import { db, users, pagePermissions, eq, and } from '@pagespace/db';
+import { db, users, pagePermissions, driveMembers, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
 // Generate fake but valid CUID2 IDs for "non-existent" entity tests
@@ -31,6 +31,11 @@ describe('permission-mutations zero-trust', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>;
 
   beforeEach(async () => {
+    // Delete in foreign key order to avoid deadlocks from cascade contention
+    await db.delete(pagePermissions);
+    await db.delete(pages);
+    await db.delete(driveMembers);
+    await db.delete(drives);
     await db.delete(users);
 
     testUser = await factories.createUser();

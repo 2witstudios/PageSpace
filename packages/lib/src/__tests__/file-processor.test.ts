@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { FileProcessor } from '../file-processing/file-processor'
-import { db, sql, users } from '@pagespace/db'
+import { db, sql, users, pagePermissions, driveMembers, pages, drives } from '@pagespace/db'
 import { factories } from '@pagespace/db/test/factories'
 import { createHash } from 'crypto'
 
@@ -13,8 +13,11 @@ describe('file-processor', () => {
   let testDrive: Awaited<ReturnType<typeof factories.createDrive>>
 
   beforeEach(async () => {
-    // Clean up test data before each test
-    // Use DELETE to avoid TRUNCATE CASCADE deadlocks with connection pool
+    // Delete in foreign key order to avoid deadlocks from cascade contention
+    await db.delete(pagePermissions)
+    await db.delete(pages)
+    await db.delete(driveMembers)
+    await db.delete(drives)
     await db.delete(users)
 
     testUser = await factories.createUser()
