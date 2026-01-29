@@ -11,7 +11,7 @@ vi.mock('@pagespace/db', () => ({
       },
     },
   },
-  eq: vi.fn((field, value) => ({ field, value })),
+  eq: vi.fn((field: string, value: string) => ({ field, value })),
 }));
 
 vi.mock('bcryptjs', () => ({
@@ -40,8 +40,8 @@ vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock-session-token'),
     validateSession: vi.fn().mockResolvedValue({
-      sessionId: 'session-id-123',
-      userId: 'test-user-id',
+      sessionId: 'sfh0haxfpzowht3oi213sess',
+      userId: 'qfh0haxfpzowht3oi213lgn1',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
@@ -85,7 +85,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 describe('/api/auth/mobile/login', () => {
   const mockUser = {
-    id: 'test-user-id',
+    id: 'qfh0haxfpzowht3oi213lgn1',
     email: 'test@example.com',
     name: 'Test User',
     image: 'https://example.com/avatar.png',
