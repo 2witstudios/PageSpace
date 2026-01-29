@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ALLOWED_IMAGE_TYPES,
+  type AllowedImageType,
   isAllowedImageType,
   extractBase64DataUrl,
   validateMagicBytes,
@@ -122,7 +123,7 @@ describe('image-validation', () => {
     });
 
     it('given an unsupported MIME type, should return false', () => {
-      expect(validateMagicBytes(VALID_PNG_BASE64, 'image/svg+xml' as any)).toBe(false);
+      expect(validateMagicBytes(VALID_PNG_BASE64, 'image/svg+xml' as unknown as AllowedImageType)).toBe(false);
     });
   });
 
@@ -156,7 +157,7 @@ describe('image-validation', () => {
       const result = validateImageAttachment({
         name: 'test.png',
         type: 'image/png',
-        data: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/',
+        data: VALID_JPEG_DATA_URL, // JPEG data but declared as PNG
       });
 
       expect(result.valid).toBe(false);

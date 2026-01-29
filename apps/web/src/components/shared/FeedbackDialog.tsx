@@ -44,7 +44,9 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
   // Cleanup blob URLs on unmount
   useEffect(() => {
     return () => {
-      attachedFiles.forEach((f) => URL.revokeObjectURL(f.preview));
+      attachedFiles.forEach((f) => {
+        URL.revokeObjectURL(f.preview);
+      });
     };
   }, [attachedFiles]);
 
@@ -171,7 +173,7 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
 
       // Convert files to base64 for submission
       const fileDataPromises = attachedFiles.map(async (af) => {
-        return new Promise<{ name: string; type: string; data: string }>((resolve) => {
+        return new Promise<{ name: string; type: string; data: string }>((resolve, reject) => {
           const reader = new FileReader();
           reader.onloadend = () => {
             resolve({
@@ -179,6 +181,12 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
               type: af.file.type,
               data: reader.result as string,
             });
+          };
+          reader.onerror = () => {
+            reject(new Error(`Failed to read file: ${af.file.name}`));
+          };
+          reader.onabort = () => {
+            reject(new Error(`File read aborted: ${af.file.name}`));
           };
           reader.readAsDataURL(af.file);
         });
