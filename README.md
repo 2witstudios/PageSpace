@@ -228,12 +228,40 @@ packages/
 
 ---
 
+## Version History & Recovery
+
+PageSpace provides comprehensive data protection so you never lose work:
+
+### Version History
+- **30-day automatic versioning**: Every save creates a recoverable version
+- **Pin important versions**: Pinned versions never expire
+- **Version comparison**: See exactly what changed between versions
+- **One-click restore**: Restore any previous version instantly
+
+### Rollback & Undo
+- **Individual activity rollback**: Undo any single change with conflict detection
+- **Bulk rollback**: Revert all changes from a specific point forward
+- **AI conversation undo**: Undo AI messages and optionally all content changes they made
+- **Atomic transactions**: Rollbacks are all-or-nothing for consistency
+
+### Trash & Recovery
+- **Soft delete**: Deleted pages and drives go to trash first
+- **Restore anytime**: Recover trashed items with full hierarchy intact
+- **Recursive restoration**: Restoring a page restores its children too
+
+### Drive Backups
+- **Full drive snapshots**: Backup entire drives including pages, permissions, members, and files
+- **Manual or scheduled**: Create backups on-demand or automatically
+- **Complete state capture**: Restore drives to exact previous states
+
+---
+
 ## Data & Privacy
 
 - **Your data stays yours**: Export anytime, no lock-in
 - **Encrypted at rest**: All sensitive data encrypted in the database
 - **API key security**: Your provider keys are encrypted and never logged
-- **Audit logging**: Comprehensive, tamper-evident logs for compliance
+- **Complete audit trail**: Every operation logged with who/what/when for compliance
 - **Self-host option**: Run entirely on your infrastructure for complete sovereignty
 
 ---
