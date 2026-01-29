@@ -137,7 +137,6 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   const {
     chatConfig: globalChatConfig,
-    messages: contextMessages, // Direct access to context messages for seamless display
     isStreaming: contextIsStreaming,
     stopStreaming: contextStopStreaming,
     setMessages: setGlobalContextMessages,
