@@ -1,12 +1,5 @@
-/**
- * Default timeout for external API calls (30 seconds)
- */
 export const DEFAULT_TIMEOUT_MS = 30000;
 
-/**
- * Custom error class for timeout errors.
- * Allows distinguishing timeout errors from other fetch errors.
- */
 export class TimeoutError extends Error {
   constructor(message: string) {
     super(message);
@@ -15,30 +8,12 @@ export class TimeoutError extends Error {
 }
 
 export interface FetchWithTimeoutOptions extends RequestInit {
-  /** Timeout in milliseconds. Defaults to DEFAULT_TIMEOUT_MS (30s) */
   timeout?: number;
 }
 
 /**
  * Fetch wrapper with built-in timeout support.
  * Prevents hanging requests that could exhaust resources.
- *
- * @param url - The URL to fetch
- * @param options - Fetch options plus optional timeout
- * @returns Promise resolving to the Response
- * @throws TimeoutError if the request exceeds the timeout
- *
- * @example
- * // With default timeout (30s)
- * const response = await fetchWithTimeout('https://api.example.com/data');
- *
- * @example
- * // With custom timeout (5s)
- * const response = await fetchWithTimeout('https://api.stripe.com/v1/charges', {
- *   method: 'POST',
- *   timeout: 5000,
- *   headers: { Authorization: 'Bearer sk_...' },
- * });
  */
 export const fetchWithTimeout = async (
   url: string,
@@ -72,18 +47,10 @@ export const fetchWithTimeout = async (
   }
 };
 
-/**
- * Predefined timeout values for different use cases
- */
 export const TIMEOUTS = {
-  /** Quick health checks and lightweight API calls */
-  SHORT: 5000,
-  /** Standard API calls */
-  MEDIUM: 15000,
-  /** Default timeout for most operations */
+  SHORT: 5000, // health checks, lightweight calls
+  MEDIUM: 15000, // standard API calls
   DEFAULT: DEFAULT_TIMEOUT_MS,
-  /** Long-running operations like file uploads */
-  LONG: 60000,
-  /** Extended operations like large file processing */
-  EXTENDED: 120000,
+  LONG: 60000, // file uploads
+  EXTENDED: 120000, // large file processing
 } as const;

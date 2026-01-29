@@ -1,16 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
-
-/**
- * Health Check Endpoint Tests
- *
- * This endpoint provides system health status for:
- * - Load balancers / reverse proxies
- * - Container orchestration (Kubernetes, Docker Swarm)
- * - Monitoring systems
- */
-
-// Mock dependencies at system boundary
 const mockExecute = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db', () => ({

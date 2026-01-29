@@ -5,13 +5,6 @@ import {
   REQUEST_ID_HEADER,
 } from '../request-id';
 
-/**
- * Request ID Utility Tests
- *
- * Validates request ID generation and propagation for distributed tracing.
- * Request IDs allow tracing a single request through multiple services.
- */
-
 describe('request-id', () => {
   describe('REQUEST_ID_HEADER', () => {
     it('should use standard X-Request-Id header name', () => {

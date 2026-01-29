@@ -1,17 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   fetchWithTimeout,
   DEFAULT_TIMEOUT_MS,
   TimeoutError,
   TIMEOUTS,
 } from '../fetch-with-timeout';
-
-/**
- * Fetch with Timeout Tests
- *
- * These tests verify that external API calls have proper timeout handling
- * to prevent hanging requests that could exhaust resources.
- */
 
 describe('fetch-with-timeout', () => {
   const originalFetch = global.fetch;

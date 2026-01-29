@@ -4,15 +4,7 @@ import {
   getEnvErrors,
   isEnvValid,
   serverEnvSchema,
-  type ServerEnv,
 } from '../env-validation';
-
-/**
- * Environment Validation Tests
- *
- * These tests verify that required environment variables are validated at startup,
- * preventing runtime failures from missing configuration.
- */
 
 describe('env-validation', () => {
   const originalEnv = process.env;

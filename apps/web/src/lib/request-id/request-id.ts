@@ -4,8 +4,7 @@ export const REQUEST_ID_HEADER = 'X-Request-Id';
 
 /**
  * Validates a request ID to prevent header injection attacks.
- * Accepts alphanumeric characters, hyphens, and underscores.
- * Max length 128 characters.
+ * Accepts alphanumeric characters, hyphens, and underscores up to 128 chars.
  */
 export const isValidRequestId = (id: string | null | undefined): boolean => {
   if (!id || typeof id !== 'string' || id.length === 0) {
@@ -16,7 +15,6 @@ export const isValidRequestId = (id: string | null | undefined): boolean => {
     return false;
   }
 
-  // Only allow alphanumeric, hyphens, and underscores
   const validPattern = /^[a-zA-Z0-9_-]+$/;
   return validPattern.test(id);
 };
@@ -24,9 +22,6 @@ export const isValidRequestId = (id: string | null | undefined): boolean => {
 /**
  * Extracts request ID from incoming headers or generates a new one.
  * Supports distributed tracing by preserving upstream request IDs.
- *
- * @param request - The incoming request
- * @returns The request ID (existing or newly generated)
  */
 export const getOrCreateRequestId = (request: Request): string => {
   const existingId = request.headers.get(REQUEST_ID_HEADER);
@@ -38,7 +33,4 @@ export const getOrCreateRequestId = (request: Request): string => {
   return createId();
 };
 
-/**
- * Creates a new unique request ID.
- */
 export const createRequestId = (): string => createId();
