@@ -26,7 +26,7 @@ const checkDatabase = async (): Promise<boolean> => {
   }
 };
 
-export async function GET(request: Request): Promise<Response> {
+export async function GET(_request: Request): Promise<Response> {
   const startTime = Date.now();
 
   try {

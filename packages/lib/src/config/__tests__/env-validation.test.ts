@@ -132,6 +132,37 @@ describe('env-validation', () => {
         expect(result.data.NODE_ENV).toBe('production');
       }
     });
+
+    it('given NODE_ENV=test without CSRF_SECRET, should parse successfully', () => {
+      const testEnv = {
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        JWT_SECRET: 'a'.repeat(32),
+        JWT_ISSUER: 'pagespace',
+        JWT_AUDIENCE: 'pagespace-users',
+        NODE_ENV: 'test',
+      };
+
+      const result = serverEnvSchema.safeParse(testEnv);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given NODE_ENV=production without CSRF_SECRET, should fail validation', () => {
+      const prodEnv = {
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        JWT_SECRET: 'a'.repeat(32),
+        JWT_ISSUER: 'pagespace',
+        JWT_AUDIENCE: 'pagespace-users',
+        NODE_ENV: 'production',
+      };
+
+      const result = serverEnvSchema.safeParse(prodEnv);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.path.includes('CSRF_SECRET'))).toBe(true);
+      }
+    });
   });
 
   describe('validateEnv', () => {

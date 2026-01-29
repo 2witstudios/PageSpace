@@ -3,64 +3,81 @@ import { z } from 'zod';
 /**
  * Server-side environment variable validation schema.
  * Validates required configuration at startup to prevent runtime failures.
+ * In test environment, CSRF_SECRET and ENCRYPTION_KEY are optional.
  */
-export const serverEnvSchema = z.object({
-  // Database
-  DATABASE_URL: z
-    .string()
-    .min(1, 'DATABASE_URL is required')
-    .refine(
-      (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
-      'DATABASE_URL must be a valid PostgreSQL connection string'
-    ),
+export const serverEnvSchema = z
+  .object({
+    // Database
+    DATABASE_URL: z
+      .string()
+      .min(1, 'DATABASE_URL is required')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'DATABASE_URL must be a valid PostgreSQL connection string'
+      ),
 
-  // JWT Authentication
-  JWT_SECRET: z
-    .string()
-    .min(32, 'JWT_SECRET must be at least 32 characters'),
-  JWT_ISSUER: z.string().min(1, 'JWT_ISSUER is required'),
-  JWT_AUDIENCE: z.string().min(1, 'JWT_AUDIENCE is required'),
+    // JWT Authentication
+    JWT_SECRET: z
+      .string()
+      .min(32, 'JWT_SECRET must be at least 32 characters'),
+    JWT_ISSUER: z.string().min(1, 'JWT_ISSUER is required'),
+    JWT_AUDIENCE: z.string().min(1, 'JWT_AUDIENCE is required'),
 
-  // CSRF Protection
-  CSRF_SECRET: z
-    .string()
-    .min(32, 'CSRF_SECRET must be at least 32 characters'),
+    // CSRF Protection (required in production/development, optional in test)
+    CSRF_SECRET: z.string().optional(),
 
-  // Encryption
-  ENCRYPTION_KEY: z
-    .string()
-    .min(32, 'ENCRYPTION_KEY must be at least 32 characters'),
+    // Encryption (required in production/development, optional in test)
+    ENCRYPTION_KEY: z.string().optional(),
 
-  // Optional with defaults
-  NODE_ENV: z
-    .enum(['development', 'production', 'test'])
-    .default('development'),
-  LOG_LEVEL: z
-    .enum(['debug', 'info', 'warn', 'error'])
-    .default('info'),
+    // Optional with defaults
+    NODE_ENV: z
+      .enum(['development', 'production', 'test'])
+      .default('development'),
+    LOG_LEVEL: z
+      .enum(['debug', 'info', 'warn', 'error'])
+      .default('info'),
 
-  // Optional URLs
-  WEB_APP_URL: z.string().url().optional(),
-  NEXT_PUBLIC_REALTIME_URL: z.string().url().optional(),
-  INTERNAL_REALTIME_URL: z.string().url().optional(),
+    // Optional URLs
+    WEB_APP_URL: z.string().url().optional(),
+    NEXT_PUBLIC_REALTIME_URL: z.string().url().optional(),
+    INTERNAL_REALTIME_URL: z.string().url().optional(),
 
-  // Optional OAuth
-  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
-  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+    // Optional OAuth
+    GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+    GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+    GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
 
-  // Optional AI keys
-  GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),
-  OPENROUTER_DEFAULT_API_KEY: z.string().optional(),
+    // Optional AI keys
+    GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),
+    OPENROUTER_DEFAULT_API_KEY: z.string().optional(),
 
-  // Optional monitoring
-  MONITORING_INGEST_KEY: z.string().optional(),
-  MONITORING_INGEST_PATH: z.string().optional(),
+    // Optional monitoring
+    MONITORING_INGEST_KEY: z.string().optional(),
+    MONITORING_INGEST_PATH: z.string().optional(),
 
-  // Optional Stripe
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
-});
+    // Optional Stripe
+    STRIPE_SECRET_KEY: z.string().optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY
+    if (data.NODE_ENV !== 'test') {
+      if (!data.CSRF_SECRET || data.CSRF_SECRET.length < 32) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'CSRF_SECRET must be at least 32 characters',
+          path: ['CSRF_SECRET'],
+        });
+      }
+      if (!data.ENCRYPTION_KEY || data.ENCRYPTION_KEY.length < 32) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'ENCRYPTION_KEY must be at least 32 characters',
+          path: ['ENCRYPTION_KEY'],
+        });
+      }
+    }
+  });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 
