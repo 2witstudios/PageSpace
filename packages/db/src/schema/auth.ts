@@ -33,6 +33,9 @@ export const users = pgTable('users', {
   // Account lockout fields
   failedLoginAttempts: integer('failedLoginAttempts').default(0).notNull(),
   lockedUntil: timestamp('lockedUntil', { mode: 'date' }),
+  // Account suspension (administrative action)
+  suspendedAt: timestamp('suspendedAt', { mode: 'date' }),
+  suspendedReason: text('suspendedReason'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });

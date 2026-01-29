@@ -54,11 +54,11 @@ async function validateSocketToken(token: string): Promise<{ userId: string } | 
 }
 
 /**
- * Origin Validation for WebSocket Connections (Defense-in-Depth Logging)
+ * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)
  *
- * While Socket.IO CORS configuration handles blocking unauthorized origins,
- * this module provides explicit logging for security monitoring.
- * Warnings are logged for unexpected origins to aid in detecting potential attacks.
+ * This module provides explicit origin validation that BLOCKS invalid origins.
+ * Socket.IO CORS is a first line of defense, but this provides defense-in-depth
+ * by rejecting connections from unexpected origins at the middleware level.
  */
 
 /**
@@ -202,37 +202,50 @@ function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginVal
 }
 
 /**
- * Validates and logs WebSocket connection origin for security monitoring
+ * Validates WebSocket connection origin and returns whether to allow the connection
  *
- * This function does NOT block connections - Socket.IO CORS handles that.
- * It provides explicit logging for unexpected origins to aid security monitoring.
+ * This function BLOCKS connections from invalid origins (defense-in-depth).
+ * Socket.IO CORS is a first line of defense, but this provides additional protection.
  *
  * @param origin - The Origin header value from the connection request
  * @param metadata - Additional metadata for logging (socketId, IP, etc.)
+ * @returns true if connection should be allowed, false if it should be rejected
  */
 function validateAndLogWebSocketOrigin(
   origin: string | undefined,
   metadata: { socketId: string; ip: string | undefined; userAgent: string | undefined }
-): void {
+): boolean {
   const allowedOrigins = getAllowedOrigins();
 
-  // No origin header - could be non-browser client, log at debug level
+  // No origin header - non-browser client (curl, mobile apps, etc.)
+  // Allow these as they authenticate via tokens, not cookies
   if (!origin) {
     loggers.realtime.debug('WebSocket origin validation: no Origin header', {
       ...metadata,
       reason: 'Non-browser client or same-origin request',
     });
-    return;
+    return true;
   }
 
-  // No allowed origins configured - log warning
+  // No allowed origins configured in production is a misconfiguration
+  // In development, allow but warn. In production, this should fail closed.
   if (allowedOrigins.length === 0) {
-    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured', {
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+      loggers.realtime.error('WebSocket origin validation: REJECTED - no allowed origins configured in production', {
+        ...metadata,
+        origin,
+        severity: 'security',
+        reason: 'CORS_ORIGIN and WEB_APP_URL not set in production',
+      });
+      return false;
+    }
+    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured (allowing in development)', {
       ...metadata,
       origin,
       reason: 'CORS_ORIGIN and WEB_APP_URL not set',
     });
-    return;
+    return true;
   }
 
   // Check if origin is allowed
@@ -241,18 +254,18 @@ function validateAndLogWebSocketOrigin(
       ...metadata,
       origin,
     });
-    return;
+    return true;
   }
 
-  // Origin not in allowed list - log security warning
-  // Note: Socket.IO CORS will block this connection, but we log for monitoring
-  loggers.realtime.warn('WebSocket origin validation: unexpected origin detected', {
+  // Origin not in allowed list - REJECT the connection
+  loggers.realtime.warn('WebSocket origin validation: REJECTED - unexpected origin', {
     ...metadata,
     origin,
     allowedOrigins,
     severity: 'security',
-    reason: 'Origin not in allowed list - connection may be blocked by CORS',
+    reason: 'Origin not in allowed list - connection rejected',
   });
+  return false;
 }
 
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
@@ -368,10 +381,12 @@ io.use(async (socket: AuthSocket, next) => {
     userAgent: socket.handshake.headers['user-agent']?.substring(0, 100),
   };
 
-  // Validate and log Origin header for security monitoring
-  // Note: Socket.IO CORS configuration handles actual blocking
+  // Validate Origin header - REJECT invalid origins (defense-in-depth)
   const origin = socket.handshake.headers.origin;
-  validateAndLogWebSocketOrigin(origin, connectionMetadata);
+  const isOriginValid = validateAndLogWebSocketOrigin(origin, connectionMetadata);
+  if (!isOriginValid) {
+    return next(new Error('Origin not allowed'));
+  }
 
   // Debug: Log all available authentication sources
   loggers.realtime.debug('Socket.IO: Authentication attempt', {

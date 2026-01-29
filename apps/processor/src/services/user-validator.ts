@@ -20,6 +20,7 @@ import { db, users, eq } from '@pagespace/db';
 export type UserValidationFailureReason =
   | 'invalid_input'
   | 'user_not_found'
+  | 'user_suspended'
   | 'database_error';
 
 /**
@@ -41,6 +42,7 @@ export type ServiceUserValidationResult =
  *
  * Checks:
  * 1. User exists in database
+ * 2. User is not suspended
  *
  * Note: Token version validation is not performed here because:
  * - Service tokens are short-lived (5 minutes default)
@@ -73,12 +75,18 @@ export async function validateServiceUser(
       columns: {
         id: true,
         role: true,
+        suspendedAt: true,
       },
     });
 
     // User not found
     if (!user) {
       return { valid: false, reason: 'user_not_found' };
+    }
+
+    // User suspended (administrative action)
+    if (user.suspendedAt) {
+      return { valid: false, reason: 'user_suspended' };
     }
 
     return {
