@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { getUserAccessLevel } from '../permissions/permissions-cached'
 import { factories } from '@pagespace/db/test/factories'
-import { db, users } from '@pagespace/db'
+import { db, users, pagePermissions, driveMembers, pages, drives } from '@pagespace/db'
 import { PermissionCache } from '../services/permission-cache'
 
 describe('cached permissions system', () => {
@@ -11,7 +11,11 @@ describe('cached permissions system', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
 
   beforeEach(async () => {
-    // Clean up test data before each test
+    // Delete in foreign key order to avoid deadlocks from cascade contention
+    await db.delete(pagePermissions)
+    await db.delete(pages)
+    await db.delete(driveMembers)
+    await db.delete(drives)
     await db.delete(users)
 
     // Clear permission cache before each test
