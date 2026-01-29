@@ -238,6 +238,7 @@ export async function POST(req: Request) {
           id: user.id,
           name: user.name,
           email: user.email,
+          emailVerified: user.emailVerified,
         },
         tokens: {
           deviceToken: deviceTokenValue,
@@ -282,6 +283,7 @@ export async function POST(req: Request) {
           id: user.id,
           name: user.name,
           email: user.email,
+          emailVerified: user.emailVerified,
         },
         csrfToken,
         redirectTo,

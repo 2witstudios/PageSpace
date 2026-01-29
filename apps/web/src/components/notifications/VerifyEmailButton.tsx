@@ -20,9 +20,9 @@ export default function VerifyEmailButton() {
       className="text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/20"
       asChild
     >
-      <Link href="/settings/account" className="flex items-center gap-1.5">
+      <Link href="/settings/account" className="hidden sm:flex items-center gap-1.5">
         <AlertCircle className="h-4 w-4" />
-        <span className="hidden sm:inline text-xs font-medium">Verify Email</span>
+        <span className="text-xs font-medium">Verify Email</span>
       </Link>
     </Button>
   );

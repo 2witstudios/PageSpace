@@ -295,6 +295,7 @@ export async function POST(req: Request) {
         picture: user.image,
         provider: user.provider,
         role: user.role,
+        emailVerified: user.emailVerified,
       },
       sessionToken,
       csrfToken,
