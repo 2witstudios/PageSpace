@@ -40,6 +40,7 @@ const mockUser: User = {
   role: 'user',
   provider: 'email',
   googleId: null,
+  appleId: null,
   emailVerified: mockVerifiedDate,
   password: '$2a$12$hashedpassword',
   tokenVersion: 0,

@@ -5,40 +5,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import crypto from 'crypto';
-import { getClientIP } from '@/lib/auth';
-
-/**
- * Validates that a return URL is a safe same-origin path.
- * Prevents open redirect attacks by ensuring the URL:
- * - Is a relative path starting with /
- * - Does not contain protocol-relative URLs (//evil.com)
- * - Does not contain backslash tricks (\/evil.com)
- * - Does not contain encoded sequences that could bypass validation
- */
-function isSafeReturnUrl(url: string | undefined): boolean {
-  if (!url) return true; // undefined/empty falls back to /dashboard
-
-  // Must start with exactly one forward slash (relative path)
-  if (!url.startsWith('/')) return false;
-
-  // Reject protocol-relative URLs (//evil.com) and backslash tricks
-  if (url.startsWith('//') || url.startsWith('/\\')) return false;
-
-  // Reject URLs with protocol schemes anywhere (javascript:, data:, etc.)
-  if (/[a-z]+:/i.test(url)) return false;
-
-  // Reject URLs with encoded characters that could bypass validation
-  // %2f = /, %5c = \, %3a = :
-  try {
-    const decoded = decodeURIComponent(url);
-    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(decoded)) return false;
-  } catch {
-    return false; // Invalid encoding
-  }
-
-  return true;
-}
+import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 
 const googleSigninSchema = z.object({
   returnUrl: z.string().optional(),

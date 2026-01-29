@@ -1,0 +1,1 @@
+ALTER TABLE "feedback_submissions" ADD COLUMN "viewport_size" text;

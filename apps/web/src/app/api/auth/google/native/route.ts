@@ -217,6 +217,7 @@ export async function POST(req: Request) {
         name: user.name,
         email: user.email,
         image: user.image,
+        emailVerified: user.emailVerified,
       },
     }), {
       status: 200,

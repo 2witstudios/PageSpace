@@ -13,23 +13,8 @@ import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-
-function isSafeReturnUrl(url: string | undefined): boolean {
-  if (!url) return true;
-  if (!url.startsWith('/')) return false;
-  if (url.startsWith('//') || url.startsWith('/\\')) return false;
-  if (/[a-z]+:/i.test(url)) return false;
-  try {
-    const decoded = decodeURIComponent(url);
-    if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
-    if (/[a-z]+:/i.test(decoded)) return false;
-  } catch {
-    return false;
-  }
-  return true;
-}
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, 'Authorization code is required'),
@@ -50,19 +35,19 @@ export async function GET(req: Request) {
     const error = searchParams.get('error');
 
     if (error) {
-      loggers.auth.warn('OAuth error', { error });
+      loggers.auth.warn('OAuth error', { error: String(error).slice(0, 100) });
       let errorParam = 'oauth_error';
       if (error === 'access_denied') {
         errorParam = 'access_denied';
       }
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
-      return NextResponse.redirect(new URL(`/auth/signin?error=${errorParam}`, baseUrl));
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
+      return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorParam)}`, baseUrl));
     }
 
     const validation = googleCallbackSchema.safeParse({ code, state });
     if (!validation.success) {
       loggers.auth.warn('Invalid OAuth callback parameters', validation.error);
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || req.url;
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
       return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
     }
 

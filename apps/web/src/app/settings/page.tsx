@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
+import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield } from "lucide-react";
@@ -15,12 +16,14 @@ interface SettingsCategory {
   href: string;
   available: boolean;
   desktopOnly?: boolean;
+  mobileHidden?: boolean;
 }
 
 export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
+  const { hideBilling } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
@@ -45,6 +48,7 @@ export default function SettingsPage() {
       icon: CreditCard,
       href: "/settings/billing",
       available: true,
+      mobileHidden: true,
     },
     {
       title: "MCP Connection",
@@ -79,6 +83,10 @@ export default function SettingsPage() {
   ].filter((category: SettingsCategory) => {
     // Filter out desktop-only features if not on desktop
     if (category.desktopOnly && !isDesktop) {
+      return false;
+    }
+    // Filter out billing on iOS Capacitor apps (Apple App Store compliance)
+    if (category.mobileHidden && hideBilling) {
       return false;
     }
     return true;

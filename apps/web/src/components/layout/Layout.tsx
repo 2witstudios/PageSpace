@@ -16,9 +16,11 @@ import { DebugPanel } from "./DebugPanel";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
+import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
+import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useRouter, usePathname } from "next/navigation";
 import { isCapacitorApp } from "@/lib/capacitor-bridge";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import {
   Sheet,
   SheetContent,
@@ -46,10 +48,14 @@ function Layout({ children }: LayoutProps) {
   const setLeftSidebarOpen = useLayoutStore(state => state.setLeftSidebarOpen);
   const setRightSidebarOpen = useLayoutStore(state => state.setRightSidebarOpen);
 
+  // Mobile sheet state from store (allows other components to control sheets)
+  const leftSheetOpen = useLayoutStore(state => state.leftSheetOpen);
+  const rightSheetOpen = useLayoutStore(state => state.rightSheetOpen);
+  const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
+  const setRightSheetOpen = useLayoutStore(state => state.setRightSheetOpen);
+
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
-  const [leftSheetOpen, setLeftSheetOpen] = useState(false);
-  const [rightSheetOpen, setRightSheetOpen] = useState(false);
 
   useResponsivePanels();
 
@@ -62,12 +68,15 @@ function Layout({ children }: LayoutProps) {
   // Monitor performance
   usePerformanceMonitor();
 
+  // Initialize iOS keyboard listeners (sets --keyboard-height CSS var)
+  useIOSKeyboardInit();
+
   useEffect(() => {
     if (!isSheetBreakpoint) {
       setLeftSheetOpen(false);
       setRightSheetOpen(false);
     }
-  }, [isSheetBreakpoint]);
+  }, [isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
   // Auto-close sheets on navigation (Capacitor only)
   // This fixes the issue where tapping a sidebar item navigates but leaves the sheet open
@@ -76,7 +85,7 @@ function Layout({ children }: LayoutProps) {
       setLeftSheetOpen(false);
       setRightSheetOpen(false);
     }
-  }, [pathname, isSheetBreakpoint]);
+  }, [pathname, isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -87,14 +96,13 @@ function Layout({ children }: LayoutProps) {
   }, [hasHydrated, isLoading, isAuthenticated, router]);
 
   const handleLeftPanelToggle = useCallback(() => {
+    dismissKeyboard();
     if (isSheetBreakpoint) {
-      setLeftSheetOpen((open) => {
-        const nextOpen = !open;
-        if (nextOpen && rightSheetOpen) {
-          setRightSheetOpen(false);
-        }
-        return nextOpen;
-      });
+      const nextOpen = !leftSheetOpen;
+      if (nextOpen && rightSheetOpen) {
+        setRightSheetOpen(false);
+      }
+      setLeftSheetOpen(nextOpen);
       return;
     }
 
@@ -113,24 +121,26 @@ function Layout({ children }: LayoutProps) {
     toggleLeftSidebar();
   }, [
     isSheetBreakpoint,
+    leftSheetOpen,
     rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
+    setLeftSheetOpen,
+    setRightSheetOpen,
     setLeftSidebarOpen,
     setRightSidebarOpen,
     toggleLeftSidebar,
   ]);
 
   const handleRightPanelToggle = useCallback(() => {
+    dismissKeyboard();
     if (isSheetBreakpoint) {
-      setRightSheetOpen((open) => {
-        const nextOpen = !open;
-        if (nextOpen && leftSheetOpen) {
-          setLeftSheetOpen(false);
-        }
-        return nextOpen;
-      });
+      const nextOpen = !rightSheetOpen;
+      if (nextOpen && leftSheetOpen) {
+        setLeftSheetOpen(false);
+      }
+      setRightSheetOpen(nextOpen);
       return;
     }
 
@@ -150,9 +160,12 @@ function Layout({ children }: LayoutProps) {
   }, [
     isSheetBreakpoint,
     leftSheetOpen,
+    rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
+    setLeftSheetOpen,
+    setRightSheetOpen,
     setLeftSidebarOpen,
     setRightSidebarOpen,
     toggleRightSidebar,
@@ -185,7 +198,10 @@ function Layout({ children }: LayoutProps) {
   return (
     <NavigationProvider>
       <GlobalChatProvider>
-        <div className="flex h-[100dvh] min-h-dvh flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10">
+        <div
+          className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
+          style={{ height: 'var(--app-height, 100dvh)' }}
+        >
           <TopBar
             onToggleLeftPanel={handleLeftPanelToggle}
             onToggleRightPanel={handleRightPanelToggle}
@@ -296,7 +312,7 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="left" forceMount className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+            <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
               <SheetHeader className="sr-only">
                 <SheetTitle>Navigation menu</SheetTitle>
                 <SheetDescription>Browse spaces and files</SheetDescription>
@@ -314,7 +330,7 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="right" forceMount className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+            <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
               <SheetHeader className="sr-only">
                 <SheetTitle>Assistant panel</SheetTitle>
                 <SheetDescription>Chat with the global assistant</SheetDescription>

@@ -13,6 +13,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 
 const usageLogger = createClientLogger({ namespace: 'usage', component: 'usage-counter' });
 
@@ -41,6 +42,7 @@ const fetcher = async (url: string) => {
 export function UsageCounter() {
   const router = useRouter();
   const { connect, getSocket } = useSocketStore();
+  const { showBilling } = useBillingVisibility();
 
   // Check if any editing or streaming is active (state-based)
   const isAnyActive = useEditingStore(state => state.isAnyActive());
@@ -174,25 +176,27 @@ export function UsageCounter() {
       {/* Quota display - always shown (hidden on mobile) */}
       {renderQuotaDisplay()}
 
-      {/* Action Button - always visible for billing navigation */}
-      <Button
-        variant={isPaid ? "ghost" : "default"}
-        size="sm"
-        onClick={handleBillingClick}
-        className={`text-xs h-8 ${!isPaid ? 'upgrade-gradient' : ''}`}
-      >
-        {isPaid ? (
-          <>
-            <span className="hidden md:inline">Billing</span>
-            <span className="md:hidden">{isBusiness ? 'Bus' : 'Pro'}</span>
-          </>
-        ) : (
-          <>
-            <span className="hidden md:inline">Upgrade</span>
-            <span className="md:hidden">+</span>
-          </>
-        )}
-      </Button>
+      {/* Action Button - hidden on iOS Capacitor apps (Apple App Store compliance) */}
+      {showBilling && (
+        <Button
+          variant={isPaid ? "ghost" : "default"}
+          size="sm"
+          onClick={handleBillingClick}
+          className={`text-xs h-8 ${!isPaid ? 'upgrade-gradient' : ''}`}
+        >
+          {isPaid ? (
+            <>
+              <span className="hidden md:inline">Billing</span>
+              <span className="md:hidden">{isBusiness ? 'Bus' : 'Pro'}</span>
+            </>
+          ) : (
+            <>
+              <span className="hidden md:inline">Upgrade</span>
+              <span className="md:hidden">+</span>
+            </>
+          )}
+        </Button>
+      )}
     </div>
   );
 }

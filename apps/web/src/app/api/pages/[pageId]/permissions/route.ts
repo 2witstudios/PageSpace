@@ -1,11 +1,19 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import {
+  authenticateRequestWithOptions,
+  authenticateWithEnforcedContext,
+  isAuthError,
+  isEnforcedAuthError,
+} from '@/lib/auth';
 import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib';
-import { loggers, getActorInfo } from '@pagespace/lib/server';
-import { logPermissionActivity } from '@pagespace/lib';
+import {
+  loggers,
+  grantPagePermission,
+  revokePagePermission,
+} from '@pagespace/lib/server';
 import { permissionManagementService } from '@/services/api';
-import { db, pages, pagePermissions, eq, and } from '@pagespace/db';
+import { db, pages, eq } from '@pagespace/db';
 import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -60,164 +68,129 @@ const postSchema = z.object({
 });
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
-  if (isAuthError(auth)) return auth.error;
-  const currentUserId = auth.userId;
+  // Authenticate and get EnforcedAuthContext for zero-trust operations
+  const auth = await authenticateWithEnforcedContext(req, AUTH_OPTIONS_WRITE);
+  if (isEnforcedAuthError(auth)) return auth.error;
+  const { ctx } = auth;
 
   const { pageId } = await params;
 
   try {
     const body = await req.json();
-    const { userId, canView, canEdit, canShare, canDelete } = postSchema.parse(body);
-
-    // Check authorization
-    const canManage = await permissionManagementService.canUserManagePermissions(currentUserId, pageId);
-    if (!canManage) {
-      return NextResponse.json({ error: 'You do not have permission to share this page' }, { status: 403 });
+    const parsed = postSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues }, { status: 400 });
     }
+    const { userId: targetUserId, canView, canEdit, canShare, canDelete } = parsed.data;
 
-    // Grant or update permission
-    const existingPermission = await db.query.pagePermissions.findFirst({
-      where: and(
-        eq(pagePermissions.pageId, pageId),
-        eq(pagePermissions.userId, userId)
-      ),
-    });
-
-    const result = await permissionManagementService.grantOrUpdatePermission({
+    // Zero-trust grant - authorization happens inside the function
+    const result = await grantPagePermission(ctx, {
       pageId,
-      targetUserId: userId,
+      targetUserId,
       permissions: { canView, canEdit, canShare, canDelete },
-      grantedBy: currentUserId,
     });
 
-    if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+    if (!result.ok) {
+      // Map error codes to HTTP responses
+      switch (result.error.code) {
+        case 'VALIDATION_FAILED':
+          return NextResponse.json({ error: result.error.issues }, { status: 400 });
+        case 'INVALID_PERMISSION_COMBINATION':
+          return NextResponse.json({ error: result.error.message }, { status: 400 });
+        case 'SELF_PERMISSION_DENIED':
+          return NextResponse.json({ error: result.error.reason }, { status: 400 });
+        case 'PAGE_NOT_ACCESSIBLE':
+          return NextResponse.json({ error: 'You do not have permission to share this page' }, { status: 403 });
+        case 'USER_NOT_FOUND':
+          return NextResponse.json({ error: 'Target user not found' }, { status: 404 });
+        case 'INSUFFICIENT_PERMISSION':
+          return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        default:
+          return NextResponse.json({ error: 'Permission operation failed' }, { status: 500 });
+      }
     }
 
-    // Send notification
+    // Send notification (audit logging already handled by zero-trust function)
     await createPermissionNotification(
-      userId,
+      targetUserId,
       pageId,
-      result.isUpdate ? 'updated' : 'granted',
+      result.data.isUpdate ? 'updated' : 'granted',
       { canView, canEdit, canShare, canDelete },
-      currentUserId
+      ctx.userId
     );
 
-    // Log to activity audit trail with actor info
+    // Fetch permission details for response
     const page = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
-      columns: { driveId: true, title: true },
+      columns: { driveId: true },
     });
-    if (page?.driveId) {
-      const actorInfo = await getActorInfo(currentUserId);
-      const previousValues = existingPermission ? {
-        canView: existingPermission.canView,
-        canEdit: existingPermission.canEdit,
-        canShare: existingPermission.canShare,
-        canDelete: existingPermission.canDelete,
-        grantedBy: existingPermission.grantedBy,
-        note: existingPermission.note,
-      } : undefined;
-      logPermissionActivity(
-        currentUserId,
-        result.isUpdate ? 'permission_update' : 'permission_grant',
-        {
-          pageId,
-          driveId: page.driveId,
-          targetUserId: userId,
-          permissions: { canView, canEdit, canShare, canDelete },
-          pageTitle: page.title ?? undefined,
-        },
-        {
-          ...actorInfo,
-          previousValues: result.isUpdate ? previousValues : undefined,
-        }
-      );
-    }
 
-    return NextResponse.json(result.permission, { status: result.isUpdate ? 200 : 201 });
+    return NextResponse.json({
+      id: result.data.permissionId,
+      pageId,
+      userId: targetUserId,
+      canView,
+      canEdit,
+      canShare,
+      canDelete,
+      grantedBy: ctx.userId,
+      driveId: page?.driveId,
+    }, { status: result.data.isUpdate ? 200 : 201 });
   } catch (error) {
     loggers.api.error('Error creating permission:', error as Error);
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: error.issues }, { status: 400 });
-    }
     return NextResponse.json({ error: 'Failed to create permission' }, { status: 500 });
   }
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
-  if (isAuthError(auth)) return auth.error;
-  const currentUserId = auth.userId;
+  // Authenticate and get EnforcedAuthContext for zero-trust operations
+  const auth = await authenticateWithEnforcedContext(req, AUTH_OPTIONS_WRITE);
+  if (isEnforcedAuthError(auth)) return auth.error;
+  const { ctx } = auth;
 
   const { pageId } = await params;
 
   try {
-    const { userId } = await req.json();
+    const { userId: targetUserId } = await req.json();
 
-    // Check authorization
-    const canManage = await permissionManagementService.canUserManagePermissions(currentUserId, pageId);
-    if (!canManage) {
-      return NextResponse.json({ error: 'You do not have permission to manage this page' }, { status: 403 });
+    // Zero-trust revoke - authorization happens inside the function
+    const result = await revokePagePermission(ctx, {
+      pageId,
+      targetUserId,
+    });
+
+    if (!result.ok) {
+      // Map error codes to HTTP responses
+      switch (result.error.code) {
+        case 'VALIDATION_FAILED':
+          return NextResponse.json({ error: result.error.issues }, { status: 400 });
+        case 'SELF_PERMISSION_DENIED':
+          return NextResponse.json({ error: result.error.reason }, { status: 400 });
+        case 'PAGE_NOT_ACCESSIBLE':
+          return NextResponse.json({ error: 'You do not have permission to manage this page' }, { status: 403 });
+        case 'INSUFFICIENT_PERMISSION':
+          return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        default:
+          return NextResponse.json({ error: 'Permission operation failed' }, { status: 500 });
+      }
     }
 
-    // Revoke permission
-    const existingPermission = await db.query.pagePermissions.findFirst({
-      where: and(
-        eq(pagePermissions.pageId, pageId),
-        eq(pagePermissions.userId, userId)
-      ),
-    });
-
-    const result = await permissionManagementService.revokePermission({
-      pageId,
-      targetUserId: userId,
-    });
-
-    if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
-    }
-
-    // Send notification
-    await createPermissionNotification(
-      userId,
-      pageId,
-      'revoked',
-      {},
-      currentUserId
-    );
-
-    // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-    await Promise.all([
-      kickUserFromPage(pageId, userId, 'permission_revoked'),
-      kickUserFromPageActivity(pageId, userId, 'permission_revoked'),
-    ]);
-
-    // Log to activity audit trail with actor info
-    const page = await db.query.pages.findFirst({
-      where: eq(pages.id, pageId),
-      columns: { driveId: true, title: true },
-    });
-    if (page?.driveId) {
-      const actorInfo = await getActorInfo(currentUserId);
-      const previousValues = existingPermission ? {
-        canView: existingPermission.canView,
-        canEdit: existingPermission.canEdit,
-        canShare: existingPermission.canShare,
-        canDelete: existingPermission.canDelete,
-        grantedBy: existingPermission.grantedBy,
-        note: existingPermission.note,
-      } : undefined;
-      logPermissionActivity(currentUserId, 'permission_revoke', {
+    // Send notification and kick user only if permission was actually revoked
+    // (Audit logging already handled by zero-trust function with previousValues)
+    if (result.data.revoked) {
+      await createPermissionNotification(
+        targetUserId,
         pageId,
-        driveId: page.driveId,
-        targetUserId: userId,
-        pageTitle: page.title ?? undefined,
-      }, {
-        ...actorInfo,
-        previousValues,
-      });
+        'revoked',
+        {},
+        ctx.userId
+      );
+
+      // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
+      await Promise.all([
+        kickUserFromPage(pageId, targetUserId, 'permission_revoked'),
+        kickUserFromPageActivity(pageId, targetUserId, 'permission_revoked'),
+      ]);
     }
 
     return NextResponse.json({ success: true });

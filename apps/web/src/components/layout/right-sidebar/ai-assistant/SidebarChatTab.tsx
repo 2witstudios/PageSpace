@@ -137,7 +137,6 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   const {
     chatConfig: globalChatConfig,
-    messages: contextMessages, // Direct access to context messages for seamless display
     isStreaming: contextIsStreaming,
     stopStreaming: contextStopStreaming,
     setMessages: setGlobalContextMessages,
@@ -359,11 +358,13 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Global Mode Sync to Context
   // ============================================
+  // Only sync when initialized to prevent race conditions during conversation loading.
+  // This ensures we don't overwrite context with stale messages from a previous conversation.
   useEffect(() => {
-    if (!selectedAgent) {
+    if (!selectedAgent && globalIsInitialized) {
       setGlobalContextMessages(globalMessages);
     }
-  }, [selectedAgent, globalMessages, setGlobalContextMessages]);
+  }, [selectedAgent, globalMessages, setGlobalContextMessages, globalIsInitialized]);
 
   useEffect(() => {
     if (selectedAgent) return;
@@ -620,9 +621,11 @@ const SidebarChatTab: React.FC = () => {
   // Computed Values for Rendering
   // ============================================
 
-  // For global mode, use context messages directly for seamless display during navigation
-  // Context messages are updated by GlobalAssistantView and shared across components
-  const displayMessages = selectedAgent ? messages : contextMessages;
+  // Use messages from the useChat hook directly for both modes.
+  // Previously used contextMessages for global mode, but this added an extra layer of
+  // indirection through sync effects that could cause race conditions and state snapping.
+  // The useChat hook with the same ID shares state via SWR, so all components see the same messages.
+  const displayMessages = messages;
 
   // Use streaming state from the appropriate source:
   // - Agent mode: Check both local useChat and dashboard store (for seamless transfer)

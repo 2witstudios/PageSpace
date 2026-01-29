@@ -2,6 +2,11 @@ import sharp from 'sharp';
 import { contentStore } from '../server';
 import { IMAGE_PRESETS, ImagePreset } from '../types';
 
+/** Sanitize a value for safe logging - strips control characters and newlines */
+function sanitizeLogValue(value: string): string {
+  return String(value).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 200);
+}
+
 interface ImageJobData {
   contentHash: string;
   preset: string;
@@ -14,7 +19,7 @@ export async function processImage(data: ImageJobData): Promise<any> {
   // Check if already cached
   const exists = await contentStore.cacheExists(contentHash, presetName);
   if (exists) {
-    console.log(`Cache hit for ${contentHash}/${presetName}`);
+    console.log('Cache hit for %s/%s', sanitizeLogValue(contentHash), sanitizeLogValue(presetName));
     return {
       success: true,
       cached: true,
@@ -34,7 +39,7 @@ export async function processImage(data: ImageJobData): Promise<any> {
     throw new Error(`Original file not found: ${contentHash}`);
   }
 
-  console.log(`Processing image ${contentHash} with preset ${presetName}`);
+  console.log('Processing image %s with preset %s', sanitizeLogValue(contentHash), sanitizeLogValue(presetName));
 
   try {
     // Process image with Sharp
@@ -87,7 +92,7 @@ export async function processImage(data: ImageJobData): Promise<any> {
 
     const url = await contentStore.getCacheUrl(contentHash, presetName);
 
-    console.log(`Successfully processed ${contentHash}/${presetName}, size: ${processedBuffer.length} bytes`);
+    console.log('Successfully processed %s/%s, size: %d bytes', sanitizeLogValue(contentHash), sanitizeLogValue(presetName), processedBuffer.length);
 
     return {
       success: true,
@@ -99,7 +104,7 @@ export async function processImage(data: ImageJobData): Promise<any> {
     };
 
   } catch (error) {
-    console.error(`Failed to process image ${contentHash}/${presetName}:`, error);
+    console.error('Failed to process image %s/%s:', sanitizeLogValue(contentHash), sanitizeLogValue(presetName), error);
     throw error;
   }
 }

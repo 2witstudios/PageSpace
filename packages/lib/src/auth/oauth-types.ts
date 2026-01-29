@@ -54,6 +54,7 @@ export interface MobileOAuthResponse {
     picture: string | null;
     provider: 'email' | 'google' | 'apple' | 'both';
     role: 'user' | 'admin';
+    emailVerified: Date | null;
   };
   /** Opaque session token (ps_sess_*) for authentication */
   sessionToken: string;

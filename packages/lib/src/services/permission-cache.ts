@@ -28,6 +28,15 @@ export interface DriveAccess {
   ttl: number;
 }
 
+export interface CacheMetrics {
+  hits: number;
+  misses: number;
+  invalidations: number;
+  invalidationFailures: number;
+  ttlExpirations: number;
+  redisErrors: number;
+}
+
 // Cache configuration
 interface CacheConfig {
   defaultTTL: number; // seconds
@@ -53,6 +62,14 @@ export class PermissionCache {
   private memoryCache = new Map<string, CachedPermission | DriveAccess>();
   private config: CacheConfig;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  private metrics: CacheMetrics = {
+    hits: 0,
+    misses: 0,
+    invalidations: 0,
+    invalidationFailures: 0,
+    ttlExpirations: 0,
+    redisErrors: 0,
+  };
 
   private constructor(config: Partial<CacheConfig> = {}) {
     this.config = {
@@ -86,6 +103,7 @@ export class PermissionCache {
     try {
       this.redis = await getSharedRedisClient();
     } catch (error) {
+      this.metrics.redisErrors++;
       loggers.api.warn('Failed to get shared Redis client for permission cache', {
         error: error instanceof Error ? error.message : String(error)
       });
@@ -124,9 +142,15 @@ export class PermissionCache {
         cleanedCount += keysToDelete.length;
       }
 
-      if (cleanedCount > 0) {
-        loggers.api.debug(`Cleaned ${cleanedCount} expired permission cache entries`);
-      }
+      this.metrics.ttlExpirations += cleanedCount;
+
+      const totalRequests = this.metrics.hits + this.metrics.misses;
+      const hitRate = totalRequests > 0 ? Math.round((this.metrics.hits / totalRequests) * 100) : 0;
+      loggers.performance.debug('Permission cache stats', {
+        memoryEntries: this.memoryCache.size,
+        hitRate: `${hitRate}%`,
+        ...this.metrics,
+      });
     }, 30000); // Clean every 30 seconds
   }
 
@@ -152,8 +176,13 @@ export class PermissionCache {
 
     // L1: Check memory cache first
     const memoryResult = this.memoryCache.get(key) as CachedPermission;
-    if (memoryResult && Date.now() < memoryResult.cachedAt + (memoryResult.ttl * 1000)) {
-      return memoryResult;
+    if (memoryResult) {
+      if (Date.now() < memoryResult.cachedAt + (memoryResult.ttl * 1000)) {
+        this.metrics.hits++;
+        return memoryResult;
+      }
+      this.metrics.ttlExpirations++;
+      this.memoryCache.delete(key);
     }
 
     // L2: Check Redis cache
@@ -165,13 +194,16 @@ export class PermissionCache {
 
           // Promote to L1 cache
           this.memoryCache.set(key, parsed);
+          this.metrics.hits++;
           return parsed;
         }
       } catch (error) {
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis get error, using memory cache only', { key, error });
       }
     }
 
+    this.metrics.misses++;
     return null;
   }
 
@@ -205,6 +237,7 @@ export class PermissionCache {
       try {
         await this.redis.setex(key, ttl, JSON.stringify(cached));
       } catch (error) {
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis set error, continuing with memory cache', { key, error });
       }
     }
@@ -218,8 +251,13 @@ export class PermissionCache {
 
     // L1: Check memory cache first
     const memoryResult = this.memoryCache.get(key) as DriveAccess;
-    if (memoryResult && Date.now() < memoryResult.cachedAt + (memoryResult.ttl * 1000)) {
-      return memoryResult;
+    if (memoryResult) {
+      if (Date.now() < memoryResult.cachedAt + (memoryResult.ttl * 1000)) {
+        this.metrics.hits++;
+        return memoryResult;
+      }
+      this.metrics.ttlExpirations++;
+      this.memoryCache.delete(key);
     }
 
     // L2: Check Redis cache
@@ -231,13 +269,16 @@ export class PermissionCache {
 
           // Promote to L1 cache
           this.memoryCache.set(key, parsed);
+          this.metrics.hits++;
           return parsed;
         }
       } catch (error) {
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis get error for drive access', { key, error });
       }
     }
 
+    this.metrics.misses++;
     return null;
   }
 
@@ -269,6 +310,7 @@ export class PermissionCache {
       try {
         await this.redis.setex(key, ttl, JSON.stringify(cached));
       } catch (error) {
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis set error for drive access', { key, error });
       }
     }
@@ -288,8 +330,10 @@ export class PermissionCache {
 
       if (cached && Date.now() < cached.cachedAt + (cached.ttl * 1000)) {
         results.set(pageId, cached);
+        this.metrics.hits++;
       } else {
         uncachedPageIds.push(pageId);
+        this.metrics.misses++;
       }
     }
 
@@ -310,6 +354,7 @@ export class PermissionCache {
           }
         }
       } catch (error) {
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis mget error for batch permissions', { error });
       }
     }
@@ -339,11 +384,15 @@ export class PermissionCache {
           await this.redis.del(...keys);
         }
       } catch (error) {
+        this.metrics.invalidationFailures++;
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis invalidation error', { userId, error });
+        return;
       }
     }
 
-    loggers.api.debug(`Invalidated permission cache for user ${userId}`);
+    this.metrics.invalidations++;
+    loggers.api.debug(`Invalidated permission cache for user ${userId}`, { entriesCleared: keysToDelete.length });
   }
 
   /**
@@ -395,11 +444,15 @@ export class PermissionCache {
           }
         }
       } catch (error) {
+        this.metrics.invalidationFailures++;
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis drive invalidation error', { driveId, error });
+        return;
       }
     }
 
-    loggers.api.debug(`Invalidated permission cache for drive ${driveId}`);
+    this.metrics.invalidations++;
+    loggers.api.debug(`Invalidated permission cache for drive ${driveId}`, { entriesCleared: keysToDelete.length });
   }
 
   /**
@@ -410,12 +463,25 @@ export class PermissionCache {
     redisAvailable: boolean;
     maxMemoryEntries: number;
     memoryUsagePercent: number;
+    metrics: CacheMetrics;
   } {
     return {
       memoryEntries: this.memoryCache.size,
       redisAvailable: this.isRedisAvailable,
       maxMemoryEntries: this.config.maxMemoryEntries,
-      memoryUsagePercent: Math.round((this.memoryCache.size / this.config.maxMemoryEntries) * 100)
+      memoryUsagePercent: Math.round((this.memoryCache.size / this.config.maxMemoryEntries) * 100),
+      metrics: { ...this.metrics },
+    };
+  }
+
+  resetMetrics(): void {
+    this.metrics = {
+      hits: 0,
+      misses: 0,
+      invalidations: 0,
+      invalidationFailures: 0,
+      ttlExpirations: 0,
+      redisErrors: 0,
     };
   }
 
@@ -432,6 +498,7 @@ export class PermissionCache {
           await this.redis.del(...keys);
         }
       } catch (error) {
+        this.metrics.redisErrors++;
         loggers.api.warn('Redis clear all error', { error });
       }
     }

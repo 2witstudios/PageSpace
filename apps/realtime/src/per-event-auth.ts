@@ -7,6 +7,11 @@
  * This prevents the "revoked but still in room" attack window where a user
  * might have been kicked from the permission system but their socket
  * hasn't been kicked from the room yet.
+ *
+ * Stale-window analysis after bypassCache fix:
+ * - Write operations (per-event auth): 0s — always hits DB directly
+ * - Room joins: up to 60s (kick handler provides immediate eviction)
+ * - API routes: up to 60s (read operations, acceptable risk)
  */
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
@@ -105,7 +110,7 @@ export async function reauthorizePageAccess(
   requiredLevel: 'view' | 'edit' = 'edit'
 ): Promise<AuthCheckResult> {
   try {
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+    const accessLevel = await getUserAccessLevel(userId, pageId, { bypassCache: true });
 
     if (!accessLevel) {
       loggers.realtime.warn('Per-event auth: Access denied (no permission)', {

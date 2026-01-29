@@ -217,6 +217,35 @@ class AuthFetch {
     return this.suspendTime;
   }
 
+  /**
+   * Validate that a URL is safe for authenticated requests.
+   * Only allows relative URLs and same-origin requests to prevent SSRF.
+   */
+  private validateRequestUrl(url: string): void {
+    // Allow relative URLs (most common case for API calls)
+    // Block protocol-relative URLs (//evil.com) which resolve to attacker-controlled hosts
+    if (url.startsWith('/') && !url.startsWith('//')) {
+      return;
+    }
+
+    // For absolute URLs, verify same-origin
+    try {
+      const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : undefined);
+      if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+        throw new Error(`Cross-origin request blocked: ${parsed.origin}`);
+      }
+      // Block non-HTTP(S) schemes
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(`Unsafe URL scheme: ${parsed.protocol}`);
+      }
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('Invalid URL');
+      }
+      throw error;
+    }
+  }
+
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
 
@@ -224,6 +253,9 @@ class AuthFetch {
     if (skipAuth) {
       return fetch(url, fetchOptions);
     }
+
+    // Validate URL to prevent SSRF - only allow same-origin requests
+    this.validateRequestUrl(url);
 
     const storage = this.getStorage();
 

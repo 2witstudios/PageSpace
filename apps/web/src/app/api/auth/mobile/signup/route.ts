@@ -254,6 +254,7 @@ export async function POST(req: Request) {
         email: user.email,
         name: user.name,
         image: user.image,
+        emailVerified: user.emailVerified,
       },
       sessionToken,
       csrfToken,

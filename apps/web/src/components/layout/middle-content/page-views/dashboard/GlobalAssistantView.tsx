@@ -72,7 +72,7 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
-  const { rightSidebarOpen, toggleRightSidebar } = useLayoutStore();
+  const { setRightSidebarOpen, setRightSheetOpen } = useLayoutStore();
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -351,11 +351,13 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, globalStatus, globalStop]);
 
   // Sync local messages to global context (global mode only)
+  // Only sync when initialized to prevent race conditions during conversation loading.
+  // This ensures we don't overwrite context with stale messages from a previous conversation.
   useEffect(() => {
-    if (!selectedAgent) {
+    if (!selectedAgent && globalIsInitialized) {
       setGlobalMessages(globalLocalMessages);
     }
-  }, [selectedAgent, globalLocalMessages, setGlobalMessages]);
+  }, [selectedAgent, globalLocalMessages, setGlobalMessages, globalIsInitialized]);
 
   // Sync streaming status to global context (global mode only)
   useEffect(() => {
@@ -445,12 +447,16 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   const handleOpenActivity = () => {
-    if (!rightSidebarOpen) toggleRightSidebar();
+    // Open both sidebar (desktop) and sheet (mobile) to ensure visibility on all breakpoints
+    setRightSidebarOpen(true);
+    setRightSheetOpen(true);
     setActiveTab('activity');
   };
 
   const handleOpenHistory = () => {
-    if (!rightSidebarOpen) toggleRightSidebar();
+    // Open both sidebar (desktop) and sheet (mobile) to ensure visibility on all breakpoints
+    setRightSidebarOpen(true);
+    setRightSheetOpen(true);
     setActiveTab('history');
   };
 
@@ -543,7 +549,7 @@ const GlobalAssistantView: React.FC = () => {
             variant="outline"
             size="sm"
             onClick={handleNewConversation}
-            className="flex items-center space-x-2"
+            className="flex items-center gap-2"
           >
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">New</span>

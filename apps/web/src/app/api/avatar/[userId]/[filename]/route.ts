@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFile, stat } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { resolveAvatarPath, verifyPathWithinBase } from '@/lib/security/safe-path';
 
@@ -34,24 +34,20 @@ export async function GET(
 
     const filepath = pathResult.path;
 
-    // Check if file exists using stat (more reliable than existsSync)
-    try {
-      const fileStat = await stat(filepath);
-      if (!fileStat.isFile()) {
-        return new NextResponse('Not Found', { status: 404 });
-      }
-    } catch {
-      return new NextResponse('Not Found', { status: 404 });
-    }
-
     // Verify symlinks don't escape the avatars directory (prevents symlink attacks)
     const avatarsBaseDir = resolve(storageBasePath, 'avatars');
     if (!(await verifyPathWithinBase(filepath, avatarsBaseDir))) {
       return new NextResponse('Not Found', { status: 404 });
     }
 
-    // Read the file
-    const fileBuffer = await readFile(filepath);
+    // Read the file atomically - avoids TOCTOU race between stat() and readFile()
+    // If the file doesn't exist or isn't readable, readFile will throw
+    let fileBuffer: Buffer;
+    try {
+      fileBuffer = await readFile(filepath);
+    } catch {
+      return new NextResponse('Not Found', { status: 404 });
+    }
 
     // Determine content type based on file extension (already validated by resolveAvatarPath)
     const extension = filename.split('.').pop()?.toLowerCase() || 'jpeg';

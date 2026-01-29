@@ -17,7 +17,7 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
-// Mock session service from @pagespace/lib/auth
+// Mock session service and account lockout from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
@@ -34,6 +34,9 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  isAccountLockedByEmail: vi.fn().mockResolvedValue({ isLocked: false, lockedUntil: null }),
+  recordFailedLoginAttemptByEmail: vi.fn().mockResolvedValue({ success: true }),
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock cookie utilities
@@ -123,6 +126,7 @@ describe('/api/auth/login redirect', () => {
       provider: 'email',
       image: null,
       googleId: null,
+      appleId: null,
       emailVerified: null,
       currentAiProvider: 'pagespace',
       currentAiModel: 'glm-4.5-air',

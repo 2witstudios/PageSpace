@@ -408,4 +408,56 @@ describe('AuthFetch', () => {
       );
     });
   });
+
+  describe('URL validation (SSRF prevention)', () => {
+    let authFetchInstance: { validateRequestUrl: (url: string) => void };
+
+    beforeEach(async () => {
+      // Clear singleton
+      const globalObj = globalThis as typeof globalThis & { [key: symbol]: unknown };
+      const AUTHFETCH_KEY = Symbol.for('pagespace.authfetch.singleton');
+      delete globalObj[AUTHFETCH_KEY];
+
+      const { AuthFetch } = await import('../auth-fetch');
+      authFetchInstance = new AuthFetch() as unknown as {
+        validateRequestUrl: (url: string) => void;
+      };
+    });
+
+    describe('given relative URLs', () => {
+      it('should allow standard relative API paths', () => {
+        expect(() => authFetchInstance.validateRequestUrl('/api/pages')).not.toThrow();
+        expect(() => authFetchInstance.validateRequestUrl('/api/auth/csrf')).not.toThrow();
+      });
+    });
+
+    describe('given protocol-relative URLs', () => {
+      it('should block protocol-relative URLs (//evil.com)', () => {
+        expect(() => authFetchInstance.validateRequestUrl('//evil.com/api')).toThrow();
+      });
+    });
+
+    describe('given cross-origin absolute URLs', () => {
+      it('should block cross-origin requests', () => {
+        expect(() => authFetchInstance.validateRequestUrl('https://evil.com/api')).toThrow(/Cross-origin/);
+      });
+    });
+
+    describe('given non-HTTP schemes', () => {
+      it('should block ftp: scheme', () => {
+        expect(() => authFetchInstance.validateRequestUrl('ftp://example.com')).toThrow();
+      });
+
+      it('should block javascript: scheme', () => {
+        expect(() => authFetchInstance.validateRequestUrl('javascript:alert(1)')).toThrow();
+      });
+    });
+
+    describe('given invalid URLs', () => {
+      it('should throw on unparseable URL', () => {
+        // new URL() with a base can parse most strings, so use one that truly fails
+        expect(() => authFetchInstance.validateRequestUrl('http://[invalid')).toThrow();
+      });
+    });
+  });
 });

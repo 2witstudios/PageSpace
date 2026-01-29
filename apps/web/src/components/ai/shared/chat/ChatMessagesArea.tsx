@@ -169,7 +169,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
     return (
       <>
-        <ConversationContent className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-34">
+        <ConversationContent className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34">
           {isLoadingOlder && LoadingOlderIndicator}
 
           {isLoading ? (
@@ -199,7 +199,8 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         </ConversationContent>
 
         {/* Scroll-to-bottom button - only visible when user scrolls up */}
-        <ConversationScrollButton className="z-10" />
+        {/* Positioned higher (bottom-36) to appear above floating input in middle content area */}
+        <ConversationScrollButton className="z-20 bottom-36" />
 
         <UndoAiChangesDialog
           open={!!undoDialogMessageId}
