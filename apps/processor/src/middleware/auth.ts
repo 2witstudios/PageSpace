@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions';
-import { loggers } from '@pagespace/lib/logger-config';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Authentication is ALWAYS required in production.
@@ -97,10 +97,14 @@ export async function authenticateService(req: Request, res: Response, next: Nex
 
     next();
   } catch (error) {
-    loggers.security.error('Processor auth: validation error', error as Error, {
-      ...requestContext,
-      tokenPrefix,
-    });
+    loggers.security.error(
+      'Processor auth: validation error',
+      error instanceof Error ? error : new Error(String(error)),
+      {
+        ...requestContext,
+        tokenPrefix,
+      }
+    );
     respondUnauthorized(res, 'Invalid token');
   }
 }
