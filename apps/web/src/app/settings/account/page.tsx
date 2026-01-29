@@ -111,7 +111,6 @@ export default function AccountPage() {
       if (mutate) {
         await mutate(); // Refresh user data
       }
-      toast.success("Profile updated successfully");
     } catch (error) {
       console.error("Profile update error:", error);
       toast.error(error instanceof Error ? error.message : "Failed to update profile");
@@ -156,7 +155,6 @@ export default function AccountPage() {
     try {
       await post('/api/account/avatar', formData);
 
-      toast.success('Avatar uploaded successfully');
       setAvatarFile(null);
 
       // Refresh user data to get new avatar URL
@@ -177,7 +175,6 @@ export default function AccountPage() {
     try {
       await del('/api/account/avatar');
 
-      toast.success('Avatar deleted successfully');
       setAvatarPreview(null);
       setAvatarFile(null);
 
@@ -277,8 +274,6 @@ export default function AccountPage() {
     setIsDeletingAccount(true);
     try {
       await del("/api/account", { emailConfirmation });
-
-      toast.success("Account deleted successfully. Redirecting...");
 
       // Clear authentication and redirect to home
       setTimeout(() => {
