@@ -35,17 +35,20 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
         </CardHeader>
 
         <CardContent className="space-y-4">
-          <div className="bg-muted p-3 rounded-md text-sm">
-            <div className="font-medium mb-1">Error Details:</div>
-            <div className="text-muted-foreground break-words">
-              {error.message || 'An unexpected error occurred'}
+          {error.digest && (
+            <div className="bg-muted p-3 rounded-md text-sm text-muted-foreground">
+              Error ID: {error.digest}
             </div>
-            {error.digest && (
-              <div className="text-xs text-muted-foreground mt-2">
-                Error ID: {error.digest}
+          )}
+
+          {process.env.NODE_ENV === 'development' && (
+            <div className="bg-muted p-3 rounded-md text-sm">
+              <div className="font-medium mb-1">Error Details:</div>
+              <div className="text-muted-foreground break-words">
+                {error.message || 'An unexpected error occurred'}
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <Button variant="default" onClick={reset} className="w-full">
