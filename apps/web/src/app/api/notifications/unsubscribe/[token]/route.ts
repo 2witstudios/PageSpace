@@ -16,6 +16,20 @@ type NotificationType =
   | 'CONNECTION_REJECTED'
   | 'NEW_DIRECT_MESSAGE';
 
+const VALID_NOTIFICATION_TYPES = new Set<string>([
+  'PERMISSION_GRANTED',
+  'PERMISSION_REVOKED',
+  'PERMISSION_UPDATED',
+  'PAGE_SHARED',
+  'DRIVE_INVITED',
+  'DRIVE_JOINED',
+  'DRIVE_ROLE_CHANGED',
+  'CONNECTION_REQUEST',
+  'CONNECTION_ACCEPTED',
+  'CONNECTION_REJECTED',
+  'NEW_DIRECT_MESSAGE',
+]);
+
 // GET /api/notifications/unsubscribe/[token] - Unsubscribe from email notifications
 export async function GET(
   request: Request,
@@ -90,9 +104,34 @@ export async function GET(
 
     // Redirect to a confirmation page
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    return NextResponse.redirect(
-      `${appUrl}/unsubscribe-success?type=${notificationType}`
-    );
+
+    // Validate notification type before using in redirect URL
+    if (!VALID_NOTIFICATION_TYPES.has(notificationType)) {
+      loggers.api.warn('Invalid notification type in unsubscribe token', { notificationType });
+      return NextResponse.json(
+        { error: 'Invalid notification type' },
+        { status: 400 }
+      );
+    }
+
+    // Construct and validate redirect URL to prevent open redirect
+    const redirectUrl = new URL('/unsubscribe-success', appUrl);
+    redirectUrl.searchParams.set('type', notificationType);
+
+    // Ensure redirect stays within the application domain
+    const appOrigin = new URL(appUrl).origin;
+    if (redirectUrl.origin !== appOrigin) {
+      loggers.api.error('Redirect URL origin mismatch detected', {
+        expected: appOrigin,
+        actual: redirectUrl.origin,
+      });
+      return NextResponse.json(
+        { error: 'Invalid redirect configuration' },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.redirect(redirectUrl.toString());
   } catch (error) {
     loggers.api.error('Error processing unsubscribe:', error as Error);
     return NextResponse.json(
