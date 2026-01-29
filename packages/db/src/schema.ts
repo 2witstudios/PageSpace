@@ -14,6 +14,7 @@ export * from './schema/versioning';
 export * from './schema/social';
 export * from './schema/subscriptions';
 export * from './schema/contact';
+export * from './schema/feedback';
 export * from './schema/storage';
 export * from './schema/tasks';
 export * from './schema/security-audit';
@@ -34,6 +35,7 @@ import * as versioning from './schema/versioning';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
 import * as contact from './schema/contact';
+import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
 import * as securityAudit from './schema/security-audit';
@@ -55,6 +57,7 @@ export const schema = {
   ...social,
   ...subscriptions,
   ...contact,
+  ...feedback,
   ...storage,
   ...tasks,
   ...securityAudit,

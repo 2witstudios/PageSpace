@@ -351,6 +351,27 @@
       "when": 1769632161841,
       "tag": "0049_lying_shriek",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1769649847175,
+      "tag": "0050_fancy_infant_terrible",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1769650005326,
+      "tag": "0051_tricky_mimic",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1769652765590,
+      "tag": "0052_careful_eddie_brock",
+      "breakpoints": true
     }
   ]
 }
