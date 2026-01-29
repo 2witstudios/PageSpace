@@ -187,6 +187,10 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, []); // Run once on mount
 
   // Create stable chat config
+  // IMPORTANT: Use `messages` instead of `initialMessages` to ensure the config always has
+  // current messages. This prevents state snap-back issues when switching conversations
+  // from history. The useChat hook only reinitializes when `id` changes, so frequent
+  // config updates from message changes won't cause unwanted reinitializations.
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
@@ -194,7 +198,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
     return {
       id: currentConversationId,
-      messages: initialMessages,
+      messages: messages,
       transport: new DefaultChatTransport({
         api: apiEndpoint,
         fetch: (url, options) => {
@@ -210,7 +214,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [currentConversationId, initialMessages]);
+  }, [currentConversationId, messages]);
 
   // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({

@@ -359,11 +359,13 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Global Mode Sync to Context
   // ============================================
+  // Only sync when initialized to prevent race conditions during conversation loading.
+  // This ensures we don't overwrite context with stale messages from a previous conversation.
   useEffect(() => {
-    if (!selectedAgent) {
+    if (!selectedAgent && globalIsInitialized) {
       setGlobalContextMessages(globalMessages);
     }
-  }, [selectedAgent, globalMessages, setGlobalContextMessages]);
+  }, [selectedAgent, globalMessages, setGlobalContextMessages, globalIsInitialized]);
 
   useEffect(() => {
     if (selectedAgent) return;

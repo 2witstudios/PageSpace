@@ -351,11 +351,13 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, globalStatus, globalStop]);
 
   // Sync local messages to global context (global mode only)
+  // Only sync when initialized to prevent race conditions during conversation loading.
+  // This ensures we don't overwrite context with stale messages from a previous conversation.
   useEffect(() => {
-    if (!selectedAgent) {
+    if (!selectedAgent && globalIsInitialized) {
       setGlobalMessages(globalLocalMessages);
     }
-  }, [selectedAgent, globalLocalMessages, setGlobalMessages]);
+  }, [selectedAgent, globalLocalMessages, setGlobalMessages, globalIsInitialized]);
 
   // Sync streaming status to global context (global mode only)
   useEffect(() => {
