@@ -1,22 +1,15 @@
-import { createId } from '@paralleldrive/cuid2';
+import { createId, isCuid } from '@paralleldrive/cuid2';
 
 export const REQUEST_ID_HEADER = 'X-Request-Id';
 
 /**
- * Validates a request ID to prevent header injection attacks.
- * Accepts alphanumeric characters, hyphens, and underscores up to 128 chars.
+ * Validates a request ID using the official CUID2 validator.
  */
 export const isValidRequestId = (id: string | null | undefined): boolean => {
-  if (!id || typeof id !== 'string' || id.length === 0) {
+  if (!id || typeof id !== 'string') {
     return false;
   }
-
-  if (id.length > 128) {
-    return false;
-  }
-
-  const validPattern = /^[a-zA-Z0-9_-]+$/;
-  return validPattern.test(id);
+  return isCuid(id);
 };
 
 /**

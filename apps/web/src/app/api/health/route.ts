@@ -57,10 +57,9 @@ export async function GET(_request: Request): Promise<Response> {
 
     const statusCode = dbHealthy ? 200 : 503;
 
-    return new Response(JSON.stringify(response), {
+    return Response.json(response, {
       status: statusCode,
       headers: {
-        'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
@@ -83,10 +82,9 @@ export async function GET(_request: Request): Promise<Response> {
       error: 'Health check failed unexpectedly',
     };
 
-    return new Response(JSON.stringify(response), {
+    return Response.json(response, {
       status: 503,
       headers: {
-        'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });

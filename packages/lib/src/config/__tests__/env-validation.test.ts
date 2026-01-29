@@ -11,7 +11,8 @@ describe('env-validation', () => {
 
   beforeEach(() => {
     vi.resetModules();
-    process.env = { ...originalEnv };
+    // Reset to minimal deterministic env to avoid host pollution
+    process.env = { NODE_ENV: 'test' };
   });
 
   afterEach(() => {

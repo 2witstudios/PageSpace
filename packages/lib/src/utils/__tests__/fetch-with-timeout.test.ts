@@ -80,29 +80,35 @@ describe('fetch-with-timeout', () => {
       ).rejects.toThrow('Network error');
     });
 
-    it('given abort error, should throw TimeoutError', async () => {
+    it('given caller abort, should rethrow AbortError (not TimeoutError)', async () => {
+      const callerController = new AbortController();
       const abortError = new Error('AbortError');
       abortError.name = 'AbortError';
-      global.fetch = vi.fn().mockRejectedValue(abortError);
+
+      global.fetch = vi.fn().mockImplementation(() => {
+        callerController.abort();
+        return Promise.reject(abortError);
+      });
 
       await expect(
-        fetchWithTimeout('https://api.example.com/data', { timeout: 100 })
-      ).rejects.toThrow(TimeoutError);
+        fetchWithTimeout('https://api.example.com/data', {
+          signal: callerController.signal,
+        })
+      ).rejects.toThrow(abortError);
     });
 
-    it('given abort error, should include URL in error message', async () => {
-      const abortError = new Error('AbortError');
-      abortError.name = 'AbortError';
-      global.fetch = vi.fn().mockRejectedValue(abortError);
+    it('given caller signal, should compose with internal timeout', async () => {
+      const mockResponse = new Response('ok', { status: 200 });
+      const callerController = new AbortController();
 
-      try {
-        await fetchWithTimeout('https://api.example.com/slow', { timeout: 100 });
-        expect.fail('Should have thrown');
-      } catch (error) {
-        expect(error).toBeInstanceOf(TimeoutError);
-        expect((error as Error).message).toContain('https://api.example.com/slow');
-        expect((error as Error).message).toContain('100ms');
-      }
+      global.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+      const response = await fetchWithTimeout('https://api.example.com/data', {
+        signal: callerController.signal,
+        timeout: 5000,
+      });
+
+      expect(response.status).toBe(200);
     });
 
     it('given zero timeout, should use default timeout', async () => {

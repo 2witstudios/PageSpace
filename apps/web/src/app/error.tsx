@@ -30,7 +30,7 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
           </div>
           <CardTitle className="text-xl">Something went wrong</CardTitle>
           <CardDescription>
-            An unexpected error occurred. Our team has been notified.
+            An unexpected error occurred. Please try again or contact support.
           </CardDescription>
         </CardHeader>
 
