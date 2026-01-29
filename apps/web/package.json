@@ -109,6 +109,7 @@
   },
   "devDependencies": {
     "@capacitor/app": "^7.1.1",
+    "@capacitor/browser": "^7.0.3",
     "@capacitor/core": "^7.0.0",
     "@capacitor/preferences": "^7.0.0",
     "@capgo/capacitor-social-login": "^7.0.5",
