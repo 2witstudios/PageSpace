@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { createId } from "@paralleldrive/cuid2";
 import {
   Dialog,
   DialogContent,
@@ -40,15 +41,21 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachedFilesRef = useRef<AttachedFile[]>([]);
 
-  // Cleanup blob URLs on unmount
+  // Keep ref in sync with state for unmount cleanup
+  useEffect(() => {
+    attachedFilesRef.current = attachedFiles;
+  }, [attachedFiles]);
+
+  // Cleanup blob URLs on unmount only
   useEffect(() => {
     return () => {
-      attachedFiles.forEach((f) => {
+      attachedFilesRef.current.forEach((f) => {
         URL.revokeObjectURL(f.preview);
       });
     };
-  }, [attachedFiles]);
+  }, []);
 
   const handleClose = useCallback(() => {
     if (!isSubmitting) {
@@ -82,7 +89,7 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
       }
 
       newFiles.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         file,
         preview: URL.createObjectURL(file),
       });

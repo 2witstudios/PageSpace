@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -76,7 +77,7 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
 });
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: Response.json({ error: 'Unauthorized' }, { status }),
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
 // Valid base64-encoded images for testing
