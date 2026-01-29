@@ -181,9 +181,19 @@ interface MonitoringIngestPayload {
 
 const DEFAULT_INGEST_PATH = '/api/internal/monitoring/ingest';
 
+// Track whether we've warned about missing ingest key (to avoid log spam)
+let hasWarnedMissingIngestKey = false;
+
 function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPayload): void {
   const ingestKey = process.env.MONITORING_INGEST_KEY;
   if (!ingestKey) {
+    if (!hasWarnedMissingIngestKey) {
+      hasWarnedMissingIngestKey = true;
+      loggers.system.warn(
+        'MONITORING_INGEST_KEY is not configured; monitoring ingest is disabled. ' +
+        'Set MONITORING_INGEST_KEY in your environment to enable API monitoring.'
+      );
+    }
     return;
   }
 
