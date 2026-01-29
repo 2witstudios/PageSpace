@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
@@ -186,11 +186,28 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
 
+  // Track the previous conversation ID to detect conversation switches
+  const prevConversationIdRef = useRef<string | null>(null);
+
+  // Sync initialMessages with current messages ONLY when conversation ID changes
+  // This ensures useChat gets the correct messages when switching conversations from history
+  // without causing chatConfig to update on every message
+  useEffect(() => {
+    const conversationJustSwitched = currentConversationId !== prevConversationIdRef.current;
+
+    if (conversationJustSwitched && currentConversationId) {
+      // On conversation switch, initialMessages is already set by loadConversation
+      // Just update our tracking ref
+      prevConversationIdRef.current = currentConversationId;
+    }
+  }, [currentConversationId]);
+
   // Create stable chat config
-  // IMPORTANT: Use `messages` instead of `initialMessages` to ensure the config always has
-  // current messages. This prevents state snap-back issues when switching conversations
-  // from history. The useChat hook only reinitializes when `id` changes, so frequent
-  // config updates from message changes won't cause unwanted reinitializations.
+  // IMPORTANT: Uses initialMessages which is set by loadConversation when switching conversations.
+  // The chatConfig only changes when:
+  // 1. currentConversationId changes (switching conversations)
+  // 2. initialMessages changes (set during loadConversation)
+  // This keeps the config stable during normal messaging to avoid confusing useChat.
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
@@ -198,7 +215,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
     return {
       id: currentConversationId,
-      messages: messages,
+      messages: initialMessages,
       transport: new DefaultChatTransport({
         api: apiEndpoint,
         fetch: (url, options) => {
@@ -214,7 +231,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [currentConversationId, messages]);
+  }, [currentConversationId, initialMessages]);
 
   // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({
