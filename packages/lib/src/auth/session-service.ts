@@ -88,13 +88,20 @@ export class SessionService {
       ),
       with: {
         user: {
-          columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true }
+          columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true, suspendedAt: true }
         }
       }
     });
 
     if (!session) return null;
     if (!session.user) return null;
+
+    // Check if user is suspended (administrative action)
+    if (session.user.suspendedAt) {
+      await this.revokeSession(token, 'user_suspended');
+      return null;
+    }
+
     if (session.tokenVersion !== session.user.tokenVersion) {
       await this.revokeSession(token, 'token_version_mismatch');
       return null;

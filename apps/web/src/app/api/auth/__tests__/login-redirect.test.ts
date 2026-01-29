@@ -138,6 +138,8 @@ describe('/api/auth/login redirect', () => {
       tosAcceptedAt: null,
       failedLoginAttempts: 0,
       lockedUntil: null,
+      suspendedAt: null,
+      suspendedReason: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     });

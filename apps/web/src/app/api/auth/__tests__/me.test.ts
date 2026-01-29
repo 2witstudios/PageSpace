@@ -55,6 +55,8 @@ const mockUser: User = {
   tosAcceptedAt: null,
   failedLoginAttempts: 0,
   lockedUntil: null,
+  suspendedAt: null,
+  suspendedReason: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
   updatedAt: new Date('2024-01-01T00:00:00Z'),
 };

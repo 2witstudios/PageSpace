@@ -67,6 +67,8 @@ describe('validateServiceUser', () => {
         lastStorageCalculated: null,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        suspendedAt: null,
+        suspendedReason: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -160,6 +162,8 @@ describe('validateServiceUser', () => {
         lastStorageCalculated: null,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        suspendedAt: null,
+        suspendedReason: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -170,6 +174,49 @@ describe('validateServiceUser', () => {
         valid: true,
         userId: 'admin-123',
         role: 'admin',
+      } satisfies ServiceUserValidationResult);
+    });
+  });
+
+  describe('given a suspended user', () => {
+    it('should return invalid result with suspended reason', async () => {
+      const mockUser = {
+        id: 'suspended-123',
+        name: 'Suspended User',
+        email: 'suspended@example.com',
+        role: 'user' as const,
+        provider: 'email' as const,
+        subscriptionTier: 'free',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        emailVerified: new Date(),
+        image: null,
+        password: null,
+        googleId: null,
+        appleId: null,
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        storageUsedBytes: 0,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        tosAcceptedAt: null,
+        currentAiProvider: 'pagespace',
+        currentAiModel: 'glm-4.5-air',
+        activeUploads: 0,
+        lastStorageCalculated: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        suspendedAt: new Date(), // User is suspended
+        suspendedReason: 'Terms of service violation',
+      };
+
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
+
+      const result = await validateServiceUser('suspended-123');
+
+      expect(result).toEqual({
+        valid: false,
+        reason: 'user_suspended',
       } satisfies ServiceUserValidationResult);
     });
   });

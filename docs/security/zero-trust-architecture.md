@@ -1423,9 +1423,10 @@ REDIS_SESSION_URL=redis://redis-sessions:6379/0
 SESSION_ENCRYPTION_KEY=<64-char-hex-for-sensitive-session-data>
 CSRF_SECRET=<32-char-random>
 
-# Deprecated (remove after migration)
-JWT_SECRET=<legacy-to-be-removed>
-SERVICE_JWT_SECRET=<legacy-to-be-removed>
+# Deprecated (migration complete - can be removed)
+# JWT_SECRET is still used for user session JWTs (separate from service tokens)
+JWT_SECRET=<rotate-regularly>
+# SERVICE_JWT_SECRET has been removed - system now uses opaque tokens
 ```
 
 ---

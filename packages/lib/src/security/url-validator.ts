@@ -268,7 +268,23 @@ export async function validateExternalURL(
 }
 
 /**
+ * Build a URL that connects directly to a resolved IP while preserving the original Host header.
+ * This prevents DNS rebinding attacks by bypassing DNS resolution during fetch().
+ */
+function buildIPDirectURL(originalUrl: URL, resolvedIP: string): string {
+  // For IPv6 addresses, wrap in brackets
+  const ipHost = resolvedIP.includes(':') ? `[${resolvedIP}]` : resolvedIP;
+  const port = originalUrl.port || (originalUrl.protocol === 'https:' ? '443' : '80');
+  return `${originalUrl.protocol}//${ipHost}:${port}${originalUrl.pathname}${originalUrl.search}`;
+}
+
+/**
  * Safe fetch wrapper that validates URLs before making requests
+ *
+ * SSRF Protection Features:
+ * - Validates URL before fetching (blocks private IPs, cloud metadata, etc.)
+ * - Mitigates DNS rebinding by connecting to the validated IP directly
+ * - Validates redirect targets before following
  *
  * @param url - The URL to fetch
  * @param options - Fetch options (including maxRedirects to prevent infinite loops)
@@ -294,15 +310,26 @@ export async function safeFetch(
     throw new Error(`SSRF protection: ${validation.error}`);
   }
 
-  // NOTE: There is a residual TOCTOU (Time-of-Check-Time-of-Use) risk with DNS rebinding.
-  // An attacker could return a safe IP during our DNS validation above, then return a
-  // private IP when fetch() does its own DNS resolution. Full mitigation requires either:
-  // - Connecting to the validated IP directly with a Host header
-  // - Using a specialized library like ssrf-req-filter
-  // - Server-side network policies (firewall rules)
-  // For high-security contexts, consider additional protections.
-  const response = await fetch(url, {
+  const originalUrl = validation.url!;
+
+  // DNS Rebinding Mitigation: Connect to the validated IP directly
+  // This prevents TOCTOU attacks where an attacker returns a safe IP during validation
+  // but a private IP when fetch() does its own DNS resolution.
+  let fetchUrl = url;
+  const headers = new Headers(fetchOptions.headers);
+
+  if (validation.resolvedIPs && validation.resolvedIPs.length > 0) {
+    // Use the first validated IP for the connection
+    const targetIP = validation.resolvedIPs[0];
+    fetchUrl = buildIPDirectURL(originalUrl, targetIP);
+
+    // Preserve the original Host header for virtual hosting
+    headers.set('Host', originalUrl.host);
+  }
+
+  const response = await fetch(fetchUrl, {
     ...fetchOptions,
+    headers,
     // Prevent automatic redirects to validate each URL
     redirect: 'manual',
   });

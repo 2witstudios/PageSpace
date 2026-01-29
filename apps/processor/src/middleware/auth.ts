@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions';
+import { loggers } from '@pagespace/lib/logger-config';
 
 /**
  * Authentication is ALWAYS required in production.
@@ -38,23 +39,42 @@ export async function authenticateService(req: Request, res: Response, next: Nex
   }
 
   const header = req.headers.authorization;
+  const requestContext = {
+    endpoint: req.path,
+    method: req.method,
+    ip: req.ip || req.socket?.remoteAddress,
+    userAgent: req.headers['user-agent']?.substring(0, 100),
+  };
+
   if (!header || !header.startsWith('Bearer ')) {
+    loggers.security.warn('Processor auth: missing or invalid authorization header', requestContext);
     respondUnauthorized(res);
     return;
   }
 
   const token = header.slice(7).trim();
+  const tokenPrefix = token.substring(0, 12); // Log prefix only for debugging
 
   try {
     const claims = await sessionService.validateSession(token);
 
     if (!claims) {
+      loggers.security.warn('Processor auth: invalid or expired token', {
+        ...requestContext,
+        tokenPrefix,
+      });
       respondUnauthorized(res, 'Invalid or expired token');
       return;
     }
 
     // Reject non-service session types - processor is for service-to-service only
     if (claims.type !== 'service') {
+      loggers.security.warn('Processor auth: non-service token rejected', {
+        ...requestContext,
+        tokenPrefix,
+        tokenType: claims.type,
+        userId: claims.userId,
+      });
       respondForbidden(res, 'Service token required');
       return;
     }
@@ -64,9 +84,23 @@ export async function authenticateService(req: Request, res: Response, next: Nex
     const context = EnforcedAuthContext.fromSession(claims);
     req.auth = context;
 
+    // Log successful service token validation for audit trail
+    loggers.security.info('Processor auth: service token validated', {
+      ...requestContext,
+      userId: claims.userId,
+      sessionId: claims.sessionId,
+      scopes: claims.scopes,
+      resourceType: claims.resourceType,
+      resourceId: claims.resourceId,
+      driveId: claims.driveId,
+    });
+
     next();
   } catch (error) {
-    console.error('Authentication failed:', error);
+    loggers.security.error('Processor auth: validation error', error as Error, {
+      ...requestContext,
+      tokenPrefix,
+    });
     respondUnauthorized(res, 'Invalid token');
   }
 }
@@ -85,13 +119,13 @@ export function requireScope(scope: string) {
     }
 
     if (!auth.hasScope(scope)) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('Scope assertion failed', {
-          required: scope,
-          userId: auth.userId,
-          path: req.path,
-        });
-      }
+      loggers.security.warn('Processor auth: scope assertion failed', {
+        required: scope,
+        userId: auth.userId,
+        endpoint: req.path,
+        method: req.method,
+        ip: req.ip || req.socket?.remoteAddress,
+      });
       respondForbidden(res, `Missing required scope: ${scope}`, scope);
       return;
     }
