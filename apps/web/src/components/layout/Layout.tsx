@@ -20,7 +20,7 @@ import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useRouter, usePathname } from "next/navigation";
 import { isCapacitorApp } from "@/lib/capacitor-bridge";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import {
   Sheet,
   SheetContent,
@@ -48,10 +48,14 @@ function Layout({ children }: LayoutProps) {
   const setLeftSidebarOpen = useLayoutStore(state => state.setLeftSidebarOpen);
   const setRightSidebarOpen = useLayoutStore(state => state.setRightSidebarOpen);
 
+  // Mobile sheet state from store (allows other components to control sheets)
+  const leftSheetOpen = useLayoutStore(state => state.leftSheetOpen);
+  const rightSheetOpen = useLayoutStore(state => state.rightSheetOpen);
+  const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
+  const setRightSheetOpen = useLayoutStore(state => state.setRightSheetOpen);
+
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
-  const [leftSheetOpen, setLeftSheetOpen] = useState(false);
-  const [rightSheetOpen, setRightSheetOpen] = useState(false);
 
   useResponsivePanels();
 
@@ -72,7 +76,7 @@ function Layout({ children }: LayoutProps) {
       setLeftSheetOpen(false);
       setRightSheetOpen(false);
     }
-  }, [isSheetBreakpoint]);
+  }, [isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
   // Auto-close sheets on navigation (Capacitor only)
   // This fixes the issue where tapping a sidebar item navigates but leaves the sheet open
@@ -81,7 +85,7 @@ function Layout({ children }: LayoutProps) {
       setLeftSheetOpen(false);
       setRightSheetOpen(false);
     }
-  }, [pathname, isSheetBreakpoint]);
+  }, [pathname, isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -94,13 +98,11 @@ function Layout({ children }: LayoutProps) {
   const handleLeftPanelToggle = useCallback(() => {
     dismissKeyboard();
     if (isSheetBreakpoint) {
-      setLeftSheetOpen((open) => {
-        const nextOpen = !open;
-        if (nextOpen && rightSheetOpen) {
-          setRightSheetOpen(false);
-        }
-        return nextOpen;
-      });
+      const nextOpen = !leftSheetOpen;
+      if (nextOpen && rightSheetOpen) {
+        setRightSheetOpen(false);
+      }
+      setLeftSheetOpen(nextOpen);
       return;
     }
 
@@ -119,10 +121,13 @@ function Layout({ children }: LayoutProps) {
     toggleLeftSidebar();
   }, [
     isSheetBreakpoint,
+    leftSheetOpen,
     rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
+    setLeftSheetOpen,
+    setRightSheetOpen,
     setLeftSidebarOpen,
     setRightSidebarOpen,
     toggleLeftSidebar,
@@ -131,13 +136,11 @@ function Layout({ children }: LayoutProps) {
   const handleRightPanelToggle = useCallback(() => {
     dismissKeyboard();
     if (isSheetBreakpoint) {
-      setRightSheetOpen((open) => {
-        const nextOpen = !open;
-        if (nextOpen && leftSheetOpen) {
-          setLeftSheetOpen(false);
-        }
-        return nextOpen;
-      });
+      const nextOpen = !rightSheetOpen;
+      if (nextOpen && leftSheetOpen) {
+        setLeftSheetOpen(false);
+      }
+      setRightSheetOpen(nextOpen);
       return;
     }
 
@@ -157,9 +160,12 @@ function Layout({ children }: LayoutProps) {
   }, [
     isSheetBreakpoint,
     leftSheetOpen,
+    rightSheetOpen,
     shouldOverlaySidebars,
     leftSidebarOpen,
     rightSidebarOpen,
+    setLeftSheetOpen,
+    setRightSheetOpen,
     setLeftSidebarOpen,
     setRightSidebarOpen,
     toggleRightSidebar,
