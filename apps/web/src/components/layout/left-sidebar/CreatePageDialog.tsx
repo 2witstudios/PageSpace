@@ -72,7 +72,6 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
         }
 
         const result = await response.json();
-        toast.success('File uploaded successfully');
         onPageCreated(result.page);
         setIsOpen(false);
         setTitle('');
@@ -100,7 +99,6 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
         content
       });
 
-      toast.success('Page created successfully');
       onPageCreated(newPage);
       setIsOpen(false);
       setTitle('');

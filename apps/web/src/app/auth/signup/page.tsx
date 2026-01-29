@@ -103,7 +103,6 @@ export default function SignUp() {
       // Handle successful signup (303 redirect)
       if (signupResponse.status === 303 || signupResponse.type === 'opaqueredirect') {
         // Success! Server sent redirect
-        toast.success(`Welcome to PageSpace, ${name}! Let's get started.`);
         setLoadingMessage("Taking you to your dashboard...");
 
         // Navigate to dashboard (or follow the Location header)
@@ -170,7 +169,6 @@ export default function SignUp() {
         if (result.success) {
           const { useAuthStore } = await import('@/stores/useAuthStore');
           useAuthStore.getState().setAuthFailedPermanently(false);
-          toast.success("Welcome! You've been signed in successfully.");
 
           if (result.user) {
             useAuthStore.getState().setUser(result.user);
@@ -248,7 +246,6 @@ export default function SignUp() {
         if (result.success) {
           const { useAuthStore } = await import('@/stores/useAuthStore');
           useAuthStore.getState().setAuthFailedPermanently(false);
-          toast.success("Welcome! You've been signed in successfully.");
 
           if (result.user) {
             useAuthStore.getState().setUser(result.user);

@@ -39,7 +39,6 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       }
       await patch(`/api/pages/${pageId}`, { content: newValue }, { headers });
       console.log('Save successful');
-      toast.success('Page saved successfully!');
     } catch (error) {
       console.error('Failed to save page content:', error);
       toast.error('Failed to save page content.');
@@ -74,7 +73,6 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
             const newContent = typeof updatedPage.content === 'string' ? updatedPage.content : '';
             // Use updateContentFromServer to avoid triggering auto-save loop
             updateContentFromServer(newContent);
-            toast.success('Canvas updated');
           }
         } catch (error) {
           console.error('Failed to fetch updated canvas content:', error);

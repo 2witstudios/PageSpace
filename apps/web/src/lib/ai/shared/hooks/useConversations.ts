@@ -119,7 +119,6 @@ export function useConversations({
           const messagesData = await response.json();
           const messages = messagesData.messages || [];
           onConversationLoad?.(conversationId, messages);
-          toast.success('Conversation loaded');
         } else {
           throw new Error('Failed to load conversation');
         }
@@ -154,7 +153,6 @@ export function useConversations({
         }
 
         onConversationCreate?.(newConversationId);
-        toast.success('New conversation started');
         return newConversationId;
       }
       return null;
@@ -185,8 +183,6 @@ export function useConversations({
           if (conversationId === currentConversationId) {
             onConversationDelete?.(conversationId);
           }
-
-          toast.success('Conversation deleted');
         }
       } catch (error) {
         console.error('Failed to delete conversation:', error);

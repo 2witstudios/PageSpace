@@ -67,9 +67,6 @@ function SignInForm() {
       const result = await actions.login(email, password);
 
       if (result.success) {
-        // Show success message
-        toast.success("Welcome back! You've been signed in successfully.");
-        
         // Use replace to avoid back navigation issues
         router.replace(result.redirectTo ?? '/dashboard');
       } else {
@@ -106,8 +103,6 @@ function SignInForm() {
 
           // Clear authFailedPermanently flag to allow auth validation
           useAuthStore.getState().setAuthFailedPermanently(false);
-
-          toast.success("Welcome! You've been signed in successfully.");
 
           // Directly set auth state - no API call needed
           // This is synchronous and prevents race conditions where the dashboard
@@ -194,8 +189,6 @@ function SignInForm() {
 
           // Clear authFailedPermanently flag to allow auth validation
           useAuthStore.getState().setAuthFailedPermanently(false);
-
-          toast.success("Welcome! You've been signed in successfully.");
 
           // Directly set auth state - no API call needed
           if (result.user) {
