@@ -8,6 +8,7 @@ import {
   DragOverEvent,
   DragStartEvent,
   PointerSensor,
+  TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
@@ -79,6 +80,12 @@ export function SortableTree<T extends TreeItem>({
     useSensor(PointerSensor, {
       activationConstraint: {
         distance: 8,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 300,
+        tolerance: 8,
       },
     }),
     useSensor(KeyboardSensor, {

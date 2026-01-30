@@ -232,7 +232,7 @@ export function PageTreeItem({
               {...handleProps.listeners}
               data-tree-node-id={item.id}
               className={cn(
-                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
+                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 select-none",
                 showDropIndicator && dropPosition === "inside" &&
                   "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
                 !isActive && !showDropIndicator &&
@@ -279,8 +279,13 @@ export function PageTreeItem({
                 href={linkHref}
                 onClick={handleLinkClick}
                 onMouseDown={handleMouseDown}
-                onPointerDown={(e) => e.stopPropagation()}
-                onTouchEnd={(e) => e.stopPropagation()}
+                onPointerDown={(e) => {
+                  // On non-touch devices, stop propagation to prevent drag when clicking link
+                  // On touch devices, let the event through - TouchSensor uses delay to distinguish tap vs long-press
+                  if (!isTouchDevice) {
+                    e.stopPropagation();
+                  }
+                }}
                 className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer touch-manipulation"
               >
                 {item.title}
