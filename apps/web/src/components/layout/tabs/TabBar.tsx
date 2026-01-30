@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { useOpenTabsStore, selectHasMultipleTabs } from '@/stores/useOpenTabsStore';
+import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { TabItem } from './TabItem';
 import { cn } from '@/lib/utils';
 
@@ -15,6 +16,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const router = useRouter();
   const params = useParams();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isMobile = useBreakpoint('(max-width: 1023px)');
 
   const tabs = useOpenTabsStore((state) => state.tabs);
   const activeTabId = useOpenTabsStore((state) => state.activeTabId);
@@ -129,8 +131,8 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
     }
   }, [activeTabId]);
 
-  // Auto-hide when 0 or 1 tabs
-  if (!hasMultipleTabs) {
+  // Auto-hide on mobile or when 0 or 1 tabs
+  if (isMobile || !hasMultipleTabs) {
     return null;
   }
 

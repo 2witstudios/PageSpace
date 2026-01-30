@@ -12,7 +12,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import type { Tab, TabPageType } from '@/stores/useOpenTabsStore';
+import type { Tab } from '@/stores/useOpenTabsStore';
+import { PageType } from '@pagespace/lib/client-safe';
 
 interface TabItemProps {
   tab: Tab;
@@ -91,7 +92,7 @@ export const TabItem = memo(function TabItem({
         >
           {/* Page type icon */}
           <PageTypeIcon
-            type={tab.type as TabPageType}
+            type={tab.type as PageType}
             className={cn(
               "h-3.5 w-3.5 flex-shrink-0",
               isActive ? "text-foreground" : "text-muted-foreground"
