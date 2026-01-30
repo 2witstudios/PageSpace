@@ -162,6 +162,23 @@ function Layout({ children }: LayoutProps) {
     toggleRightSidebar,
   ]);
 
+  // Dismiss keyboard when tapping outside editable content (iOS Capacitor fix)
+  // iOS contenteditable elements don't automatically blur on outside taps like regular inputs
+  const handleLayoutClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+
+    // Don't dismiss if clicking inside editable content
+    const isInsideEditable =
+      target.closest('.ProseMirror') !== null ||           // TipTap editor
+      target.closest('input') !== null ||                  // Input fields
+      target.closest('textarea') !== null ||               // Textareas
+      target.closest('[contenteditable="true"]') !== null; // Other contenteditable
+
+    if (!isInsideEditable) {
+      dismissKeyboard();
+    }
+  }, []);
+
   // Optimize loading checks - show UI earlier for better perceived performance
   if (isLoading || !hasHydrated) {
     return (
@@ -192,6 +209,7 @@ function Layout({ children }: LayoutProps) {
         <div
           className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
           style={{ height: 'var(--app-height, 100dvh)' }}
+          onClick={handleLayoutClick}
         >
           <TopBar
             onToggleLeftPanel={handleLeftPanelToggle}
