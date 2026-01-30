@@ -68,10 +68,10 @@ function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { ch
   );
 }
 
-// Custom paragraph component with word breaking
+// Custom paragraph component with smart word breaking and hyphenation
 function CustomParagraph({ children, ...props }: HTMLAttributes<HTMLParagraphElement> & { children?: ReactNode }) {
   return (
-    <p className="min-w-0 max-w-full [overflow-wrap:anywhere]" {...props}>
+    <p className="min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]" {...props}>
       {children}
     </p>
   );
@@ -86,19 +86,19 @@ function CustomTable({ children, ...props }: TableHTMLAttributes<HTMLTableElemen
   );
 }
 
-// Custom list item component with word breaking
+// Custom list item component with smart word breaking and hyphenation
 function CustomListItem({ children, ...props }: HTMLAttributes<HTMLLIElement> & { children?: ReactNode }) {
   return (
-    <li className="min-w-0 max-w-full break-all [overflow-wrap:anywhere]" {...props}>
+    <li className="min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]" {...props}>
       {children}
     </li>
   );
 }
 
-// Custom span component for inline text - uses overflow-wrap only to preserve word boundaries
+// Custom span component for inline text - uses smart word breaking to preserve word boundaries
 function CustomSpan({ children, ...props }: HTMLAttributes<HTMLSpanElement> & { children?: ReactNode }) {
   return (
-    <span className="min-w-0 max-w-full [overflow-wrap:anywhere]" {...props}>
+    <span className="min-w-0 max-w-full [overflow-wrap:break-word] [hyphens:auto]" {...props}>
       {children}
     </span>
   );

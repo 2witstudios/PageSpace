@@ -76,7 +76,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
       ) : (
         <>
           <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
-            <div className="break-words overflow-wrap-anywhere">
+            <div className="[overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]">
               <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
             </div>
           </div>
