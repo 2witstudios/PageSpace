@@ -109,9 +109,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No active document found' }, { status: 404 });
     }
     
-    // Check user permissions
+    // Check user permissions - Zero Trust: explicitly verify view permission
     const accessLevel = await getUserAccessLevel(userId, pageId);
-    if (!accessLevel) {
+    if (!accessLevel || !accessLevel.canView) {
+      loggers.api.warn('MCP document access denied - no view permission', {
+        userId,
+        pageId,
+        hasAccessLevel: !!accessLevel,
+        canView: accessLevel?.canView ?? false
+      });
       return new NextResponse('Forbidden', { status: 403 });
     }
 
