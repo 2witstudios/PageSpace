@@ -8,6 +8,7 @@ import { usePageAgentSidebarState, useSidebarAgentStore } from "@/hooks/page-age
 import { useDashboardContext } from "@/hooks/useDashboardContext";
 import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useMobileKeyboard } from "@/hooks/useMobileKeyboard";
 
 import SidebarChatTab from "./ai-assistant/SidebarChatTab";
 import SidebarHistoryTab from "./ai-assistant/SidebarHistoryTab";
@@ -34,8 +35,11 @@ export interface RightPanelProps {
  * - Automatic ARIA roles (tablist, tab, tabpanel)
  * - Focus management and screen reader support
  */
-export default function RightPanel({ className }: RightPanelProps) {
+export default function RightPanel({ className, variant }: RightPanelProps) {
   const { isDashboardContext } = useDashboardContext();
+
+  // Mobile keyboard support - adjust height when keyboard is open
+  const { isOpen: isKeyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   // Get agent state from both stores (hooks must be called unconditionally)
   // Only extract selectedAgent from sidebar state to minimize subscriptions
@@ -93,12 +97,25 @@ export default function RightPanel({ className }: RightPanelProps) {
     "data-[state=inactive]:text-muted-foreground data-[state=inactive]:hover:bg-muted/60 data-[state=inactive]:hover:text-foreground"
   );
 
+  // For overlay variant (Sheet on mobile), adjust height when keyboard is open
+  const isOverlay = variant === 'overlay';
+  const adjustedHeight = isOverlay && isKeyboardOpen
+    ? `calc(100% - ${keyboardHeight}px)`
+    : undefined;
+
   return (
     <aside
       className={cn(
-        "flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tl-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden",
+        "flex w-full flex-col pt-[env(safe-area-inset-top)] text-sidebar-foreground liquid-glass-regular rounded-tl-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden",
+        // Use h-full normally, but allow height override when keyboard is open
+        !adjustedHeight && "h-full",
+        // Only add bottom padding when keyboard is NOT open
+        !isKeyboardOpen && "pb-[env(safe-area-inset-bottom)]",
         className,
       )}
+      style={{
+        height: adjustedHeight,
+      }}
     >
       <Tabs
         value={activeTab}
