@@ -19,6 +19,8 @@ import {
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { cn } from '@/lib/utils';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import type { Task, TaskFilters, Drive, Pagination, TaskStatus, TaskPriority } from './types';
 
 interface TasksDashboardProps {
@@ -232,179 +234,186 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-        {/* Header */}
-        <div className="mb-6">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(context === 'drive' && selectedDriveId
-              ? `/dashboard/${selectedDriveId}`
-              : '/dashboard'
-            )}
-            className="mb-4"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
-          </Button>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">{title}</h1>
-              <p className="text-sm text-muted-foreground">{description}</p>
-            </div>
-            <Button
-              onClick={handleRefresh}
-              variant="outline"
-              size="sm"
-              disabled={loading}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-          </div>
-        </div>
-
-        {/* Error Alert */}
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {/* Filter Bar */}
-        <div className="mb-6 flex flex-wrap gap-3">
-          {/* Drive Selector (for user context or drive context switching) */}
-          <Select
-            value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-            onValueChange={(value) => handleDriveChange(value === 'all' ? '' : value)}
-          >
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="All drives" />
-            </SelectTrigger>
-            <SelectContent>
-              {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-              {drives.map((drive) => (
-                <SelectItem key={drive.id} value={drive.id}>
-                  {drive.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* Status Filter */}
-          <Select
-            value={filters.status || 'all'}
-            onValueChange={(value) => handleFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-          >
-            <SelectTrigger className="w-[150px]">
-              <SelectValue placeholder="All statuses" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="in_progress">In Progress</SelectItem>
-              <SelectItem value="blocked">Blocked</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Priority Filter */}
-          <Select
-            value={filters.priority || 'all'}
-            onValueChange={(value) => handleFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-          >
-            <SelectTrigger className="w-[130px]">
-              <SelectValue placeholder="All priorities" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All priorities</SelectItem>
-              <SelectItem value="high">High</SelectItem>
-              <SelectItem value="medium">Medium</SelectItem>
-              <SelectItem value="low">Low</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Tasks List */}
-        {tasks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <CheckSquare className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <h3 className="text-lg font-medium mb-1">
-              {context === 'drive' && !selectedDriveId
-                ? 'Select a drive to view tasks'
-                : 'No tasks found'}
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              {context === 'drive' && !selectedDriveId
-                ? 'Choose a drive from the dropdown above'
-                : 'Tasks assigned to you will appear here'}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Render by status groups when no status filter is applied */}
-            {!filters.status ? (
-              <>
-                {tasksByStatus.in_progress.length > 0 && (
-                  <TaskSection
-                    title="In Progress"
-                    tasks={tasksByStatus.in_progress}
-                    drives={drives}
-                    context={context}
-                  />
+    <div className="h-full">
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+      >
+        <CustomScrollArea className="h-full">
+          <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
+            {/* Header */}
+            <div className="mb-6">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push(context === 'drive' && selectedDriveId
+                  ? `/dashboard/${selectedDriveId}`
+                  : '/dashboard'
                 )}
-                {tasksByStatus.pending.length > 0 && (
-                  <TaskSection
-                    title="Pending"
-                    tasks={tasksByStatus.pending}
-                    drives={drives}
-                    context={context}
-                  />
-                )}
-                {tasksByStatus.blocked.length > 0 && (
-                  <TaskSection
-                    title="Blocked"
-                    tasks={tasksByStatus.blocked}
-                    drives={drives}
-                    context={context}
-                  />
-                )}
-                {tasksByStatus.completed.length > 0 && (
-                  <TaskSection
-                    title="Completed"
-                    tasks={tasksByStatus.completed}
-                    drives={drives}
-                    context={context}
-                  />
-                )}
-              </>
-            ) : (
-              <TaskSection
-                title={STATUS_CONFIG[filters.status]?.label || 'Tasks'}
-                tasks={tasks}
-                drives={drives}
-                context={context}
-              />
-            )}
-
-            {/* Load More */}
-            {pagination?.hasMore && (
-              <div className="flex justify-center pt-4">
+                className="mb-4"
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
+              </Button>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h1 className="text-2xl font-bold">{title}</h1>
+                  <p className="text-sm text-muted-foreground">{description}</p>
+                </div>
                 <Button
-                  onClick={handleLoadMore}
+                  onClick={handleRefresh}
                   variant="outline"
-                  disabled={loadingMore}
+                  size="sm"
+                  disabled={loading}
                 >
-                  {loadingMore ? 'Loading...' : 'Load more'}
+                  <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
                 </Button>
+              </div>
+            </div>
+
+            {/* Error Alert */}
+            {error && (
+              <Alert variant="destructive" className="mb-6">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Filter Bar */}
+            <div className="mb-6 flex flex-wrap gap-3">
+              {/* Drive Selector (for user context or drive context switching) */}
+              <Select
+                value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
+                onValueChange={(value) => handleDriveChange(value === 'all' ? '' : value)}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="All drives" />
+                </SelectTrigger>
+                <SelectContent>
+                  {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
+                  {drives.map((drive) => (
+                    <SelectItem key={drive.id} value={drive.id}>
+                      {drive.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {/* Status Filter */}
+              <Select
+                value={filters.status || 'all'}
+                onValueChange={(value) => handleFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
+              >
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="blocked">Blocked</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                </SelectContent>
+              </Select>
+
+              {/* Priority Filter */}
+              <Select
+                value={filters.priority || 'all'}
+                onValueChange={(value) => handleFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
+              >
+                <SelectTrigger className="w-[130px]">
+                  <SelectValue placeholder="All priorities" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All priorities</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="low">Low</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Tasks List */}
+            {tasks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <CheckSquare className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                <h3 className="text-lg font-medium mb-1">
+                  {context === 'drive' && !selectedDriveId
+                    ? 'Select a drive to view tasks'
+                    : 'No tasks found'}
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  {context === 'drive' && !selectedDriveId
+                    ? 'Choose a drive from the dropdown above'
+                    : 'Tasks assigned to you will appear here'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Render by status groups when no status filter is applied */}
+                {!filters.status ? (
+                  <>
+                    {tasksByStatus.in_progress.length > 0 && (
+                      <TaskSection
+                        title="In Progress"
+                        tasks={tasksByStatus.in_progress}
+                        drives={drives}
+                        context={context}
+                      />
+                    )}
+                    {tasksByStatus.pending.length > 0 && (
+                      <TaskSection
+                        title="Pending"
+                        tasks={tasksByStatus.pending}
+                        drives={drives}
+                        context={context}
+                      />
+                    )}
+                    {tasksByStatus.blocked.length > 0 && (
+                      <TaskSection
+                        title="Blocked"
+                        tasks={tasksByStatus.blocked}
+                        drives={drives}
+                        context={context}
+                      />
+                    )}
+                    {tasksByStatus.completed.length > 0 && (
+                      <TaskSection
+                        title="Completed"
+                        tasks={tasksByStatus.completed}
+                        drives={drives}
+                        context={context}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <TaskSection
+                    title={STATUS_CONFIG[filters.status]?.label || 'Tasks'}
+                    tasks={tasks}
+                    drives={drives}
+                    context={context}
+                  />
+                )}
+
+                {/* Load More */}
+                {pagination?.hasMore && (
+                  <div className="flex justify-center pt-4">
+                    <Button
+                      onClick={handleLoadMore}
+                      variant="outline"
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
-      </div>
+        </CustomScrollArea>
+      </PullToRefresh>
     </div>
   );
 }

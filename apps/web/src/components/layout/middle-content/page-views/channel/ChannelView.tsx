@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 
 interface ChannelViewProps {
   page: TreePage;
@@ -132,35 +133,48 @@ export default function ChannelView({ page }: ChannelViewProps) {
     chatInputRef.current?.clear();
   };
 
+  // Pull-to-refresh handler for mobile - re-fetch messages if real-time missed any
+  const handleRefresh = useCallback(async () => {
+    try {
+      const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
+      const data = await res.json();
+      setMessages(data);
+    } catch (error) {
+      console.error('Failed to refresh messages:', error);
+    }
+  }, [page.id]);
+
   return (
     <div className="flex flex-col h-full">
-        <div className="flex-grow overflow-hidden">
-            <ScrollArea className="h-full" ref={scrollAreaRef}>
-                <div className="p-4 space-y-4">
-                    {messages.map((m) => (
-                        <div key={m.id} className="flex items-start gap-4">
-                            <Avatar>
-                                <AvatarImage src={m.user?.image || ''} />
-                                <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
-                            </Avatar>
-                            <div className="flex flex-col">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-bold">{m.user?.name}</span>
-                                    <span className="text-xs text-gray-500">
-                                        {new Date(m.createdAt).toLocaleTimeString()}
-                                    </span>
-                                </div>
-                                {(() => {
-                                  // Channel messages are always user messages with rich text support
-                                  const parts = convertToMessageParts(m.content);
-                                  return renderMessageParts(parts, 'message');
-                                })()}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </ScrollArea>
-        </div>
+        <PullToRefresh direction="top" onRefresh={handleRefresh}>
+          <div className="flex-grow overflow-hidden">
+              <ScrollArea className="h-full" ref={scrollAreaRef}>
+                  <div className="p-4 space-y-4">
+                      {messages.map((m) => (
+                          <div key={m.id} className="flex items-start gap-4">
+                              <Avatar>
+                                  <AvatarImage src={m.user?.image || ''} />
+                                  <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
+                              </Avatar>
+                              <div className="flex flex-col">
+                                  <div className="flex items-center gap-2">
+                                      <span className="font-bold">{m.user?.name}</span>
+                                      <span className="text-xs text-gray-500">
+                                          {new Date(m.createdAt).toLocaleTimeString()}
+                                      </span>
+                                  </div>
+                                  {(() => {
+                                    // Channel messages are always user messages with rich text support
+                                    const parts = convertToMessageParts(m.content);
+                                    return renderMessageParts(parts, 'message');
+                                  })()}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              </ScrollArea>
+          </div>
+        </PullToRefresh>
         <div className="p-4 border-t">
           {canEdit ? (
             <div className="flex w-full items-center space-x-2">

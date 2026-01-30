@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -22,6 +22,8 @@ import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
 import { toast } from "sonner";
 import { patch, del, post } from '@/lib/auth/auth-fetch';
+import { PullToRefresh } from "@/components/ui/pull-to-refresh";
+import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
 
 const DriveListItem = ({
   drive,
@@ -266,6 +268,10 @@ export default function DriveList() {
     return { ownedDrives: owned, sharedDrives: shared, trashedDrives: trashed };
   }, [drives]);
 
+  const handleRefresh = useCallback(async () => {
+    await fetchDrives(true, true);
+  }, [fetchDrives]);
+
   if (isLoading) {
     return (
       <div className="space-y-4 p-2">
@@ -277,95 +283,102 @@ export default function DriveList() {
   }
 
   return (
-    <div className="space-y-4">
-      {ownedDrives.length > 0 && (
-        <div>
-          <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">My Drives</h3>
-          <div className="space-y-1">
-            {ownedDrives.map((drive) => (
-              <DriveListItem
-                key={drive.id}
-                drive={drive}
-                isActive={!isTrashView && drive.id === urlDriveId}
-                canManage={true}
-                isTouchDevice={isTouchDevice}
-                onRename={() => setRenameDialogState({ isOpen: true, drive })}
-                onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
-                onFilesUploaded={() => fetchDrives(true, true)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-      {sharedDrives.length > 0 && (
-        <div>
-          <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Shared Drives</h3>
-          <div className="space-y-1">
-            {sharedDrives.map((drive) => (
-              <DriveListItem
-                key={drive.id}
-                drive={drive}
-                isActive={!isTrashView && drive.id === urlDriveId}
-                canManage={drive.role === 'ADMIN'}
-                isTouchDevice={isTouchDevice}
-                onRename={drive.role === 'ADMIN' ? () => setRenameDialogState({ isOpen: true, drive }) : undefined}
-                onDelete={drive.role === 'ADMIN' ? () => setDeleteDialogState({ isOpen: true, drive }) : undefined}
-                onFilesUploaded={() => fetchDrives(true, true)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-       {drives.length === 0 && (
-         <p className="p-2 text-sm text-gray-500">No drives found.</p>
-      )}
-      {trashedDrives.length > 0 && (
-        <div>
-          <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Trash</h3>
-          <div className="space-y-1">
-            {trashedDrives.map((drive) => (
-              <DriveListItem
-                key={drive.id}
-                drive={drive}
-                isActive={false}
-                canManage={true}
-                isTouchDevice={isTouchDevice}
-                onRestore={handleRestoreDrive}
-                onPermanentDelete={handlePermanentDelete}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-      {urlDriveId && (
-        <div>
-          <Link href={`/dashboard/${urlDriveId}/trash`}>
-            <div
-              className={cn(
-                "flex items-center gap-2 p-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                isTrashView && "bg-accent text-accent-foreground"
-              )}
-            >
-              <Trash2 className="h-4 w-4" />
-              <span className="truncate">Page Trash</span>
+    <PullToRefresh
+      direction="top"
+      onRefresh={handleRefresh}
+    >
+      <CustomScrollArea className="h-full">
+        <div className="space-y-4">
+          {ownedDrives.length > 0 && (
+            <div>
+              <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">My Drives</h3>
+              <div className="space-y-1">
+                {ownedDrives.map((drive) => (
+                  <DriveListItem
+                    key={drive.id}
+                    drive={drive}
+                    isActive={!isTrashView && drive.id === urlDriveId}
+                    canManage={true}
+                    isTouchDevice={isTouchDevice}
+                    onRename={() => setRenameDialogState({ isOpen: true, drive })}
+                    onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
+                    onFilesUploaded={() => fetchDrives(true, true)}
+                  />
+                ))}
+              </div>
             </div>
-          </Link>
+          )}
+          {sharedDrives.length > 0 && (
+            <div>
+              <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Shared Drives</h3>
+              <div className="space-y-1">
+                {sharedDrives.map((drive) => (
+                  <DriveListItem
+                    key={drive.id}
+                    drive={drive}
+                    isActive={!isTrashView && drive.id === urlDriveId}
+                    canManage={drive.role === 'ADMIN'}
+                    isTouchDevice={isTouchDevice}
+                    onRename={drive.role === 'ADMIN' ? () => setRenameDialogState({ isOpen: true, drive }) : undefined}
+                    onDelete={drive.role === 'ADMIN' ? () => setDeleteDialogState({ isOpen: true, drive }) : undefined}
+                    onFilesUploaded={() => fetchDrives(true, true)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          {drives.length === 0 && (
+            <p className="p-2 text-sm text-gray-500">No drives found.</p>
+          )}
+          {trashedDrives.length > 0 && (
+            <div>
+              <h3 className="px-2 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Trash</h3>
+              <div className="space-y-1">
+                {trashedDrives.map((drive) => (
+                  <DriveListItem
+                    key={drive.id}
+                    drive={drive}
+                    isActive={false}
+                    canManage={true}
+                    isTouchDevice={isTouchDevice}
+                    onRestore={handleRestoreDrive}
+                    onPermanentDelete={handlePermanentDelete}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          {urlDriveId && (
+            <div>
+              <Link href={`/dashboard/${urlDriveId}/trash`}>
+                <div
+                  className={cn(
+                    "flex items-center gap-2 p-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                    isTrashView && "bg-accent text-accent-foreground"
+                  )}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span className="truncate">Page Trash</span>
+                </div>
+              </Link>
+            </div>
+          )}
+          <RenameDialog
+            isOpen={renameDialogState.isOpen}
+            onClose={() => setRenameDialogState({ isOpen: false, drive: null })}
+            onRename={handleRenameDrive}
+            initialName={renameDialogState.drive?.name || ""}
+            title="Rename Drive"
+            description="Enter a new name for your drive."
+          />
+          <DeleteDriveDialog
+            isOpen={deleteDialogState.isOpen}
+            onClose={() => setDeleteDialogState({ isOpen: false, drive: null })}
+            onConfirm={handleDeleteDrive}
+            driveName={deleteDialogState.drive?.name || ""}
+          />
         </div>
-      )}
-      <RenameDialog
-        isOpen={renameDialogState.isOpen}
-        onClose={() => setRenameDialogState({ isOpen: false, drive: null })}
-        onRename={handleRenameDrive}
-        initialName={renameDialogState.drive?.name || ""}
-        title="Rename Drive"
-        description="Enter a new name for your drive."
-      />
-      <DeleteDriveDialog
-        isOpen={deleteDialogState.isOpen}
-        onClose={() => setDeleteDialogState({ isOpen: false, drive: null })}
-        onConfirm={handleDeleteDrive}
-        driveName={deleteDialogState.drive?.name || ""}
-      />
-    </div>
+      </CustomScrollArea>
+    </PullToRefresh>
   );
 }

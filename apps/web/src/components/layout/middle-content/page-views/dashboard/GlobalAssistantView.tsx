@@ -332,6 +332,36 @@ const GlobalAssistantView: React.FC = () => {
     setGlobalLocalMessages,
   ]);
 
+  // Pull-up refresh to check for missed messages (when real-time may have failed)
+  const handlePullUpRefresh = useCallback(async () => {
+    if (!currentConversationId) return;
+    try {
+      const url = selectedAgent
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
+        : `/api/ai/global/${currentConversationId}/messages`;
+      const res = await fetchWithAuth(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (selectedAgent) {
+          setAgentMessages(data.messages);
+          setAgentStoreMessages(data.messages);
+        } else {
+          setGlobalMessages(data.messages);
+          setGlobalLocalMessages(data.messages);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to refresh messages:', error);
+    }
+  }, [
+    currentConversationId,
+    selectedAgent,
+    setAgentMessages,
+    setAgentStoreMessages,
+    setGlobalMessages,
+    setGlobalLocalMessages,
+  ]);
+
   // ============================================
   // GLOBAL MODE SYNC EFFECTS
   // ============================================
@@ -601,6 +631,7 @@ const GlobalAssistantView: React.FC = () => {
         lastAssistantMessageId={lastAssistantMessageId}
         lastUserMessageId={lastUserMessageId}
         onUndoSuccess={handleUndoSuccess}
+        onPullUpRefresh={handlePullUpRefresh}
         mcpRunningServers={runningServers}
         mcpServerNames={runningServerNames}
         mcpEnabledCount={enabledServerCount}

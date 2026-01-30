@@ -10,6 +10,8 @@ import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { ActivityFilterBar } from './ActivityFilterBar';
 import { ActivityTimeline } from './ActivityTimeline';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import type { ActivityLog, ActivityFilters, Drive, Pagination } from './types';
 import type { RollbackContext } from './ActivityItem';
 import type { ActivityActionResult } from '@/types/activity-actions';
@@ -254,79 +256,86 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
       : 'Your recent activity across all drives';
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
-        {/* Header */}
-        <div className="mb-6">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(context === 'drive' && selectedDriveId
-              ? `/dashboard/${selectedDriveId}`
-              : '/dashboard'
-            )}
-            className="mb-4"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
-          </Button>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">{title}</h1>
-              <p className="text-sm text-muted-foreground">{description}</p>
+    <div className="h-full">
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+      >
+        <CustomScrollArea className="h-full">
+          <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
+            {/* Header */}
+            <div className="mb-6">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push(context === 'drive' && selectedDriveId
+                  ? `/dashboard/${selectedDriveId}`
+                  : '/dashboard'
+                )}
+                className="mb-4"
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
+              </Button>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h1 className="text-2xl font-bold">{title}</h1>
+                  <p className="text-sm text-muted-foreground">{description}</p>
+                </div>
+                <Button
+                  onClick={handleRefresh}
+                  variant="outline"
+                  size="sm"
+                  disabled={loading}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
             </div>
-            <Button
-              onClick={handleRefresh}
-              variant="outline"
-              size="sm"
-              disabled={loading}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+
+            {/* Error Alert */}
+            {error && (
+              <Alert variant="destructive" className="mb-6">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Filter Bar */}
+            <div className="mb-6">
+              <ActivityFilterBar
+                context={context}
+                driveId={context === 'drive' ? selectedDriveId : filters.driveId}
+                drives={drives}
+                filters={filters}
+                onFiltersChange={handleFiltersChange}
+                onDriveChange={handleDriveChange}
+              />
+            </div>
+
+            {/* Activity Timeline */}
+            <ActivityTimeline
+              activities={activities}
+              pagination={pagination}
+              loading={loading}
+              loadingMore={loadingMore}
+              onLoadMore={handleLoadMore}
+              emptyMessage={context === 'drive' && !selectedDriveId
+                ? 'Select a drive to view activity'
+                : 'No activity found'
+              }
+              emptyDescription={context === 'drive' && !selectedDriveId
+                ? 'Choose a drive from the dropdown above'
+                : 'Activity will appear here as you and your team make changes'
+              }
+              context={rollbackContext}
+              onRollback={handleRollback}
+            />
           </div>
-        </div>
-
-        {/* Error Alert */}
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {/* Filter Bar */}
-        <div className="mb-6">
-          <ActivityFilterBar
-            context={context}
-            driveId={context === 'drive' ? selectedDriveId : filters.driveId}
-            drives={drives}
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            onDriveChange={handleDriveChange}
-          />
-        </div>
-
-        {/* Activity Timeline */}
-        <ActivityTimeline
-          activities={activities}
-          pagination={pagination}
-          loading={loading}
-          loadingMore={loadingMore}
-          onLoadMore={handleLoadMore}
-          emptyMessage={context === 'drive' && !selectedDriveId
-            ? 'Select a drive to view activity'
-            : 'No activity found'
-          }
-          emptyDescription={context === 'drive' && !selectedDriveId
-            ? 'Choose a drive from the dropdown above'
-            : 'Activity will appear here as you and your team make changes'
-          }
-          context={rollbackContext}
-          onRollback={handleRollback}
-        />
-      </div>
+        </CustomScrollArea>
+      </PullToRefresh>
     </div>
   );
 }
