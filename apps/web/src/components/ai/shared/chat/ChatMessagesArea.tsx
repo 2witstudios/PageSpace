@@ -197,6 +197,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
           onTouchStart={touchHandlers.onTouchStart}
           onTouchMove={touchHandlers.onTouchMove}
           onTouchEnd={touchHandlers.onTouchEnd}
+          onTouchCancel={touchHandlers.onTouchCancel}
         >
           {isLoadingOlder && LoadingOlderIndicator}
 

@@ -29,6 +29,7 @@ export interface UseChatPullToRefreshReturn {
     onTouchStart: (e: React.TouchEvent) => void;
     onTouchMove: (e: React.TouchEvent) => void;
     onTouchEnd: () => void;
+    onTouchCancel: () => void;
   };
   /** Check if container is scrolled to bottom */
   isAtBottom: (container: HTMLElement | null) => boolean;
@@ -70,8 +71,8 @@ export function useChatPullToRefresh({
     (e: React.TouchEvent) => {
       if (!isEnabled || isRefreshing) return;
 
-      // Check if streaming is active
-      if (useEditingStore.getState().isAnyActive()) return;
+      // Check if document editing is active (allows refresh during AI streaming)
+      if (useEditingStore.getState().isAnyEditing()) return;
 
       const touch = e.touches[0];
       startYRef.current = touch.clientY;
@@ -98,7 +99,7 @@ export function useChatPullToRefresh({
   const onTouchMove = useCallback(
     (e: React.TouchEvent) => {
       if (!isEnabled || isRefreshing) return;
-      if (useEditingStore.getState().isAnyActive()) return;
+      if (useEditingStore.getState().isAnyEditing()) return;
 
       const touch = e.touches[0];
       const deltaY = startYRef.current - touch.clientY; // Positive when pulling up
@@ -170,6 +171,14 @@ export function useChatPullToRefresh({
     }
   }, [pullDistance, threshold, isRefreshing, onRefresh]);
 
+  const onTouchCancel = useCallback(() => {
+    if (!isPullingRef.current) return;
+    isPullingRef.current = false;
+    setIsPulling(false);
+    setHasReachedThreshold(false);
+    setPullDistance(0);
+  }, []);
+
   return {
     pullDistance,
     isPulling,
@@ -179,6 +188,7 @@ export function useChatPullToRefresh({
       onTouchStart,
       onTouchMove,
       onTouchEnd,
+      onTouchCancel,
     },
     isAtBottom,
   };

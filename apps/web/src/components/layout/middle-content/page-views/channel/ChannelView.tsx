@@ -147,33 +147,31 @@ export default function ChannelView({ page }: ChannelViewProps) {
   return (
     <div className="flex flex-col h-full">
         <PullToRefresh direction="top" onRefresh={handleRefresh}>
-          <div className="flex-grow overflow-hidden">
-              <ScrollArea className="h-full" ref={scrollAreaRef}>
-                  <div className="p-4 space-y-4">
-                      {messages.map((m) => (
-                          <div key={m.id} className="flex items-start gap-4">
-                              <Avatar>
-                                  <AvatarImage src={m.user?.image || ''} />
-                                  <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
-                              </Avatar>
-                              <div className="flex flex-col">
-                                  <div className="flex items-center gap-2">
-                                      <span className="font-bold">{m.user?.name}</span>
-                                      <span className="text-xs text-gray-500">
-                                          {new Date(m.createdAt).toLocaleTimeString()}
-                                      </span>
-                                  </div>
-                                  {(() => {
-                                    // Channel messages are always user messages with rich text support
-                                    const parts = convertToMessageParts(m.content);
-                                    return renderMessageParts(parts, 'message');
-                                  })()}
+          <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
+              <div className="p-4 space-y-4">
+                  {messages.map((m) => (
+                      <div key={m.id} className="flex items-start gap-4">
+                          <Avatar>
+                              <AvatarImage src={m.user?.image || ''} />
+                              <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex flex-col">
+                              <div className="flex items-center gap-2">
+                                  <span className="font-bold">{m.user?.name}</span>
+                                  <span className="text-xs text-gray-500">
+                                      {new Date(m.createdAt).toLocaleTimeString()}
+                                  </span>
                               </div>
+                              {(() => {
+                                // Channel messages are always user messages with rich text support
+                                const parts = convertToMessageParts(m.content);
+                                return renderMessageParts(parts, 'message');
+                              })()}
                           </div>
-                      ))}
-                  </div>
-              </ScrollArea>
-          </div>
+                      </div>
+                  ))}
+              </div>
+          </ScrollArea>
         </PullToRefresh>
         <div className="p-4 border-t">
           {canEdit ? (

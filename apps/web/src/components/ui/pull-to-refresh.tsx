@@ -65,6 +65,7 @@ export function PullToRefresh({
     onTouchStart?: (e: React.TouchEvent) => void;
     onTouchMove?: (e: React.TouchEvent) => void;
     onTouchEnd?: () => void;
+    onTouchCancel?: () => void;
     style?: React.CSSProperties;
     className?: string;
   }>;
@@ -74,11 +75,15 @@ export function PullToRefresh({
     onTouchStart: touchHandlers.onTouchStart,
     onTouchMove: touchHandlers.onTouchMove,
     onTouchEnd: touchHandlers.onTouchEnd,
+    onTouchCancel: touchHandlers.onTouchCancel,
     style: {
       ...childElement.props.style,
       // Add visual offset when pulling
       transform: direction === 'top' && pullDistance > 0 ? `translateY(${pullDistance}px)` : undefined,
       transition: isPulling ? 'none' : 'transform 0.2s ease-out',
+      // Prevent native scroll/gesture handling while actively pulling
+      // This ensures e.preventDefault() works in touch handlers
+      touchAction: isPulling ? 'none' : undefined,
     },
   });
 

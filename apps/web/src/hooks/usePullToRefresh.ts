@@ -30,6 +30,7 @@ export interface UsePullToRefreshReturn {
     onTouchStart: (e: React.TouchEvent) => void;
     onTouchMove: (e: React.TouchEvent) => void;
     onTouchEnd: () => void;
+    onTouchCancel: () => void;
   };
   /** Ref to attach to the scrollable container */
   containerRef: RefObject<HTMLElement | null>;
@@ -165,6 +166,14 @@ export function usePullToRefresh({
     }
   }, [pullDistance, threshold, isRefreshing, onRefresh]);
 
+  const onTouchCancel = useCallback(() => {
+    if (!isPullingRef.current) return;
+    isPullingRef.current = false;
+    setIsPulling(false);
+    setHasReachedThreshold(false);
+    setPullDistance(0);
+  }, []);
+
   return {
     pullDistance,
     isPulling,
@@ -174,6 +183,7 @@ export function usePullToRefresh({
       onTouchStart,
       onTouchMove,
       onTouchEnd,
+      onTouchCancel,
     },
     containerRef,
   };
