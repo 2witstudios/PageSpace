@@ -500,7 +500,7 @@ export default function SidebarActivityTab() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                            className="h-6 w-6 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0"
                           >
                             <MoreVertical className="h-3 w-3" />
                             <span className="sr-only">Actions</span>
@@ -577,7 +577,7 @@ export default function SidebarActivityTab() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                            className="h-6 w-6 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0"
                           >
                             <MoreVertical className="h-3 w-3" />
                             <span className="sr-only">Actions</span>
@@ -631,7 +631,7 @@ export default function SidebarActivityTab() {
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-5 w-5 opacity-0 group-hover/item:opacity-100 transition-opacity flex-shrink-0"
+                                    className="h-5 w-5 sm:opacity-0 sm:group-hover/item:opacity-100 transition-opacity flex-shrink-0"
                                   >
                                     <MoreVertical className="h-3 w-3" />
                                   </Button>
