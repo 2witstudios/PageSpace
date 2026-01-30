@@ -28,6 +28,8 @@ import {
   useConversationScrollRef
 } from '@/components/ai/ui/conversation';
 import { useStickToBottomContext } from 'use-stick-to-bottom';
+import { useChatPullToRefresh } from '@/hooks/useChatPullToRefresh';
+import { cn } from '@/lib/utils';
 
 // Threshold for enabling virtualization - below this count, regular rendering is fine
 const VIRTUALIZATION_THRESHOLD = 50;
@@ -59,6 +61,8 @@ interface ChatMessagesAreaProps {
   onScrollNearTop?: () => void;
   /** Whether older messages are loading */
   isLoadingOlder?: boolean;
+  /** Callback for pull-up refresh (to check for missed messages) */
+  onPullUpRefresh?: () => Promise<void>;
 }
 
 export interface ChatMessagesAreaRef {
@@ -83,12 +87,31 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       onUndoSuccess,
       onScrollNearTop,
       isLoadingOlder = false,
+      onPullUpRefresh,
     },
     ref
   ) => {
     const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
     const { scrollToBottom } = useStickToBottomContext();
     const scrollRef = useConversationScrollRef();
+
+    // Pull-up refresh for checking missed messages
+    const {
+      pullDistance,
+      isPulling: _isPulling,
+      isRefreshing: isPullUpRefreshing,
+      hasReachedThreshold,
+      touchHandlers,
+    } = useChatPullToRefresh({
+      disabled: isStreaming || !onPullUpRefresh,
+      onRefresh: onPullUpRefresh || (() => Promise.resolve()),
+    });
+
+    // Calculate spinner state for pull-up
+    const showPullUpSpinner = (pullDistance > 0 || isPullUpRefreshing) && onPullUpRefresh;
+    const spinnerOpacity = Math.min(pullDistance / 60, 1);
+    const spinnerRotation = isPullUpRefreshing ? 0 : (pullDistance / 60) * 360;
+    const spinnerScale = Math.min(0.5 + (pullDistance / 60) * 0.5, 1);
 
     // Whether to use virtualization based on message count
     const shouldVirtualize = messages.length >= VIRTUALIZATION_THRESHOLD;
@@ -169,7 +192,13 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
     return (
       <>
-        <ConversationContent className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34">
+        <ConversationContent
+          className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34"
+          onTouchStart={touchHandlers.onTouchStart}
+          onTouchMove={touchHandlers.onTouchMove}
+          onTouchEnd={touchHandlers.onTouchEnd}
+          onTouchCancel={touchHandlers.onTouchCancel}
+        >
           {isLoadingOlder && LoadingOlderIndicator}
 
           {isLoading ? (
@@ -197,6 +226,40 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             <StreamingIndicator />
           )}
         </ConversationContent>
+
+        {/* Pull-up refresh spinner indicator */}
+        {showPullUpSpinner && (
+          <div
+            className={cn(
+              'absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none',
+              'transition-opacity duration-150'
+            )}
+            style={{
+              bottom: 100,
+              opacity: spinnerOpacity,
+              transform: `translateX(-50%) translateY(${Math.min(0, -(pullDistance - 20))}px) scale(${spinnerScale})`,
+            }}
+          >
+            <div
+              className={cn(
+                'flex items-center justify-center w-10 h-10 rounded-full',
+                'bg-background/95 border shadow-lg backdrop-blur-sm',
+                hasReachedThreshold && 'border-primary'
+              )}
+            >
+              <Loader2
+                className={cn(
+                  'w-5 h-5 text-muted-foreground',
+                  isPullUpRefreshing && 'animate-spin',
+                  hasReachedThreshold && 'text-primary'
+                )}
+                style={{
+                  transform: !isPullUpRefreshing ? `rotate(${spinnerRotation}deg)` : undefined,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Scroll-to-bottom button - only visible when user scrolls up */}
         {/* Positioned higher (bottom-36) to appear above floating input in middle content area */}

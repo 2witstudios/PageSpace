@@ -60,6 +60,8 @@ export interface ChatLayoutProps {
   isReadOnly?: boolean;
   /** Callback when undo completes successfully (to refresh messages) */
   onUndoSuccess?: () => void;
+  /** Callback for pull-up refresh (to check for missed messages) */
+  onPullUpRefresh?: () => Promise<void>;
 
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
@@ -140,6 +142,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       lastUserMessageId,
       isReadOnly = false,
       onUndoSuccess,
+      onPullUpRefresh,
       renderInput,
       mcpRunningServers = 0,
       mcpServerNames = [],
@@ -250,6 +253,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 lastUserMessageId={lastUserMessageId}
                 isReadOnly={isReadOnly}
                 onUndoSuccess={onUndoSuccess}
+                onPullUpRefresh={onPullUpRefresh}
               />
             </motion.div>
           )}

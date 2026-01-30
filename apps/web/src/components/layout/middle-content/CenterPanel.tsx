@@ -13,6 +13,7 @@ import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/client-safe';
 import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
@@ -23,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { useTabSync } from '@/hooks/useTabSync';
+import { usePageRefresh } from '@/hooks/usePageRefresh';
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -145,6 +147,9 @@ export default function CenterPanel() {
 
   const setPageId = usePageStore(state => state.setPageId);
 
+  // Get page refresh configuration for pull-to-refresh
+  const pageRefresh = usePageRefresh();
+
   // Sync activePageId to store for components that rely on usePageStore
   useEffect(() => {
     setPageId(activePageId);
@@ -191,9 +196,15 @@ export default function CenterPanel() {
       >
         <OptimizedViewHeader pageId={activePageId} />
         <div className="flex-1 min-h-0 relative overflow-hidden">
-          <CustomScrollArea className="h-full">
-            <PageContent pageId={activePageId} />
-          </CustomScrollArea>
+          <PullToRefresh
+            direction="top"
+            onRefresh={pageRefresh.refresh}
+            disabled={!pageRefresh.canRefresh}
+          >
+            <CustomScrollArea className="h-full">
+              <PageContent pageId={activePageId} />
+            </CustomScrollArea>
+          </PullToRefresh>
         </div>
       </div>
     </div>

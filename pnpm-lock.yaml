@@ -326,6 +326,9 @@ importers:
       '@capacitor/browser':
         specifier: ^7.0.3
         version: 7.0.3(@capacitor/core@7.4.5)
+      '@capacitor/haptics':
+        specifier: ^7.0.3
+        version: 7.0.3(@capacitor/core@7.4.5)
       '@capacitor/keyboard':
         specifier: ^7.0.4
         version: 7.0.4(@capacitor/core@7.4.5)
@@ -1082,6 +1085,11 @@ packages:
 
   '@capacitor/core@7.4.5':
     resolution: {integrity: sha512-JnUywi0WRbqm4QYoplNsMQ7KAVuyrQFha0dOH9YDVCyrVHUvPcvrnK+9j5elUMgy+pOh3ve+pk6BVoySr91c+A==}
+
+  '@capacitor/haptics@7.0.3':
+    resolution: {integrity: sha512-6O5W4jtYKPGrulqt3pEeXKH1vWT5deSUoiiN2sVj7F6UgrEOxCmm06XS07Eeum0lDXEmksKARwtA+iQwHPswtA==}
+    peerDependencies:
+      '@capacitor/core': '>=7.0.0'
 
   '@capacitor/ios@7.4.5':
     resolution: {integrity: sha512-i9cfo15Vn0GvFJ0Pm2zPhxQrK3NW5ISrf7bdzmKWUM5TUaCnWkCO4Zxsgjm8/VMXwt/gabA/di1O1c9pC3enCA==}
@@ -10511,6 +10519,10 @@ snapshots:
   '@capacitor/core@7.4.5':
     dependencies:
       tslib: 2.8.1
+
+  '@capacitor/haptics@7.0.3(@capacitor/core@7.4.5)':
+    dependencies:
+      '@capacitor/core': 7.4.5
 
   '@capacitor/ios@7.4.5(@capacitor/core@7.4.5)':
     dependencies:

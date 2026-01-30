@@ -326,6 +326,22 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
   }, [currentConversationId, page.id, setMessages]);
 
+  // Pull-up refresh handler for mobile - check for missed messages
+  const handlePullUpRefresh = useCallback(async () => {
+    if (!currentConversationId) return;
+    try {
+      const res = await fetchWithAuth(
+        `/api/ai/page-agents/${page.id}/conversations/${currentConversationId}/messages`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.messages);
+      }
+    } catch (error) {
+      console.error('Failed to refresh messages:', error);
+    }
+  }, [currentConversationId, page.id, setMessages]);
+
   // ============================================
   // RENDER
   // ============================================
@@ -440,6 +456,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             lastUserMessageId={lastUserMessageId}
             isReadOnly={isReadOnly}
             onUndoSuccess={handleUndoSuccess}
+            onPullUpRefresh={handlePullUpRefresh}
             mcpRunningServers={runningServers}
             mcpServerNames={runningServerNames}
             mcpEnabledCount={enabledServerCount}

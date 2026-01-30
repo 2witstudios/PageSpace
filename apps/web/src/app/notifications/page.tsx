@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -28,6 +28,8 @@ import { useNotificationStore } from '@/stores/useNotificationStore';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { isConnectionRequest } from '@pagespace/lib/client-safe';
 import { patch } from '@/lib/auth/auth-fetch';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
 const NotificationIcon = ({ type, size = 'default' }: { type: string; size?: 'default' | 'large' }) => {
   const sizeClass = size === 'large' ? 'h-5 w-5' : 'h-4 w-4';
@@ -193,6 +195,10 @@ export default function NotificationsPage() {
     }
   };
 
+  const handleRefresh = useCallback(async () => {
+    await fetchNotifications();
+  }, [fetchNotifications]);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header with Back Button */}
@@ -221,11 +227,15 @@ export default function NotificationsPage() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="container mx-auto py-6 px-4 max-w-6xl">
-          <div className="flex flex-col gap-6">
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+      >
+        <CustomScrollArea className="flex-1">
+          <div className="container mx-auto py-6 px-4 max-w-6xl">
+            <div className="flex flex-col gap-6">
 
-        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex flex-col md:flex-row gap-4">
           <Card className="flex-1">
             <CardHeader className="pb-4">
               <div className="flex items-center justify-between">
@@ -430,9 +440,10 @@ export default function NotificationsPage() {
             </CardContent>
           </Card>
         </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </CustomScrollArea>
+      </PullToRefresh>
     </div>
   );
 }
