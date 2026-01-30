@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ChevronRight,
+  FolderPlus,
   Plus,
   Trash2,
   Pencil,
   Star,
   Undo2,
 } from "lucide-react";
+import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { TreePage } from "@/hooks/usePageTree";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
@@ -91,6 +93,7 @@ export function PageTreeItem({
   const [isRenameOpen, setRenameOpen] = useState(false);
   const params = useParams();
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
+  const isTouchDevice = useTouchDevice();
   const hasChildren = item.children && item.children.length > 0;
 
   const linkHref = `/dashboard/${params.driveId}/${item.id}`;
@@ -174,8 +177,8 @@ export function PageTreeItem({
         ref={wrapperProps.ref}
         style={wrapperProps.style}
         className={cn("relative", isActive && "z-50")}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseEnter={() => !isTouchDevice && setIsHovered(true)}
+        onMouseLeave={() => !isTouchDevice && setIsHovered(false)}
       >
         {/* Drop indicator - BEFORE */}
         {showDropIndicator && dropPosition === "before" && (
@@ -293,6 +296,10 @@ export function PageTreeItem({
               </>
             ) : (
               <>
+                <ContextMenuItem onSelect={() => onOpenCreateDialog(item.id)}>
+                  <FolderPlus className="mr-2 h-4 w-4" />
+                  <span>Add child page</span>
+                </ContextMenuItem>
                 <ContextMenuItem onSelect={() => setRenameOpen(true)}>
                   <Pencil className="mr-2 h-4 w-4" />
                   <span>Rename</span>
