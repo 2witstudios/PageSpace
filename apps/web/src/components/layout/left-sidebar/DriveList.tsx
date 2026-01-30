@@ -5,6 +5,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
+import { useTouchDevice } from '@/hooks/useTouchDevice';
 import { Skeleton } from "@/components/ui/skeleton";
 import { Drive } from "@/hooks/useDrive";
 import { Folder, Trash2, MoreHorizontal, Pencil, Undo2 } from "lucide-react";
@@ -26,6 +27,7 @@ const DriveListItem = ({
   drive,
   isActive,
   canManage,
+  isTouchDevice,
   onRename,
   onDelete,
   onRestore,
@@ -35,6 +37,7 @@ const DriveListItem = ({
   drive: Drive;
   isActive: boolean;
   canManage: boolean;
+  isTouchDevice: boolean;
   onRename?: (drive: Drive) => void;
   onDelete?: (drive: Drive) => void;
   onRestore?: (drive: Drive) => void;
@@ -59,10 +62,10 @@ const DriveListItem = ({
   });
   
   return (
-    <div 
+    <div
       className="group relative"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseEnter={() => !isTouchDevice && setIsHovered(true)}
+      onMouseLeave={() => !isTouchDevice && setIsHovered(false)}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -87,7 +90,7 @@ const DriveListItem = ({
                 size="icon"
                 className={cn(
                   "h-6 w-6 transition-opacity",
-                  isHovered ? "opacity-100" : "opacity-0"
+                  isTouchDevice || isHovered ? "opacity-100" : "opacity-0"
                 )}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -157,6 +160,7 @@ export default function DriveList() {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
+  const isTouchDevice = useTouchDevice();
 
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore(state => state.drives);
@@ -284,6 +288,7 @@ export default function DriveList() {
                 drive={drive}
                 isActive={!isTrashView && drive.id === urlDriveId}
                 canManage={true}
+                isTouchDevice={isTouchDevice}
                 onRename={() => setRenameDialogState({ isOpen: true, drive })}
                 onDelete={() => setDeleteDialogState({ isOpen: true, drive })}
                 onFilesUploaded={() => fetchDrives(true, true)}
@@ -302,6 +307,7 @@ export default function DriveList() {
                 drive={drive}
                 isActive={!isTrashView && drive.id === urlDriveId}
                 canManage={drive.role === 'ADMIN'}
+                isTouchDevice={isTouchDevice}
                 onRename={drive.role === 'ADMIN' ? () => setRenameDialogState({ isOpen: true, drive }) : undefined}
                 onDelete={drive.role === 'ADMIN' ? () => setDeleteDialogState({ isOpen: true, drive }) : undefined}
                 onFilesUploaded={() => fetchDrives(true, true)}
@@ -323,6 +329,7 @@ export default function DriveList() {
                 drive={drive}
                 isActive={false}
                 canManage={true}
+                isTouchDevice={isTouchDevice}
                 onRestore={handleRestoreDrive}
                 onPermanentDelete={handlePermanentDelete}
               />
