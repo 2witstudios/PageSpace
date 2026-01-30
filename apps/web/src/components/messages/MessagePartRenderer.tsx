@@ -77,10 +77,10 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
 
       // If no mentions found, just return the plain text
       if (textElements.length === 0) {
-        return <span key={index}>{text}</span>;
+        return <span key={index} className="break-words [overflow-wrap:anywhere]">{text}</span>;
       }
 
-      return <span key={index}>{textElements}</span>;
+      return <span key={index} className="break-words [overflow-wrap:anywhere]">{textElements}</span>;
 
     case 'rich-text':
       const textContent = typeof part.content === 'string'
@@ -129,7 +129,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
         elements.push(<span key={`${index}-text-${lastIndex}`}>{remainingText}</span>);
       }
 
-      return <div key={index} className="whitespace-pre-wrap">{elements}</div>;
+      return <div key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{elements}</div>;
 
     case 'tool-invocation':
       return (
@@ -140,7 +140,7 @@ const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }
           <div className="font-semibold">
             {part.toolInvocation?.toolName}
           </div>
-          <pre className="text-xs whitespace-pre-wrap">
+          <pre className="text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
             {JSON.stringify(part.toolInvocation?.args, null, 2)}
           </pre>
         </div>
