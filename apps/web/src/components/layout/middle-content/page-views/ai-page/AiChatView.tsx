@@ -468,6 +468,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 isMcpServerEnabled={props.isMcpServerEnabled}
                 onMcpServerToggle={props.onMcpServerToggle}
                 showMcp={props.showMcp}
+                popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
                 selectedProvider={selectedProvider}
                 selectedModel={selectedModel}
                 onProviderModelChange={(provider, model) => {

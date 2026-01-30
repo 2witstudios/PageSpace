@@ -48,6 +48,8 @@ export interface ChatInputProps {
   onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether MCP section should be shown (desktop only) */
   showMcp?: boolean;
+  /** Popup placement for mention suggestions: 'top' (default) for docked input, 'bottom' for centered input */
+  popupPlacement?: 'top' | 'bottom';
   /** Override provider from props (for page-level settings) */
   selectedProvider?: string | null;
   /** Override model from props (for page-level settings) */
@@ -96,6 +98,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       isMcpServerEnabled,
       onMcpServerToggle,
       showMcp = false,
+      popupPlacement = 'top',
       selectedProvider: propProvider,
       selectedModel: propModel,
       onProviderModelChange,
@@ -176,6 +179,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             crossDrive={crossDrive}
             disabled={disabled}
             variant={variant}
+            popupPlacement={popupPlacement}
           />
 
           <InputActions
