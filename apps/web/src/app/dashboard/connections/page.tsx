@@ -209,18 +209,18 @@ export default function ConnectionsPage() {
                   {acceptedConnections.map((connection) => {
                     const displayName = connection.user.displayName || connection.user.name;
                     return (
-                      <div key={connection.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center gap-4">
-                          <Avatar className="h-10 w-10">
+                      <div key={connection.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 border rounded-lg">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <Avatar className="h-10 w-10 shrink-0">
                             <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
                             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                           </Avatar>
-                          <div>
-                            <p className="font-medium">{displayName}</p>
-                            <p className="text-sm text-muted-foreground">{connection.user.email}</p>
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{displayName}</p>
+                            <p className="text-sm text-muted-foreground truncate">{connection.user.email}</p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                           <Button
                             variant="outline"
                             size="sm"
@@ -280,25 +280,25 @@ export default function ConnectionsPage() {
                     const isIncoming = !connection.isRequester;
 
                     return (
-                      <div key={connection.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center gap-4">
-                          <Avatar className="h-10 w-10">
+                      <div key={connection.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 border rounded-lg">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <Avatar className="h-10 w-10 shrink-0">
                             <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
                             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                           </Avatar>
-                          <div>
-                            <p className="font-medium">{displayName}</p>
-                            <p className="text-sm text-muted-foreground">{connection.user.email}</p>
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{displayName}</p>
+                            <p className="text-sm text-muted-foreground truncate">{connection.user.email}</p>
                             <p className="text-xs text-muted-foreground">
                               {isIncoming ? 'Sent you a request' : 'Request sent'} {' '}
                               {formatDistanceToNow(new Date(connection.requestedAt), { addSuffix: true })}
                             </p>
                             {connection.requestMessage && (
-                              <p className="text-sm mt-1">{connection.requestMessage}</p>
+                              <p className="text-sm mt-1 line-clamp-2">{connection.requestMessage}</p>
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                           {isIncoming ? (
                             <>
                               <Button
