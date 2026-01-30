@@ -65,16 +65,29 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if in input/textarea
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-        return;
-      }
-
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modifier = isMac ? e.metaKey : e.ctrlKey;
 
+      // Ctrl + Tab / Ctrl + Shift + Tab: Cycle tabs
+      // These shortcuts work globally, even when in editors/inputs
+      if (e.ctrlKey && e.key === 'Tab') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          cycleTab('prev');
+        } else {
+          cycleTab('next');
+        }
+        // Navigate to the new active tab
+        const newActiveTabId = useOpenTabsStore.getState().activeTabId;
+        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
+        if (newActiveTab) {
+          router.push(`/dashboard/${newActiveTab.driveId}/${newActiveTab.id}`);
+        }
+        return;
+      }
+
       // Ctrl/Cmd + 1-9: Switch to tab by index
+      // These shortcuts work globally, even when in editors/inputs
       if (modifier && !e.shiftKey && !e.altKey) {
         const num = parseInt(e.key, 10);
         if (num >= 1 && num <= 9) {
@@ -88,28 +101,15 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         }
       }
 
-      // Ctrl/Cmd + W: Close current tab
-      if (modifier && e.key === 'w' && !e.shiftKey && !e.altKey) {
+      // For shortcuts that might conflict with editor behavior, check if in editable
+      const target = e.target as HTMLElement;
+      const isInEditable = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
+      // Ctrl/Cmd + W: Close current tab (skip in inputs to allow browser default behavior)
+      if (modifier && e.key === 'w' && !e.shiftKey && !e.altKey && !isInEditable) {
         if (activeTabId) {
           e.preventDefault();
           handleClose(activeTabId);
-        }
-        return;
-      }
-
-      // Ctrl + Tab / Ctrl + Shift + Tab: Cycle tabs
-      if (e.ctrlKey && e.key === 'Tab') {
-        e.preventDefault();
-        if (e.shiftKey) {
-          cycleTab('prev');
-        } else {
-          cycleTab('next');
-        }
-        // Navigate to the new active tab
-        const newActiveTabId = useOpenTabsStore.getState().activeTabId;
-        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
-        if (newActiveTab) {
-          router.push(`/dashboard/${newActiveTab.driveId}/${newActiveTab.id}`);
         }
         return;
       }
