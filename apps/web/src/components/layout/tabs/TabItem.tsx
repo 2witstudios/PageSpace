@@ -46,10 +46,8 @@ export const TabItem = memo(function TabItem({
   }, [tab.id, onActivate]);
 
   const handleMiddleClick = useCallback((e: React.MouseEvent) => {
-    if (e.button === 1) {
-      e.preventDefault();
-      onClose(tab.id);
-    }
+    e.preventDefault();
+    onClose(tab.id);
   }, [tab.id, onClose]);
 
   const handleCloseClick = useCallback((e: React.MouseEvent) => {
@@ -76,7 +74,7 @@ export const TabItem = memo(function TabItem({
           aria-selected={isActive}
           tabIndex={isActive ? 0 : -1}
           onClick={handleClick}
-          onMouseDown={handleMiddleClick}
+          onAuxClick={handleMiddleClick}
           onKeyDown={handleKeyDown}
           className={cn(
             "group relative flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium",

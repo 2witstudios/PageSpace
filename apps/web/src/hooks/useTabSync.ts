@@ -27,8 +27,14 @@ export function useTabSync() {
     // Wait for store to rehydrate from localStorage
     if (!rehydrated) return;
 
-    // Skip if no page is selected or still loading
-    if (!pageId || !driveId || isLoading) return;
+    // Reset sync state when navigating away from a page
+    if (!pageId || !driveId) {
+      lastSyncedPageId.current = null;
+      return;
+    }
+
+    // Skip if still loading tree
+    if (isLoading) return;
 
     // Skip if we already synced this page
     if (lastSyncedPageId.current === pageId) return;

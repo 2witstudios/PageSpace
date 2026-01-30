@@ -43,12 +43,12 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const handleClose = useCallback((tabId: string) => {
     const tabIndex = tabs.findIndex(t => t.id === tabId);
     const isClosingActive = tabId === activeTabId;
+    const remainingTabs = tabs.filter(t => t.id !== tabId);
 
     closeTab(tabId);
 
-    // If closing active tab, navigate to the new active tab
-    if (isClosingActive && tabs.length > 1) {
-      const remainingTabs = tabs.filter(t => t.id !== tabId);
+    // If closing active tab, navigate to the new active tab or dashboard
+    if (isClosingActive) {
       if (remainingTabs.length > 0) {
         // Prefer the tab at the same index, or the last one
         const newActiveIndex = Math.min(tabIndex, remainingTabs.length - 1);

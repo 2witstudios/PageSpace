@@ -57,9 +57,18 @@ export const useOpenTabsStore = create<OpenTabsState>()(
           return;
         }
 
-        // Find insert position: after active tab, or at end
+        // Find insert position: after active tab, or after all pinned tabs
+        const activeTab = tabs.find(t => t.id === activeTabId);
         const activeIndex = tabs.findIndex(t => t.id === activeTabId);
-        const insertIndex = activeIndex >= 0 ? activeIndex + 1 : tabs.length;
+
+        let insertIndex: number;
+        if (activeTab?.isPinned) {
+          // If active tab is pinned, insert after all pinned tabs
+          const lastPinnedIndex = tabs.reduce((last, t, i) => t.isPinned ? i : last, -1);
+          insertIndex = lastPinnedIndex + 1;
+        } else {
+          insertIndex = activeIndex >= 0 ? activeIndex + 1 : tabs.length;
+        }
 
         const newTab: Tab = { ...tabData, isPinned: false };
         const newTabs = [...tabs];
@@ -80,9 +89,18 @@ export const useOpenTabsStore = create<OpenTabsState>()(
           return;
         }
 
-        // Find insert position: after active tab, or at end
+        // Find insert position: after active tab, or after all pinned tabs
+        const activeTab = tabs.find(t => t.id === activeTabId);
         const activeIndex = tabs.findIndex(t => t.id === activeTabId);
-        const insertIndex = activeIndex >= 0 ? activeIndex + 1 : tabs.length;
+
+        let insertIndex: number;
+        if (activeTab?.isPinned) {
+          // If active tab is pinned, insert after all pinned tabs
+          const lastPinnedIndex = tabs.reduce((last, t, i) => t.isPinned ? i : last, -1);
+          insertIndex = lastPinnedIndex + 1;
+        } else {
+          insertIndex = activeIndex >= 0 ? activeIndex + 1 : tabs.length;
+        }
 
         const newTab: Tab = { ...tabData, isPinned: false };
         const newTabs = [...tabs];
@@ -210,17 +228,20 @@ export const useOpenTabsStore = create<OpenTabsState>()(
         const tabIndex = tabs.findIndex(t => t.id === tabId);
         if (tabIndex === -1) return;
 
-        const newTabs = [...tabs];
-        newTabs[tabIndex] = { ...newTabs[tabIndex], isPinned: true };
+        // Create tabs with original indices for stable sort
+        const tabsWithIndex = tabs.map((t, i) => ({
+          tab: i === tabIndex ? { ...t, isPinned: true } : t,
+          originalIndex: i,
+        }));
 
-        // Move pinned tabs to the front
-        newTabs.sort((a, b) => {
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          return 0;
+        // Stable sort: pinned first, then by original index
+        tabsWithIndex.sort((a, b) => {
+          if (a.tab.isPinned && !b.tab.isPinned) return -1;
+          if (!a.tab.isPinned && b.tab.isPinned) return 1;
+          return a.originalIndex - b.originalIndex;
         });
 
-        set({ tabs: newTabs });
+        set({ tabs: tabsWithIndex.map(({ tab }) => tab) });
       },
 
       unpinTab: (tabId) => {
