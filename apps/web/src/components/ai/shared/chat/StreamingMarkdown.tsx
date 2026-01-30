@@ -11,10 +11,12 @@
 
 'use client';
 
-import { memo, useMemo, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode, MouseEvent } from 'react';
+import { memo, useMemo, useState, useRef, useEffect, useCallback, AnchorHTMLAttributes, HTMLAttributes, TableHTMLAttributes, ReactNode, MouseEvent } from 'react';
 import { Streamdown } from 'streamdown';
 import { useRouter } from 'next/navigation';
 import { isInternalUrl, openExternalUrl } from '@/lib/navigation/app-navigation';
+import { CheckIcon, CopyIcon } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 /** Router interface for navigation - compatible with Next.js useRouter */
 interface RouterLike {
@@ -42,6 +44,78 @@ function preprocessMentions(content: string): string {
   });
 }
 
+/**
+ * Extract text content from React children recursively
+ * Used to get the code content for copy functionality
+ */
+function extractTextFromChildren(children: ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (typeof children === 'number') return String(children);
+  if (!children) return '';
+
+  if (Array.isArray(children)) {
+    return children.map(extractTextFromChildren).join('');
+  }
+
+  // Handle React elements with children
+  if (typeof children === 'object' && 'props' in children && children.props?.children) {
+    return extractTextFromChildren(children.props.children);
+  }
+
+  return '';
+}
+
+/**
+ * Copy button for code blocks with visual feedback
+ */
+function CodeCopyButton({ code, className }: { code: string; className?: string }) {
+  const [isCopied, setIsCopied] = useState(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = useCallback(async () => {
+    if (typeof window === 'undefined' || !navigator?.clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(code);
+      setIsCopied(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        setIsCopied(false);
+        timeoutRef.current = null;
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to copy code:', error);
+    }
+  }, [code]);
+
+  const Icon = isCopied ? CheckIcon : CopyIcon;
+
+  return (
+    <button
+      onClick={handleCopy}
+      className={cn(
+        'absolute top-2 right-2 p-1.5 rounded-md',
+        'bg-background/80 hover:bg-muted border border-border/50',
+        'opacity-0 group-hover:opacity-100 transition-opacity',
+        'focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring',
+        className
+      )}
+      aria-label={isCopied ? 'Copied' : 'Copy code'}
+      type="button"
+    >
+      <Icon size={14} className={isCopied ? 'text-green-500' : 'text-muted-foreground'} />
+    </button>
+  );
+}
+
 // Custom code component with proper overflow handling
 function CustomCode({ className, children, ...props }: HTMLAttributes<HTMLElement> & { children?: ReactNode }) {
   const isInline = !className?.includes('language-');
@@ -59,12 +133,17 @@ function CustomCode({ className, children, ...props }: HTMLAttributes<HTMLElemen
   );
 }
 
-// Custom pre component with overflow handling
+// Custom pre component with overflow handling and copy button
 function CustomPre({ children, ...props }: HTMLAttributes<HTMLPreElement> & { children?: ReactNode }) {
+  const code = extractTextFromChildren(children);
+
   return (
-    <pre className="min-w-0 max-w-full overflow-x-auto" {...props}>
-      {children}
-    </pre>
+    <div className="group relative min-w-0 max-w-full">
+      <pre className="min-w-0 max-w-full overflow-x-auto" {...props}>
+        {children}
+      </pre>
+      {code && <CodeCopyButton code={code} />}
+    </div>
   );
 }
 
