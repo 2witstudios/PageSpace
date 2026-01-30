@@ -144,7 +144,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         exit={{ height: 0, opacity: 0 }}
         transition={{ duration: 0.15, ease: 'easeOut' }}
         className={cn(
-          "flex-shrink-0 border-b border-[var(--separator)] bg-muted/20 overflow-hidden",
+          "flex-shrink-0 bg-primary overflow-hidden",
           className
         )}
       >

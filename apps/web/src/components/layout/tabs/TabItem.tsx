@@ -79,23 +79,19 @@ export const TabItem = memo(function TabItem({
           onKeyDown={handleKeyDown}
           className={cn(
             "group relative flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium cursor-pointer",
-            "border-r border-[var(--separator)]",
             "transition-colors duration-100",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
             "max-w-[180px] min-w-[100px]",
             isActive
-              ? "bg-background text-foreground"
-              : "bg-muted/30 text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+              ? "bg-white/20 text-white"
+              : "text-white/80 hover:bg-white/10 hover:text-white",
             tab.isPinned && "min-w-0 max-w-[60px] px-2"
           )}
         >
           {/* Page type icon */}
           <PageTypeIcon
             type={tab.type as PageType}
-            className={cn(
-              "h-3.5 w-3.5 flex-shrink-0",
-              isActive ? "text-foreground" : "text-muted-foreground"
-            )}
+            className="h-3.5 w-3.5 flex-shrink-0 text-white"
           />
 
           {/* Title (hidden for pinned tabs) */}
@@ -112,14 +108,14 @@ export const TabItem = memo(function TabItem({
               title="Unsaved changes"
             />
           ) : shortcutNumber && !tab.isPinned ? (
-            <span className="text-[10px] text-muted-foreground/60 flex-shrink-0 hidden group-hover:inline">
+            <span className="text-[10px] text-white/70 flex-shrink-0 hidden group-hover:inline">
               {shortcutNumber}
             </span>
           ) : null}
 
           {/* Pin indicator for pinned tabs */}
           {tab.isPinned && (
-            <Pin className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+            <Pin className="h-3 w-3 text-white/80 flex-shrink-0" />
           )}
 
           {/* Close button (not shown for pinned tabs) */}
@@ -130,8 +126,8 @@ export const TabItem = memo(function TabItem({
               className={cn(
                 "ml-1 rounded-sm p-0.5 flex-shrink-0",
                 "opacity-0 group-hover:opacity-100 focus:opacity-100",
-                "hover:bg-muted transition-opacity",
-                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                "hover:bg-white/20 text-white transition-opacity",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               )}
               aria-label={`Close ${tab.title}`}
             >
@@ -141,7 +137,7 @@ export const TabItem = memo(function TabItem({
 
           {/* Active tab indicator */}
           {isActive && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white" />
           )}
         </div>
       </ContextMenuTrigger>
