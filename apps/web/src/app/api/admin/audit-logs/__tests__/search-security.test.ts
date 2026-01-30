@@ -103,9 +103,10 @@ import { verifyAdminAuth } from '@/lib/auth';
 
 describe('/api/admin/audit-logs - Search Security', () => {
   const mockAdminUser = {
-    userId: 'admin-user-id',
-    userRole: 'admin' as const,
-    sessionId: 'test-session-id',
+    id: 'admin-user-id',
+    role: 'admin' as const,
+    tokenVersion: 1,
+    adminRoleVersion: 1,
   };
 
   beforeEach(() => {
