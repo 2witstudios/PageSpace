@@ -46,6 +46,8 @@ export const TabItem = memo(function TabItem({
   }, [tab.id, onActivate]);
 
   const handleMiddleClick = useCallback((e: React.MouseEvent) => {
+    // Only handle middle-click (button 1), not right-click
+    if (e.button !== 1) return;
     e.preventDefault();
     onClose(tab.id);
   }, [tab.id, onClose]);
@@ -68,8 +70,7 @@ export const TabItem = memo(function TabItem({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
-          type="button"
+        <div
           role="tab"
           aria-selected={isActive}
           tabIndex={isActive ? 0 : -1}
@@ -77,7 +78,7 @@ export const TabItem = memo(function TabItem({
           onAuxClick={handleMiddleClick}
           onKeyDown={handleKeyDown}
           className={cn(
-            "group relative flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium",
+            "group relative flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium cursor-pointer",
             "border-r border-[var(--separator)]",
             "transition-colors duration-100",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1",
@@ -142,7 +143,7 @@ export const TabItem = memo(function TabItem({
           {isActive && (
             <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
           )}
-        </button>
+        </div>
       </ContextMenuTrigger>
 
       <ContextMenuContent className="w-48">
