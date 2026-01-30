@@ -107,7 +107,7 @@ function CodeCopyButton({ code, className }: { code: string; className?: string 
       className={cn(
         'absolute top-2 right-2 p-1.5 rounded-md',
         'bg-background/80 hover:bg-muted border border-border/50',
-        'opacity-0 group-hover:opacity-100 transition-opacity',
+        'opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity',
         'focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring',
         className
       )}
