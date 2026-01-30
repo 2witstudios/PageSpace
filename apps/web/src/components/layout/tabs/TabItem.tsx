@@ -83,8 +83,8 @@ export const TabItem = memo(function TabItem({
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white",
             "max-w-[180px] min-w-[100px]",
             isActive
-              ? "bg-white/20 text-white"
-              : "text-white/80 hover:bg-white/10 hover:text-white",
+              ? "bg-white/15 text-white"
+              : "text-white/70 hover:bg-white/10 hover:text-white",
             tab.isPinned && "min-w-0 max-w-[60px] px-2"
           )}
         >
@@ -135,9 +135,9 @@ export const TabItem = memo(function TabItem({
             </button>
           )}
 
-          {/* Active tab indicator */}
+          {/* Active tab indicator - uses primary color to contrast with both dark trough and white content */}
           {isActive && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white" />
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary dark:bg-primary" />
           )}
         </div>
       </ContextMenuTrigger>
