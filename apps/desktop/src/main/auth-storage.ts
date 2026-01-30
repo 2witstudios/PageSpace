@@ -24,7 +24,18 @@ function ensureAuthSessionPath(): string {
 
 export async function saveAuthSession(sessionData: StoredAuthSession): Promise<void> {
   try {
+    // Validate session data structure before persisting to filesystem
+    if (!sessionData || typeof sessionData !== 'object') {
+      throw new Error('Invalid session data: must be an object');
+    }
+    if (typeof sessionData.sessionToken !== 'string' || sessionData.sessionToken.length === 0) {
+      throw new Error('Invalid session data: sessionToken must be a non-empty string');
+    }
+    // Limit payload size to prevent abuse (session tokens should be < 4KB)
     const payload = JSON.stringify(sessionData);
+    if (payload.length > 8192) {
+      throw new Error('Session data exceeds maximum allowed size');
+    }
     const encryptionAvailable = safeStorage.isEncryptionAvailable();
     const encrypted = encryptionAvailable
       ? safeStorage.encryptString(payload)

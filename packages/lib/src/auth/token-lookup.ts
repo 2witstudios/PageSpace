@@ -18,9 +18,8 @@ const MCP_TOKEN_PREFIX = 'mcp_';
 export interface MCPTokenRecord {
   id: string;
   userId: string;
-  token: string;
-  tokenHash: string | null;
-  tokenPrefix: string | null;
+  tokenHash: string;
+  tokenPrefix: string;
   name: string;
   lastUsed: Date | null;
   createdAt: Date;

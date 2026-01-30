@@ -5,6 +5,7 @@ import {
   getHashChainStats,
   verifyEntry,
 } from '@pagespace/lib/monitoring/hash-chain-verifier';
+import { isValidId } from '@pagespace/lib/validators';
 import { verifyAdminAuth } from '@/lib/auth';
 
 /**
@@ -155,10 +156,18 @@ export async function GET(request: Request) {
       }
 
       case 'entry': {
-        // Verify specific entry
+        // Verify specific entry - validate entryId format before passing to query
         if (!entryId) {
           return Response.json(
             { error: 'entryId parameter is required for mode=entry' },
+            { status: 400 }
+          );
+        }
+
+        // Validate entryId format (CUID2)
+        if (!isValidId(entryId)) {
+          return Response.json(
+            { error: 'Invalid entryId format' },
             { status: 400 }
           );
         }

@@ -159,8 +159,8 @@ Origin header validation has been implemented at two levels:
 1. **Middleware-Level Validation** (`apps/web/middleware.ts`):
    - Validates Origin header for all `/api/*` routes automatically
    - Configurable mode via `ORIGIN_VALIDATION_MODE` environment variable:
-     - `warn` (default): Logs warnings but allows requests (safe initial rollout)
-     - `block`: Rejects requests with invalid origins (403 Forbidden)
+     - `block` (default): Rejects requests with invalid origins (403 Forbidden)
+     - `warn`: Logs warnings but allows requests (opt-in for debugging only)
    - Skips validation for safe methods (GET, HEAD, OPTIONS) and requests without Origin header
 
 2. **Route-Level Validation** (`apps/web/src/lib/auth/origin-validation.ts`):
@@ -194,7 +194,7 @@ WEB_APP_URL=https://app.pagespace.com
 # Optional: Additional allowed origins (comma-separated)
 ADDITIONAL_ALLOWED_ORIGINS=https://staging.pagespace.com,https://dev.pagespace.com
 
-# Optional: Validation mode (warn|block, default: warn)
+# Optional: Validation mode (block|warn, default: block)
 ORIGIN_VALIDATION_MODE=block
 ```
 

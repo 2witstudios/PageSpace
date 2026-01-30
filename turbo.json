@@ -43,6 +43,10 @@
       "cache": false,
       "dependsOn": ["build"],
       "outputs": ["dist-electron/**"]
+    },
+    "capture": {
+      "cache": false,
+      "outputs": ["output/**"]
     }
   },
   "globalDependencies": [

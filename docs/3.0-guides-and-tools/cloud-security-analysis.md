@@ -22,90 +22,55 @@ This analysis identifies security vulnerabilities in PageSpace when deployed in 
 
 ## Critical Severity Vulnerabilities
 
-### 1. SERVICE_JWT_SECRET is a "God Key"
+### ~~1. SERVICE_JWT_SECRET is a "God Key"~~ (RESOLVED)
 
-**File:** `packages/lib/src/services/service-auth.ts:48-62`
+**Status:** RESOLVED (2026-01-29)
 
-**Description:** A single shared secret (`SERVICE_JWT_SECRET`) is used by all services (web, processor, realtime) to sign and verify service-to-service tokens. If this secret leaks from any source (logs, error dumps, SSM misconfiguration, container compromise), an attacker can forge tokens for any user with any scope.
+**Original Issue:** A single shared secret (`SERVICE_JWT_SECRET`) was used by all services to sign and verify service-to-service tokens.
 
-**Current Code:**
-```typescript
-function getServiceConfig(): ServiceJWTConfig {
-  const rawSecret = process.env.SERVICE_JWT_SECRET;
-  // Same secret used by web, processor, and realtime services
-  return {
-    secret: new TextEncoder().encode(rawSecret),
-    issuer: process.env.JWT_ISSUER || 'pagespace',
-    audience: 'pagespace-processor',
-  };
-}
-```
+**Resolution:** The system has been migrated to database-backed opaque tokens (`ps_svc_*` format). Key improvements:
+- **Opaque tokens**: No claims embedded in token - all data stored in database
+- **Hash-only storage**: Tokens stored as SHA-256 hashes, never plaintext
+- **Immediate revocation**: Database-backed means instant revocation via `revokedAt`
+- **Token version binding**: `tokenVersion` mismatch auto-revokes session
+- **Scope validation**: Permissions checked before token issuance
+- **Audit logging**: Service token grants logged with full details
 
-**Attack Scenario:**
-1. Attacker compromises one service or gains access to environment variables
-2. Extracts `SERVICE_JWT_SECRET`
-3. Forges service tokens with arbitrary `userId`, `scopes`, and `driveIds`
-4. Accesses/modifies any file or resource across all tenants
-5. No revocation mechanism exists - tokens valid until expiration
+The `SERVICE_JWT_SECRET` environment variable has been removed from `.env.example` and `docker-compose.yml`.
 
-**Recommended Hardening:**
-
-**Tier 1 (Quick Win):**
-- Add JTI (JWT ID) to a Redis-based allowlist/denylist with 5-minute TTL
-- Log all service token usage with full claims for audit
-
-**Tier 2 (Recommended):**
-- Use separate secrets per service pair:
-  - `SERVICE_JWT_SECRET_WEB_TO_PROCESSOR`
-  - `SERVICE_JWT_SECRET_WEB_TO_REALTIME`
-- Add `tokenVersion` to service tokens and verify against database
-- Validate that `userId` exists and isn't suspended before processing
-
-**Tier 3 (Zero-Trust):**
-- Replace symmetric JWT with asymmetric RS256 (private key signs, public key verifies)
-- Implement mTLS between services with identity verification
-- Use opaque tokens with shared auth lookup service
+**Files Changed:**
+- `packages/lib/src/auth/session-service.ts` - Opaque token validation
+- `packages/lib/src/auth/opaque-tokens.ts` - Token generation
+- `packages/db/src/schema/sessions.ts` - Session storage schema
 
 ---
 
-### 2. Processor Blindly Trusts userId Claim
+### ~~2. Processor Blindly Trusts userId Claim~~ (RESOLVED)
 
-**Files:**
-- `apps/processor/src/middleware/auth.ts:97-110`
-- `apps/processor/src/services/rbac.ts:12-38`
+**Status:** RESOLVED (2026-01-29)
 
-**Description:** The processor service extracts `userId` from service tokens and uses it directly without validating that the user exists, is active, or has the claimed permissions. In a multi-tenant cloud, a compromised web instance could fabricate tokens to access other tenants' files.
+**Original Issue:** The processor service extracted `userId` from service tokens without validating that the user exists, is active, or has the claimed permissions.
 
-**Current Code:**
-```typescript
-function buildAuthContext(claims: ServiceTokenClaims): ProcessorServiceAuth {
-  const userId = String(claims.sub); // Blindly trusted
-  return {
-    userId,
-    service: claims.service,
-    scopes,
-    tenantId: claims.resource ?? userId, // Can be any value
-  };
-}
-```
+**Resolution:** Multiple layers of validation now exist:
 
-**Attack Scenario:**
-1. Attacker gains access to web service or obtains a service token
-2. Forges token with victim's `userId` and `driveIds`
-3. Processor accepts token without user validation
-4. Attacker downloads/modifies victim's files
+1. **Session Service** (`packages/lib/src/auth/session-service.ts`):
+   - Validates token against database (not JWT decoding)
+   - Checks user exists via relation
+   - Checks `suspendedAt` field - auto-revokes session if user suspended
+   - Checks `tokenVersion` matches - auto-revokes on mismatch
 
-**Recommended Hardening:**
-```typescript
-// Add user validation before processing
-async function validateServiceUser(userId: string): Promise<boolean> {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { id: true, tokenVersion: true, suspendedAt: true }
-  });
-  return user && !user.suspendedAt;
-}
-```
+2. **User Validator** (`apps/processor/src/services/user-validator.ts`):
+   - Validates user exists
+   - Checks `suspendedAt` field
+   - Returns specific failure reasons: `user_not_found`, `user_suspended`
+
+3. **Auth Middleware** (`apps/processor/src/middleware/auth.ts`):
+   - Uses opaque token validation (no JWT claims to forge)
+   - Builds `EnforcedAuthContext` from validated session
+   - Logs all authentication attempts with full context
+
+**Schema Changes:**
+- Added `suspendedAt` and `suspendedReason` fields to users table
 
 ---
 
@@ -256,27 +221,43 @@ async function checkDistributedRateLimit(
 
 ---
 
-### 6. PROCESSOR_AUTH_REQUIRED Can Be Disabled
+### 6. ~~PROCESSOR_AUTH_REQUIRED Can Be Disabled~~ (RESOLVED)
 
-**File:** `apps/processor/src/middleware/auth.ts:24`
+**File:** `apps/processor/src/middleware/auth.ts:5-17`
 
-**Description:** Setting `PROCESSOR_AUTH_REQUIRED=false` completely disables authentication for the processor service. This should never be possible in production.
+**Status:** RESOLVED (2026-01-26)
 
+**Original Issue:** Setting `PROCESSOR_AUTH_REQUIRED=false` could completely disable authentication for the processor service in production.
+
+**Implementation:**
 ```typescript
-export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
-```
-
-**Recommended Hardening:**
-```typescript
-// Fail if auth is disabled in production
+/**
+ * Authentication is ALWAYS required in production.
+ * In development only, it can be explicitly disabled with PROCESSOR_AUTH_REQUIRED=false.
+ */
 export const AUTH_REQUIRED = (() => {
-  const disabled = process.env.PROCESSOR_AUTH_REQUIRED === 'false';
-  if (disabled && process.env.NODE_ENV === 'production') {
-    throw new Error('PROCESSOR_AUTH_REQUIRED cannot be disabled in production');
+  const wantsDisabled = process.env.PROCESSOR_AUTH_REQUIRED === 'false';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+
+  if (wantsDisabled && !isDevelopment) {
+    throw new Error(
+      'PROCESSOR_AUTH_REQUIRED=false is only allowed in development mode. ' +
+      'Authentication cannot be disabled in production.'
+    );
   }
-  return !disabled;
+
+  return !wantsDisabled;
 })();
 ```
+
+**Behavior:**
+- Missing env var: Auth REQUIRED (secure default)
+- `PROCESSOR_AUTH_REQUIRED=true`: Auth REQUIRED
+- `PROCESSOR_AUTH_REQUIRED=false` + `NODE_ENV=production`: THROWS ERROR (fails fast)
+- `PROCESSOR_AUTH_REQUIRED=false` + `NODE_ENV=development`: Auth disabled (dev convenience)
+- `PROCESSOR_AUTH_REQUIRED=false` + no NODE_ENV: THROWS ERROR (fail-safe)
+
+**Tests:** `apps/processor/src/middleware/__tests__/auth.test.ts`
 
 ---
 
@@ -371,27 +352,26 @@ function secureCompare(a: string, b: string): boolean {
 
 ---
 
-### 11. WebSocket Origin Validation is Log-Only
+### ~~11. WebSocket Origin Validation is Log-Only~~ (RESOLVED)
 
-**File:** `apps/realtime/src/index.ts:122-159`
+**Status:** RESOLVED (2026-01-29)
 
-**Description:** The WebSocket origin validation function only logs warnings - it doesn't block connections with invalid origins. Socket.IO CORS is the actual enforcement, but if misconfigured, the origin validation provides no protection.
+**Original Issue:** The WebSocket origin validation function only logged warnings - it didn't block connections with invalid origins.
 
+**Resolution:** The `validateAndLogWebSocketOrigin` function in `apps/realtime/src/index.ts` now:
+- Returns a boolean indicating whether to allow the connection
+- **Blocks connections** with invalid origins (not just logging)
+- **Fails closed in production** when no allowed origins are configured
+- Allows development mode to proceed with warnings for easier testing
+- Non-browser clients (no Origin header) are still allowed (they authenticate via tokens)
+
+The middleware now calls the validation function and rejects the connection if validation fails:
 ```typescript
-// Missing origin is allowed
-if (!origin) {
-  return { isValid: true, reason: 'no_origin' };
-}
-// No config means allow all
-if (allowedOrigins.length === 0) {
-  return { isValid: true, reason: 'no_config' };
+const isOriginValid = validateAndLogWebSocketOrigin(origin, connectionMetadata);
+if (!isOriginValid) {
+  return next(new Error('Origin not allowed'));
 }
 ```
-
-**Recommended Hardening:**
-- Make origin validation mandatory in production
-- Fail closed (reject) when configuration is missing
-- Add explicit allowlist requirement
 
 ---
 
@@ -523,9 +503,9 @@ Before implementing security hardening, ensure infrastructure is prepared:
    - Ensure all API keys use `encryptedApiKey` column
    - Add encryption for any plaintext secrets
 
-7. **Remove Auth Disable Flag**
-   - Make PROCESSOR_AUTH_REQUIRED=false fail in production
-   - Add startup validation
+7. ~~**Remove Auth Disable Flag**~~ COMPLETED (2026-01-26)
+   - ~~Make PROCESSOR_AUTH_REQUIRED=false fail in production~~
+   - ~~Add startup validation~~
 
 8. **Implement Timing-Safe Comparisons**
    - Update all secret comparisons to use crypto.timingSafeEqual

@@ -77,8 +77,6 @@ export function GoogleOneTap({
         const data = await res.json();
 
         if (res.ok && data.success) {
-          toast.success("Welcome! You've been signed in with Google.");
-
           if (onSuccess) {
             onSuccess(data.user);
           }

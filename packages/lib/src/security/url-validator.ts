@@ -268,7 +268,35 @@ export async function validateExternalURL(
 }
 
 /**
+ * Build a URL that connects directly to a resolved IP while preserving the original Host header.
+ * This prevents DNS rebinding attacks by bypassing DNS resolution during fetch().
+ *
+ * NOTE: This only works for HTTP. For HTTPS, TLS/SNI requires the hostname for certificate
+ * validation, so we cannot use IP-direct URLs without a custom TLS connector.
+ */
+function buildIPDirectURL(originalUrl: URL, resolvedIP: string): string | null {
+  // HTTPS requires hostname for SNI/certificate validation - cannot use IP-direct
+  if (originalUrl.protocol === 'https:') {
+    return null;
+  }
+
+  // For IPv6 addresses, wrap in brackets
+  const ipHost = resolvedIP.includes(':') ? `[${resolvedIP}]` : resolvedIP;
+  const port = originalUrl.port || '80';
+  return `${originalUrl.protocol}//${ipHost}:${port}${originalUrl.pathname}${originalUrl.search}`;
+}
+
+/**
  * Safe fetch wrapper that validates URLs before making requests
+ *
+ * SSRF Protection Features:
+ * - Validates URL before fetching (blocks private IPs, cloud metadata, etc.)
+ * - Mitigates DNS rebinding by connecting to the validated IP directly (HTTP only)
+ * - Validates redirect targets before following
+ *
+ * NOTE: For HTTPS URLs, DNS rebinding mitigation is not applied because TLS/SNI
+ * requires the hostname for certificate validation. The initial DNS validation
+ * still provides significant protection.
  *
  * @param url - The URL to fetch
  * @param options - Fetch options (including maxRedirects to prevent infinite loops)
@@ -294,15 +322,30 @@ export async function safeFetch(
     throw new Error(`SSRF protection: ${validation.error}`);
   }
 
-  // NOTE: There is a residual TOCTOU (Time-of-Check-Time-of-Use) risk with DNS rebinding.
-  // An attacker could return a safe IP during our DNS validation above, then return a
-  // private IP when fetch() does its own DNS resolution. Full mitigation requires either:
-  // - Connecting to the validated IP directly with a Host header
-  // - Using a specialized library like ssrf-req-filter
-  // - Server-side network policies (firewall rules)
-  // For high-security contexts, consider additional protections.
-  const response = await fetch(url, {
+  const originalUrl = validation.url!;
+
+  // DNS Rebinding Mitigation (HTTP only): Connect to the validated IP directly
+  // This prevents TOCTOU attacks where an attacker returns a safe IP during validation
+  // but a private IP when fetch() does its own DNS resolution.
+  // For HTTPS, we cannot use IP-direct URLs because TLS/SNI requires the hostname.
+  let fetchUrl = url;
+  const headers = new Headers(fetchOptions.headers);
+
+  if (validation.resolvedIPs && validation.resolvedIPs.length > 0) {
+    const targetIP = validation.resolvedIPs[0];
+    const ipDirectUrl = buildIPDirectURL(originalUrl, targetIP);
+
+    if (ipDirectUrl) {
+      // HTTP: Use IP-direct URL with Host header
+      fetchUrl = ipDirectUrl;
+      headers.set('Host', originalUrl.host);
+    }
+    // HTTPS: Use original URL (DNS rebinding mitigation not possible without custom TLS)
+  }
+
+  const response = await fetch(fetchUrl, {
     ...fetchOptions,
+    headers,
     // Prevent automatic redirects to validate each URL
     redirect: 'manual',
   });

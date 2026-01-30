@@ -4,9 +4,17 @@ import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissio
 import { sessionService } from '@pagespace/lib/auth';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, dmConversations, socketTokens } from '@pagespace/db';
+import { db, eq, gt, and, or, dmConversations, socketTokens } from '@pagespace/db';
+import {
+  validatePageId,
+  validateDriveId,
+  validateConversationId,
+  emitValidationError,
+} from './validation';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
+import { socketRegistry } from './socket-registry';
+import { handleKickRequest } from './kick-handler';
 
 dotenv.config({ path: '../../.env' });
 
@@ -46,11 +54,11 @@ async function validateSocketToken(token: string): Promise<{ userId: string } | 
 }
 
 /**
- * Origin Validation for WebSocket Connections (Defense-in-Depth Logging)
+ * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)
  *
- * While Socket.IO CORS configuration handles blocking unauthorized origins,
- * this module provides explicit logging for security monitoring.
- * Warnings are logged for unexpected origins to aid in detecting potential attacks.
+ * This module provides explicit origin validation that BLOCKS invalid origins.
+ * Socket.IO CORS is a first line of defense, but this provides defense-in-depth
+ * by rejecting connections from unexpected origins at the middleware level.
  */
 
 /**
@@ -194,37 +202,50 @@ function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginVal
 }
 
 /**
- * Validates and logs WebSocket connection origin for security monitoring
+ * Validates WebSocket connection origin and returns whether to allow the connection
  *
- * This function does NOT block connections - Socket.IO CORS handles that.
- * It provides explicit logging for unexpected origins to aid security monitoring.
+ * This function BLOCKS connections from invalid origins (defense-in-depth).
+ * Socket.IO CORS is a first line of defense, but this provides additional protection.
  *
  * @param origin - The Origin header value from the connection request
  * @param metadata - Additional metadata for logging (socketId, IP, etc.)
+ * @returns true if connection should be allowed, false if it should be rejected
  */
 function validateAndLogWebSocketOrigin(
   origin: string | undefined,
   metadata: { socketId: string; ip: string | undefined; userAgent: string | undefined }
-): void {
+): boolean {
   const allowedOrigins = getAllowedOrigins();
 
-  // No origin header - could be non-browser client, log at debug level
+  // No origin header - non-browser client (curl, mobile apps, etc.)
+  // Allow these as they authenticate via tokens, not cookies
   if (!origin) {
     loggers.realtime.debug('WebSocket origin validation: no Origin header', {
       ...metadata,
       reason: 'Non-browser client or same-origin request',
     });
-    return;
+    return true;
   }
 
-  // No allowed origins configured - log warning
+  // No allowed origins configured in production is a misconfiguration
+  // In development, allow but warn. In production, this should fail closed.
   if (allowedOrigins.length === 0) {
-    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured', {
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+      loggers.realtime.error('WebSocket origin validation: REJECTED - no allowed origins configured in production', {
+        ...metadata,
+        origin,
+        severity: 'security',
+        reason: 'CORS_ORIGIN and WEB_APP_URL not set in production',
+      });
+      return false;
+    }
+    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured (allowing in development)', {
       ...metadata,
       origin,
       reason: 'CORS_ORIGIN and WEB_APP_URL not set',
     });
-    return;
+    return true;
   }
 
   // Check if origin is allowed
@@ -233,21 +254,46 @@ function validateAndLogWebSocketOrigin(
       ...metadata,
       origin,
     });
-    return;
+    return true;
   }
 
-  // Origin not in allowed list - log security warning
-  // Note: Socket.IO CORS will block this connection, but we log for monitoring
-  loggers.realtime.warn('WebSocket origin validation: unexpected origin detected', {
+  // Origin not in allowed list - REJECT the connection
+  loggers.realtime.warn('WebSocket origin validation: REJECTED - unexpected origin', {
     ...metadata,
     origin,
     allowedOrigins,
     severity: 'security',
-    reason: 'Origin not in allowed list - connection may be blocked by CORS',
+    reason: 'Origin not in allowed list - connection rejected',
   });
+  return false;
 }
 
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
+    // Helper to verify signature (shared by broadcast and kick)
+    const verifySignature = (signatureHeader: string | undefined, body: string): boolean => {
+        if (!signatureHeader) {
+            loggers.realtime.warn('Request missing signature header', {
+                url: req.url,
+                ip: req.socket.remoteAddress,
+                userAgent: req.headers['user-agent']
+            });
+            return false;
+        }
+
+        if (!verifyBroadcastSignature(signatureHeader, body)) {
+            loggers.realtime.error('Request signature verification failed', {
+                url: req.url,
+                ip: req.socket.remoteAddress,
+                userAgent: req.headers['user-agent'],
+                hasSignature: !!signatureHeader,
+                bodyLength: body.length
+            });
+            return false;
+        }
+
+        return true;
+    };
+
     if (req.method === 'POST' && req.url === '/api/broadcast') {
         let body = '';
         req.on('data', chunk => {
@@ -255,25 +301,8 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         });
         req.on('end', () => {
             try {
-                // Verify HMAC signature before processing
                 const signatureHeader = req.headers['x-broadcast-signature'] as string;
-                if (!signatureHeader) {
-                    loggers.realtime.warn('Broadcast request missing signature header', {
-                        ip: req.socket.remoteAddress,
-                        userAgent: req.headers['user-agent']
-                    });
-                    res.writeHead(401, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Authentication required' }));
-                    return;
-                }
-
-                if (!verifyBroadcastSignature(signatureHeader, body)) {
-                    loggers.realtime.error('Broadcast request signature verification failed', {
-                        ip: req.socket.remoteAddress,
-                        userAgent: req.headers['user-agent'],
-                        hasSignature: !!signatureHeader,
-                        bodyLength: body.length
-                    });
+                if (!verifySignature(signatureHeader, body)) {
                     res.writeHead(401, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Authentication failed' }));
                     return;
@@ -303,6 +332,24 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
+        });
+    } else if (req.method === 'POST' && req.url === '/api/kick') {
+        // Kick API: Remove user from rooms on permission revocation
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            const result = handleKickRequest(io, body);
+            res.writeHead(result.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result.body));
         });
     } else {
         res.writeHead(404);
@@ -334,10 +381,12 @@ io.use(async (socket: AuthSocket, next) => {
     userAgent: socket.handshake.headers['user-agent']?.substring(0, 100),
   };
 
-  // Validate and log Origin header for security monitoring
-  // Note: Socket.IO CORS configuration handles actual blocking
+  // Validate Origin header - REJECT invalid origins (defense-in-depth)
   const origin = socket.handshake.headers.origin;
-  validateAndLogWebSocketOrigin(origin, connectionMetadata);
+  const isOriginValid = validateAndLogWebSocketOrigin(origin, connectionMetadata);
+  if (!isOriginValid) {
+    return next(new Error('Origin not allowed'));
+  }
 
   // Debug: Log all available authentication sources
   loggers.realtime.debug('Socket.IO: Authentication attempt', {
@@ -398,25 +447,46 @@ io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
   const user = socket.data.user;
 
+  // Register socket in the registry for permission revocation tracking
+  if (user?.id) {
+    socketRegistry.registerSocket(user.id, socket.id);
+  }
+
   // Auto-join user's notification room and task room
   if (user?.id) {
     const notificationRoom = `notifications:${user.id}`;
     const taskRoom = `user:${user.id}:tasks`;
+    const userDrivesRoom = `user:${user.id}:drives`;
     socket.join(notificationRoom);
     socket.join(taskRoom);
-    loggers.realtime.debug('User joined notification and task rooms', { 
-      userId: user.id, 
-      rooms: [notificationRoom, taskRoom] 
+    socket.join(userDrivesRoom);
+    // Track in registry (these are always-on rooms, not permission-gated)
+    socketRegistry.trackRoomJoin(socket.id, notificationRoom);
+    socketRegistry.trackRoomJoin(socket.id, taskRoom);
+    socketRegistry.trackRoomJoin(socket.id, userDrivesRoom);
+    loggers.realtime.debug('User joined notification, task, and drives rooms', {
+      userId: user.id,
+      rooms: [notificationRoom, taskRoom, userDrivesRoom]
     });
   }
 
-  socket.on('join_channel', async (pageId: string) => {
+  socket.on('join_channel', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_channel payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_channel', validation.error);
+      return;
+    }
+    const pageId = validation.value;
 
     try {
       const accessLevel = await getUserAccessLevel(user.id, pageId);
       if (accessLevel) {
         socket.join(pageId);
+        socketRegistry.trackRoomJoin(socket.id, pageId);
         loggers.realtime.debug('User joined channel', { userId: user.id, channelId: pageId });
       } else {
         loggers.realtime.warn('User denied access to channel', { userId: user.id, channelId: pageId });
@@ -428,14 +498,24 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('join_drive', async (driveId: string) => {
+  socket.on('join_drive', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
 
     try {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
       if (hasAccess) {
         const driveRoom = `drive:${driveId}`;
         socket.join(driveRoom);
+        socketRegistry.trackRoomJoin(socket.id, driveRoom);
         loggers.realtime.debug('User joined drive room', { userId: user.id, room: driveRoom });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
@@ -446,54 +526,94 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Join a direct message conversation room after membership verification
-  socket.on('join_dm_conversation', async (conversationId: string) => {
+  // Security: Uses filter-in-query pattern - authorization is part of the query, not post-query
+  socket.on('join_dm_conversation', async (payload: unknown) => {
     const userId = user?.id;
-    if (!userId || !conversationId) return;
+    if (!userId) return;
+
+    // Validate payload before any DB query
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_dm_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_dm_conversation', validation.error);
+      return;
+    }
+    const conversationId = validation.value;
 
     try {
+      // Filter-in-query: Authorization is part of the WHERE clause
+      // Only returns a row if the user is a participant
       const [conversation] = await db
-        .select()
+        .select({ id: dmConversations.id })
         .from(dmConversations)
         .where(
-          eq(dmConversations.id, conversationId as string)
+          and(
+            eq(dmConversations.id, conversationId),
+            or(
+              eq(dmConversations.participant1Id, userId),
+              eq(dmConversations.participant2Id, userId)
+            )
+          )
         )
         .limit(1);
 
-      if (!conversation || (conversation.participant1Id !== userId && conversation.participant2Id !== userId)) {
-        loggers.realtime.warn('DM join denied: not a participant', { userId, conversationId });
+      if (!conversation) {
+        loggers.realtime.warn('DM join denied: not a participant or not found', { userId, conversationId });
         return;
       }
 
       const room = `dm:${conversationId}`;
       socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
       loggers.realtime.debug('User joined DM room', { userId, room });
     } catch (error) {
       loggers.realtime.error('Error joining DM conversation', error as Error, { conversationId });
     }
   });
 
-  socket.on('leave_dm_conversation', (conversationId: string) => {
+  socket.on('leave_dm_conversation', (payload: unknown) => {
     const userId = user?.id;
-    if (!userId || !conversationId) return;
+    if (!userId) return;
+
+    // Validate payload - leave operations still need format validation
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_dm_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_dm_conversation', validation.error);
+      return;
+    }
+    const conversationId = validation.value;
 
     const room = `dm:${conversationId}`;
     socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
     loggers.realtime.debug('User left DM room', { userId, room });
   });
 
-  socket.on('leave_drive', (driveId: string) => {
+  socket.on('leave_drive', (payload: unknown) => {
     if (!user?.id) return;
-    
+
+    // Validate payload
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
+
     const driveRoom = `drive:${driveId}`;
     socket.leave(driveRoom);
+    socketRegistry.trackRoomLeave(socket.id, driveRoom);
     loggers.realtime.debug('User left drive room', { userId: user.id, room: driveRoom });
   });
 
   socket.on('join_global_drives', () => {
     if (!user?.id) return;
-    
+
     const globalDrivesRoom = 'global:drives';
     socket.join(globalDrivesRoom);
+    socketRegistry.trackRoomJoin(socket.id, globalDrivesRoom);
     loggers.realtime.debug('User joined global drives room', { userId: user.id, room: globalDrivesRoom });
   });
 
@@ -502,18 +622,29 @@ io.on('connection', (socket: AuthSocket) => {
 
     const globalDrivesRoom = 'global:drives';
     socket.leave(globalDrivesRoom);
+    socketRegistry.trackRoomLeave(socket.id, globalDrivesRoom);
     loggers.realtime.debug('User left global drives room', { userId: user.id, room: globalDrivesRoom });
   });
 
   // Activity channel handlers - for real-time activity feed updates
-  socket.on('join_activity_drive', async (driveId: string) => {
+  socket.on('join_activity_drive', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_activity_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_activity_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
 
     try {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
       if (hasAccess) {
         const activityRoom = `activity:drive:${driveId}`;
         socket.join(activityRoom);
+        socketRegistry.trackRoomJoin(socket.id, activityRoom);
         loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity drive', { userId: user.id, driveId });
@@ -523,14 +654,24 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('join_activity_page', async (pageId: string) => {
+  socket.on('join_activity_page', async (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload before any DB query
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_activity_page payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'join_activity_page', validation.error);
+      return;
+    }
+    const pageId = validation.value;
 
     try {
       const accessLevel = await getUserAccessLevel(user.id, pageId);
       if (accessLevel) {
         const activityRoom = `activity:page:${pageId}`;
         socket.join(activityRoom);
+        socketRegistry.trackRoomJoin(socket.id, activityRoom);
         loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity page', { userId: user.id, pageId });
@@ -540,23 +681,45 @@ io.on('connection', (socket: AuthSocket) => {
     }
   });
 
-  socket.on('leave_activity_drive', (driveId: string) => {
+  socket.on('leave_activity_drive', (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload
+    const validation = validateDriveId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_activity_drive payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_activity_drive', validation.error);
+      return;
+    }
+    const driveId = validation.value;
 
     const activityRoom = `activity:drive:${driveId}`;
     socket.leave(activityRoom);
+    socketRegistry.trackRoomLeave(socket.id, activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
   });
 
-  socket.on('leave_activity_page', (pageId: string) => {
+  socket.on('leave_activity_page', (payload: unknown) => {
     if (!user?.id) return;
+
+    // Validate payload
+    const validation = validatePageId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_activity_page payload', { userId: user.id, error: validation.error });
+      emitValidationError(socket, 'leave_activity_page', validation.error);
+      return;
+    }
+    const pageId = validation.value;
 
     const activityRoom = `activity:page:${pageId}`;
     socket.leave(activityRoom);
+    socketRegistry.trackRoomLeave(socket.id, activityRoom);
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
   socket.on('disconnect', (reason) => {
+    // Unregister socket from registry (cleans up all room tracking)
+    socketRegistry.unregisterSocket(socket.id);
     loggers.realtime.info('User disconnected', { socketId: socket.id, reason });
   });
 });

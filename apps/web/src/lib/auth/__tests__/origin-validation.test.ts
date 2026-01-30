@@ -492,39 +492,10 @@ describe('origin-validation', () => {
       });
     });
 
-    describe('invalid origin handling in warn mode (default)', () => {
-      it('validateOriginForMiddleware_invalidOriginWarnMode_returnsInvalidButNotBlocked', () => {
+    describe('invalid origin handling in block mode (default)', () => {
+      it('validateOriginForMiddleware_invalidOriginDefaultMode_returnsInvalidAndBlocked', () => {
         process.env.WEB_APP_URL = 'https://app.example.com';
-        // Default is warn mode
-        const headers = new Headers();
-        headers.set('Origin', 'https://evil.example.com');
-        const request = new Request('https://example.com/api/test', {
-          method: 'POST',
-          headers,
-        });
-
-        const result = validateOriginForMiddleware(request);
-
-        expect(result).toEqual({
-          valid: false,
-          origin: 'https://evil.example.com',
-          skipped: false,
-          reason: 'Origin not in allowed list (warn mode - request allowed)',
-        });
-        expect(loggers.auth.warn).toHaveBeenCalledWith(
-          'Middleware origin validation: unexpected origin (warn mode)',
-          expect.objectContaining({
-            origin: 'https://evil.example.com',
-            mode: 'warn',
-          })
-        );
-      });
-    });
-
-    describe('invalid origin handling in block mode', () => {
-      it('validateOriginForMiddleware_invalidOriginBlockMode_returnsInvalidAndBlocked', () => {
-        process.env.WEB_APP_URL = 'https://app.example.com';
-        process.env.ORIGIN_VALIDATION_MODE = 'block';
+        // Default is block mode - no ORIGIN_VALIDATION_MODE set
         const headers = new Headers();
         headers.set('Origin', 'https://evil.example.com');
         const request = new Request('https://example.com/api/test', {
@@ -545,6 +516,55 @@ describe('origin-validation', () => {
           expect.objectContaining({
             origin: 'https://evil.example.com',
             mode: 'block',
+          })
+        );
+      });
+
+      it('validateOriginForMiddleware_invalidOriginExplicitBlockMode_returnsInvalidAndBlocked', () => {
+        process.env.WEB_APP_URL = 'https://app.example.com';
+        process.env.ORIGIN_VALIDATION_MODE = 'block';
+        const headers = new Headers();
+        headers.set('Origin', 'https://evil.example.com');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
+
+        const result = validateOriginForMiddleware(request);
+
+        expect(result).toEqual({
+          valid: false,
+          origin: 'https://evil.example.com',
+          skipped: false,
+          reason: 'Origin not in allowed list (block mode - request rejected)',
+        });
+      });
+    });
+
+    describe('invalid origin handling in warn mode (opt-in)', () => {
+      it('validateOriginForMiddleware_invalidOriginWarnMode_returnsInvalidButNotBlocked', () => {
+        process.env.WEB_APP_URL = 'https://app.example.com';
+        process.env.ORIGIN_VALIDATION_MODE = 'warn';
+        const headers = new Headers();
+        headers.set('Origin', 'https://evil.example.com');
+        const request = new Request('https://example.com/api/test', {
+          method: 'POST',
+          headers,
+        });
+
+        const result = validateOriginForMiddleware(request);
+
+        expect(result).toEqual({
+          valid: false,
+          origin: 'https://evil.example.com',
+          skipped: false,
+          reason: 'Origin not in allowed list (warn mode - request allowed)',
+        });
+        expect(loggers.auth.warn).toHaveBeenCalledWith(
+          'Middleware origin validation: unexpected origin (warn mode)',
+          expect.objectContaining({
+            origin: 'https://evil.example.com',
+            mode: 'warn',
           })
         );
       });
@@ -579,9 +599,9 @@ describe('origin-validation', () => {
   });
 
   describe('isOriginValidationBlocking', () => {
-    it('isOriginValidationBlocking_noConfig_returnsFalse', () => {
-      // Default is warn mode
-      expect(isOriginValidationBlocking()).toBe(false);
+    it('isOriginValidationBlocking_noConfig_returnsTrue', () => {
+      // Default is block mode - secure by default
+      expect(isOriginValidationBlocking()).toBe(true);
     });
 
     it('isOriginValidationBlocking_warnMode_returnsFalse', () => {
@@ -594,9 +614,9 @@ describe('origin-validation', () => {
       expect(isOriginValidationBlocking()).toBe(true);
     });
 
-    it('isOriginValidationBlocking_unknownMode_returnsFalse', () => {
+    it('isOriginValidationBlocking_unknownMode_returnsTrue', () => {
       process.env.ORIGIN_VALIDATION_MODE = 'invalid-mode';
-      expect(isOriginValidationBlocking()).toBe(false);
+      expect(isOriginValidationBlocking()).toBe(true);
     });
   });
 

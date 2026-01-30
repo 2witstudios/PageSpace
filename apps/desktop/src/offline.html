@@ -146,10 +146,28 @@
       button.textContent = 'Connecting...';
       status.textContent = 'Attempting to reconnect...';
 
-      // Get the original URL from the hash
-      const targetUrl = decodeURIComponent(window.location.hash.slice(1)) || 'https://pagespace.ai/dashboard';
+      // Get the original URL from the hash with validation
+      const rawHash = window.location.hash.slice(1);
+      const defaultUrl = 'https://pagespace.ai/dashboard';
+      let targetUrl = defaultUrl;
 
-      // Navigate to the original URL after a short delay
+      if (rawHash) {
+        try {
+          const decoded = decodeURIComponent(rawHash);
+          const parsed = new URL(decoded);
+          // Hash is set by Electron main process (loadFile) from getAppUrl() —
+          // trusted source. No origin allowlist: the app URL may be localhost,
+          // a self-hosted domain, or production. Protocol check is sufficient
+          // since this page is only reachable via Electron's loadFile.
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            targetUrl = parsed.href;
+          }
+        } catch {
+          targetUrl = defaultUrl;
+        }
+      }
+
+      // Navigate to the validated URL after a short delay
       setTimeout(() => {
         window.location.href = targetUrl;
       }, 500);

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -18,11 +19,13 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquare, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard } from 'lucide-react';
+import { LogOut, MessageSquare, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard } from 'lucide-react';
 import { useTheme } from "next-themes";
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
 import { useEditingStore } from '@/stores/useEditingStore';
+import { FeedbackDialog } from './FeedbackDialog';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -36,6 +39,8 @@ export default function UserDropdown() {
   const { isAuthenticated, user, isLoading, actions } = useAuth();
   const router = useRouter();
   const { setTheme } = useTheme();
+  const { showBilling } = useBillingVisibility();
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // Check if any editing or streaming is active (state-based)
   const isAnyActive = useEditingStore(state => state.isAnyActive());
@@ -78,6 +83,7 @@ export default function UserDropdown() {
 
   if (isAuthenticated && user) {
     return (
+      <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="relative h-8 w-8 rounded-full">
@@ -125,15 +131,21 @@ export default function UserDropdown() {
               )}
             </div>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
-            <CreditCard className="mr-2 h-4 w-4" />
-            <span>
-              Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
-            </span>
-          </DropdownMenuItem>
+          {showBilling && (
+            <DropdownMenuItem onClick={() => router.push('/settings/billing')}>
+              <CreditCard className="mr-2 h-4 w-4" />
+              <span>
+                Billing ({subscriptionInfo?.subscriptionTier === 'free' ? 'Free' : subscriptionInfo?.subscriptionTier === 'pro' ? 'Pro' : 'Business'})
+              </span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={() => router.push('/settings/account')}>
             <LayoutDashboard className="mr-2 h-4 w-4" />
             <span>Account</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
+            <MessageSquareText className="mr-2 h-4 w-4" />
+            <span>Feedback</span>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => router.push('/settings')}>
             <Settings className="mr-2 h-4 w-4" />
@@ -170,6 +182,8 @@ export default function UserDropdown() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <FeedbackDialog isOpen={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+    </>
     );
   }
 

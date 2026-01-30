@@ -1,6 +1,13 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { sessionService, generateCSRFToken, SESSION_DURATION_MS } from '@pagespace/lib/auth';
+import {
+  sessionService,
+  generateCSRFToken,
+  SESSION_DURATION_MS,
+  isAccountLockedByEmail,
+  recordFailedLoginAttemptByEmail,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -118,6 +125,20 @@ export async function POST(req: Request) {
       );
     }
 
+    // Account lockout check (database-backed, persists across restarts/IP changes)
+    const lockoutStatus = await isAccountLockedByEmail(email);
+    if (lockoutStatus.isLocked) {
+      logSecurityEvent('account_locked_login_attempt', { email, ip: clientIP });
+      return Response.json(
+        {
+          error: 'Account is temporarily locked due to too many failed login attempts. Please try again later.',
+          code: 'ACCOUNT_LOCKED',
+          lockedUntil: lockoutStatus.lockedUntil?.toISOString(),
+        },
+        { status: 423 }
+      );
+    }
+
     const user = await authRepository.findUserByEmail(email);
 
     // Always perform bcrypt comparison to prevent timing attacks
@@ -128,6 +149,12 @@ export async function POST(req: Request) {
       const reason = !user ? 'invalid_email' : 'invalid_password';
       logAuthEvent('failed', user?.id, email, clientIP, reason === 'invalid_email' ? 'Invalid email' : 'Invalid password');
       trackAuthEvent(user?.id, 'failed_login', { reason, email, ip: clientIP });
+
+      // Record failed attempt for lockout tracking (only for existing users to avoid info leakage)
+      if (user) {
+        await recordFailedLoginAttemptByEmail(email);
+      }
+
       return Response.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
@@ -156,10 +183,11 @@ export async function POST(req: Request) {
     // Generate CSRF token bound to session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Reset rate limits on successful login
+    // Reset rate limits and failed login attempts on successful login
     const resetResults = await Promise.allSettled([
       resetDistributedRateLimit(`login:ip:${clientIP}`),
       resetDistributedRateLimit(`login:email:${email.toLowerCase()}`),
+      resetFailedLoginAttempts(user.id),
     ]);
 
     const failures = resetResults.filter((r): r is PromiseRejectedResult => r.status === 'rejected');

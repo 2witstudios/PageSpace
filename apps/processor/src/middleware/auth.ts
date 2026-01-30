@@ -1,79 +1,25 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
-export const AUTH_REQUIRED = process.env.PROCESSOR_AUTH_REQUIRED !== 'false';
+/**
+ * Authentication is ALWAYS required in production.
+ * In development only, it can be explicitly disabled with PROCESSOR_AUTH_REQUIRED=false.
+ */
+export const AUTH_REQUIRED = (() => {
+  const wantsDisabled = process.env.PROCESSOR_AUTH_REQUIRED === 'false';
+  const isDevelopment = process.env.NODE_ENV === 'development';
 
-function collectCandidateUrls(req: Request): string[] {
-  const rawValues: Array<string | undefined | null> = [
-    req.baseUrl,
-    req.originalUrl,
-    req.path,
-    (req as any).url,
-  ];
-
-  const queryParamUrls: string[] = [];
-  const hasAvatarQuery = req.originalUrl?.includes('/api/avatar/upload');
-  if (hasAvatarQuery) {
-    queryParamUrls.push('/api/avatar/upload');
-    queryParamUrls.push('api/avatar/upload');
+  if (wantsDisabled && !isDevelopment) {
+    throw new Error(
+      'PROCESSOR_AUTH_REQUIRED=false is only allowed in development mode. ' +
+      'Authentication cannot be disabled in production.'
+    );
   }
 
-  return [...rawValues, ...queryParamUrls]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .map((value) => value.toLowerCase());
-}
-
-function inferScope(req: Request): string | null {
-  const method = req.method.toUpperCase();
-  const candidateUrls = collectCandidateUrls(req);
-
-  const originalUrl = req.originalUrl?.toLowerCase() ?? '';
-  if (originalUrl.includes('/api/avatar/')) {
-    return 'avatars:write';
-  }
-
-  const matches = (url: string, prefix: string) =>
-    url === prefix || url.startsWith(`${prefix}/`) || url.startsWith(`${prefix}?`);
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/avatar') || matches(url, 'api/avatar') || matches(url, '/avatar')) {
-      return 'avatars:write';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/upload') || matches(url, 'api/upload')) {
-      return 'files:write';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/optimize') || matches(url, 'api/optimize')) {
-      return method === 'GET' ? 'files:read' : 'files:optimize';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/ingest') || matches(url, 'api/ingest')) {
-      return 'files:ingest';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/cache') || matches(url, 'cache')) {
-      return 'files:read';
-    }
-  }
-
-  for (const url of candidateUrls) {
-    if (matches(url, '/api/queue') || matches(url, 'api/queue') || matches(url, '/api/job') || matches(url, 'api/job')) {
-      return 'queue:read';
-    }
-  }
-
-  return null;
-}
+  return !wantsDisabled;
+})();
 
 function respondUnauthorized(res: Response, message = 'Authentication required'): void {
   res.status(401).json({ error: message });
@@ -93,49 +39,72 @@ export async function authenticateService(req: Request, res: Response, next: Nex
   }
 
   const header = req.headers.authorization;
+  const requestContext = {
+    endpoint: req.path,
+    method: req.method,
+    ip: req.ip || req.socket?.remoteAddress,
+    userAgent: req.headers['user-agent']?.substring(0, 100),
+  };
+
   if (!header || !header.startsWith('Bearer ')) {
+    loggers.security.warn('Processor auth: missing or invalid authorization header', requestContext);
     respondUnauthorized(res);
     return;
   }
 
   const token = header.slice(7).trim();
+  const tokenPrefix = token.substring(0, 12); // Log prefix only for debugging
 
   try {
     const claims = await sessionService.validateSession(token);
 
     if (!claims) {
+      loggers.security.warn('Processor auth: invalid or expired token', {
+        ...requestContext,
+        tokenPrefix,
+      });
       respondUnauthorized(res, 'Invalid or expired token');
       return;
     }
 
     // Reject non-service session types - processor is for service-to-service only
     if (claims.type !== 'service') {
+      loggers.security.warn('Processor auth: non-service token rejected', {
+        ...requestContext,
+        tokenPrefix,
+        tokenType: claims.type,
+        userId: claims.userId,
+      });
       respondForbidden(res, 'Service token required');
       return;
     }
 
     // Build enforced auth context from validated session
+    // Scope checking is done by requireScope() middleware on each route
     const context = EnforcedAuthContext.fromSession(claims);
     req.auth = context;
 
-    // Check inferred scope if applicable
-    const inferredScope = inferScope(req);
-    if (inferredScope && !context.hasScope(inferredScope)) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('Scope inference failed', {
-          required: inferredScope,
-          userId: claims.userId,
-          resourceBinding: context.resourceBinding,
-          urls: collectCandidateUrls(req),
-        });
-      }
-      respondForbidden(res, 'Insufficient scopes', inferredScope);
-      return;
-    }
+    // Log successful service token validation for audit trail
+    loggers.security.info('Processor auth: service token validated', {
+      ...requestContext,
+      userId: claims.userId,
+      sessionId: claims.sessionId,
+      scopes: claims.scopes,
+      resourceType: claims.resourceType,
+      resourceId: claims.resourceId,
+      driveId: claims.driveId,
+    });
 
     next();
   } catch (error) {
-    console.error('Authentication failed:', error);
+    loggers.security.error(
+      'Processor auth: validation error',
+      error instanceof Error ? error : new Error(String(error)),
+      {
+        ...requestContext,
+        tokenPrefix,
+      }
+    );
     respondUnauthorized(res, 'Invalid token');
   }
 }
@@ -154,13 +123,13 @@ export function requireScope(scope: string) {
     }
 
     if (!auth.hasScope(scope)) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('Scope assertion failed', {
-          required: scope,
-          userId: auth.userId,
-          urls: collectCandidateUrls(req),
-        });
-      }
+      loggers.security.warn('Processor auth: scope assertion failed', {
+        required: scope,
+        userId: auth.userId,
+        endpoint: req.path,
+        method: req.method,
+        ip: req.ip || req.socket?.remoteAddress,
+      });
       respondForbidden(res, `Missing required scope: ${scope}`, scope);
       return;
     }

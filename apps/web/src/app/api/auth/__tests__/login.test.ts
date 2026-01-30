@@ -10,6 +10,7 @@
  * - Rate limiting (IP, email)
  * - Security (timing-safe comparison, no sensitive data leakage)
  * - Session management (session-based auth with opaque tokens)
+ * - Account lockout (lock check, record failed attempts, reset on success)
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
@@ -30,7 +31,7 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
-// Mock session service and CSRF generation from @pagespace/lib/auth
+// Mock session service, CSRF generation, and account lockout from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
@@ -48,6 +49,9 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  isAccountLockedByEmail: vi.fn().mockResolvedValue({ isLocked: false, lockedUntil: null }),
+  recordFailedLoginAttemptByEmail: vi.fn().mockResolvedValue({ success: true }),
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock cookie utilities
@@ -112,7 +116,13 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import {
+  sessionService,
+  generateCSRFToken,
+  isAccountLockedByEmail,
+  recordFailedLoginAttemptByEmail,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -135,6 +145,7 @@ const mockUser: User = {
   provider: 'email',
   image: null,
   googleId: null,
+  appleId: null,
   emailVerified: null,
   currentAiProvider: 'pagespace',
   currentAiModel: 'glm-4.5-air',
@@ -144,6 +155,10 @@ const mockUser: User = {
   stripeCustomerId: null,
   subscriptionTier: 'free',
   tosAcceptedAt: null,
+  failedLoginAttempts: 0,
+  lockedUntil: null,
+  suspendedAt: null,
+  suspendedReason: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
   updatedAt: new Date('2024-01-01T00:00:00Z'),
 };
@@ -646,6 +661,83 @@ describe('POST /api/auth/login', () => {
       // After P1-T5 implementation, these headers should be present
       expect(response.headers.get('X-RateLimit-Limit')).toBeTruthy();
       expect(response.headers.get('X-RateLimit-Remaining')).toBeTruthy();
+    });
+  });
+
+  describe('account lockout', () => {
+    it('returns 423 when account is locked', async () => {
+      const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+      vi.mocked(isAccountLockedByEmail).mockResolvedValueOnce({
+        isLocked: true,
+        lockedUntil,
+      });
+
+      const request = createLoginRequest(validLoginPayload);
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(423);
+      expect(body.error).toMatch(/locked/i);
+      expect(body.lockedUntil).toBeDefined();
+    });
+
+    it('does not attempt password validation when account is locked', async () => {
+      vi.mocked(isAccountLockedByEmail).mockResolvedValueOnce({
+        isLocked: true,
+        lockedUntil: new Date(Date.now() + 15 * 60 * 1000),
+      });
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      expect(authRepository.findUserByEmail).not.toHaveBeenCalled();
+      expect(bcrypt.compare).not.toHaveBeenCalled();
+    });
+
+    it('records failed login attempt on invalid credentials', async () => {
+      (bcrypt.compare as Mock).mockResolvedValue(false);
+
+      const request = createLoginRequest({
+        email: 'test@example.com',
+        password: 'wrongpassword',
+      });
+      await POST(request);
+
+      expect(recordFailedLoginAttemptByEmail).toHaveBeenCalledWith('test@example.com');
+    });
+
+    it('resets failed login attempts on successful login', async () => {
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      expect(resetFailedLoginAttempts).toHaveBeenCalledWith(mockUser.id);
+    });
+
+    it('does not record failed attempt for non-existent email', async () => {
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+      (bcrypt.compare as Mock).mockResolvedValue(false);
+
+      const request = createLoginRequest({
+        email: 'nonexistent@example.com',
+        password: 'anypassword',
+      });
+      await POST(request);
+
+      expect(recordFailedLoginAttemptByEmail).not.toHaveBeenCalled();
+    });
+
+    it('checks lockout after rate limiting passes', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        attemptsRemaining: 0,
+        retryAfter: 900,
+      });
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      // When rate-limited, lockout check should not be reached
+      expect(isAccountLockedByEmail).not.toHaveBeenCalled();
     });
   });
 });

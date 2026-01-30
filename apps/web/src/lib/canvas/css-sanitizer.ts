@@ -20,11 +20,13 @@ export function sanitizeCSS(css: string): string {
 
   let sanitized = css;
 
-  // Remove JavaScript execution vectors
+  // Remove JavaScript execution vectors and dangerous URL schemes
   sanitized = sanitized
     .replace(/expression\s*\(/gi, '/* expression blocked */')
     .replace(/-moz-binding\s*:/gi, '/* moz-binding blocked */')
-    .replace(/javascript:/gi, '/* javascript blocked */')
+    .replace(/javascript\s*:/gi, '/* javascript blocked */')
+    .replace(/vbscript\s*:/gi, '/* vbscript blocked */')
+    .replace(/data\s*:\s*text\/html/gi, '/* data:text/html blocked */')
     .replace(/behavior\s*:/gi, '/* behavior blocked */');
 
   // Block external @import statements (prevent external stylesheet loading)

@@ -13,8 +13,6 @@ export {
   getUserAccessiblePagesInDrive,
   isDriveOwnerOrAdmin,
   isUserDriveMember,
-  grantPagePermissions,
-  revokePagePermissions,
 } from './permissions';
 
 // Export rollback permissions
@@ -22,3 +20,7 @@ export * from './rollback-permissions';
 
 // Export enforced auth context
 export * from './enforced-context';
+
+// Export zero-trust permission mutations (NEW - replaces grantPagePermissions/revokePagePermissions)
+export * from './permission-mutations';
+export * from './schemas';

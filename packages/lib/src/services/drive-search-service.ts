@@ -254,6 +254,20 @@ export async function regexSearchPages(
   const { searchIn = 'content', maxResults = 50 } = options;
   const effectiveMaxResults = Math.min(maxResults, 100);
 
+  // Validate and limit pattern length to prevent ReDoS
+  if (pattern.length > 500) {
+    return {
+      driveSlug,
+      pattern,
+      searchIn,
+      results: [],
+      totalResults: 0,
+      summary: 'Pattern too long (max 500 characters)',
+      stats: { pagesScanned: 0, pagesWithAccess: 0, documentTypes: [] },
+      nextSteps: ['Shorten your regex pattern to under 500 characters'],
+    };
+  }
+
   // Create regex for PostgreSQL - escape backslashes but preserve regex shortcuts
   const pgPattern = pattern.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
 
@@ -292,6 +306,15 @@ export async function regexSearchPages(
     .where(whereConditions)
     .limit(effectiveMaxResults);
 
+  // Use original pattern for line-level matching — consistent with PG regex semantics.
+  // Pattern is length-checked (≤500 chars) and applied per-line (not concatenated).
+  let lineRegex: RegExp | null = null;
+  try {
+    lineRegex = new RegExp(pattern, 'gi');
+  } catch {
+    // PG regex syntax may differ from JS — skip line extraction
+  }
+
   // Filter by permissions and build results
   const results: RegexSearchResult[] = [];
   for (const page of matchingPages) {
@@ -328,11 +351,12 @@ export async function regexSearchPages(
 
     // Extract matching lines if searching content
     const matchingLines: Array<{ lineNumber: number; content: string }> = [];
-    if (searchIn !== 'title') {
+    if (searchIn !== 'title' && lineRegex) {
       const lines = page.content.split('\n');
-      const regex = new RegExp(pattern, 'g');
       lines.forEach((line, index) => {
-        if (regex.test(line)) {
+        // Reset lastIndex for global regex on each line
+        lineRegex!.lastIndex = 0;
+        if (lineRegex!.test(line)) {
           matchingLines.push({
             lineNumber: index + 1,
             content: line.substring(0, 200), // Truncate long lines

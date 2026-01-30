@@ -81,7 +81,6 @@ services:
       - REDIS_RATE_LIMIT_URL=redis://:${REDIS_PASSWORD:-pagespace_redis}@redis-sessions:6379/1
       - PORT=3000
       - NODE_OPTIONS=--max-old-space-size=640
-      - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET}
     deploy:
       resources:
         limits:
@@ -136,7 +135,6 @@ services:
       - NODE_OPTIONS=--max-old-space-size=1024
       - ENABLE_OCR=${ENABLE_OCR:-false}
       - ENABLE_EXTERNAL_OCR=${ENABLE_EXTERNAL_OCR:-false}
-      - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET}
       - PROCESSOR_AUTH_REQUIRED=${PROCESSOR_AUTH_REQUIRED:-true}
       - PROCESSOR_UPLOAD_RATE_LIMIT=${PROCESSOR_UPLOAD_RATE_LIMIT:-100}
       - PROCESSOR_UPLOAD_RATE_WINDOW=${PROCESSOR_UPLOAD_RATE_WINDOW:-3600}

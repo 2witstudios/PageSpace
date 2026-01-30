@@ -17,6 +17,7 @@ export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'mem
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
 export type UsageOperation = 'updated';
 export type ActivityOperation = 'logged';
+export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
 
 export interface ActivityEventPayload {
   activityId: string;
@@ -79,6 +80,24 @@ export interface UsageEventPayload {
     limit: number;
     remaining: number;
   };
+}
+
+export interface KickPayload {
+  userId: string;
+  roomPattern: string;
+  reason: KickReason;
+  metadata?: {
+    driveId?: string;
+    pageId?: string;
+    driveName?: string;
+  };
+}
+
+export interface KickResult {
+  success: boolean;
+  kickedCount: number;
+  rooms: string[];
+  error?: string;
 }
 
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
@@ -449,4 +468,143 @@ export async function broadcastActivityEvent(payload: ActivityEventPayload): Pro
 
     pendingActivityBroadcasts.set(key, timeout);
   }
+}
+
+// ============================================================================
+// Permission Revocation (Kick API)
+// ============================================================================
+
+/**
+ * Kicks a user from Socket.IO rooms on permission revocation.
+ * This is called when permissions are changed to immediately revoke real-time access.
+ *
+ * @param payload - The kick payload specifying user and rooms to remove from
+ * @returns The result of the kick operation
+ */
+export async function kickUserFromRooms(payload: KickPayload): Promise<KickResult> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping kick', {
+      userId: maskIdentifier(payload.userId),
+      roomPattern: payload.roomPattern,
+    });
+    return { success: false, kickedCount: 0, rooms: [], error: 'Realtime URL not configured' };
+  }
+
+  try {
+    const requestBody = JSON.stringify(payload);
+
+    const response = await fetch(`${realtimeUrl}/api/kick`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+    });
+
+    const result = await response.json() as KickResult;
+
+    if (result.success) {
+      realtimeLogger.info('User kicked from rooms', {
+        userId: maskIdentifier(payload.userId),
+        roomPattern: payload.roomPattern,
+        reason: payload.reason,
+        kickedCount: result.kickedCount,
+      });
+    }
+
+    return result;
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to kick user from rooms',
+      error instanceof Error ? error : undefined,
+      {
+        userId: maskIdentifier(payload.userId),
+        roomPattern: payload.roomPattern,
+      }
+    );
+    return { success: false, kickedCount: 0, rooms: [], error: 'Network error' };
+  }
+}
+
+/**
+ * Kicks a user from all rooms related to a specific drive.
+ * Called when a user is removed from a drive or loses drive access.
+ *
+ * @param driveId - The drive ID to remove user from
+ * @param userId - The user to kick
+ * @param reason - The reason for the kick
+ * @param driveName - Optional drive name for client notification
+ */
+export async function kickUserFromDrive(
+  driveId: string,
+  userId: string,
+  reason: KickReason,
+  driveName?: string
+): Promise<KickResult> {
+  return kickUserFromRooms({
+    userId,
+    roomPattern: `drive:${driveId}`,
+    reason,
+    metadata: { driveId, driveName },
+  });
+}
+
+/**
+ * Kicks a user from all activity rooms related to a specific drive.
+ *
+ * @param driveId - The drive ID
+ * @param userId - The user to kick
+ * @param reason - The reason for the kick
+ */
+export async function kickUserFromDriveActivity(
+  driveId: string,
+  userId: string,
+  reason: KickReason
+): Promise<KickResult> {
+  return kickUserFromRooms({
+    userId,
+    roomPattern: `activity:drive:${driveId}`,
+    reason,
+    metadata: { driveId },
+  });
+}
+
+/**
+ * Kicks a user from a specific page room.
+ * Called when page-level permissions are revoked.
+ *
+ * @param pageId - The page ID to remove user from
+ * @param userId - The user to kick
+ * @param reason - The reason for the kick
+ */
+export async function kickUserFromPage(
+  pageId: string,
+  userId: string,
+  reason: KickReason
+): Promise<KickResult> {
+  return kickUserFromRooms({
+    userId,
+    roomPattern: pageId,
+    reason,
+    metadata: { pageId },
+  });
+}
+
+/**
+ * Kicks a user from a page's activity room.
+ *
+ * @param pageId - The page ID
+ * @param userId - The user to kick
+ * @param reason - The reason for the kick
+ */
+export async function kickUserFromPageActivity(
+  pageId: string,
+  userId: string,
+  reason: KickReason
+): Promise<KickResult> {
+  return kickUserFromRooms({
+    userId,
+    roomPattern: `activity:page:${pageId}`,
+    reason,
+    metadata: { pageId },
+  });
 }

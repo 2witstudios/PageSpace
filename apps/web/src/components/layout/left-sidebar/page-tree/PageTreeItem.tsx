@@ -277,7 +277,8 @@ export function PageTreeItem({
                 onClick={handleLinkClick}
                 onMouseDown={handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer"
+                onTouchEnd={(e) => e.stopPropagation()}
+                className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer touch-manipulation"
               >
                 {item.title}
               </Link>

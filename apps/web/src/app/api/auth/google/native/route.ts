@@ -173,7 +173,7 @@ export async function POST(req: Request) {
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     // Create device token
-    await validateOrCreateDeviceToken({
+    const { deviceToken } = await validateOrCreateDeviceToken({
       providedDeviceToken: undefined,
       userId: user.id,
       deviceId,
@@ -210,12 +210,14 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({
       sessionToken,
       csrfToken,
+      deviceToken,
       isNewUser,
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
         image: user.image,
+        emailVerified: user.emailVerified,
       },
     }), {
       status: 200,

@@ -23,7 +23,7 @@ export const MessageActionButtons: React.FC<MessageActionButtonsProps> = ({
   const iconSize = compact ? 'h-2 w-2' : 'h-2.5 w-2.5';
 
   return (
-    <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="flex items-center space-x-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
       {onRetry && (
         <Button
           variant="ghost"

@@ -1,8 +1,8 @@
 # PageSpace: Where AI Can Actually Work
 
-**Try it free at [www.pagespace.ai](https://www.pagespace.ai)** • Self-host with Docker • [Discord](https://discord.gg/yxDQkTHXT5)
+**[www.pagespace.ai](https://www.pagespace.ai)** • Desktop Apps • Self-Host • [Discord](https://discord.gg/yxDQkTHXT5)
 
-> 🚀 PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
+> PageSpace turns your projects into intelligent workspaces where AI agents collaborate alongside your team with real tools to create, edit, and organize content.
 
 ---
 
@@ -12,8 +12,9 @@ In most tools, you chat with AI *about* your work. In PageSpace, AI works *direc
 
 - **AI with real tools**: Your AI can create documents, organize projects, edit content - not just answer questions
 - **External AI integration**: Connect Claude Desktop or Cursor to directly manipulate your workspace via MCP
-- **Team + AI collaboration**: Multiple people and AIs working on the same pages simultaneously  
-- **100+ AI models**: From free (Qwen, DeepSeek) to premium (Claude 4.1, GPT-5) - you choose
+- **Team + AI collaboration**: Multiple people and AIs working on the same pages simultaneously
+- **100+ AI models**: From free (Qwen, DeepSeek) to premium (Claude Opus 4.5, GPT-5, Gemini 3) - you choose
+- **Zero-trust security**: Enterprise-grade security with opaque tokens, per-event authorization, and tamper-evident audit trails
 - **Your workspace understands context**: AI intelligence flows through your project hierarchy
 
 ## Preview
@@ -51,13 +52,16 @@ Claude: "Update all meeting notes in my PageSpace"
 
 ## Quick Start
 
-### Option 1: Cloud (Instant Access)
+### Cloud (Recommended)
+The fastest way to get started - no setup required:
 1. Visit **[www.pagespace.ai](https://www.pagespace.ai)**
 2. Sign up for free
 3. Start building with AI immediately
 
-### Option 2: Desktop App (Native Experience)
-Download the native desktop app that connects to your cloud instance:
+**Cloud features**: Automatic updates, zero maintenance, built-in AI models, team collaboration, and enterprise security out of the box.
+
+### Desktop Apps
+Native desktop apps that connect to your PageSpace cloud instance:
 
 **macOS** (Signed & Notarized)
 - [Download DMG](https://github.com/2witstudios/PageSpace/releases/latest/download/PageSpace.dmg) - Universal (Intel & Apple Silicon)
@@ -90,7 +94,8 @@ pnpm package:desktop
 
 See [apps/desktop/README.md](apps/desktop/README.md) for detailed instructions.
 
-### Option 3: Self-Host (Full Control)
+### Self-Host (Advanced)
+For complete data sovereignty and custom deployments:
 ```bash
 # Clone and setup
 git clone https://github.com/2witstudios/PageSpace.git
@@ -114,6 +119,8 @@ pnpm dev
 
 # Visit http://localhost:3000
 ```
+
+**When to self-host**: Air-gapped environments, compliance requirements, or when you need to run local AI models exclusively.
 
 ---
 
@@ -156,45 +163,106 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
 
 ## Core Features
 
-### 🤖 AI Agent Infrastructure
+### AI Agent Infrastructure
 - **33 workspace tools** for AI to manipulate content directly
 - **Three AI personalities**: Partner (collaborative), Planner (strategic), Writer (execution-focused)
 - **Tool permissions**: Control what each AI can do in your workspace
+- **MCP protocol support**: Connect external AI tools like Claude Desktop and Cursor
 
-### 📄 Everything is a Page
+### Everything is a Page
 - Documents, folders, AI chats, channels - all share the same powerful foundation
 - Hierarchical context flows through your workspace
 - Real-time collaboration on any page type
 
-### 🔌 Multi-Provider AI Support
+### Multi-Provider AI Support
 - **Built-in models** via PageSpace (no API key needed)
-- **Bring your own key**: OpenAI, Anthropic, Google, OpenRouter, xAI
-- **100+ models** from free tier to cutting edge
+- **Bring your own key**: OpenAI, Anthropic, Google, OpenRouter, xAI, and more
+- **100+ models** including Claude Opus 4.5, GPT-5, Gemini 3, Grok 4, and open-source alternatives
+- **Local models**: Connect Ollama or LM Studio for air-gapped deployments
 
-### 🔒 Privacy & Control
-- **Cloud option** at www.pagespace.ai for instant access
-- **Self-host option** for complete data sovereignty
-- **Export anytime**: Your data is always yours
+### Zero-Trust Security Architecture
+PageSpace implements enterprise-grade security designed for cloud-first deployment:
+
+- **Opaque session tokens**: Server-validated tokens with SHA-256 hash-only storage - raw tokens never persisted
+- **Per-event authorization**: Every sensitive operation re-validates permissions against the database
+- **Instant token revocation**: Token versioning enables immediate session invalidation across all devices
+- **Device fingerprinting**: Trust scoring detects token theft via IP/User-Agent anomalies
+- **Tamper-evident audit trails**: Hash-chained security logs for compliance and forensics
+- **Defense-in-depth**: SameSite cookies + CSRF tokens + origin validation + rate limiting
+- **Comprehensive security headers**: CSP with nonces, HSTS, X-Frame-Options, and more
+
+[Security architecture details →](./docs/3.0-guides-and-tools/cloud-security-analysis.md)
 
 ---
 
 ## Architecture
 
-PageSpace is a monorepo with a modern, production-ready stack:
+PageSpace is a cloud-native monorepo designed for scalability and security:
 
 ```
 apps/
-├── web/          # Next.js 15 main application
-├── realtime/     # Socket.IO server for real-time sync
-├── processor/    # File processing service
-└── desktop/      # Electron desktop wrapper
+├── web/          # Next.js 15 App Router (main application)
+├── realtime/     # Socket.IO server (real-time collaboration)
+├── processor/    # File processing service (uploads, optimization)
+├── desktop/      # Electron desktop wrapper
+└── mobile/       # Capacitor mobile apps (iOS/Android)
 
 packages/
 ├── db/           # Drizzle ORM + PostgreSQL schema
-└── lib/          # Shared utilities and types
+└── lib/          # Shared auth, permissions, utilities
 ```
 
-**Tech Stack**: Next.js 15, PostgreSQL, Socket.IO, Vercel AI SDK, TypeScript, Tailwind CSS, Turbo
+### Tech Stack
+- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS 4, shadcn/ui
+- **Backend**: Next.js API routes, PostgreSQL, Drizzle ORM, Redis
+- **AI**: Vercel AI SDK, 10+ provider integrations
+- **Real-time**: Socket.IO with Redis pub/sub for horizontal scaling
+- **Auth**: Opaque session tokens, OAuth (Google, Apple), MCP tokens
+- **Build**: pnpm workspaces, Turbo, Docker
+
+### Cloud Infrastructure
+- **Database**: Any PostgreSQL (Neon, Supabase, RDS, or self-hosted)
+- **Cache**: Redis for sessions, rate limiting, and distributed state
+- **Storage**: Content-addressed file storage with optimization pipeline
+- **Deployment**: Docker containers, CI/CD via GitHub Actions
+
+---
+
+## Version History & Recovery
+
+PageSpace provides comprehensive data protection so you never lose work:
+
+### Version History
+- **30-day automatic versioning**: Every save creates a recoverable version
+- **Pin important versions**: Pinned versions never expire
+- **Version comparison**: See exactly what changed between versions
+- **One-click restore**: Restore any previous version instantly
+
+### Rollback & Undo
+- **Individual activity rollback**: Undo any single change with conflict detection
+- **Bulk rollback**: Revert all changes from a specific point forward
+- **AI conversation undo**: Undo AI messages and optionally all content changes they made
+- **Atomic transactions**: Rollbacks are all-or-nothing for consistency
+
+### Trash & Recovery
+- **Soft delete**: Deleted pages and drives go to trash first
+- **Restore anytime**: Recover trashed items with full hierarchy intact
+- **Recursive restoration**: Restoring a page restores its children too
+
+### Drive Backups
+- **Full drive snapshots**: Backup entire drives including pages, permissions, members, and files
+- **Manual or scheduled**: Create backups on-demand or automatically
+- **Complete state capture**: Restore drives to exact previous states
+
+---
+
+## Data & Privacy
+
+- **Your data stays yours**: Export anytime, no lock-in
+- **Encrypted at rest**: All sensitive data encrypted in the database
+- **API key security**: Your provider keys are encrypted and never logged
+- **Complete audit trail**: Every operation logged with who/what/when for compliance
+- **Self-host option**: Run entirely on your infrastructure for complete sovereignty
 
 ---
 
@@ -233,4 +301,4 @@ This means you can use, modify, and share PageSpace for non-commercial purposes.
 
 **Built by people who believe AI should work with you, not just talk to you.**
 
-[Try PageSpace at www.pagespace.ai →](https://www.pagespace.ai)
+[Get started at www.pagespace.ai →](https://www.pagespace.ai)

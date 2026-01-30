@@ -57,6 +57,17 @@ export class WSClient {
       baseUrl = baseUrl.replace(/^http:/, 'https:');
     }
 
+    // Validate the URL is well-formed and uses http(s) protocol
+    try {
+      const parsed = new URL(baseUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(`Invalid protocol: ${parsed.protocol}`);
+      }
+    } catch (error) {
+      logger.error('Invalid base URL configuration', { baseUrl, error });
+      return 'https://pagespace.ai';
+    }
+
     return baseUrl;
   }
 

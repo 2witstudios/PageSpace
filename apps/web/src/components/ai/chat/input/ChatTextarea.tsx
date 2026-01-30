@@ -1,6 +1,6 @@
 'use client';
 
-import React, { forwardRef, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
@@ -59,6 +59,8 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
   ) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const context = useSuggestionContext();
+    // Track IME composition state to prevent accidental sends during predictive text
+    const [isComposing, setIsComposing] = useState(false);
 
     const suggestion = useSuggestion({
       inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
@@ -81,7 +83,12 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       suggestion.handleKeyDown(e);
 
       // Send on Enter (without Shift) when suggestions are closed
+      // Also check for IME composition to prevent sends during predictive text selection
       if (!context.isOpen && e.key === 'Enter' && !e.shiftKey) {
+        // Don't send during IME composition (predictive text, etc.)
+        if (isComposing || e.nativeEvent.isComposing) {
+          return;
+        }
         e.preventDefault();
         if (value.trim() && !disabled) {
           onSend();
@@ -96,6 +103,8 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           value={value}
           onChange={(e) => suggestion.handleValueChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onCompositionStart={() => setIsComposing(true)}
+          onCompositionEnd={() => setIsComposing(false)}
           placeholder={placeholder}
           disabled={disabled}
           className={cn(

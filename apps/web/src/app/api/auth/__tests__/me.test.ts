@@ -40,6 +40,7 @@ const mockUser: User = {
   role: 'user',
   provider: 'email',
   googleId: null,
+  appleId: null,
   emailVerified: mockVerifiedDate,
   password: '$2a$12$hashedpassword',
   tokenVersion: 0,
@@ -52,6 +53,10 @@ const mockUser: User = {
   stripeCustomerId: null,
   subscriptionTier: 'free',
   tosAcceptedAt: null,
+  failedLoginAttempts: 0,
+  lockedUntil: null,
+  suspendedAt: null,
+  suspendedReason: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
   updatedAt: new Date('2024-01-01T00:00:00Z'),
 };

@@ -383,7 +383,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   variant="outline"
                   size="sm"
                   onClick={() => createConversation()}
-                  className="flex items-center space-x-2"
+                  className="flex items-center gap-2"
                 >
                   <Plus className="h-4 w-4" />
                   <span className="hidden sm:inline">New Chat</span>

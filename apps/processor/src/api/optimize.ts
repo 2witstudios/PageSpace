@@ -37,8 +37,8 @@ router.post('/', async (req, res) => {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
-    if (!IMAGE_PRESETS[preset]) {
-      return res.status(400).json({ 
+    if (typeof preset !== 'string' || !Object.prototype.hasOwnProperty.call(IMAGE_PRESETS, preset)) {
+      return res.status(400).json({
         error: 'Invalid preset',
         validPresets: Object.keys(IMAGE_PRESETS)
       });
@@ -118,6 +118,10 @@ router.post('/batch', async (req, res) => {
       return res.status(400).json({ error: 'contentHash is required' });
     }
 
+    if (!Array.isArray(presets) || !presets.every((p: unknown) => typeof p === 'string')) {
+      return res.status(400).json({ error: 'presets must be an array of strings' });
+    }
+
     if (!isValidContentHash(contentHash)) {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
@@ -133,24 +137,28 @@ router.post('/batch', async (req, res) => {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
-    const results: any = {};
+    type BatchPresetResult =
+      | { cached: true; url: string; status: 'completed' }
+      | { cached: false; jobId: string; status: 'queued' };
+
+    const resultsMap = new Map<string, BatchPresetResult>();
     const jobIds: string[] = [];
 
     for (const preset of presets) {
-      if (!IMAGE_PRESETS[preset]) {
-        results[preset] = { error: 'Invalid preset' };
+      // Validate preset is a known key in IMAGE_PRESETS (rejects unknown/dangerous keys)
+      if (typeof preset !== 'string' || !Object.prototype.hasOwnProperty.call(IMAGE_PRESETS, preset)) {
         continue;
       }
 
       // Check cache first
       const cached = await contentStore.cacheExists(contentHash, preset);
-      
+
       if (cached) {
-        results[preset] = {
+        resultsMap.set(preset, {
           cached: true,
           url: await contentStore.getCacheUrl(contentHash, preset),
           status: 'completed'
-        };
+        });
       } else {
         // Queue for processing
         const jobId = await queueManager.addJob('image-optimize', {
@@ -158,15 +166,17 @@ router.post('/batch', async (req, res) => {
           preset,
           fileId
         });
-        
+
         jobIds.push(jobId);
-        results[preset] = {
+        resultsMap.set(preset, {
           cached: false,
           jobId,
           status: 'queued'
-        };
+        });
       }
     }
+
+    const results = Object.fromEntries(resultsMap);
 
     res.json({
       success: true,

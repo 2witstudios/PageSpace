@@ -4,8 +4,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createId } from '@paralleldrive/cuid2';
 import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/server';
+import {
+  getOrCreateRequestId,
+  REQUEST_ID_HEADER,
+} from '@/lib/request-id/request-id';
 import { db, apiMetrics } from '@pagespace/db';
 
 // In-memory buffer for metrics (flushed to database every 30s or when buffer is full)
@@ -178,9 +181,19 @@ interface MonitoringIngestPayload {
 
 const DEFAULT_INGEST_PATH = '/api/internal/monitoring/ingest';
 
+// Track whether we've warned about missing ingest key (to avoid log spam)
+let hasWarnedMissingIngestKey = false;
+
 function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPayload): void {
   const ingestKey = process.env.MONITORING_INGEST_KEY;
   if (!ingestKey) {
+    if (!hasWarnedMissingIngestKey) {
+      hasWarnedMissingIngestKey = true;
+      loggers.system.warn(
+        'MONITORING_INGEST_KEY is not configured; monitoring ingest is disabled. ' +
+        'Set MONITORING_INGEST_KEY in your environment to enable API monitoring.'
+      );
+    }
     return;
   }
 
@@ -282,8 +295,8 @@ export async function monitoringMiddleware(
     return next();
   }
 
-  // Generate request ID
-  const requestId = createId();
+  // Get or generate request ID (preserves incoming ID for distributed tracing)
+  const requestId = getOrCreateRequestId(request);
   const startedAt = new Date();
   const startTime = Date.now();
 
@@ -364,7 +377,7 @@ export async function monitoringMiddleware(
     }
 
     // Add monitoring headers
-    response.headers.set('X-Request-Id', requestId);
+    response.headers.set(REQUEST_ID_HEADER, requestId);
     response.headers.set('X-Response-Time', `${duration}ms`);
 
     return response;

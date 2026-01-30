@@ -114,6 +114,10 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
 }));
 
+vi.mock('@/lib/auth/cookie-config', () => ({
+  appendSessionCookie: vi.fn(),
+}));
+
 import { db, users } from '@pagespace/db';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, logAuthEvent } from '@pagespace/lib/server';
@@ -209,6 +213,12 @@ describe('POST /api/auth/google/native', () => {
     (sessionService.revokeAllUserSessions as Mock).mockResolvedValue(0);
     (generateCSRFToken as Mock).mockReturnValue('mock-csrf-token');
 
+    // Default device token mock
+    (validateOrCreateDeviceToken as Mock).mockResolvedValue({
+      deviceToken: 'mock-device-token',
+      deviceTokenRecordId: 'device-record-id',
+    });
+
     // Default provisioning mock
     (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({ driveId: 'drive-123' });
 
@@ -252,6 +262,7 @@ describe('POST /api/auth/google/native', () => {
       expect(response.status).toBe(200);
       expect(body.sessionToken).toBe('ps_sess_mock_session_token');
       expect(body.csrfToken).toBe('mock-csrf-token');
+      expect(body.deviceToken).toBe('mock-device-token');
       expect(body.isNewUser).toBe(true);
     });
 
@@ -264,6 +275,7 @@ describe('POST /api/auth/google/native', () => {
 
       expect(response.status).toBe(200);
       expect(body.sessionToken).toBe('ps_sess_mock_session_token');
+      expect(body.deviceToken).toBe('mock-device-token');
       expect(body.isNewUser).toBe(false);
       expect(db.insert).not.toHaveBeenCalled();
     });

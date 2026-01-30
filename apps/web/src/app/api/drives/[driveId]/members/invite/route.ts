@@ -3,7 +3,7 @@ import { db, eq, and } from '@pagespace/db';
 import { driveMembers, drives, pagePermissions, pages, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -118,6 +118,12 @@ export async function POST(
         driveName: drive[0].name
       })
     );
+
+    // Invalidate permission caches so user immediately sees their new access
+    await Promise.all([
+      invalidateUserPermissions(invitedUserId),
+      invalidateDrivePermissions(driveId),
+    ]);
 
     // Validate that all pageIds belong to this drive
     const validPages = await db.select({ id: pages.id })

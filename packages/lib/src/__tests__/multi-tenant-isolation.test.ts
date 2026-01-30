@@ -65,7 +65,6 @@ const mockCanUserViewPage = vi.fn();
 const mockCanUserEditPage = vi.fn();
 const mockCanUserDeletePage = vi.fn();
 const mockGetUserDriveAccess = vi.fn();
-const mockGrantPagePermissions = vi.fn();
 
 vi.mock('../permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
@@ -73,7 +72,6 @@ vi.mock('../permissions/permissions', () => ({
   canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   canUserDeletePage: (...args: unknown[]) => mockCanUserDeletePage(...args),
   getUserDriveAccess: (...args: unknown[]) => mockGetUserDriveAccess(...args),
-  grantPagePermissions: (...args: unknown[]) => mockGrantPagePermissions(...args),
 }));
 
 // Mock cached permissions
@@ -513,19 +511,11 @@ describe('Multi-Tenant Isolation', () => {
       });
 
       it('should allow page collaborator to join page room but not drive room', async () => {
-        const { getUserAccessLevel, getUserDriveAccess, grantPagePermissions } =
+        const { getUserAccessLevel, getUserDriveAccess } =
           await import('../permissions/permissions');
 
-        // Grant permission succeeds
-        mockGrantPagePermissions.mockResolvedValue(undefined);
-
-        await grantPagePermissions(
-          TENANT_A.pageId,
-          UNAUTHORIZED_USER.userId,
-          { canView: true, canEdit: false, canShare: false, canDelete: false },
-          TENANT_A.ownerId
-        );
-
+        // Simulate that a page permission has been granted
+        // (In real code, this would happen via the zero-trust grantPagePermission function)
         // Collaborator can access the specific page
         mockGetUserAccessLevel.mockResolvedValue({
           canView: true,

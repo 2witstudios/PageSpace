@@ -25,6 +25,7 @@ import { AddPaymentMethodForm } from '@/components/billing/AddPaymentMethodForm'
 import { InvoiceList, type Invoice } from '@/components/billing/InvoiceList';
 import { UpcomingInvoice } from '@/components/billing/UpcomingInvoice';
 import { BillingAddressForm, type BillingAddress } from '@/components/billing/BillingAddressForm';
+import { BillingGuard } from '@/components/billing/BillingGuard';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/lib/subscription/plans';
 import { post } from '@/lib/auth/auth-fetch';
 
@@ -215,6 +216,7 @@ export default function BillingPage() {
   const scheduledChangeDate = subscriptionData?.subscription?.scheduledChangeDate;
 
   return (
+    <BillingGuard>
     <div className="container mx-auto p-6 space-y-8 max-w-4xl">
       {/* Header */}
       <div>
@@ -435,5 +437,6 @@ export default function BillingPage() {
         }}
       />
     </div>
+    </BillingGuard>
   );
 }

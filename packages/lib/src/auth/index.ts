@@ -3,6 +3,7 @@
  * @description Authentication and security utilities
  */
 
+export * from './account-lockout';
 export * from './constants';
 export * from './broadcast-auth';
 export * from './csrf-utils';

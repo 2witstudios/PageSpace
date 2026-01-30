@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 import { KeyboardResize } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
-  appId: 'ai.pagespace.app',
+  appId: 'ai.pagespace.ios',
   appName: 'PageSpace',
   webDir: './public', // Fallback for offline scenarios; app loads from server.url
   server: {
@@ -26,7 +26,7 @@ const config: CapacitorConfig = {
       showSpinner: false,
     },
     Keyboard: {
-      resize: KeyboardResize.Body,
+      resize: KeyboardResize.None,
       resizeOnFullScreen: true,
     },
     StatusBar: {
@@ -34,6 +34,9 @@ const config: CapacitorConfig = {
       backgroundColor: '#000000',
     },
     SocialLogin: {
+      apple: {
+        clientId: 'ai.pagespace.ios',
+      },
       google: {
         iOSClientId: '636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com',
       },

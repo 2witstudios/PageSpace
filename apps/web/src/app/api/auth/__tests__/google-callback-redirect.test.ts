@@ -104,6 +104,21 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  // Use actual implementation for isSafeReturnUrl so redirect tests are valid
+  isSafeReturnUrl: (url: string | undefined): boolean => {
+    if (!url) return true;
+    if (!url.startsWith('/')) return false;
+    if (url.startsWith('//') || url.startsWith('/\\')) return false;
+    if (/[a-z]+:/i.test(url)) return false;
+    try {
+      const decoded = decodeURIComponent(url);
+      if (decoded.startsWith('//') || decoded.startsWith('/\\')) return false;
+      if (/[a-z]+:/i.test(decoded)) return false;
+    } catch {
+      return false;
+    }
+    return true;
+  },
 }));
 
 import { db, users } from '@pagespace/db';

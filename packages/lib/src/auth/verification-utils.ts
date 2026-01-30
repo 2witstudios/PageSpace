@@ -29,14 +29,13 @@ export async function createVerificationToken(options: CreateTokenOptions): Prom
       )
     );
 
-  // SECURITY: Hash the token before storing - never store plaintext
+  // Hash the token before storing
   const tokenHashValue = hashToken(token);
 
   // Create new token
   await db.insert(verificationTokens).values({
     id: createId(),
     userId,
-    token: tokenHashValue,        // Store hash, NOT plaintext
     tokenHash: tokenHashValue,
     tokenPrefix: getTokenPrefix(token),
     type,

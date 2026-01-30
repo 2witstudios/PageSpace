@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { getUserAccessLevel } from '../permissions/permissions-cached'
-import { grantPagePermissions } from '../permissions/permissions'
 import { factories } from '@pagespace/db/test/factories'
-import { db, users } from '@pagespace/db'
+import { db, users, pagePermissions, driveMembers, pages, drives } from '@pagespace/db'
 import { PermissionCache } from '../services/permission-cache'
 
 describe('cached permissions system', () => {
@@ -12,7 +11,11 @@ describe('cached permissions system', () => {
   let testPage: Awaited<ReturnType<typeof factories.createPage>>
 
   beforeEach(async () => {
-    // Clean up test data before each test
+    // Delete in foreign key order to avoid deadlocks from cascade contention
+    await db.delete(pagePermissions)
+    await db.delete(pages)
+    await db.delete(driveMembers)
+    await db.delete(drives)
     await db.delete(users)
 
     // Clear permission cache before each test
@@ -65,11 +68,10 @@ describe('cached permissions system', () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' })
 
       // Create explicit permission with limited access
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: false, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       // Drive admin should still have full access (admin overrides explicit permissions)
@@ -93,11 +95,10 @@ describe('cached permissions system', () => {
     })
 
     it('returns specific permissions when granted to non-admin user', async () => {
-      await grantPagePermissions(
+      await factories.createPagePermission(
         testPage.id,
         otherUser.id,
-        { canView: true, canEdit: true, canShare: false, canDelete: false },
-        testUser.id
+        { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
       const access = await getUserAccessLevel(otherUser.id, testPage.id)

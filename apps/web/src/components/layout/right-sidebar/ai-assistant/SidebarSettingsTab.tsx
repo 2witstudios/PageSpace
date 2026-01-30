@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { AI_PROVIDERS, getBackendProvider, getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import type { AgentInfo } from '@/types/agent';
 
 // Using centralized AI providers configuration from ai-providers-config.ts
@@ -66,6 +67,9 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
   // Dynamic LM Studio models state
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
+
+  // Billing visibility (hide upgrade CTA on iOS)
+  const { showBilling } = useBillingVisibility();
 
   // Page tree context toggle (from centralized store)
   const showPageTree = useAssistantSettingsStore((state) => state.showPageTree);
@@ -639,8 +643,9 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
             </CardContent>
           </Card>
 
-          {/* Upgrade notification for restricted models */}
-          {selectedProvider === 'pagespace' &&
+          {/* Upgrade notification for restricted models (hidden on iOS) */}
+          {showBilling &&
+           selectedProvider === 'pagespace' &&
            !hasModelAccess('pagespace', 'glm-4.7') && (
             <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10">
               <CardContent className="pt-6">

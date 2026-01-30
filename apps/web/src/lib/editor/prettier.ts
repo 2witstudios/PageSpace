@@ -54,7 +54,8 @@ export const formatHtml = async (html: string): Promise<string> => {
       tagTypes.forEach(closingTag => {
         // Replace cases where text directly touches closing tag with space before tag
         // This regex finds: any non-whitespace character followed immediately by the closing tag
-        const noSpacePattern = new RegExp(`([^\\s>])(${closingTag.replace(/[/]/g, '\\/')})`, 'g');
+        const escapedTag = closingTag.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+        const noSpacePattern = new RegExp(`([^\\s>])(${escapedTag})`, 'g');
         formatted = formatted.replace(noSpacePattern, (match, char, tag) => {
           // Only add space if the original HTML had trailing spaces for this tag type
           return `${char} ${tag}`;

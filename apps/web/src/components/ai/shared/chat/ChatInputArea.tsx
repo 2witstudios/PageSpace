@@ -3,12 +3,13 @@
  * Used by both Agent engine and Global Assistant engine
  */
 
-import React, { useRef, forwardRef, useImperativeHandle } from 'react';
+import React, { useRef, forwardRef, useImperativeHandle, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Send, StopCircle } from 'lucide-react';
 import AiInput from './AiInput';
 import { ChatInputRef } from '@/components/messages/ChatInput';
 import { getAIErrorMessage } from '@/lib/ai/shared/error-messages';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 interface ChatInputAreaProps {
   /** Current input value */
@@ -76,6 +77,18 @@ export const ChatInputArea = forwardRef<ChatInputAreaRef, ChatInputAreaProps>(
   ) => {
     const chatInputRef = useRef<ChatInputRef>(null);
 
+    // Mobile keyboard management
+    const keyboard = useMobileKeyboard();
+    const prevStreamingRef = useRef(isStreaming);
+
+    // Dismiss keyboard when streaming starts
+    useEffect(() => {
+      if (isStreaming && !prevStreamingRef.current) {
+        keyboard.dismiss();
+      }
+      prevStreamingRef.current = isStreaming;
+    }, [isStreaming, keyboard]);
+
     // Expose methods to parent
     useImperativeHandle(ref, () => ({
       focus: () => chatInputRef.current?.focus?.(),
@@ -85,6 +98,7 @@ export const ChatInputArea = forwardRef<ChatInputAreaRef, ChatInputAreaProps>(
     // Handle send
     const handleSend = () => {
       if (value.trim() && !disabled && !isLoading && !isReadOnly) {
+        keyboard.dismiss();
         onSend();
       }
     };
