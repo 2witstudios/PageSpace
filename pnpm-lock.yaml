@@ -536,6 +536,9 @@ importers:
       react-hook-form:
         specifier: ^7.62.0
         version: 7.63.0(react@19.2.1)
+      react-image-crop:
+        specifier: ^11.0.10
+        version: 11.0.10(react@19.2.1)
       react-pdf:
         specifier: ^10.1.0
         version: 10.1.0(@types/react@19.1.13)(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -8532,6 +8535,11 @@ packages:
     peerDependencies:
       react: ^19.1.2
 
+  react-image-crop@11.0.10:
+    resolution: {integrity: sha512-+5FfDXUgYLLqBh1Y/uQhIycpHCbXkI50a+nbfkB1C0xXXUTwkisHDo2QCB1SQJyHCqIuia4FeyReqXuMDKWQTQ==}
+    peerDependencies:
+      react: ^19.1.2
+
   react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
 
@@ -9860,6 +9868,7 @@ packages:
   whatwg-encoding@3.1.1:
     resolution: {integrity: sha512-6qN4hJdMwfYBtE3YBTTHhoeuUrDBPZmbQaxWAqSALV/MeEnR5z1xd8UKud2RAkFoPkmB+hli1TZSnyi84xz1vQ==}
     engines: {node: '>=18'}
+    deprecated: Use @exodus/bytes instead for a more spec-conformant and faster implementation
 
   whatwg-mimetype@4.0.0:
     resolution: {integrity: sha512-QaKxh0eNIi2mE9p2vEdzfagOKHCcj1pJ56EEHGQOVxp8r9/iszLUUV7v89x9O1p/T+NlTM5W7jW6+cz4Fq1YVg==}
@@ -18583,6 +18592,10 @@ snapshots:
       - utf-8-validate
 
   react-hook-form@7.63.0(react@19.2.1):
+    dependencies:
+      react: 19.2.1
+
+  react-image-crop@11.0.10(react@19.2.1):
     dependencies:
       react: 19.2.1
 
