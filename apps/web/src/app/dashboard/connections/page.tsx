@@ -228,6 +228,7 @@ export default function ConnectionsPage() {
                           <Button
                             variant="outline"
                             size="sm"
+                            aria-label="Message"
                             onClick={() => handleStartConversation(connection.user.id)}
                           >
                             <MessageSquare className="h-4 w-4 sm:mr-2" />
@@ -308,6 +309,7 @@ export default function ConnectionsPage() {
                               <Button
                                 variant="default"
                                 size="sm"
+                                aria-label="Accept request"
                                 onClick={() => handleConnectionAction(connection.id, 'accept')}
                               >
                                 <UserCheck className="h-4 w-4 sm:mr-2" />
@@ -316,6 +318,7 @@ export default function ConnectionsPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
+                                aria-label="Decline request"
                                 onClick={() => handleConnectionAction(connection.id, 'reject')}
                               >
                                 <UserX className="h-4 w-4 sm:mr-2" />
