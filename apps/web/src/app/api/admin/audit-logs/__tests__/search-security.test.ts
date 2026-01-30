@@ -31,26 +31,8 @@ vi.mock('@pagespace/lib/server', () => ({
 
 // Mock the database module
 vi.mock('@pagespace/db', () => {
-  const mockSelect = vi.fn();
-  const mockFrom = vi.fn();
-  const mockLeftJoin = vi.fn();
-  const mockWhere = vi.fn();
-  const mockOrderBy = vi.fn();
-  const mockLimit = vi.fn();
-  const mockOffset = vi.fn();
-
   // Track the ilike calls to verify escaping
   const ilikeCallTracker: Array<{ column: unknown; pattern: string }> = [];
-
-  const chainedMethods = {
-    select: mockSelect.mockReturnThis(),
-    from: mockFrom.mockReturnThis(),
-    leftJoin: mockLeftJoin.mockReturnThis(),
-    where: mockWhere.mockReturnThis(),
-    orderBy: mockOrderBy.mockReturnThis(),
-    limit: mockLimit.mockReturnThis(),
-    offset: mockOffset.mockResolvedValue([]),
-  };
 
   // Reset and return the tracker for each test
   const getIlikeCallTracker = () => ilikeCallTracker;
