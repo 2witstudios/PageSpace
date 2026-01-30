@@ -171,8 +171,8 @@ export default function StorageDashboard() {
   const { quota, tierInfo, fileTypeBreakdown, largestFiles, recentFiles, storageByDrive, totalFiles } = storageInfo;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-full">
         <div className="mb-8">
         <Button
           variant="ghost"
@@ -350,7 +350,7 @@ export default function StorageDashboard() {
 
       <div className="grid gap-8 lg:grid-cols-2">
         {/* Recent Files */}
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Clock className="h-5 w-5" />
@@ -366,14 +366,15 @@ export default function StorageDashboard() {
                 recentFiles.map((file) => {
                   const FileIconComponent = getFileIcon(file.mimeType);
                   return (
-                    <div key={file.id} className="flex items-center justify-between py-2">
+                    <div key={file.id} className="flex flex-wrap items-center gap-2 py-2">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <FileIconComponent className="h-4 w-4 text-muted-foreground shrink-0" />
                         <span className="text-sm truncate">{file.title}</span>
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
                         <span>{file.formattedSize}</span>
-                        <span>{formatDistanceToNow(new Date(file.createdAt), { addSuffix: true })}</span>
+                        <span className="hidden sm:inline">•</span>
+                        <span className="hidden sm:inline">{formatDistanceToNow(new Date(file.createdAt), { addSuffix: true })}</span>
                       </div>
                     </div>
                   );
@@ -384,7 +385,7 @@ export default function StorageDashboard() {
         </Card>
 
         {/* Largest Files */}
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <HardDrive className="h-5 w-5" />
@@ -400,13 +401,13 @@ export default function StorageDashboard() {
                 largestFiles.map((file, index) => {
                   const FileIconComponent = getFileIcon(file.mimeType);
                   return (
-                    <div key={file.id} className="flex items-center justify-between py-2">
+                    <div key={file.id} className="flex flex-wrap items-center gap-2 py-2">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <span className="text-xs text-muted-foreground w-4">{index + 1}.</span>
+                        <span className="text-xs text-muted-foreground w-4 shrink-0">{index + 1}.</span>
                         <FileIconComponent className="h-4 w-4 text-muted-foreground shrink-0" />
                         <span className="text-sm truncate">{file.title}</span>
                       </div>
-                      <Badge variant="secondary" className="text-xs">
+                      <Badge variant="secondary" className="text-xs shrink-0">
                         {file.formattedSize}
                       </Badge>
                     </div>
