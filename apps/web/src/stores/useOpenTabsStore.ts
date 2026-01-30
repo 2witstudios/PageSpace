@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { PageType } from '@pagespace/lib/client-safe';
 
-export type TabPageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
+export type TabPageType = `${PageType}`;
 
 export interface Tab {
   id: string; // pageId
