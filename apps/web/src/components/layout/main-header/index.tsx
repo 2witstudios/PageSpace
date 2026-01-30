@@ -10,6 +10,7 @@ import VerifyEmailButton from "@/components/notifications/VerifyEmailButton";
 import InlineSearch from "@/components/search/InlineSearch";
 import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
+import RecentsDropdown from "@/components/shared/RecentsDropdown";
 import { UsageCounter } from "@/components/billing/UsageCounter";
 
 interface TopBarProps {
@@ -74,6 +75,8 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
           <VerifyEmailButton />
 
           <NotificationBell />
+
+          <RecentsDropdown className="lg:hidden" />
 
           <Button
             variant="ghost"

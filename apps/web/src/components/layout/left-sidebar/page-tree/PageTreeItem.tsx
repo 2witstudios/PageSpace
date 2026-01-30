@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, CSSProperties } from "react";
+import { useState, useCallback, CSSProperties, MouseEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useOpenTabsStore, type TabPageType } from "@/stores/useOpenTabsStore";
 import {
   ChevronRight,
   FolderPlus,
@@ -93,10 +94,42 @@ export function PageTreeItem({
   const [isRenameOpen, setRenameOpen] = useState(false);
   const params = useParams();
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
+  const openTabInBackground = useOpenTabsStore((state) => state.openTabInBackground);
   const isTouchDevice = useTouchDevice();
   const hasChildren = item.children && item.children.length > 0;
 
   const linkHref = `/dashboard/${params.driveId}/${item.id}`;
+
+  // Handle middle-click or Ctrl/Cmd+click to open in background tab
+  const handleLinkClick = useCallback((e: MouseEvent<HTMLAnchorElement>) => {
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modifier = isMac ? e.metaKey : e.ctrlKey;
+
+    if (modifier || e.button === 1) {
+      e.preventDefault();
+      openTabInBackground({
+        id: item.id,
+        driveId: params.driveId as string,
+        title: item.title,
+        type: item.type as TabPageType,
+      });
+    }
+    // Normal clicks are handled by useTabSync via URL change
+  }, [item.id, item.title, item.type, params.driveId, openTabInBackground]);
+
+  // Handle middle-click on mousedown (for middle-click detection)
+  const handleMouseDown = useCallback((e: MouseEvent<HTMLAnchorElement>) => {
+    e.stopPropagation();
+    if (e.button === 1) {
+      e.preventDefault();
+      openTabInBackground({
+        id: item.id,
+        driveId: params.driveId as string,
+        title: item.title,
+        type: item.type as TabPageType,
+      });
+    }
+  }, [item.id, item.title, item.type, params.driveId, openTabInBackground]);
 
   // Combine file drops AND internal dnd-kit drags for drop indicators
   const isFileDragOver = fileDragState?.overId === item.id;
@@ -244,6 +277,8 @@ export function PageTreeItem({
               {/* Title - Click to Navigate */}
               <Link
                 href={linkHref}
+                onClick={handleLinkClick}
+                onMouseDown={handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}
                 onTouchEnd={(e) => e.stopPropagation()}
                 className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer touch-manipulation"
