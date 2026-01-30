@@ -98,7 +98,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
     // Pull-up refresh for checking missed messages
     const {
       pullDistance,
-      isPulling,
+      isPulling: _isPulling,
       isRefreshing: isPullUpRefreshing,
       hasReachedThreshold,
       touchHandlers,

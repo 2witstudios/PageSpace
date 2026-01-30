@@ -25,7 +25,7 @@ export function usePageRefresh(): PageRefreshConfig {
   const driveId = params.driveId as string | undefined;
   const pageId = params.pageId as string | undefined;
 
-  const { tree, mutate, invalidateTree } = usePageTree(driveId);
+  const { tree, mutate } = usePageTree(driveId);
 
   // Find the current page in the tree
   const currentPage = useMemo<TreePage | null>(() => {
