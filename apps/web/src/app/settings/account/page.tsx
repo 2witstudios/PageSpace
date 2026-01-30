@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
+import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
 import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
 import { useDevices } from "@/hooks/useDevices";
@@ -61,6 +62,8 @@ export default function AccountPage() {
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [cropperOpen, setCropperOpen] = useState(false);
+  const [cropperImageSrc, setCropperImageSrc] = useState<string | null>(null);
 
   // Password form state
   const [currentPassword, setCurrentPassword] = useState("");
@@ -135,14 +138,26 @@ export default function AccountPage() {
       return;
     }
 
-    setAvatarFile(file);
-
-    // Create preview
+    // Create preview and open cropper
     const reader = new FileReader();
     reader.onloadend = () => {
-      setAvatarPreview(reader.result as string);
+      setCropperImageSrc(reader.result as string);
+      setCropperOpen(true);
     };
     reader.readAsDataURL(file);
+
+    // Reset file input so same file can be selected again
+    e.target.value = '';
+  };
+
+  const handleCropComplete = (croppedBlob: Blob) => {
+    // Create a File from the blob for upload
+    const croppedFile = new File([croppedBlob], 'avatar.png', { type: 'image/png' });
+    setAvatarFile(croppedFile);
+
+    // Create preview from the cropped blob
+    const previewUrl = URL.createObjectURL(croppedBlob);
+    setAvatarPreview(previewUrl);
   };
 
   const handleAvatarUpload = async () => {
@@ -153,7 +168,17 @@ export default function AccountPage() {
     formData.append('file', avatarFile);
 
     try {
-      await post('/api/account/avatar', formData);
+      // Use fetchWithAuth directly - post() helper sets Content-Type: application/json
+      // which breaks FormData uploads. fetchWithAuth lets browser set correct boundary.
+      const response = await fetchWithAuth('/api/account/avatar', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to upload avatar');
+      }
 
       setAvatarFile(null);
 
@@ -673,6 +698,16 @@ export default function AccountPage() {
         }}
         deviceCount={devices?.length || 0}
       />
+
+      {/* Image Cropper Dialog */}
+      {cropperImageSrc && (
+        <ImageCropperDialog
+          open={cropperOpen}
+          onOpenChange={setCropperOpen}
+          imageSrc={cropperImageSrc}
+          onCropComplete={handleCropComplete}
+        />
+      )}
     </div>
   );
 }
