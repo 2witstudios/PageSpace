@@ -22,6 +22,7 @@ import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInf
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
+import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -131,6 +132,9 @@ const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
  */
 const SidebarChatTab: React.FC = () => {
   const pathname = usePathname();
+
+  // Mobile keyboard support - track keyboard state to adjust input positioning
+  const { isOpen: isKeyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   // ============================================
   // Global Chat Context (for global mode sync)
@@ -711,8 +715,13 @@ const SidebarChatTab: React.FC = () => {
         </Conversation>
       </div>
 
-      {/* Input */}
-      <div className="border-t p-3 space-y-2 min-w-0 overflow-hidden">
+      {/* Input - adds keyboard height padding on mobile to stay above keyboard */}
+      <div
+        className="border-t p-3 space-y-2 min-w-0 overflow-hidden transition-[padding-bottom] duration-200"
+        style={{
+          paddingBottom: isKeyboardOpen ? `calc(0.75rem + ${keyboardHeight}px)` : undefined,
+        }}
+      >
         {error && showError && (
           <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex items-center justify-between">
             <p className="text-red-700 dark:text-red-300">
