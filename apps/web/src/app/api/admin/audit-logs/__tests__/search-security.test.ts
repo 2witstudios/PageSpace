@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
 
 /**
@@ -12,6 +12,15 @@ import { GET } from '../route';
  * Impact: Broader pattern matching than intended, data disclosure
  * Fix: Escape LIKE special characters before using in queries
  */
+
+// Create mock ilike function using vi.hoisted() to ensure it's available when vi.mock is hoisted
+const { mockIlike } = vi.hoisted(() => ({
+  mockIlike: vi.fn((column: unknown, pattern: string) => ({
+    type: 'ilike' as const,
+    column,
+    pattern,
+  })),
+}));
 
 // Mock dependencies
 vi.mock('@/lib/auth', () => ({
@@ -28,9 +37,6 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
 }));
-
-// Create mock ilike function at module scope for tracking
-const mockIlike = vi.fn((column, pattern) => ({ type: 'ilike', column, pattern }));
 
 // Mock the database module
 vi.mock('@pagespace/db', () => {
@@ -82,13 +88,13 @@ vi.mock('@pagespace/db', () => {
       email: 'email',
       image: 'image',
     },
-    eq: vi.fn((col, val) => ({ type: 'eq', col, val })),
-    and: vi.fn((...conditions) => ({ type: 'and', conditions })),
-    or: vi.fn((...conditions) => ({ type: 'or', conditions })),
-    desc: vi.fn((col) => ({ type: 'desc', col })),
+    eq: vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })),
+    and: vi.fn((...conditions: unknown[]) => ({ type: 'and', conditions })),
+    or: vi.fn((...conditions: unknown[]) => ({ type: 'or', conditions })),
+    desc: vi.fn((col: unknown) => ({ type: 'desc', col })),
     count: vi.fn(() => ({ type: 'count' })),
-    gte: vi.fn((col, val) => ({ type: 'gte', col, val })),
-    lte: vi.fn((col, val) => ({ type: 'lte', col, val })),
+    gte: vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })),
+    lte: vi.fn((col: unknown, val: unknown) => ({ type: 'lte', col, val })),
     ilike: mockIlike,
   };
 });
@@ -104,7 +110,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (verifyAdminAuth as unknown as Mock).mockResolvedValue(mockAdminUser);
+    vi.mocked(verifyAdminAuth).mockResolvedValue(mockAdminUser);
   });
 
   describe('LIKE pattern injection prevention', () => {
@@ -210,7 +216,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
   describe('authentication requirements', () => {
     it('GET_withoutAdminAuth_returns403', async () => {
       // Arrange: Not an admin
-      (verifyAdminAuth as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(verifyAdminAuth).mockResolvedValue(null);
 
       const request = new Request(
         'http://localhost/api/admin/audit-logs?search=test',
