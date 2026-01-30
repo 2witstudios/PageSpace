@@ -227,12 +227,10 @@ export function PageTreeItem({
         <ContextMenu>
           <ContextMenuTrigger asChild>
             <div
-              ref={handleProps.ref}
               {...handleProps.attributes}
-              {...handleProps.listeners}
               data-tree-node-id={item.id}
               className={cn(
-                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
+                "group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0",
                 showDropIndicator && dropPosition === "inside" &&
                   "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
                 !isActive && !showDropIndicator &&
@@ -262,8 +260,12 @@ export function PageTreeItem({
                 </button>
               )}
 
-              {/* Icon */}
-              <div className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700">
+              {/* Icon - Drag Handle */}
+              <div
+                ref={handleProps.ref}
+                {...handleProps.listeners}
+                className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-grab active:cursor-grabbing touch-manipulation"
+              >
                 <PageTypeIcon
                   type={item.type}
                   isTaskLinked={item.isTaskLinked}

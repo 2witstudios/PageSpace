@@ -789,6 +789,13 @@ body.keyboard-open {
   -webkit-text-size-adjust: 100%;
 }
 
+/* Prevent iOS touch callout and text selection in sidebar */
+.capacitor-ios aside {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* Prevent iOS input zoom - font-size < 16px causes auto-zoom on focus */
 .capacitor-ios input,
 .capacitor-ios textarea,
