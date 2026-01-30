@@ -7,6 +7,8 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
 import { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import {
   SheetData,
   SheetExternalReferenceToken,
@@ -240,6 +242,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
   const { tree } = usePageTree(page.driveId);
@@ -371,6 +374,22 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   useEffect(() => {
     isDirtyRef.current = documentState?.isDirty || false;
   }, [documentState?.isDirty]);
+
+  // Pull-to-refresh handler
+  const handleRefresh = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth(`/api/pages/${page.id}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
+        updateContentFromServer(updatedPage.content);
+      }
+    } catch (error) {
+      console.error('Failed to refresh sheet:', error);
+    }
+  }, [page.id, updateContentFromServer]);
+
+  // Disable pull-to-refresh when editing
+  const isPullToRefreshDisabled = !!editingCell || documentState?.isDirty || isFormulaFocused;
 
   useEffect(() => {
     setExternalSheets((prev) => {
@@ -1414,18 +1433,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     updateCellRect();
 
     // Add scroll and resize listeners
-    const gridElement = gridRef.current;
+    // Use scrollContainerRef for scroll events since CustomScrollArea handles scrolling
+    const scrollElement = scrollContainerRef.current;
     const handleScroll = () => updateCellRect();
     const handleResize = () => updateCellRect();
 
-    if (gridElement) {
-      gridElement.addEventListener('scroll', handleScroll, { passive: true });
+    if (scrollElement) {
+      scrollElement.addEventListener('scroll', handleScroll, { passive: true });
     }
     window.addEventListener('resize', handleResize, { passive: true });
 
     return () => {
-      if (gridElement) {
-        gridElement.removeEventListener('scroll', handleScroll);
+      if (scrollElement) {
+        scrollElement.removeEventListener('scroll', handleScroll);
       }
       window.removeEventListener('resize', handleResize);
     };
@@ -1656,17 +1676,24 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           <div className="px-3 pb-2 text-xs text-destructive sm:px-4 sm:pb-3">Error: {currentError}</div>
         )}
       </div>
-      <div
-        ref={gridRef}
-        role="grid"
-        aria-label="Spreadsheet"
-        aria-rowcount={sheet.rowCount}
-        aria-colcount={sheet.columnCount}
-        aria-activedescendant={`cell-${currentAddress}`}
-        tabIndex={0}
-        onKeyDown={handleGridKeyDown}
-        className="flex-1 overflow-auto focus:outline-none touch-pan-x touch-pan-y"
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+        disabled={isPullToRefreshDisabled}
+        className="flex-1"
       >
+        <CustomScrollArea ref={scrollContainerRef} className="h-full">
+          <div
+            ref={gridRef}
+            role="grid"
+            aria-label="Spreadsheet"
+            aria-rowcount={sheet.rowCount}
+            aria-colcount={sheet.columnCount}
+            aria-activedescendant={`cell-${currentAddress}`}
+            tabIndex={0}
+            onKeyDown={handleGridKeyDown}
+            className="focus:outline-none touch-pan-x touch-pan-y"
+          >
         <table className="min-w-max border-collapse text-sm" role="presentation">
           <thead>
             <tr role="row">
@@ -1752,6 +1779,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           </tbody>
         </table>
       </div>
+        </CustomScrollArea>
+      </PullToRefresh>
 
       {/* Floating Cell Editor */}
       <FloatingCellEditor

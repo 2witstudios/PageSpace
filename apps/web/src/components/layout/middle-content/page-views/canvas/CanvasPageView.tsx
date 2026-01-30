@@ -13,6 +13,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { openExternalUrl } from '@/lib/navigation/app-navigation';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
 interface CanvasPageViewProps {
   page: TreePage;
@@ -135,6 +137,23 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     }
   }, [router, user]);
 
+  // Pull-to-refresh handler
+  const handleRefresh = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth(`/api/pages/${page.id}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
+        const newContent = typeof updatedPage.content === 'string' ? updatedPage.content : '';
+        updateContentFromServer(newContent);
+      }
+    } catch (error) {
+      console.error('Failed to refresh canvas:', error);
+    }
+  }, [page.id, updateContentFromServer]);
+
+  // Disable pull-to-refresh when in code mode
+  const isPullToRefreshDisabled = activeTab === 'code';
+
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
       <div className="flex border-b">
@@ -151,22 +170,31 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
           View
         </button>
       </div>
-      <div className="flex-1 flex justify-center items-start p-4 overflow-auto">
-        {activeTab === 'code' && (
-          <MonacoEditor
-            value={content}
-            onChange={(newValue) => setContent(newValue || '')}
-            language="html"
-          />
-        )}
-        {activeTab === 'view' && (
-          <div className="w-full h-full bg-background text-foreground">
-            <ErrorBoundary>
-              <ShadowCanvas html={content} onNavigate={handleNavigation} />
-            </ErrorBoundary>
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+        disabled={isPullToRefreshDisabled}
+        className="flex-1"
+      >
+        <CustomScrollArea className="h-full">
+          <div className={`flex justify-center items-start p-4 ${activeTab === 'code' ? 'h-full' : ''}`}>
+            {activeTab === 'code' && (
+              <MonacoEditor
+                value={content}
+                onChange={(newValue) => setContent(newValue || '')}
+                language="html"
+              />
+            )}
+            {activeTab === 'view' && (
+              <div className="w-full h-full bg-background text-foreground">
+                <ErrorBoundary>
+                  <ShadowCanvas html={content} onNavigate={handleNavigation} />
+                </ErrorBoundary>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </CustomScrollArea>
+      </PullToRefresh>
     </div>
   );
 };

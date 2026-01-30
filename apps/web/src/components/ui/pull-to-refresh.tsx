@@ -93,7 +93,7 @@ export function PullToRefresh({
       {direction === 'top' && (
         <div
           className={cn(
-            'absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none',
+            'absolute left-1/2 z-50 pointer-events-none',
             'transition-opacity duration-150'
           )}
           style={{
@@ -130,7 +130,7 @@ export function PullToRefresh({
       {direction === 'bottom' && (
         <div
           className={cn(
-            'absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none',
+            'absolute left-1/2 z-50 pointer-events-none',
             'transition-opacity duration-150'
           )}
           style={{

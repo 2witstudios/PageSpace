@@ -7,6 +7,8 @@ import { TreePage } from "@/hooks/usePageTree";
 import { usePageTreeSocket } from "@/hooks/usePageTreeSocket";
 import { findNodeAndParent } from "@/lib/tree/tree-utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PullToRefresh } from "@/components/ui/pull-to-refresh";
+import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
 import CreatePageDialog from "../CreatePageDialog";
 import { useTreeState } from "@/hooks/useUI";
 import { useFileDrop } from "@/hooks/useFileDrop";
@@ -274,6 +276,10 @@ export default function PageTree({
     [isDraggingFiles, fileDragState, tree, handleFileDrop]
   );
 
+  const handleRefresh = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
+
   if (isLoading) {
     return (
       <div className="p-4 space-y-2">
@@ -285,94 +291,98 @@ export default function PageTree({
   }
 
   return (
-    <div
-      className={cn("relative h-full", isDraggingFiles && "bg-primary/5")}
-      onDragEnter={handleFileDragEnter}
-      onDragLeave={handleFileDragLeave}
-      onDragOver={handleFileDragOver}
-      onDrop={handleFileDropEvent}
-    >
-      <nav className="px-1 py-2 min-h-[200px]">
-        <SortableTree
-          items={displayedTree as SortableTreePage[]}
-          collapsedIds={collapsedIds}
-          indentationWidth={12}
-          onMove={handleMove}
-          renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, handleProps, wrapperProps }) => (
-            <PageTreeItem
-              item={item as TreePage}
-              depth={depth}
-              isActive={isActive}
-              isOver={isOver}
-              dropPosition={dropPosition}
-              projectedDepth={projectedDepth}
-              projected={projected}
-              handleProps={handleProps}
-              wrapperProps={wrapperProps}
-              isExpanded={expandedNodes.has(item.id)}
-              onToggleExpand={handleToggleExpand}
-              onOpenCreateDialog={handleOpenCreateDialog}
-              mutate={mutate}
-              isTrashView={isTrashView}
-              fileDragState={fileDragState}
-            />
-          )}
-        />
-
-        {/* Empty state drop zone */}
-        {isDraggingFiles && !fileDragState.overId && displayedTree.length === 0 && (
-          <div className="flex items-center justify-center py-8 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
-            <div className="text-center">
-              <FileIcon className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Drop files here to upload</p>
-            </div>
-          </div>
-        )}
-
-        {/* Drop zone at bottom */}
-        {isDraggingFiles && !fileDragState.overId && displayedTree.length > 0 && (
-          <div className="mt-2 py-2 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
-            <p className="text-sm text-muted-foreground text-center">Drop here to add to root</p>
-          </div>
-        )}
-      </nav>
-
-      {/* File drag overlay */}
-      {isDraggingFiles && fileDragState.dragStartPos && (
+    <PullToRefresh direction="top" onRefresh={handleRefresh}>
+      <CustomScrollArea className="h-full">
         <div
-          className="fixed pointer-events-none z-[9999]"
-          style={{
-            left: fileDragState.dragStartPos.x + 10,
-            top: fileDragState.dragStartPos.y - 10,
-          }}
+          className={cn("relative", isDraggingFiles && "bg-primary/5")}
+          onDragEnter={handleFileDragEnter}
+          onDragLeave={handleFileDragLeave}
+          onDragOver={handleFileDragOver}
+          onDrop={handleFileDropEvent}
         >
-          <div className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 opacity-90">
-            <FileIcon className="h-4 w-4 text-gray-500 mr-2" />
-            <span className="text-sm font-medium">Upload files</span>
-          </div>
-        </div>
-      )}
-
-      <CreatePageDialog
-        isOpen={createPageInfo.isOpen}
-        setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
-        parentId={createPageInfo.parentId}
-        onPageCreated={handlePageCreated}
-        driveId={driveId}
-      />
-
-      {/* Upload progress indicator */}
-      {isUploading && (
-        <div className="absolute bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg z-50">
-          <p className="text-sm font-medium mb-2">Uploading files...</p>
-          <div className="w-48 h-2 bg-secondary rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{ width: `${uploadProgress}%` }}
+          <nav className="px-1 py-2 min-h-[200px]">
+            <SortableTree
+              items={displayedTree as SortableTreePage[]}
+              collapsedIds={collapsedIds}
+              indentationWidth={12}
+              onMove={handleMove}
+              renderItem={({ item, depth, isActive, isOver, dropPosition, projectedDepth, projected, handleProps, wrapperProps }) => (
+                <PageTreeItem
+                  item={item as TreePage}
+                  depth={depth}
+                  isActive={isActive}
+                  isOver={isOver}
+                  dropPosition={dropPosition}
+                  projectedDepth={projectedDepth}
+                  projected={projected}
+                  handleProps={handleProps}
+                  wrapperProps={wrapperProps}
+                  isExpanded={expandedNodes.has(item.id)}
+                  onToggleExpand={handleToggleExpand}
+                  onOpenCreateDialog={handleOpenCreateDialog}
+                  mutate={mutate}
+                  isTrashView={isTrashView}
+                  fileDragState={fileDragState}
+                />
+              )}
             />
-          </div>
+
+            {/* Empty state drop zone */}
+            {isDraggingFiles && !fileDragState.overId && displayedTree.length === 0 && (
+              <div className="flex items-center justify-center py-8 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
+                <div className="text-center">
+                  <FileIcon className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">Drop files here to upload</p>
+                </div>
+              </div>
+            )}
+
+            {/* Drop zone at bottom */}
+            {isDraggingFiles && !fileDragState.overId && displayedTree.length > 0 && (
+              <div className="mt-2 py-2 px-4 border-2 border-dashed border-primary/20 rounded-lg bg-primary/5">
+                <p className="text-sm text-muted-foreground text-center">Drop here to add to root</p>
+              </div>
+            )}
+          </nav>
+
+          {/* File drag overlay */}
+          {isDraggingFiles && fileDragState.dragStartPos && (
+            <div
+              className="fixed pointer-events-none z-[9999]"
+              style={{
+                left: fileDragState.dragStartPos.x + 10,
+                top: fileDragState.dragStartPos.y - 10,
+              }}
+            >
+              <div className="flex items-center px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 opacity-90">
+                <FileIcon className="h-4 w-4 text-gray-500 mr-2" />
+                <span className="text-sm font-medium">Upload files</span>
+              </div>
+            </div>
+          )}
+
+          <CreatePageDialog
+            isOpen={createPageInfo.isOpen}
+            setIsOpen={(isOpen) => setCreatePageInfo({ ...createPageInfo, isOpen })}
+            parentId={createPageInfo.parentId}
+            onPageCreated={handlePageCreated}
+            driveId={driveId}
+          />
+
+          {/* Upload progress indicator */}
+          {isUploading && (
+            <div className="absolute bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg z-50">
+              <p className="text-sm font-medium mb-2">Uploading files...</p>
+              <div className="w-48 h-2 bg-secondary rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </CustomScrollArea>
+    </PullToRefresh>
   );
 }

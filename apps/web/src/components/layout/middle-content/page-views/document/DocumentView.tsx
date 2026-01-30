@@ -13,6 +13,8 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
 interface DocumentViewProps {
   pageId: string;
@@ -27,6 +29,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [isPaginated, setIsPaginated] = useState(false);
+  const [isEditorFocused, setIsEditorFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
   const hasInitializedRef = useRef(false);
@@ -44,6 +47,41 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     saveWithDebounce,
     forceSave,
   } = useDocument(pageId);
+
+  // Track editor focus state for pull-to-refresh
+  useEffect(() => {
+    if (!editor) return;
+
+    const handleFocus = () => setIsEditorFocused(true);
+    const handleBlur = () => setIsEditorFocused(false);
+
+    editor.on('focus', handleFocus);
+    editor.on('blur', handleBlur);
+
+    // Set initial state
+    setIsEditorFocused(editor.isFocused);
+
+    return () => {
+      editor.off('focus', handleFocus);
+      editor.off('blur', handleBlur);
+    };
+  }, [editor]);
+
+  // Pull-to-refresh handler
+  const handleRefresh = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
+        updateContentFromServer(updatedPage.content);
+      }
+    } catch (error) {
+      console.error('Failed to refresh document:', error);
+    }
+  }, [pageId, updateContentFromServer]);
+
+  // Disable pull-to-refresh when editing
+  const isPullToRefreshDisabled = isEditorFocused || documentState?.isDirty || activeView === 'code';
 
   // Store forceSave in ref to prevent cleanup effects from re-running
   const forceSaveRef = useRef(forceSave);
@@ -277,50 +315,59 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
         </div>
       )}
 
-      {/* Editor content */}
-      <div className={`flex-1 flex justify-center items-start p-4 overflow-auto ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
-        <AnimatePresence mode="wait">
-          {activeView === 'code' ? (
-            <motion.div
-              key="code-editor"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              transition={{ duration: 0.2 }}
-              className="w-full h-full"
-            >
-              <div className={`h-full ${isReadOnly ? 'editor-readonly' : ''}`}>
-                <MonacoEditor
-                  value={documentState?.content || ''}
-                  onChange={handleContentChange}
-                  language="html"
-                  readOnly={isReadOnly}
-                />
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="rich-editor"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              transition={{ duration: 0.2 }}
-              className="w-full h-full"
-            >
-              <div className="max-w-4xl mx-auto w-full">
-                <RichEditor
-                  value={documentState?.content || ''}
-                  onChange={handleContentChange}
-                  onFormatChange={handleFormatChange}
-                  onEditorChange={setEditor}
-                  readOnly={isReadOnly}
-                  isPaginated={isPaginated}
-                />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+      {/* Editor content with pull-to-refresh */}
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+        disabled={isPullToRefreshDisabled}
+        className="flex-1"
+      >
+        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
+          <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
+            <AnimatePresence mode="wait">
+              {activeView === 'code' ? (
+                <motion.div
+                  key="code-editor"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="w-full h-full"
+                >
+                  <div className={`h-full ${isReadOnly ? 'editor-readonly' : ''}`}>
+                    <MonacoEditor
+                      value={documentState?.content || ''}
+                      onChange={handleContentChange}
+                      language="html"
+                      readOnly={isReadOnly}
+                    />
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="rich-editor"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="w-full h-full"
+                >
+                  <div className="max-w-4xl mx-auto w-full">
+                    <RichEditor
+                      value={documentState?.content || ''}
+                      onChange={handleContentChange}
+                      onFormatChange={handleFormatChange}
+                      onEditorChange={setEditor}
+                      readOnly={isReadOnly}
+                      isPaginated={isPaginated}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </CustomScrollArea>
+      </PullToRefresh>
 
       {/* Loading overlay */}
       <AnimatePresence>

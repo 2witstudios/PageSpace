@@ -78,10 +78,10 @@ export default function Sidebar({ className }: SidebarProps) {
       <div className="flex h-full flex-col gap-3 px-4 py-4 sm:px-3">
         <DriveSwitcher />
 
-        <div className="flex-1 overflow-y-auto overflow-x-hidden py-2">
+        <div className="flex-1 overflow-hidden py-2 flex flex-col">
           {driveId ? (
             <>
-              <div className="mb-4 flex items-center gap-2">
+              <div className="mb-4 flex items-center gap-2 flex-shrink-0">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -116,7 +116,9 @@ export default function Sidebar({ className }: SidebarProps) {
                 )}
               </div>
 
-              <PageTree driveId={driveId as string} searchQuery={searchQuery} />
+              <div className="flex-1 min-h-0">
+                <PageTree driveId={driveId as string} searchQuery={searchQuery} />
+              </div>
             </>
           ) : (
             <DriveList />
