@@ -86,30 +86,6 @@ export default function SuggestionPopup({
         `}
       >
         {items.map((suggestion, index) => {
-          const isFirst = index === 0;
-          const isLast = index === items.length - 1;
-
-          let roundingClasses = '';
-          if (variant === 'inline') {
-            if (popupPlacement === 'top') {
-              // When reversed, swap the rounding
-              if (isFirst) roundingClasses += 'rounded-b-lg ';
-              if (isLast) roundingClasses += 'rounded-t-lg';
-            } else {
-              if (isFirst) roundingClasses += 'rounded-t-lg ';
-              if (isLast) roundingClasses += 'rounded-b-lg';
-            }
-          } else {
-            if (popupPlacement === 'top') {
-              // When reversed, swap the rounding
-              if (isFirst) roundingClasses += 'rounded-b-md ';
-              if (isLast) roundingClasses += 'rounded-t-md';
-            } else {
-              if (isFirst) roundingClasses += 'rounded-t-md ';
-              if (isLast) roundingClasses += 'rounded-b-md';
-            }
-          }
-
           return (
             <li
               key={`${suggestion.id}-${index}`}
@@ -121,37 +97,49 @@ export default function SuggestionPopup({
                 hover:bg-gray-100 hover:dark:bg-gray-700
                 ${selectedIndex === index ? 'bg-gray-100 dark:bg-gray-700' : ''}
                 ${selectedIndex === index ? 'border-l-2 border-blue-500' : ''}
-                ${roundingClasses}
               `}
               onClick={() => onSelect(suggestion)}
               onMouseEnter={() => onSelectionChange(index)}
             >
               <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {suggestion.label}
-              </span>
-              {suggestion.type && (
-                <span className="text-xs text-gray-500 ml-auto">
-                  {suggestion.type}
+                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {suggestion.label}
                 </span>
-              )}
-            </div>
-            {suggestion.description && (
-              <div className="text-xs text-gray-500 mt-1 truncate">
-                {suggestion.description}
+                {suggestion.type && (
+                  <span className="text-xs text-gray-500 ml-auto">
+                    {suggestion.type}
+                  </span>
+                )}
               </div>
-            )}
-          </li>
+              {suggestion.description && (
+                <div className="text-xs text-gray-500 mt-1 truncate">
+                  {suggestion.description}
+                </div>
+              )}
+            </li>
           );
         })}
       </ul>
     );
   };
 
+  // Get corner rounding based on placement
+  // When popup is above input (top), round top corners more; when below (bottom), round bottom corners more
+  const getRoundingClasses = () => {
+    if (variant === 'inline') {
+      return popupPlacement === 'top'
+        ? 'rounded-t-lg rounded-b-sm'
+        : 'rounded-b-lg rounded-t-sm';
+    }
+    return popupPlacement === 'top'
+      ? 'rounded-t-lg rounded-b-sm'
+      : 'rounded-b-lg rounded-t-sm';
+  };
+
   // Get variant-specific classes
-  const variantClasses = variant === 'inline' 
-    ? 'fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl min-w-56 max-w-sm backdrop-blur-sm bg-white/95 dark:bg-gray-800/95'
-    : 'fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg min-w-48 max-w-sm';
+  const variantClasses = variant === 'inline'
+    ? `fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${getRoundingClasses()} shadow-xl min-w-56 max-w-sm backdrop-blur-sm bg-white/95 dark:bg-gray-800/95`
+    : `fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${getRoundingClasses()} shadow-lg min-w-48 max-w-sm`;
 
   return (
     <div

@@ -80,6 +80,8 @@ export interface ChatLayoutProps {
     isMcpServerEnabled?: (serverName: string) => boolean;
     onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
     showMcp?: boolean;
+    /** Input position: 'centered' for new conversations, 'docked' when there are messages */
+    inputPosition?: InputPosition;
   }) => React.ReactNode;
 
   /** MCP running servers count */
@@ -219,6 +221,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           isMcpServerEnabled,
           onMcpServerToggle,
           showMcp,
+          inputPosition,
         })
       : defaultInputContent;
 

@@ -185,6 +185,7 @@ export function useSuggestion({
               position = positioningService.calculateTextareaPosition({
                 element,
                 textBeforeCursor,
+                placement: popupPlacement,
               });
             } else {
               position = positioningService.calculateInlinePosition({
@@ -195,6 +196,7 @@ export function useSuggestion({
             position = positioningService.calculateTextareaPosition({
               element,
               textBeforeCursor,
+              placement: popupPlacement,
             });
           }
 
@@ -222,6 +224,7 @@ export function useSuggestion({
     suggestion.actions,
     getSelectionStart,
     variant,
+    popupPlacement,
     effectiveTriggerPattern
   ]);
 

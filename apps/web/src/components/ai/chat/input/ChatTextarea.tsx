@@ -27,6 +27,8 @@ export interface ChatTextareaProps {
   disabled?: boolean;
   /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
   variant?: 'main' | 'sidebar';
+  /** Popup placement: 'top' for suggestions above (docked input), 'bottom' for suggestions below (centered input) */
+  popupPlacement?: 'top' | 'bottom';
   /** Additional class names */
   className?: string;
 }
@@ -53,6 +55,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       crossDrive = false,
       disabled = false,
       variant = 'main',
+      popupPlacement = 'top',
       className,
     },
     ref
@@ -70,7 +73,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       crossDrive,
       mentionFormat: 'markdown-typed',
       variant: 'chat',
-      popupPlacement: 'top',
+      popupPlacement,
     });
 
     useImperativeHandle(ref, () => ({
@@ -133,7 +136,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           onSelect={suggestion.actions.selectSuggestion}
           onSelectionChange={suggestion.actions.selectItem}
           variant="overlay"
-          popupPlacement="top"
+          popupPlacement={popupPlacement}
         />
       </div>
     );

@@ -629,6 +629,7 @@ const GlobalAssistantView: React.FC = () => {
             isMcpServerEnabled={props.isMcpServerEnabled}
             onMcpServerToggle={props.onMcpServerToggle}
             showMcp={props.showMcp}
+            popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
           />
         )}
       />

@@ -9,6 +9,8 @@ export interface TextareaPositionParams {
   element: HTMLTextAreaElement | HTMLInputElement;
   textBeforeCursor: string;
   preferredWidth?: number;
+  /** Where to position the popup relative to the input: 'top' (above) or 'bottom' (below) */
+  placement?: 'top' | 'bottom';
 }
 
 export interface RichlinePositionParams {
@@ -64,12 +66,20 @@ export const positioningService = {
   calculateTextareaPosition: (
     params: TextareaPositionParams
   ): Position => {
-    const { element } = params;
+    const { element, placement = 'top' } = params;
     const rect = element.getBoundingClientRect();
     const viewportHeight = getViewportHeight();
 
-    // Anchor to the bottom of the viewport, with a gap above the textarea
-    // Account for keyboard height on iOS
+    if (placement === 'bottom') {
+      // Position below the input (dropdown style for centered input)
+      return {
+        top: rect.bottom + 8,
+        left: rect.left,
+        width: rect.width,
+      };
+    }
+
+    // Position above the input (default, for docked input at bottom of screen)
     return {
       bottom: viewportHeight - rect.top + 8,
       left: rect.left,
