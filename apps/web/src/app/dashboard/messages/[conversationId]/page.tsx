@@ -207,12 +207,12 @@ export default function ConversationPage() {
                     )}
                   </div>
 
-                  <div className={`p-3 rounded-lg ${
+                  <div className={`p-3 rounded-lg max-w-full ${
                     isOwnMessage
                       ? 'bg-primary/5 dark:bg-primary/10 ml-8'
                       : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
                   }`}>
-                    <div className="text-gray-900 dark:text-gray-100">
+                    <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
                       {renderMessageParts(convertToMessageParts(message.content))}
                     </div>
                   </div>
