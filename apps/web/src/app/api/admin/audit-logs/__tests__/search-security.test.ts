@@ -29,17 +29,11 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+// Create mock ilike function at module scope for tracking
+const mockIlike = vi.fn((column, pattern) => ({ type: 'ilike', column, pattern }));
+
 // Mock the database module
 vi.mock('@pagespace/db', () => {
-  // Track the ilike calls to verify escaping
-  const ilikeCallTracker: Array<{ column: unknown; pattern: string }> = [];
-
-  // Reset and return the tracker for each test
-  const getIlikeCallTracker = () => ilikeCallTracker;
-  const clearIlikeCallTracker = () => {
-    ilikeCallTracker.length = 0;
-  };
-
   return {
     db: {
       select: () => ({
@@ -95,20 +89,11 @@ vi.mock('@pagespace/db', () => {
     count: vi.fn(() => ({ type: 'count' })),
     gte: vi.fn((col, val) => ({ type: 'gte', col, val })),
     lte: vi.fn((col, val) => ({ type: 'lte', col, val })),
-    ilike: vi.fn((column, pattern) => {
-      ilikeCallTracker.push({ column, pattern });
-      return { type: 'ilike', column, pattern };
-    }),
-    // Export tracker functions for test access
-    __test__: {
-      getIlikeCallTracker,
-      clearIlikeCallTracker,
-    },
+    ilike: mockIlike,
   };
 });
 
 import { verifyAdminAuth } from '@/lib/auth';
-import { ilike, __test__ } from '@pagespace/db';
 
 describe('/api/admin/audit-logs - Search Security', () => {
   const mockAdminUser = {
@@ -119,7 +104,6 @@ describe('/api/admin/audit-logs - Search Security', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    __test__.clearIlikeCallTracker();
     (verifyAdminAuth as unknown as Mock).mockResolvedValue(mockAdminUser);
   });
 
@@ -136,10 +120,9 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: The % should be escaped to \%
-      const tracker = __test__.getIlikeCallTracker();
-      expect(tracker.length).toBeGreaterThan(0);
+      expect(mockIlike).toHaveBeenCalled();
       // Pattern should have the % escaped, wrapped in search wildcards
-      expect(tracker[0].pattern).toBe('%100\\%%');
+      expect(mockIlike.mock.calls[0][1]).toBe('%100\\%%');
     });
 
     it('GET_withUnderscoreWildcardInSearch_escapesWildcard', async () => {
@@ -154,9 +137,8 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: The _ should be escaped to \_
-      const tracker = __test__.getIlikeCallTracker();
-      expect(tracker.length).toBeGreaterThan(0);
-      expect(tracker[0].pattern).toBe('%user\\_name%');
+      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike.mock.calls[0][1]).toBe('%user\\_name%');
     });
 
     it('GET_withBackslashInSearch_escapesBackslash', async () => {
@@ -171,9 +153,8 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: Backslashes should be escaped
-      const tracker = __test__.getIlikeCallTracker();
-      expect(tracker.length).toBeGreaterThan(0);
-      expect(tracker[0].pattern).toBe('%path\\\\to\\\\file%');
+      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike.mock.calls[0][1]).toBe('%path\\\\to\\\\file%');
     });
 
     it('GET_withCombinedSpecialCharsInSearch_escapesAll', async () => {
@@ -188,10 +169,9 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: All special characters should be escaped
-      const tracker = __test__.getIlikeCallTracker();
-      expect(tracker.length).toBeGreaterThan(0);
+      expect(mockIlike).toHaveBeenCalled();
       // Order of escaping: \ first, then %, then _
-      expect(tracker[0].pattern).toBe('%50\\%\\_off\\\\deal%');
+      expect(mockIlike.mock.calls[0][1]).toBe('%50\\%\\_off\\\\deal%');
     });
 
     it('GET_withNormalSearch_doesNotAddExtraEscapes', async () => {
@@ -206,9 +186,8 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: Pattern should just have the search term wrapped in wildcards
-      const tracker = __test__.getIlikeCallTracker();
-      expect(tracker.length).toBeGreaterThan(0);
-      expect(tracker[0].pattern).toBe('%admin user%');
+      expect(mockIlike).toHaveBeenCalled();
+      expect(mockIlike.mock.calls[0][1]).toBe('%admin user%');
     });
 
     it('GET_withSearch_usesIlikeFunctionInsteadOfRawSql', async () => {
@@ -222,9 +201,9 @@ describe('/api/admin/audit-logs - Search Security', () => {
       await GET(request);
 
       // Assert: ilike function should be called (not raw SQL template)
-      expect(ilike).toHaveBeenCalled();
+      expect(mockIlike).toHaveBeenCalled();
       // Should search across all 4 fields
-      expect(ilike).toHaveBeenCalledTimes(4);
+      expect(mockIlike).toHaveBeenCalledTimes(4);
     });
   });
 
