@@ -170,14 +170,18 @@ export default function ConnectionsPage() {
       </div>
 
       <Tabs defaultValue="connections" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="connections">
-            Connections {acceptedConnections.length > 0 && `(${acceptedConnections.length})`}
+        <TabsList className="flex w-full flex-col sm:grid sm:grid-cols-3 h-auto">
+          <TabsTrigger value="connections" className="w-full">
+            <span className="truncate">Connections</span>
+            {acceptedConnections.length > 0 && <span className="ml-1 shrink-0">({acceptedConnections.length})</span>}
           </TabsTrigger>
-          <TabsTrigger value="pending">
-            Pending {pendingConnections.length > 0 && <Badge className="ml-2">{pendingConnections.length}</Badge>}
+          <TabsTrigger value="pending" className="w-full">
+            <span className="truncate">Pending</span>
+            {pendingConnections.length > 0 && <Badge className="ml-1.5 shrink-0">{pendingConnections.length}</Badge>}
           </TabsTrigger>
-          <TabsTrigger value="discover">Add Connection</TabsTrigger>
+          <TabsTrigger value="discover" className="w-full">
+            <span className="truncate">Add Connection</span>
+          </TabsTrigger>
         </TabsList>
 
         {/* Accepted Connections */}
@@ -209,25 +213,26 @@ export default function ConnectionsPage() {
                   {acceptedConnections.map((connection) => {
                     const displayName = connection.user.displayName || connection.user.name;
                     return (
-                      <div key={connection.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center gap-4">
-                          <Avatar className="h-10 w-10">
+                      <div key={connection.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border rounded-lg">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar className="h-10 w-10 shrink-0">
                             <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
                             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                           </Avatar>
-                          <div>
-                            <p className="font-medium">{displayName}</p>
-                            <p className="text-sm text-muted-foreground">{connection.user.email}</p>
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{displayName}</p>
+                            <p className="text-sm text-muted-foreground truncate">{connection.user.email}</p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                           <Button
                             variant="outline"
                             size="sm"
+                            aria-label="Message"
                             onClick={() => handleStartConversation(connection.user.id)}
                           >
-                            <MessageSquare className="h-4 w-4 mr-2" />
-                            Message
+                            <MessageSquare className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">Message</span>
                           </Button>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -280,42 +285,44 @@ export default function ConnectionsPage() {
                     const isIncoming = !connection.isRequester;
 
                     return (
-                      <div key={connection.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div className="flex items-center gap-4">
-                          <Avatar className="h-10 w-10">
+                      <div key={connection.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border rounded-lg">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar className="h-10 w-10 shrink-0">
                             <AvatarImage src={connection.user.image || connection.user.avatarUrl || ''} />
                             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
                           </Avatar>
-                          <div>
-                            <p className="font-medium">{displayName}</p>
-                            <p className="text-sm text-muted-foreground">{connection.user.email}</p>
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{displayName}</p>
+                            <p className="text-sm text-muted-foreground truncate">{connection.user.email}</p>
                             <p className="text-xs text-muted-foreground">
                               {isIncoming ? 'Sent you a request' : 'Request sent'} {' '}
                               {formatDistanceToNow(new Date(connection.requestedAt), { addSuffix: true })}
                             </p>
                             {connection.requestMessage && (
-                              <p className="text-sm mt-1">{connection.requestMessage}</p>
+                              <p className="text-sm mt-1 line-clamp-2">{connection.requestMessage}</p>
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                           {isIncoming ? (
                             <>
                               <Button
                                 variant="default"
                                 size="sm"
+                                aria-label="Accept request"
                                 onClick={() => handleConnectionAction(connection.id, 'accept')}
                               >
-                                <UserCheck className="h-4 w-4 mr-2" />
-                                Accept
+                                <UserCheck className="h-4 w-4 sm:mr-2" />
+                                <span className="hidden sm:inline">Accept</span>
                               </Button>
                               <Button
                                 variant="outline"
                                 size="sm"
+                                aria-label="Decline request"
                                 onClick={() => handleConnectionAction(connection.id, 'reject')}
                               >
-                                <UserX className="h-4 w-4 mr-2" />
-                                Decline
+                                <UserX className="h-4 w-4 sm:mr-2" />
+                                <span className="hidden sm:inline">Decline</span>
                               </Button>
                             </>
                           ) : (
