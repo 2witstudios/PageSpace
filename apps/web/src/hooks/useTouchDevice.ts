@@ -15,10 +15,20 @@ const subscribe = (callback: () => void) => {
   }
 
   const mediaQueryList = window.matchMedia(TOUCH_QUERY);
-  mediaQueryList.addEventListener("change", callback);
+  const listener = () => callback();
+
+  if (mediaQueryList.addEventListener) {
+    mediaQueryList.addEventListener("change", listener);
+  } else {
+    mediaQueryList.addListener(listener);
+  }
 
   return () => {
-    mediaQueryList.removeEventListener("change", callback);
+    if (mediaQueryList.removeEventListener) {
+      mediaQueryList.removeEventListener("change", listener);
+    } else {
+      mediaQueryList.removeListener(listener);
+    }
   };
 };
 
