@@ -104,6 +104,24 @@ export const mcpTokens = pgTable('mcp_tokens', {
   };
 });
 
+// Junction table for MCP token drive scopes
+// If a token has no entries here, it has access to ALL user's drives (backward compatible)
+// If a token has entries here, it ONLY has access to those specific drives
+import { drives } from './core';
+
+export const mcpTokenDrives = pgTable('mcp_token_drives', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  tokenId: text('tokenId').notNull().references(() => mcpTokens.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    tokenIdx: index('mcp_token_drives_token_id_idx').on(table.tokenId),
+    driveIdx: index('mcp_token_drives_drive_id_idx').on(table.driveId),
+    tokenDriveUnique: index('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
+  };
+});
+
 export const verificationTokens = pgTable('verification_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -164,10 +182,22 @@ export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
   }),
 }));
 
-export const mcpTokensRelations = relations(mcpTokens, ({ one }) => ({
+export const mcpTokensRelations = relations(mcpTokens, ({ one, many }) => ({
   user: one(users, {
     fields: [mcpTokens.userId],
     references: [users.id],
+  }),
+  driveScopes: many(mcpTokenDrives),
+}));
+
+export const mcpTokenDrivesRelations = relations(mcpTokenDrives, ({ one }) => ({
+  token: one(mcpTokens, {
+    fields: [mcpTokenDrives.tokenId],
+    references: [mcpTokens.id],
+  }),
+  drive: one(drives, {
+    fields: [mcpTokenDrives.driveId],
+    references: [drives.id],
   }),
 }));
 

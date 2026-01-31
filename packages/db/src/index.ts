@@ -30,6 +30,8 @@ export {
   deviceTokensRelations,
   mcpTokens,
   mcpTokensRelations,
+  mcpTokenDrives,
+  mcpTokenDrivesRelations,
   verificationTokens,
   verificationTokensRelations,
   socketTokens,

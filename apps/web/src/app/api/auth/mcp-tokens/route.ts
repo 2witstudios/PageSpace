@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, mcpTokens } from '@pagespace/db';
+import { db, mcpTokens, mcpTokenDrives, drives, eq, and, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
@@ -12,6 +12,9 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
   name: z.string().min(1).max(100),
+  // Optional array of drive IDs to scope this token to
+  // If empty or not provided, token has access to all user's drives
+  driveIds: z.array(z.string()).optional(),
 });
 
 // POST: Create a new MCP token
@@ -22,7 +25,28 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name } = createTokenSchema.parse(body);
+    const { name, driveIds } = createTokenSchema.parse(body);
+
+    // Validate that the user owns/has access to the specified drives
+    if (driveIds && driveIds.length > 0) {
+      const userDrives = await db.query.drives.findMany({
+        where: and(
+          eq(drives.ownerId, userId),
+          inArray(drives.id, driveIds)
+        ),
+        columns: { id: true },
+      });
+
+      const validDriveIds = new Set(userDrives.map(d => d.id));
+      const invalidDriveIds = driveIds.filter(id => !validDriveIds.has(id));
+
+      if (invalidDriveIds.length > 0) {
+        return NextResponse.json(
+          { error: 'Invalid drive IDs: ' + invalidDriveIds.join(', ') },
+          { status: 400 }
+        );
+      }
+    }
 
     // P1-T3: Generate token with hash and prefix for secure storage
     // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
@@ -35,6 +59,16 @@ export async function POST(req: NextRequest) {
       tokenPrefix,
       name,
     }).returning();
+
+    // If drive scopes are specified, create the junction table entries
+    if (driveIds && driveIds.length > 0) {
+      await db.insert(mcpTokenDrives).values(
+        driveIds.map(driveId => ({
+          tokenId: newToken.id,
+          driveId,
+        }))
+      );
+    }
 
     // Log activity for audit trail (token creation is a security event)
     const actorInfo = await getActorInfo(userId);
@@ -50,6 +84,7 @@ export async function POST(req: NextRequest) {
       name: newToken.name,
       token: rawToken, // Return the actual token, not the hash
       createdAt: newToken.createdAt,
+      driveIds: driveIds || [], // Return the drive scopes
     });
   } catch (error) {
     loggers.auth.error('Error creating MCP token:', error as Error);
@@ -67,7 +102,7 @@ export async function GET(req: NextRequest) {
   const userId = auth.userId;
 
   try {
-    // Fetch all non-revoked tokens for the user
+    // Fetch all non-revoked tokens for the user with their drive scopes
     const tokens = await db.query.mcpTokens.findMany({
       where: (tokens, { eq, isNull, and }) => and(
         eq(tokens.userId, userId),
@@ -79,9 +114,36 @@ export async function GET(req: NextRequest) {
         lastUsed: true,
         createdAt: true,
       },
+      with: {
+        driveScopes: {
+          columns: {
+            driveId: true,
+          },
+          with: {
+            drive: {
+              columns: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
     });
 
-    return NextResponse.json(tokens);
+    // Transform the response to include drive info
+    const tokensWithDrives = tokens.map(token => ({
+      id: token.id,
+      name: token.name,
+      lastUsed: token.lastUsed,
+      createdAt: token.createdAt,
+      driveScopes: token.driveScopes.map(scope => ({
+        id: scope.drive.id,
+        name: scope.drive.name,
+      })),
+    }));
+
+    return NextResponse.json(tokensWithDrives);
   } catch (error) {
     loggers.auth.error('Error fetching MCP tokens:', error as Error);
     return NextResponse.json({ error: 'Failed to fetch MCP tokens' }, { status: 500 });

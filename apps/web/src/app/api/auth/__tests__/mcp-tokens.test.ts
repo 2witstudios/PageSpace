@@ -332,12 +332,14 @@ describe('/api/auth/mcp-tokens', () => {
           name: 'Token 1',
           lastUsed: new Date(),
           createdAt: new Date(),
+          driveScopes: [{ driveId: 'drive-1', drive: { id: 'drive-1', name: 'Work Drive' } }],
         },
         {
           id: 'token-2',
           name: 'Token 2',
           lastUsed: null,
           createdAt: new Date(),
+          driveScopes: [],
         },
       ]);
     });

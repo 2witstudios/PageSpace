@@ -19,6 +19,8 @@ interface BaseAuthDetails {
 
 interface MCPAuthDetails extends BaseAuthDetails {
   tokenId: string;
+  // Drive IDs this token is scoped to. Empty array means access to ALL drives.
+  allowedDriveIds: string[];
 }
 
 export interface MCPAuthResult extends MCPAuthDetails {
@@ -81,6 +83,11 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
             adminRoleVersion: true,
           },
         },
+        driveScopes: {
+          columns: {
+            driveId: true,
+          },
+        },
       },
     });
 
@@ -94,12 +101,17 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       .set({ lastUsed: new Date() })
       .where(eq(mcpTokens.id, tokenRecord.id));
 
+    // Extract allowed drive IDs from the scopes
+    // Empty array means no restrictions (access to all user's drives)
+    const allowedDriveIds = tokenRecord.driveScopes.map(scope => scope.driveId);
+
     return {
       userId: tokenRecord.userId,
       role: user.role as 'user' | 'admin',
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: tokenRecord.id,
+      allowedDriveIds,
     };
   } catch (error) {
     console.error('validateMCPToken error', error);
