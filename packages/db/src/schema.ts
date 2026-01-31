@@ -19,6 +19,7 @@ export * from './schema/storage';
 export * from './schema/tasks';
 export * from './schema/security-audit';
 export * from './schema/page-views';
+export * from './schema/hotkeys';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -41,6 +42,7 @@ import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
 import * as securityAudit from './schema/security-audit';
 import * as pageViews from './schema/page-views';
+import * as hotkeys from './schema/hotkeys';
 
 export const schema = {
   ...auth,
@@ -64,4 +66,5 @@ export const schema = {
   ...tasks,
   ...securityAudit,
   ...pageViews,
+  ...hotkeys,
 };

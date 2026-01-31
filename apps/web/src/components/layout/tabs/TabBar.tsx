@@ -21,6 +21,7 @@ import { useOpenTabsStore, selectHasMultipleTabs } from '@/stores/useOpenTabsSto
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { TabItem } from './TabItem';
 import { cn } from '@/lib/utils';
+import { getEffectiveBinding, matchesKeyEvent } from '@/stores/useHotkeyStore';
 
 interface TabBarProps {
   className?: string;
@@ -36,7 +37,6 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const activeTabId = useOpenTabsStore((state) => state.activeTabId);
   const hasMultipleTabs = useOpenTabsStore(selectHasMultipleTabs);
   const setActiveTab = useOpenTabsStore((state) => state.setActiveTab);
-  const setActiveTabByIndex = useOpenTabsStore((state) => state.setActiveTabByIndex);
   const closeTab = useOpenTabsStore((state) => state.closeTab);
   const closeOtherTabs = useOpenTabsStore((state) => state.closeOtherTabs);
   const closeTabsToRight = useOpenTabsStore((state) => state.closeTabsToRight);
@@ -106,19 +106,10 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      const modifier = isMac ? e.metaKey : e.ctrlKey;
-
-      // Ctrl + Tab / Ctrl + Shift + Tab: Cycle tabs
-      // These shortcuts work globally, even when in editors/inputs
-      if (e.ctrlKey && e.key === 'Tab') {
+      // Cycle tabs
+      if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-next'), e)) {
         e.preventDefault();
-        if (e.shiftKey) {
-          cycleTab('prev');
-        } else {
-          cycleTab('next');
-        }
-        // Navigate to the new active tab
+        cycleTab('next');
         const newActiveTabId = useOpenTabsStore.getState().activeTabId;
         const newActiveTab = tabs.find(t => t.id === newActiveTabId);
         if (newActiveTab) {
@@ -127,11 +118,20 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         return;
       }
 
-      // Ctrl/Cmd + 1-9: Switch to tab by index
-      // These shortcuts work globally, even when in editors/inputs
-      if (modifier && !e.shiftKey && !e.altKey) {
-        const num = parseInt(e.key, 10);
-        if (num >= 1 && num <= 9) {
+      if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-prev'), e)) {
+        e.preventDefault();
+        cycleTab('prev');
+        const newActiveTabId = useOpenTabsStore.getState().activeTabId;
+        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
+        if (newActiveTab) {
+          router.push(`/dashboard/${newActiveTab.driveId}/${newActiveTab.id}`);
+        }
+        return;
+      }
+
+      // Tab number shortcuts (1-9)
+      for (let num = 1; num <= 9; num++) {
+        if (matchesKeyEvent(getEffectiveBinding(`tabs.go-to-${num}`), e)) {
           e.preventDefault();
           const index = num - 1;
           if (index < tabs.length) {
@@ -142,12 +142,11 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         }
       }
 
-      // For shortcuts that might conflict with editor behavior, check if in editable
+      // Close tab - skip in editable inputs
       const target = e.target as HTMLElement;
       const isInEditable = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      // Ctrl/Cmd + W: Close current tab (skip in inputs to allow browser default behavior)
-      if (modifier && e.key === 'w' && !e.shiftKey && !e.altKey && !isInEditable) {
+      if (!isInEditable && matchesKeyEvent(getEffectiveBinding('tabs.close'), e)) {
         if (activeTabId) {
           e.preventDefault();
           handleClose(activeTabId);
@@ -158,7 +157,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tabs, activeTabId, handleActivate, handleClose, cycleTab, router, setActiveTabByIndex]);
+  }, [tabs, activeTabId, handleActivate, handleClose, cycleTab, router]);
 
   // Scroll active tab into view
   useEffect(() => {

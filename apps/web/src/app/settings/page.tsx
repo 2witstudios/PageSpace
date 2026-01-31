@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard } from "lucide-react";
 
 interface SettingsItem {
   title: string;
@@ -84,6 +84,13 @@ export default function SettingsPage() {
           description: "Manage email notification preferences",
           icon: Bell,
           href: "/settings/notifications",
+          available: true,
+        },
+        {
+          title: "Keyboard Shortcuts",
+          description: "Customize keyboard shortcuts",
+          icon: Keyboard,
+          href: "/settings/hotkeys",
           available: true,
         },
         {

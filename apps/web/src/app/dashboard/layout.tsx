@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import Layout from "@/components/layout/Layout";
+import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
@@ -15,6 +16,9 @@ const FULL_PAGE_ROUTES = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+
+  // Load user hotkey preferences and sync to store
+  useHotkeyPreferences();
 
   // Check if current route should render its children directly
   // Also match /dashboard/[driveId]/activity pattern

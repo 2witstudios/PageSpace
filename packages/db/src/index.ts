@@ -68,6 +68,12 @@ export {
   type SelectSecurityAuditLog,
 } from './schema/security-audit';
 
+// Hotkey preferences re-exports
+export {
+  userHotkeyPreferences,
+  userHotkeyPreferencesRelations,
+} from './schema/hotkeys';
+
 // Note: Auth transaction functions are exported from '@pagespace/db/transactions/auth-transactions'
 // They are NOT re-exported here to avoid circular dependency issues
 // Import directly: import { atomicDeviceTokenRotation, ... } from '@pagespace/db/transactions/auth-transactions';

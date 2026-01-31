@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { useDebouncedCallback } from 'use-debounce';
 import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { getEffectiveBinding, matchesKeyEvent } from '@/stores/useHotkeyStore';
 
 interface SearchResult {
   id: string;
@@ -98,7 +99,7 @@ export default function InlineSearch() {
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
       // Cmd+K (Mac) or Ctrl+K (Windows/Linux)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if (matchesKeyEvent(getEffectiveBinding('navigation.search'), e)) {
         e.preventDefault();
         inputRef.current?.focus();
         setIsOpen(true);
