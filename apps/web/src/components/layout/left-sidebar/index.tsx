@@ -7,7 +7,7 @@ import { useSWRConfig } from "swr";
 import {
   Activity,
   CheckSquare,
-  HardDrive,
+  Home,
   Lock,
   Plus,
   Search,
@@ -26,8 +26,10 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
+import { useLayoutStore } from "@/stores/useLayoutStore";
 
 import CreatePageDialog from "./CreatePageDialog";
 import DriveList from "./DriveList";
@@ -45,6 +47,8 @@ export default function Sidebar({ className }: SidebarProps) {
   const params = useParams();
   const { driveId: driveIdParams } = params;
   const { user } = useAuth();
+  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
+  const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
 
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore(state => state.drives);
@@ -76,6 +80,15 @@ export default function Sidebar({ className }: SidebarProps) {
       )}
     >
       <div className="flex h-full flex-col gap-3 px-4 py-4 sm:px-3">
+        <Link
+          href="/dashboard"
+          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
+          className="flex items-center gap-2 rounded-lg p-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          <Home className="h-4 w-4" />
+          Dashboard
+        </Link>
+
         <DriveSwitcher />
 
         <div className="flex-1 overflow-hidden py-2 flex flex-col">
@@ -135,29 +148,24 @@ export default function Sidebar({ className }: SidebarProps) {
               Members
             </Link>
           )}
-          {!driveId && (
+          {driveId && (
             <Link
-              href="/dashboard/storage"
+              href={`/dashboard/${driveId}/activity`}
               className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
             >
-              <HardDrive className="h-4 w-4" />
-              Storage
+              <Activity className="h-4 w-4" />
+              Activity
             </Link>
           )}
-          <Link
-            href={driveId ? `/dashboard/${driveId}/activity` : "/dashboard/activity"}
-            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Activity className="h-4 w-4" />
-            Activity
-          </Link>
-          <Link
-            href={driveId ? `/dashboard/${driveId}/tasks` : "/dashboard/tasks"}
-            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <CheckSquare className="h-4 w-4" />
-            Tasks
-          </Link>
+          {driveId && (
+            <Link
+              href={`/dashboard/${driveId}/tasks`}
+              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <CheckSquare className="h-4 w-4" />
+              Tasks
+            </Link>
+          )}
           {driveId && canManage && (
             <Link
               href={`/dashboard/${driveId}/settings`}
@@ -165,15 +173,6 @@ export default function Sidebar({ className }: SidebarProps) {
             >
               <Settings className="h-4 w-4" />
               Drive Settings
-            </Link>
-          )}
-          {!driveId && (
-            <Link
-              href="/settings"
-              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Settings className="h-4 w-4" />
-              Settings
             </Link>
           )}
           <Link

@@ -5,6 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
+import { createStreamTrackingFetch } from '@/lib/ai/core/client';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -218,10 +219,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       messages: initialMessages,
       transport: new DefaultChatTransport({
         api: apiEndpoint,
-        fetch: (url, options) => {
-          const urlString = url instanceof Request ? url.url : url.toString();
-          return fetchWithAuth(urlString, options);
-        },
+        // Use stream tracking fetch to capture streamId from response headers
+        // This enables explicit abort via /api/ai/abort endpoint
+        fetch: createStreamTrackingFetch({ chatId: currentConversationId }),
       }),
       experimental_throttle: 100, // Match agent mode throttle for consistent streaming feel
       onError: (error: Error) => {

@@ -19,7 +19,7 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquare, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard } from 'lucide-react';
+import { LogOut, MessageSquare, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard, Activity, CheckSquare } from 'lucide-react';
 import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import useSWR from 'swr';
@@ -110,6 +110,14 @@ export default function UserDropdown() {
           <DropdownMenuItem onClick={() => router.push('/dashboard/connections')}>
             <Users className="mr-2 h-4 w-4" />
             <span>Connections</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push('/dashboard/activity')}>
+            <Activity className="mr-2 h-4 w-4" />
+            <span>Activity</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push('/dashboard/tasks')}>
+            <CheckSquare className="mr-2 h-4 w-4" />
+            <span>Tasks</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => router.push('/dashboard/storage')}>

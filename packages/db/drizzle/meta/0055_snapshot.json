@@ -1,5 +1,5 @@
 {
-  "id": "0b9f36ce-ef1b-4ae4-a13e-8c4b96534a03",
+  "id": "3e59734b-ea9c-411e-bdd6-0463e909685a",
   "prevId": "e4bc4f05-e517-45a0-ae3c-661b373ac7a7",
   "version": "7",
   "dialect": "postgresql",
@@ -9188,24 +9188,36 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.user_page_views": {
-      "name": "user_page_views",
+    "public.user_hotkey_preferences": {
+      "name": "user_hotkey_preferences",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
         "userId": {
           "name": "userId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "pageId": {
-          "name": "pageId",
+        "hotkeyId": {
+          "name": "hotkeyId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "viewedAt": {
-          "name": "viewedAt",
+        "binding": {
+          "name": "binding",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updatedAt": {
+          "name": "updatedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
@@ -9213,38 +9225,8 @@
         }
       },
       "indexes": {
-        "user_page_views_user_id_idx": {
-          "name": "user_page_views_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "user_page_views_page_id_idx": {
-          "name": "user_page_views_page_id_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "user_page_views_user_page_idx": {
-          "name": "user_page_views_user_page_idx",
+        "user_hotkey_preferences_user_hotkey_idx": {
+          "name": "user_hotkey_preferences_user_hotkey_idx",
           "columns": [
             {
               "expression": "userId",
@@ -9253,7 +9235,22 @@
               "nulls": "last"
             },
             {
-              "expression": "pageId",
+              "expression": "hotkeyId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_hotkey_preferences_user_idx": {
+          "name": "user_hotkey_preferences_user_idx",
+          "columns": [
+            {
+              "expression": "userId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -9266,9 +9263,9 @@
         }
       },
       "foreignKeys": {
-        "user_page_views_userId_users_id_fk": {
-          "name": "user_page_views_userId_users_id_fk",
-          "tableFrom": "user_page_views",
+        "user_hotkey_preferences_userId_users_id_fk": {
+          "name": "user_hotkey_preferences_userId_users_id_fk",
+          "tableFrom": "user_hotkey_preferences",
           "tableTo": "users",
           "columnsFrom": [
             "userId"
@@ -9278,30 +9275,9 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
-        },
-        "user_page_views_pageId_pages_id_fk": {
-          "name": "user_page_views_pageId_pages_id_fk",
-          "tableFrom": "user_page_views",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "pageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "user_page_views_userId_pageId_pk": {
-          "name": "user_page_views_userId_pageId_pk",
-          "columns": [
-            "userId",
-            "pageId"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     }
   },

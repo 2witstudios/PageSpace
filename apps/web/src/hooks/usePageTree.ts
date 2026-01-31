@@ -37,6 +37,7 @@ export type TreePage = Page & {
   aiChat: AiChat | null;
   messages: MessageWithUser[];
   isTaskLinked?: boolean;
+  hasChanges?: boolean;
 };
 
 const fetcher = async (url: string) => {
