@@ -51,8 +51,12 @@ export default function HotkeysSettingsPage() {
 
   const handleReset = async (hotkeyId: string) => {
     const definition = HOTKEY_REGISTRY.find((h) => h.id === hotkeyId);
-    if (definition) {
+    if (!definition) return;
+
+    try {
       await handleSave(hotkeyId, definition.defaultBinding);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to reset hotkey');
     }
   };
 

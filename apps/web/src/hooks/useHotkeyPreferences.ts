@@ -59,8 +59,15 @@ export async function updateHotkeyPreference(hotkeyId: string, binding: string):
   });
 
   if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.error || 'Failed to update hotkey preference');
+    let errorMessage = 'Failed to update hotkey preference';
+    try {
+      const errorBody = await res.json();
+      errorMessage = errorBody.error || errorBody.message || errorMessage;
+    } catch {
+      const textBody = await res.text().catch(() => '');
+      errorMessage = textBody || res.statusText || errorMessage;
+    }
+    throw new Error(errorMessage);
   }
 
   // Update local store
