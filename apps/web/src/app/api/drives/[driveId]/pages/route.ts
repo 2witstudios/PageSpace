@@ -142,7 +142,7 @@ export async function GET(
       // hasChanges is true if:
       // 1. User has never viewed this page, OR
       // 2. Page was updated after the user's last view
-      const hasChanges = !viewedAt || (page.updatedAt && page.updatedAt > viewedAt);
+      const hasChanges = !viewedAt || (page.updatedAt ? page.updatedAt > viewedAt : false);
 
       return {
         ...page,

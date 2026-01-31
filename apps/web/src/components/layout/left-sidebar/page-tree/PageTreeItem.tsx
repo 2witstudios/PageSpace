@@ -279,6 +279,7 @@ export function PageTreeItem({
               {/* Change indicator dot */}
               {item.hasChanges && (
                 <span
+                  role="img"
                   className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 ml-1"
                   aria-label="Has changes since last viewed"
                 />

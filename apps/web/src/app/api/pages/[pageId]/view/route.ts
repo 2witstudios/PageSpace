@@ -3,6 +3,7 @@ import { db, eq, userPageViews, pages } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
+import { canUserViewPage } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -27,6 +28,12 @@ export async function POST(
 
     if (!page) {
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Verify user has permission to view this page
+    const canView = await canUserViewPage(userId, pageId);
+    if (!canView) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     // Upsert the page view record
