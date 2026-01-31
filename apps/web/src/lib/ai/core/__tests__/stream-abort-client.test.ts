@@ -124,7 +124,7 @@ describe('stream-abort-client', () => {
       expect(fetchWithAuth).not.toHaveBeenCalled();
     });
 
-    it('handles fetch error gracefully', async () => {
+    it('handles fetch error gracefully and preserves streamId', async () => {
       const client = await import('../stream-abort-client');
 
       // Setup active stream
@@ -140,6 +140,8 @@ describe('stream-abort-client', () => {
 
       expect(result.aborted).toBe(false);
       expect(result.reason).toBe('Failed to call abort endpoint');
+      // Verify streamId is preserved after fetch error (allows retry)
+      expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBe('stream-456');
     });
   });
 

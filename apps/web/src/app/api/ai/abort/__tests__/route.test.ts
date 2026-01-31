@@ -131,6 +131,19 @@ describe('POST /api/ai/abort', () => {
       expect(response.status).toBe(400);
       expect(data.error).toBe('streamId is required');
     });
+
+    it('returns 400 when streamId is whitespace only', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+
+      const request = createRequest({ streamId: '   ' });
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.error).toBe('streamId is required');
+      expect(abortStream).not.toHaveBeenCalled();
+    });
   });
 
   describe('Successful Abort', () => {

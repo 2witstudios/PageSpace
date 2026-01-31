@@ -1022,6 +1022,8 @@ export async function POST(request: Request) {
         }),
       };
     } catch (streamError) {
+      // Clean up the registry entry since onFinish won't be called
+      removeStream({ streamId });
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
         stack: streamError instanceof Error ? streamError.stack : undefined

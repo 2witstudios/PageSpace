@@ -45,7 +45,7 @@ export async function POST(request: Request) {
 
     const { streamId } = await request.json();
 
-    if (!streamId || typeof streamId !== 'string') {
+    if (!streamId || typeof streamId !== 'string' || !streamId.trim()) {
       return NextResponse.json(
         { error: 'streamId is required' },
         { status: 400 }

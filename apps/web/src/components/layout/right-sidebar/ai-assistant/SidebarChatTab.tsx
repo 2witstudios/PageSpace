@@ -452,8 +452,16 @@ const SidebarChatTab: React.FC = () => {
     enabled: !isStreaming && currentConversationId !== null,
   });
 
-  // Clean up stream tracking on unmount
+  // Clean up stream tracking on unmount or conversation change
+  // Use ref to capture current ID so cleanup clears the correct stream
+  const prevConversationIdRef = useRef<string | null>(null);
   useEffect(() => {
+    // Clear previous conversation's stream ID when switching conversations
+    if (prevConversationIdRef.current && prevConversationIdRef.current !== currentConversationId) {
+      clearActiveStreamId({ chatId: prevConversationIdRef.current });
+    }
+    prevConversationIdRef.current = currentConversationId;
+
     return () => {
       if (currentConversationId) {
         clearActiveStreamId({ chatId: currentConversationId });

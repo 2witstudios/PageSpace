@@ -120,11 +120,15 @@ export function useAppStateRecovery({
     if (!isCapacitorApp()) return;
 
     let cleanup: (() => void) | undefined;
+    let mounted = true;
 
     const setupListener = async () => {
       try {
         // Dynamic import to avoid issues in non-Capacitor environments
         const { App } = await import('@capacitor/app');
+
+        // Check if component unmounted during async import
+        if (!mounted) return;
 
         const listener = await App.addListener('appStateChange', ({ isActive }) => {
           if (isActive) {
@@ -136,6 +140,12 @@ export function useAppStateRecovery({
           }
         });
 
+        // Check again after addListener - if unmounted, clean up immediately
+        if (!mounted) {
+          listener.remove();
+          return;
+        }
+
         cleanup = () => listener.remove();
       } catch {
         // Capacitor plugin not available - this is fine on web
@@ -146,6 +156,7 @@ export function useAppStateRecovery({
     setupListener();
 
     return () => {
+      mounted = false;
       cleanup?.();
     };
   }, [handleResume, log]);
