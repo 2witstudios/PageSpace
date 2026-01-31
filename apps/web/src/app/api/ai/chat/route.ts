@@ -58,6 +58,11 @@ import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import {
+  createStreamAbortController,
+  removeStream,
+  STREAM_ID_HEADER,
+} from '@/lib/ai/core/stream-abort-registry';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -713,16 +718,26 @@ export async function POST(request: Request) {
     // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
     const serverAssistantMessageId = createId();
 
+    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
+    // This is separate from request.signal which fires on any client disconnect
+    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
+
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
           // Send the server-generated message ID to the client at stream start
-          // The client's useChat will use this ID instead of generating its own
-          writer.write({
-            type: 'start',
-            messageId: serverAssistantMessageId,
-          });
+          // streamId is passed via X-Stream-Id header (see result.toUIMessageStreamResponse below)
+          // Wrapped in try/catch to handle early disconnect - continue processing anyway
+          try {
+            writer.write({
+              type: 'start',
+              messageId: serverAssistantMessageId,
+            });
+          } catch {
+            // Client disconnected before first write - continue processing
+            // to ensure onFinish fires and the message is saved
+          }
 
           // Start the AI response
           const aiResult = streamText({
@@ -731,7 +746,7 @@ export async function POST(request: Request) {
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-            abortSignal: request.signal, // Enable stop/abort functionality from client
+            abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
             experimental_context: {
               userId,
               aiProvider: currentProvider,
@@ -755,11 +770,12 @@ export async function POST(request: Request) {
             }, // Pass userId, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
-              loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
+              loggers.ai.info('AI Chat API: Stream aborted by user', {
                 userId: maskIdentifier(userId!),
                 pageId: chatId,
+                streamId,
                 model: currentModel,
-                provider: currentProvider
+                provider: currentProvider,
               });
             },
           });
@@ -774,11 +790,21 @@ export async function POST(request: Request) {
             });
 
           // Stream the AI response directly to the client
+          // Wrap in try-catch to handle client disconnection gracefully - the AI stream
+          // will continue processing server-side even if writes fail
           for await (const chunk of aiResult.toUIMessageStream()) {
-            writer.write(chunk);
+            try {
+              writer.write(chunk);
+            } catch {
+              // Client disconnected - continue processing to ensure onFinish fires
+              // and the message is saved to the database
+            }
           }
         },
         onFinish: async ({ responseMessage }) => {
+          // Clean up abort controller from registry
+          removeStream({ streamId });
+
           loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
           
           // Enhanced debugging: Log the complete message structure
@@ -995,8 +1021,15 @@ export async function POST(request: Request) {
         },
       });
 
-      result = { toUIMessageStreamResponse: () => createUIMessageStreamResponse({ stream }) };
+      result = {
+        toUIMessageStreamResponse: () => createUIMessageStreamResponse({
+          stream,
+          headers: { [STREAM_ID_HEADER]: streamId },
+        }),
+      };
     } catch (streamError) {
+      // Clean up the registry entry since onFinish won't be called
+      removeStream({ streamId });
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
         stack: streamError instanceof Error ? streamError.stack : undefined

@@ -36,5 +36,11 @@ export * from './ai-utils';
 export * from './schema-introspection';
 export * from './complete-request-builder';
 
+// Stream Abort (server-side registry)
+export * from './stream-abort-registry';
+
+// NOTE: Client-side stream-abort functions are NOT exported here to prevent
+// accidental import in server contexts. Import from '@/lib/ai/core/client' instead.
+
 // Types
 export * from './types';
