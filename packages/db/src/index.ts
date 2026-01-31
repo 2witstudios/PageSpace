@@ -68,6 +68,12 @@ export {
   type SelectSecurityAuditLog,
 } from './schema/security-audit';
 
+// Hotkey preferences re-exports
+export {
+  userHotkeyPreferences,
+  userHotkeyPreferencesRelations,
+} from './schema/hotkeys';
+
 // Push notification tokens re-exports
 export {
   pushNotificationTokens,

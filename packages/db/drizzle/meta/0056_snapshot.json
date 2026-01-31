@@ -1,6 +1,6 @@
 {
-  "id": "3e59734b-ea9c-411e-bdd6-0463e909685a",
-  "prevId": "e4bc4f05-e517-45a0-ae3c-661b373ac7a7",
+  "id": "5fe16c13-7aed-474f-baac-07c244c0a449",
+  "prevId": "0b9f36ce-ef1b-4ae4-a13e-8c4b96534a03",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -9188,8 +9188,124 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.user_hotkey_preferences": {
-      "name": "user_hotkey_preferences",
+    "public.user_page_views": {
+      "name": "user_page_views",
+      "schema": "",
+      "columns": {
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pageId": {
+          "name": "pageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "viewedAt": {
+          "name": "viewedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_page_views_user_id_idx": {
+          "name": "user_page_views_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_page_views_page_id_idx": {
+          "name": "user_page_views_page_id_idx",
+          "columns": [
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_page_views_user_page_idx": {
+          "name": "user_page_views_user_page_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_page_views_userId_users_id_fk": {
+          "name": "user_page_views_userId_users_id_fk",
+          "tableFrom": "user_page_views",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "user_page_views_pageId_pages_id_fk": {
+          "name": "user_page_views_pageId_pages_id_fk",
+          "tableFrom": "user_page_views",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "pageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "user_page_views_userId_pageId_pk": {
+          "name": "user_page_views_userId_pageId_pk",
+          "columns": [
+            "userId",
+            "pageId"
+          ]
+        }
+      },
+      "uniqueConstraints": {}
+    },
+    "public.push_notification_tokens": {
+      "name": "push_notification_tokens",
       "schema": "",
       "columns": {
         "id": {
@@ -9204,17 +9320,50 @@
           "primaryKey": false,
           "notNull": true
         },
-        "hotkeyId": {
-          "name": "hotkeyId",
+        "token": {
+          "name": "token",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "binding": {
-          "name": "binding",
-          "type": "text",
+        "platform": {
+          "name": "platform",
+          "type": "PushPlatformType",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
+        },
+        "deviceId": {
+          "name": "deviceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deviceName": {
+          "name": "deviceName",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "isActive": {
+          "name": "isActive",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "webPushSubscription": {
+          "name": "webPushSubscription",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         },
         "updatedAt": {
           "name": "updatedAt",
@@ -9222,32 +9371,30 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "lastUsedAt": {
+          "name": "lastUsedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failedAttempts": {
+          "name": "failedAttempts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0'"
+        },
+        "lastFailedAt": {
+          "name": "lastFailedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "user_hotkey_preferences_user_hotkey_idx": {
-          "name": "user_hotkey_preferences_user_hotkey_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "hotkeyId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "user_hotkey_preferences_user_idx": {
-          "name": "user_hotkey_preferences_user_idx",
+        "push_notification_tokens_user_id_idx": {
+          "name": "push_notification_tokens_user_id_idx",
           "columns": [
             {
               "expression": "userId",
@@ -9260,12 +9407,63 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "push_notification_tokens_token_idx": {
+          "name": "push_notification_tokens_token_idx",
+          "columns": [
+            {
+              "expression": "token",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "push_notification_tokens_platform_idx": {
+          "name": "push_notification_tokens_platform_idx",
+          "columns": [
+            {
+              "expression": "platform",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "push_notification_tokens_active_idx": {
+          "name": "push_notification_tokens_active_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "isActive",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "user_hotkey_preferences_userId_users_id_fk": {
-          "name": "user_hotkey_preferences_userId_users_id_fk",
-          "tableFrom": "user_hotkey_preferences",
+        "push_notification_tokens_userId_users_id_fk": {
+          "name": "push_notification_tokens_userId_users_id_fk",
+          "tableFrom": "push_notification_tokens",
           "tableTo": "users",
           "columnsFrom": [
             "userId"
@@ -9574,6 +9772,15 @@
         "security.rate.limited",
         "security.brute.force.detected",
         "security.suspicious.activity"
+      ]
+    },
+    "public.PushPlatformType": {
+      "name": "PushPlatformType",
+      "schema": "public",
+      "values": [
+        "ios",
+        "android",
+        "web"
       ]
     }
   },
