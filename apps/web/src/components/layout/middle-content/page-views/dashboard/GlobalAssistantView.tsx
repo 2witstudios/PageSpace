@@ -61,7 +61,7 @@ import {
   useProviderSettings,
   LocationContext,
 } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/stream-abort-client';
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import {
   ProviderSetupCard,

@@ -728,10 +728,16 @@ export async function POST(request: Request) {
         execute: async ({ writer }) => {
           // Send the server-generated message ID to the client at stream start
           // streamId is passed via X-Stream-Id header (see result.toUIMessageStreamResponse below)
-          writer.write({
-            type: 'start',
-            messageId: serverAssistantMessageId,
-          });
+          // Wrapped in try/catch to handle early disconnect - continue processing anyway
+          try {
+            writer.write({
+              type: 'start',
+              messageId: serverAssistantMessageId,
+            });
+          } catch {
+            // Client disconnected before first write - continue processing
+            // to ensure onFinish fires and the message is saved
+          }
 
           // Start the AI response
           const aiResult = streamText({

@@ -74,11 +74,21 @@ export const abortActiveStream = async ({
 
     const result = await response.json();
 
-    // Clear the stream ID after abort attempt
-    activeStreams.delete(chatId);
+    // Only clear streamId when abort succeeded or stream is already gone
+    // Keep streamId on 401/429/500 errors so user can retry
+    const shouldClear =
+      result.aborted === true ||
+      (result.reason &&
+        (result.reason.includes('not found') ||
+          result.reason.includes('already completed')));
+
+    if (shouldClear) {
+      activeStreams.delete(chatId);
+    }
 
     return result;
   } catch (error) {
+    // Network error - keep streamId for retry
     console.error('Failed to abort stream:', error);
     return { aborted: false, reason: 'Failed to call abort endpoint' };
   }

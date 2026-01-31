@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { createStreamTrackingFetch } from '@/lib/ai/core/stream-abort-client';
+import { createStreamTrackingFetch } from '@/lib/ai/core/client';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state

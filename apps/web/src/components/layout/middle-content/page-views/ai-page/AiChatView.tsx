@@ -23,7 +23,7 @@ import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/stream-abort-client';
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 
 // Shared hooks and components
