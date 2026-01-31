@@ -23,6 +23,37 @@ interface SettingsSection {
   items: SettingsItem[];
 }
 
+function SettingsRow({ item, index }: { item: SettingsItem; index: number }) {
+  return (
+    <div
+      className={`
+        flex items-center gap-4 px-4 py-3 transition-colors
+        ${item.available ? "hover:bg-accent" : "opacity-50"}
+        ${index > 0 ? "border-t" : ""}
+      `}
+    >
+      <div className="flex-shrink-0">
+        <item.icon className="h-5 w-5 text-muted-foreground" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium">{item.title}</div>
+        <div className="text-sm text-muted-foreground truncate">
+          {item.description}
+        </div>
+      </div>
+      <div className="flex-shrink-0">
+        {!item.available ? (
+          <span className="text-xs text-muted-foreground">
+            Coming Soon
+          </span>
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
@@ -129,39 +160,10 @@ export default function SettingsPage() {
               {section.title}
             </h2>
             <div className="rounded-lg border bg-card overflow-hidden">
-              {section.items.map((item, index) => {
-                const row = (
-                  <div
-                    className={`
-                      flex items-center gap-4 px-4 py-3 transition-colors
-                      ${item.available ? "hover:bg-accent" : "opacity-50"}
-                      ${index > 0 ? "border-t" : ""}
-                    `}
-                  >
-                    <div className="flex-shrink-0">
-                      <item.icon className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium">{item.title}</div>
-                      <div className="text-sm text-muted-foreground truncate">
-                        {item.description}
-                      </div>
-                    </div>
-                    <div className="flex-shrink-0">
-                      {!item.available ? (
-                        <span className="text-xs text-muted-foreground">
-                          Coming Soon
-                        </span>
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </div>
-                  </div>
-                );
-
-                return item.available ? (
+              {section.items.map((item, index) =>
+                item.available ? (
                   <Link key={item.href} href={item.href}>
-                    {row}
+                    <SettingsRow item={item} index={index} />
                   </Link>
                 ) : (
                   <div
@@ -169,10 +171,10 @@ export default function SettingsPage() {
                     className="cursor-not-allowed"
                     aria-disabled="true"
                   >
-                    {row}
+                    <SettingsRow item={item} index={index} />
                   </div>
-                );
-              })}
+                )
+              )}
             </div>
           </div>
         ))}
