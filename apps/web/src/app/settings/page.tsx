@@ -129,12 +129,8 @@ export default function SettingsPage() {
               {section.title}
             </h2>
             <div className="rounded-lg border bg-card overflow-hidden">
-              {section.items.map((item, index) => (
-                <Link
-                  key={item.href}
-                  href={item.available ? item.href : "#"}
-                  className={!item.available ? "cursor-not-allowed" : ""}
-                >
+              {section.items.map((item, index) => {
+                const row = (
                   <div
                     className={`
                       flex items-center gap-4 px-4 py-3 transition-colors
@@ -161,8 +157,22 @@ export default function SettingsPage() {
                       )}
                     </div>
                   </div>
-                </Link>
-              ))}
+                );
+
+                return item.available ? (
+                  <Link key={item.href} href={item.href}>
+                    {row}
+                  </Link>
+                ) : (
+                  <div
+                    key={item.href}
+                    className="cursor-not-allowed"
+                    aria-disabled="true"
+                  >
+                    {row}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
