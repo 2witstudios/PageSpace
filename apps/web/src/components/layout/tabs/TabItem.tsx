@@ -90,6 +90,8 @@ export const TabItem = memo(function TabItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          {...attributes}
+          {...listeners}
           ref={setNodeRef}
           style={style}
           role="tab"
@@ -109,8 +111,6 @@ export const TabItem = memo(function TabItem({
             tab.isPinned && "min-w-0 max-w-[60px] px-2",
             isDragging && "shadow-lg ring-2 ring-primary/50"
           )}
-          {...attributes}
-          {...listeners}
         >
           {/* Page type icon */}
           <PageTypeIcon
