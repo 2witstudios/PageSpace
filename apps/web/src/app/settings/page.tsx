@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield } from "lucide-react";
+import { Settings, User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard } from "lucide-react";
 
 interface SettingsCategory {
   title: string;
@@ -40,6 +40,13 @@ export default function SettingsPage() {
       description: "Manage email notification preferences",
       icon: Bell,
       href: "/settings/notifications",
+      available: true,
+    },
+    {
+      title: "Keyboard Shortcuts",
+      description: "Customize keyboard shortcuts",
+      icon: Keyboard,
+      href: "/settings/hotkeys",
       available: true,
     },
     {
