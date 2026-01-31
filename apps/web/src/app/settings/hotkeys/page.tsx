@@ -19,7 +19,26 @@ export default function HotkeysSettingsPage() {
   const hotkeysByCategory = getHotkeysByCategory();
   const categories = Object.keys(hotkeysByCategory) as HotkeyCategory[];
 
+  function detectConflict(hotkeyId: string, newBinding: string): string | null {
+    if (!newBinding) return null;
+
+    for (const hotkey of HOTKEY_REGISTRY) {
+      if (hotkey.id === hotkeyId) continue;
+      const existingBinding = getEffectiveBinding(hotkey.id);
+      if (existingBinding === newBinding) {
+        return `Conflicts with "${hotkey.label}"`;
+      }
+    }
+    return null;
+  }
+
   const handleSave = async (hotkeyId: string, binding: string) => {
+    const conflict = detectConflict(hotkeyId, binding);
+    if (conflict) {
+      toast.error(conflict);
+      return;
+    }
+
     try {
       await updateHotkeyPreference(hotkeyId, binding);
       setEditingId(null);
