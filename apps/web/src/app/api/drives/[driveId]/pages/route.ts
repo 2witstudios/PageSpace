@@ -139,10 +139,9 @@ export async function GET(
     // Add isTaskLinked and hasChanges flags to each page
     const pagesWithFlags = pageResults.map(page => {
       const viewedAt = pageViewsMap.get(page.id);
-      // hasChanges is true if:
-      // 1. User has never viewed this page, OR
-      // 2. Page was updated after the user's last view
-      const hasChanges = !viewedAt || (page.updatedAt ? page.updatedAt > viewedAt : false);
+      // hasChanges is true only if user has viewed the page before AND page was updated after
+      // Pages never viewed don't show a dot - users shouldn't be notified about changes to pages they've never visited
+      const hasChanges = viewedAt && page.updatedAt ? page.updatedAt > viewedAt : false;
 
       return {
         ...page,
