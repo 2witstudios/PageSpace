@@ -19,6 +19,7 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -341,6 +342,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       console.error('Failed to refresh messages:', error);
     }
   }, [currentConversationId, page.id, setMessages]);
+
+  // ============================================
+  // APP STATE RECOVERY
+  // ============================================
+
+  // Auto-refresh messages when returning from background (iOS/Capacitor)
+  // This handles the case where streaming continued server-side while user was away
+  useAppStateRecovery({
+    onForeground: handlePullUpRefresh,
+    minBackgroundTime: 2000, // Refresh if backgrounded for more than 2 seconds
+    enabled: !!currentConversationId && activeTab === 'chat',
+  });
 
   // ============================================
   // RENDER

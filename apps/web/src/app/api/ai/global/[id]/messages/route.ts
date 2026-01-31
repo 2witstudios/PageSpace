@@ -711,13 +711,25 @@ MENTION PROCESSING:
       wasTruncated: contextCalculation.wasTruncated,
     });
 
+    // Track if client disconnects (for logging purposes)
+    request.signal.addEventListener('abort', () => {
+      loggers.api.info('🔌 Global Assistant Chat API: Client disconnected, continuing stream server-side', {
+        userId: maskIdentifier(userId),
+        conversationId,
+        model: currentModel,
+        provider: currentProvider
+      });
+    });
+
+    // NOTE: abortSignal intentionally NOT passed - stream completes server-side
+    // even if client disconnects (e.g., app backgrounded on iOS/Capacitor)
+    // The response will be saved to DB in onFinish, so users can see it when they return
     const result = streamText({
       model,
       system: finalSystemPrompt,
       messages: modelMessages,
       tools: finalTools,
       stopWhen: stepCountIs(100),
-      abortSignal: request.signal, // Enable stop/abort functionality from client
       experimental_context: {
         userId,
         aiProvider: currentProvider,
@@ -727,14 +739,6 @@ MENTION PROCESSING:
         modelCapabilities: getModelCapabilities(currentModel, currentProvider)
       },
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-      onAbort: () => {
-        loggers.api.info('🛑 Global Assistant Chat API: Stream aborted by user', {
-          userId: maskIdentifier(userId),
-          conversationId,
-          model: currentModel,
-          provider: currentProvider
-        });
-      },
     });
 
     loggers.api.debug('📡 Global Assistant Chat API: Returning stream response', {});

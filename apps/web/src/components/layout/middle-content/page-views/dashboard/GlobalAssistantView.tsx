@@ -53,6 +53,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 
 // Shared hooks and components
 import {
@@ -361,6 +362,18 @@ const GlobalAssistantView: React.FC = () => {
     setGlobalMessages,
     setGlobalLocalMessages,
   ]);
+
+  // ============================================
+  // APP STATE RECOVERY
+  // ============================================
+
+  // Auto-refresh messages when returning from background (iOS/Capacitor)
+  // This handles the case where streaming continued server-side while user was away
+  useAppStateRecovery({
+    onForeground: handlePullUpRefresh,
+    minBackgroundTime: 2000, // Refresh if backgrounded for more than 2 seconds
+    enabled: !!currentConversationId,
+  });
 
   // ============================================
   // GLOBAL MODE SYNC EFFECTS

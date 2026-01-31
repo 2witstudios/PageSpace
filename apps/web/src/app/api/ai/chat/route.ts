@@ -724,14 +724,32 @@ export async function POST(request: Request) {
             messageId: serverAssistantMessageId,
           });
 
-          // Start the AI response
+          // Track if client is still connected (for graceful handling of disconnects)
+          let clientDisconnected = false;
+
+          // Listen for client disconnect but DON'T abort the AI stream
+          // This allows the stream to complete and save to DB even if user leaves the app
+          request.signal.addEventListener('abort', () => {
+            clientDisconnected = true;
+            loggers.ai.info('🔌 AI Chat API: Client disconnected, continuing stream server-side', {
+              userId: maskIdentifier(userId!),
+              pageId: chatId,
+              model: currentModel,
+              provider: currentProvider
+            });
+          });
+
+          // Start the AI response WITHOUT abort signal
+          // This ensures streaming continues to completion regardless of client state
+          // The response will be saved to DB in onFinish, so users can see it when they return
           const aiResult = streamText({
             model,
             system: systemPrompt + timestampSystemPrompt + pageTreePrompt,
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-            abortSignal: request.signal, // Enable stop/abort functionality from client
+            // NOTE: abortSignal intentionally NOT passed - stream completes server-side
+            // even if client disconnects (e.g., app backgrounded on iOS/Capacitor)
             experimental_context: {
               userId,
               aiProvider: currentProvider,
@@ -754,14 +772,6 @@ export async function POST(request: Request) {
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-            onAbort: () => {
-              loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
-                userId: maskIdentifier(userId!),
-                pageId: chatId,
-                model: currentModel,
-                provider: currentProvider
-              });
-            },
           });
 
           usagePromise = aiResult.totalUsage
@@ -773,9 +783,22 @@ export async function POST(request: Request) {
               return undefined;
             });
 
-          // Stream the AI response directly to the client
+          // Stream the AI response to the client
+          // Continue processing even if client disconnects - onFinish will save to DB
           for await (const chunk of aiResult.toUIMessageStream()) {
-            writer.write(chunk);
+            // Only attempt to write if client is still connected
+            if (!clientDisconnected) {
+              try {
+                writer.write(chunk);
+              } catch (writeError) {
+                // Client disconnected mid-write, mark as disconnected and continue
+                clientDisconnected = true;
+                loggers.ai.debug('AI Chat API: Write failed (client disconnected), continuing stream', {
+                  error: writeError instanceof Error ? writeError.message : 'Unknown write error',
+                });
+              }
+            }
+            // Continue iterating to let the AI stream complete (for onFinish to fire)
           }
         },
         onFinish: async ({ responseMessage }) => {
