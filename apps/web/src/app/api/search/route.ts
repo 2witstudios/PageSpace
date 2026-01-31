@@ -227,14 +227,16 @@ export async function GET(request: Request) {
     const query = searchParams.get('q');
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 50);
 
-    if (!query || query.length < 2) {
+    // Trim whitespace and validate - prevents whitespace-only queries
+    const trimmedQuery = query?.trim();
+    if (!trimmedQuery || trimmedQuery.length < 2) {
       return NextResponse.json({ results: [] });
     }
 
     const results: SearchResult[] = [];
 
     // 1. Search drives the user owns (with multi-word support)
-    const driveCondition = buildMultiWordDriveCondition(query);
+    const driveCondition = buildMultiWordDriveCondition(trimmedQuery);
     const driveResults = await db.select({
       id: drives.id,
       name: drives.name,
@@ -250,13 +252,17 @@ export async function GET(request: Request) {
     )
     .limit(10);
 
-    // Add drive results
+    // Add drive results (calculate score inline for consistency)
     for (const drive of driveResults) {
+      const matchLocation = 'title' as const;
+      const relevanceScore = calculateRelevanceScore(drive.name, trimmedQuery, matchLocation);
       results.push({
         id: drive.id,
         title: drive.name,
         type: 'drive',
         description: `/${drive.slug}`,
+        matchLocation,
+        relevanceScore,
       });
     }
 
@@ -279,8 +285,8 @@ export async function GET(request: Request) {
     // 2. Search pages in accessible drives
     // We use multi-word search: all query words must appear in title OR content
     if (allDriveIds.length > 0) {
-      const titleCondition = buildMultiWordTitleCondition(query);
-      const contentCondition = buildMultiWordContentCondition(query);
+      const titleCondition = buildMultiWordTitleCondition(trimmedQuery);
+      const contentCondition = buildMultiWordContentCondition(trimmedQuery);
 
       const pageResults = await db.select({
         id: pages.id,
@@ -315,8 +321,8 @@ export async function GET(request: Request) {
         const permissions = permissionsMap.get(page.id);
         if (!permissions?.canView) continue;
 
-        const matchLocation = getMatchLocation(page.title, page.content, query);
-        const relevanceScore = calculateRelevanceScore(page.title, query, matchLocation);
+        const matchLocation = getMatchLocation(page.title, page.content, trimmedQuery);
+        const relevanceScore = calculateRelevanceScore(page.title, trimmedQuery, matchLocation);
 
         results.push({
           id: page.id,
@@ -333,7 +339,7 @@ export async function GET(request: Request) {
     }
 
     // 3. Search users (with public profiles) - multi-word support
-    const userCondition = buildMultiWordUserCondition(query);
+    const userCondition = buildMultiWordUserCondition(trimmedQuery);
     const profileResults = await db.select({
       userId: userProfiles.userId,
       username: userProfiles.username,
@@ -351,28 +357,20 @@ export async function GET(request: Request) {
     )
     .limit(10);
 
+    // Add user results (calculate score inline for consistency)
     for (const profile of profileResults) {
+      const title = profile.displayName || profile.username || 'Unknown User';
+      const matchLocation = 'title' as const;
+      const relevanceScore = calculateRelevanceScore(title, trimmedQuery, matchLocation);
       results.push({
         id: profile.userId,
-        title: profile.displayName || profile.username || 'Unknown User',
+        title,
         type: 'user',
         description: profile.username ? `@${profile.username}` : profile.email || '',
         avatarUrl: profile.avatarUrl,
+        matchLocation,
+        relevanceScore,
       });
-    }
-
-    // Calculate relevance scores for drives and users (pages already have scores)
-    for (const result of results) {
-      if (result.type === 'drive') {
-        // Drives always match on title
-        result.matchLocation = 'title';
-        result.relevanceScore = calculateRelevanceScore(result.title, query, 'title');
-      } else if (result.type === 'user') {
-        // Users always match on name (title)
-        result.matchLocation = 'title';
-        result.relevanceScore = calculateRelevanceScore(result.title, query, 'title');
-      }
-      // Pages already have relevanceScore calculated
     }
 
     // Sort results by relevance score (highest first)
@@ -402,7 +400,7 @@ export async function GET(request: Request) {
     const finalResults = results.slice(0, limit);
 
     loggers.api.debug('[SEARCH] Returning results', {
-      query,
+      query: trimmedQuery,
       count: finalResults.length,
       breakdown: {
         drives: finalResults.filter(r => r.type === 'drive').length,
