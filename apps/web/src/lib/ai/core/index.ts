@@ -36,5 +36,18 @@ export * from './ai-utils';
 export * from './schema-introspection';
 export * from './complete-request-builder';
 
+// Stream Abort (server-side registry)
+export * from './stream-abort-registry';
+
+// Stream Abort (client-side)
+export {
+  abortActiveStream,
+  createStreamTrackingFetch,
+  setActiveStreamId,
+  getActiveStreamId,
+  clearActiveStreamId,
+  handleStreamStartMessage,
+} from './stream-abort-client';
+
 // Types
 export * from './types';

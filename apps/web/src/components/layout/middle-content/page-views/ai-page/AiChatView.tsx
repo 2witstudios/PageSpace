@@ -23,6 +23,8 @@ import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
+import { abortActiveStream, createStreamTrackingFetch } from '@/lib/ai/core';
+
 // Shared hooks and components
 import {
   useMCPTools,
@@ -134,10 +136,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       messages: initialMessages,
       transport: new DefaultChatTransport({
         api: '/api/ai/chat',
-        fetch: (url, options) => {
-          const urlString = url instanceof Request ? url.url : url.toString();
-          return fetchWithAuth(urlString, options);
-        },
+        // Use stream tracking fetch to capture streamId from response headers
+        // This enables explicit abort via /api/ai/abort endpoint
+        fetch: createStreamTrackingFetch({ chatId: page.id }),
       }),
       experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
@@ -148,10 +149,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id]
   );
 
-  const { messages, sendMessage, status, error, regenerate, setMessages, stop } =
+  const { messages, sendMessage, status, error, regenerate, setMessages, stop: useChatStop } =
     useChat(chatConfig);
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Combined stop function that calls both abort endpoint (server-side) and useChat stop (client-side)
+  const stop = useCallback(async () => {
+    // Call abort endpoint to stop server-side processing
+    await abortActiveStream({ chatId: page.id });
+    // Call useChat's stop to abort client-side fetch
+    useChatStop();
+  }, [page.id, useChatStop]);
   const isLoading = !isInitialized;
 
   // ============================================

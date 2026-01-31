@@ -22,6 +22,7 @@ import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInf
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
+import { abortActiveStream, createStreamTrackingFetch } from '@/lib/ai/core';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
@@ -175,10 +176,9 @@ const SidebarChatTab: React.FC = () => {
       messages: agentInitialMessages,
       transport: new DefaultChatTransport({
         api: '/api/ai/chat',
-        fetch: (url, options) => {
-          const urlString = url instanceof Request ? url.url : url.toString();
-          return fetchWithAuth(urlString, options);
-        },
+        // Use stream tracking fetch to capture streamId from response headers
+        // This enables explicit abort via /api/ai/abort endpoint
+        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
       }),
       experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
@@ -385,16 +385,25 @@ const SidebarChatTab: React.FC = () => {
     prevGlobalStatusRef.current = globalStatus;
   }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
 
+  // Register stop function to global context (global mode only)
+  // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
   useEffect(() => {
     if (selectedAgent) return;
 
     const streaming = globalStatus === 'submitted' || globalStatus === 'streaming';
     if (streaming) {
-      setGlobalStopStreaming(() => globalStop);
+      setGlobalStopStreaming(() => async () => {
+        // Call abort endpoint to stop server-side processing
+        if (globalConversationId) {
+          await abortActiveStream({ chatId: globalConversationId });
+        }
+        // Call useChat's stop to abort client-side fetch
+        globalStop();
+      });
     } else {
       setGlobalStopStreaming(null);
     }
-  }, [selectedAgent, globalStatus, globalStop, setGlobalStopStreaming]);
+  }, [selectedAgent, globalStatus, globalStop, globalConversationId, setGlobalStopStreaming]);
 
   // ============================================
   // Effects: Editing Store Registration
@@ -581,19 +590,23 @@ const SidebarChatTab: React.FC = () => {
   }, [selectAgent]);
 
   // Stop handler that uses appropriate stop function based on mode
-  const handleStop = useCallback(() => {
+  // All stop functions call both abort endpoint (server-side) and useChat stop (client-side)
+  const handleStop = useCallback(async () => {
     // Use the appropriate stop function based on mode
     if (!selectedAgent && contextStopStreaming) {
-      // Global mode: use context stop function
+      // Global mode: use context stop function (already calls abort endpoint)
       contextStopStreaming();
     } else if (selectedAgent && dashboardStopStreaming) {
-      // Agent mode: use dashboard store stop function
+      // Agent mode: use dashboard store stop function (already calls abort endpoint)
       dashboardStopStreaming();
     } else {
-      // Fallback: use local useChat stop
+      // Fallback: call abort endpoint directly + local useChat stop
+      if (currentConversationId) {
+        await abortActiveStream({ chatId: currentConversationId });
+      }
       stop();
     }
-  }, [selectedAgent, contextStopStreaming, dashboardStopStreaming, stop]);
+  }, [selectedAgent, contextStopStreaming, dashboardStopStreaming, currentConversationId, stop]);
 
   const handleUndoFromHere = useCallback((messageId: string) => {
     setUndoDialogMessageId(messageId);

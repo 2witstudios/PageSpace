@@ -58,6 +58,11 @@ import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import type { MCPTool } from '@/types/mcp';
 import { getMCPBridge } from '@/lib/mcp';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import {
+  createStreamAbortController,
+  removeStream,
+  STREAM_ID_HEADER,
+} from '@/lib/ai/core/stream-abort-registry';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -713,15 +718,20 @@ export async function POST(request: Request) {
     // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
     const serverAssistantMessageId = createId();
 
+    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
+    // This is separate from request.signal which fires on any client disconnect
+    const { streamId, signal: abortSignal } = createStreamAbortController();
+
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
-          // Send the server-generated message ID to the client at stream start
-          // The client's useChat will use this ID instead of generating its own
+          // Send the server-generated message ID and stream ID to the client at stream start
+          // The client uses messageId for message tracking and streamId for explicit abort
           writer.write({
             type: 'start',
             messageId: serverAssistantMessageId,
+            streamId, // Client uses this to call /api/ai/abort for explicit stop
           });
 
           // Start the AI response
@@ -731,9 +741,7 @@ export async function POST(request: Request) {
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-            // Note: We intentionally don't pass abortSignal here - we want the AI stream to complete
-            // server-side even if the client disconnects. This ensures onFinish always fires and
-            // saves the message to the database. Write errors are handled gracefully below.
+            abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
             experimental_context: {
               userId,
               aiProvider: currentProvider,
@@ -756,6 +764,15 @@ export async function POST(request: Request) {
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+            onAbort: () => {
+              loggers.ai.info('AI Chat API: Stream aborted by user', {
+                userId: maskIdentifier(userId!),
+                pageId: chatId,
+                streamId,
+                model: currentModel,
+                provider: currentProvider,
+              });
+            },
           });
 
           usagePromise = aiResult.totalUsage
@@ -780,6 +797,9 @@ export async function POST(request: Request) {
           }
         },
         onFinish: async ({ responseMessage }) => {
+          // Clean up abort controller from registry
+          removeStream({ streamId });
+
           loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
           
           // Enhanced debugging: Log the complete message structure
@@ -996,7 +1016,12 @@ export async function POST(request: Request) {
         },
       });
 
-      result = { toUIMessageStreamResponse: () => createUIMessageStreamResponse({ stream }) };
+      result = {
+        toUIMessageStreamResponse: () => createUIMessageStreamResponse({
+          stream,
+          headers: { [STREAM_ID_HEADER]: streamId },
+        }),
+      };
     } catch (streamError) {
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
