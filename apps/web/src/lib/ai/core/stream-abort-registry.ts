@@ -17,6 +17,7 @@ import { createId } from '@paralleldrive/cuid2';
 interface StreamEntry {
   controller: AbortController;
   createdAt: number;
+  userId: string;
 }
 
 const registry = new Map<string, StreamEntry>();
@@ -43,10 +44,17 @@ const startCleanupInterval = () => {
 /**
  * Create and register a new AbortController for a stream
  * Returns the streamId and AbortSignal to use with streamText
+ *
+ * @param userId - The ID of the user who owns this stream (required for security)
+ * @param streamId - Optional custom stream ID (defaults to auto-generated cuid2)
  */
 export const createStreamAbortController = ({
+  userId,
   streamId = createId(),
-}: { streamId?: string } = {}): {
+}: {
+  userId: string;
+  streamId?: string;
+}): {
   streamId: string;
   signal: AbortSignal;
   controller: AbortController;
@@ -57,6 +65,7 @@ export const createStreamAbortController = ({
   registry.set(streamId, {
     controller,
     createdAt: Date.now(),
+    userId,
   });
 
   return {
@@ -69,16 +78,26 @@ export const createStreamAbortController = ({
 /**
  * Abort a stream by its ID
  * Returns true if stream was found and aborted, false if not found
+ *
+ * @param streamId - The ID of the stream to abort
+ * @param userId - The ID of the user requesting the abort (must match stream owner)
  */
 export const abortStream = ({
   streamId,
+  userId,
 }: {
   streamId: string;
+  userId: string;
 }): { aborted: boolean; reason: string } => {
   const entry = registry.get(streamId);
 
   if (!entry) {
     return { aborted: false, reason: 'Stream not found or already completed' };
+  }
+
+  // SECURITY: Verify the requesting user owns this stream (prevents IDOR attacks)
+  if (entry.userId !== userId) {
+    return { aborted: false, reason: 'Unauthorized to abort this stream' };
   }
 
   entry.controller.abort();

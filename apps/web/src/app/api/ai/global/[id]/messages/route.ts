@@ -718,7 +718,7 @@ MENTION PROCESSING:
 
     // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
     // This is separate from request.signal which fires on any client disconnect
-    const { streamId, signal: abortSignal } = createStreamAbortController();
+    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
 
     const result = streamText({
       model,

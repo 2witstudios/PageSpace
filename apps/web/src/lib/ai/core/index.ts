@@ -46,7 +46,6 @@ export {
   setActiveStreamId,
   getActiveStreamId,
   clearActiveStreamId,
-  handleStreamStartMessage,
 } from './stream-abort-client';
 
 // Types

@@ -61,7 +61,8 @@ import {
   useProviderSettings,
   LocationContext,
 } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch } from '@/lib/ai/core';
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/stream-abort-client';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -361,6 +362,22 @@ const GlobalAssistantView: React.FC = () => {
     setGlobalMessages,
     setGlobalLocalMessages,
   ]);
+
+  // App state recovery - refresh messages when returning from background
+  // This catches completed AI responses that finished while the app was backgrounded
+  useAppStateRecovery({
+    onResume: handlePullUpRefresh,
+    enabled: !isStreaming && currentConversationId !== null,
+  });
+
+  // Clean up stream tracking on unmount
+  useEffect(() => {
+    return () => {
+      if (currentConversationId) {
+        clearActiveStreamId({ chatId: currentConversationId });
+      }
+    };
+  }, [currentConversationId]);
 
   // ============================================
   // GLOBAL MODE SYNC EFFECTS

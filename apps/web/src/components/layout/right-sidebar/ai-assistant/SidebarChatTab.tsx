@@ -22,8 +22,9 @@ import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInf
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch } from '@/lib/ai/core';
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/stream-abort-client';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -435,6 +436,30 @@ const SidebarChatTab: React.FC = () => {
   useEffect(() => {
     if (error) setShowError(true);
   }, [error]);
+
+  // App state recovery - refresh messages when returning from background
+  // This catches completed AI responses that finished while the app was backgrounded
+  const handleAppResume = useCallback(async () => {
+    if (selectedAgent) {
+      await refreshAgentConversation();
+    } else {
+      await refreshGlobalConversation();
+    }
+  }, [selectedAgent, refreshAgentConversation, refreshGlobalConversation]);
+
+  useAppStateRecovery({
+    onResume: handleAppResume,
+    enabled: !isStreaming && currentConversationId !== null,
+  });
+
+  // Clean up stream tracking on unmount
+  useEffect(() => {
+    return () => {
+      if (currentConversationId) {
+        clearActiveStreamId({ chatId: currentConversationId });
+      }
+    };
+  }, [currentConversationId]);
 
   // ============================================
   // Effects: Initialize Settings Store

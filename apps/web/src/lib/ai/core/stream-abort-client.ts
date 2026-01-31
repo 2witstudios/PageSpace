@@ -107,18 +107,3 @@ export const createStreamTrackingFetch = ({
   };
 };
 
-/**
- * Parse streamId from a stream start message (for page chat route)
- * Call this when you receive a 'start' message from the stream
- */
-export const handleStreamStartMessage = ({
-  chatId,
-  message,
-}: {
-  chatId: string;
-  message: { type: string; streamId?: string };
-}): void => {
-  if (message.type === 'start' && message.streamId) {
-    setActiveStreamId({ chatId, streamId: message.streamId });
-  }
-};

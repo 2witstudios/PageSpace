@@ -720,18 +720,17 @@ export async function POST(request: Request) {
 
     // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
     // This is separate from request.signal which fires on any client disconnect
-    const { streamId, signal: abortSignal } = createStreamAbortController();
+    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
 
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
-          // Send the server-generated message ID and stream ID to the client at stream start
-          // The client uses messageId for message tracking and streamId for explicit abort
+          // Send the server-generated message ID to the client at stream start
+          // streamId is passed via X-Stream-Id header (see result.toUIMessageStreamResponse below)
           writer.write({
             type: 'start',
             messageId: serverAssistantMessageId,
-            streamId, // Client uses this to call /api/ai/abort for explicit stop
           });
 
           // Start the AI response

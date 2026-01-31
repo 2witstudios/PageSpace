@@ -1,7 +1,18 @@
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream } from '@/lib/ai/core/stream-abort-registry';
-import { loggers } from '@pagespace/lib/logger';
+import { loggers } from '@pagespace/lib/server';
+import { checkRateLimit } from '@pagespace/lib/auth';
+
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+
+// Rate limit: 10 requests per minute per user to prevent brute-force streamId guessing
+const ABORT_RATE_LIMIT = {
+  maxAttempts: 10,
+  windowMs: 60 * 1000, // 1 minute
+  blockDurationMs: 60 * 1000, // 1 minute block
+  progressiveDelay: false,
+};
 
 /**
  * POST /api/ai/abort
@@ -11,9 +22,25 @@ import { loggers } from '@pagespace/lib/logger';
  */
 export async function POST(request: Request) {
   try {
-    const session = await getSession();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) {
+      return auth.error;
+    }
+    const userId = auth.userId;
+
+    // Rate limiting to prevent brute-force streamId guessing
+    const rateLimit = checkRateLimit(`abort:${userId}`, ABORT_RATE_LIMIT);
+    if (!rateLimit.allowed) {
+      loggers.api.warn('AI abort rate limited', { userId, retryAfter: rateLimit.retryAfter });
+      return NextResponse.json(
+        { error: 'Too many requests. Please try again later.' },
+        {
+          status: 429,
+          headers: rateLimit.retryAfter
+            ? { 'Retry-After': rateLimit.retryAfter.toString() }
+            : undefined,
+        }
+      );
     }
 
     const { streamId } = await request.json();
@@ -25,10 +52,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = abortStream({ streamId });
+    const result = abortStream({ streamId, userId });
 
     loggers.api.info('AI stream abort requested', {
       streamId,
+      userId,
       aborted: result.aborted,
       reason: result.reason,
     });

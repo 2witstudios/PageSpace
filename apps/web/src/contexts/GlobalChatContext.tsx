@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { createStreamTrackingFetch, abortActiveStream } from '@/lib/ai/core';
+import { createStreamTrackingFetch } from '@/lib/ai/core/stream-abort-client';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -232,12 +232,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       },
     };
   }, [currentConversationId, initialMessages]);
-
-  // Create abort function for explicit user stop
-  const handleAbortStream = useCallback(async () => {
-    if (!currentConversationId) return;
-    await abortActiveStream({ chatId: currentConversationId });
-  }, [currentConversationId]);
 
   // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({

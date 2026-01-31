@@ -23,7 +23,8 @@ import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-import { abortActiveStream, createStreamTrackingFetch } from '@/lib/ai/core';
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/stream-abort-client';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 
 // Shared hooks and components
 import {
@@ -149,7 +150,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id]
   );
 
-  const { messages, sendMessage, status, error, regenerate, setMessages, stop: useChatStop } =
+  const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
     useChat(chatConfig);
 
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -159,8 +160,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // Call abort endpoint to stop server-side processing
     await abortActiveStream({ chatId: page.id });
     // Call useChat's stop to abort client-side fetch
-    useChatStop();
-  }, [page.id, useChatStop]);
+    chatStop();
+  }, [page.id, chatStop]);
   const isLoading = !isInitialized;
 
   // ============================================
@@ -350,6 +351,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       console.error('Failed to refresh messages:', error);
     }
   }, [currentConversationId, page.id, setMessages]);
+
+  // App state recovery - refresh messages when returning from background
+  // This catches completed AI responses that finished while the app was backgrounded
+  useAppStateRecovery({
+    onResume: handlePullUpRefresh,
+    enabled: !isStreaming && currentConversationId !== null,
+  });
+
+  // Clean up stream tracking on unmount
+  useEffect(() => {
+    return () => {
+      clearActiveStreamId({ chatId: page.id });
+    };
+  }, [page.id]);
 
   // ============================================
   // RENDER
