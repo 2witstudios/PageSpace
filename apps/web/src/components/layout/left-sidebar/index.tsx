@@ -8,6 +8,7 @@ import {
   Activity,
   CheckSquare,
   HardDrive,
+  Home,
   Lock,
   Plus,
   Search,
@@ -26,8 +27,10 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
+import { useLayoutStore } from "@/stores/useLayoutStore";
 
 import CreatePageDialog from "./CreatePageDialog";
 import DriveList from "./DriveList";
@@ -45,6 +48,8 @@ export default function Sidebar({ className }: SidebarProps) {
   const params = useParams();
   const { driveId: driveIdParams } = params;
   const { user } = useAuth();
+  const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
+  const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
 
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore(state => state.drives);
@@ -76,6 +81,15 @@ export default function Sidebar({ className }: SidebarProps) {
       )}
     >
       <div className="flex h-full flex-col gap-3 px-4 py-4 sm:px-3">
+        <Link
+          href="/dashboard"
+          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
+          className="flex items-center gap-2 rounded-lg p-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          <Home className="h-4 w-4" />
+          Dashboard
+        </Link>
+
         <DriveSwitcher />
 
         <div className="flex-1 overflow-hidden py-2 flex flex-col">
