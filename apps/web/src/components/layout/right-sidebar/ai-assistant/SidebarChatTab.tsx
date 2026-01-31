@@ -388,18 +388,22 @@ const SidebarChatTab: React.FC = () => {
 
   // Register stop function to global context (global mode only)
   // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   useEffect(() => {
     if (selectedAgent) return;
 
     const streaming = globalStatus === 'submitted' || globalStatus === 'streaming';
     if (streaming) {
       setGlobalStopStreaming(() => async () => {
-        // Call abort endpoint to stop server-side processing
-        if (globalConversationId) {
-          await abortActiveStream({ chatId: globalConversationId });
+        try {
+          // Call abort endpoint to stop server-side processing
+          if (globalConversationId) {
+            await abortActiveStream({ chatId: globalConversationId });
+          }
+        } finally {
+          // Call useChat's stop to abort client-side fetch
+          globalStop();
         }
-        // Call useChat's stop to abort client-side fetch
-        globalStop();
       });
     } else {
       setGlobalStopStreaming(null);
@@ -634,10 +638,14 @@ const SidebarChatTab: React.FC = () => {
       dashboardStopStreaming();
     } else {
       // Fallback: call abort endpoint directly + local useChat stop
-      if (currentConversationId) {
-        await abortActiveStream({ chatId: currentConversationId });
+      // Use try/finally to guarantee client-side stop runs even if server abort fails
+      try {
+        if (currentConversationId) {
+          await abortActiveStream({ chatId: currentConversationId });
+        }
+      } finally {
+        stop();
       }
-      stop();
     }
   }, [selectedAgent, contextStopStreaming, dashboardStopStreaming, currentConversationId, stop]);
 

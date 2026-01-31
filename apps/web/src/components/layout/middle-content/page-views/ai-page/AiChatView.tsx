@@ -156,11 +156,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const isStreaming = status === 'submitted' || status === 'streaming';
 
   // Combined stop function that calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   const stop = useCallback(async () => {
-    // Call abort endpoint to stop server-side processing
-    await abortActiveStream({ chatId: page.id });
-    // Call useChat's stop to abort client-side fetch
-    chatStop();
+    try {
+      // Call abort endpoint to stop server-side processing
+      await abortActiveStream({ chatId: page.id });
+    } finally {
+      // Call useChat's stop to abort client-side fetch
+      chatStop();
+    }
   }, [page.id, chatStop]);
   const isLoading = !isInitialized;
 

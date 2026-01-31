@@ -281,11 +281,15 @@ const GlobalAssistantView: React.FC = () => {
 
   // Wrap stop handler to abort server-side stream before client-side stop
   // This ensures the server stops processing when user clicks Stop
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   const stop = useCallback(async () => {
-    if (currentConversationId) {
-      await abortActiveStream({ chatId: currentConversationId });
+    try {
+      if (currentConversationId) {
+        await abortActiveStream({ chatId: currentConversationId });
+      }
+    } finally {
+      rawStop();
     }
-    rawStop();
   }, [currentConversationId, rawStop]);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
@@ -431,16 +435,20 @@ const GlobalAssistantView: React.FC = () => {
 
   // Register stop function to global context (global mode only)
   // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   useEffect(() => {
     if (selectedAgent) return;
     if (globalStatus === 'submitted' || globalStatus === 'streaming') {
       setGlobalStopStreaming(() => async () => {
-        // Call abort endpoint to stop server-side processing
-        if (globalConversationId) {
-          await abortActiveStream({ chatId: globalConversationId });
+        try {
+          // Call abort endpoint to stop server-side processing
+          if (globalConversationId) {
+            await abortActiveStream({ chatId: globalConversationId });
+          }
+        } finally {
+          // Call useChat's stop to abort client-side fetch
+          globalStop();
         }
-        // Call useChat's stop to abort client-side fetch
-        globalStop();
       });
     } else {
       setGlobalStopStreaming(null);
@@ -466,16 +474,20 @@ const GlobalAssistantView: React.FC = () => {
 
   // Register stop function to dashboard store (agent mode only)
   // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   useEffect(() => {
     if (!selectedAgent) return;
     if (agentStatus === 'submitted' || agentStatus === 'streaming') {
       setAgentStopStreaming(() => async () => {
-        // Call abort endpoint to stop server-side processing
-        if (agentConversationId) {
-          await abortActiveStream({ chatId: agentConversationId });
+        try {
+          // Call abort endpoint to stop server-side processing
+          if (agentConversationId) {
+            await abortActiveStream({ chatId: agentConversationId });
+          }
+        } finally {
+          // Call useChat's stop to abort client-side fetch
+          agentStop();
         }
-        // Call useChat's stop to abort client-side fetch
-        agentStop();
       });
     } else {
       setAgentStopStreaming(null);
