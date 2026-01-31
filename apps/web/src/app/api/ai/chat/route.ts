@@ -731,7 +731,9 @@ export async function POST(request: Request) {
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-            abortSignal: request.signal, // Enable stop/abort functionality from client
+            // Note: We intentionally don't pass abortSignal here - we want the AI stream to complete
+            // server-side even if the client disconnects. This ensures onFinish always fires and
+            // saves the message to the database. Write errors are handled gracefully below.
             experimental_context: {
               userId,
               aiProvider: currentProvider,
@@ -754,14 +756,6 @@ export async function POST(request: Request) {
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
             }, // Pass userId, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-            onAbort: () => {
-              loggers.ai.info('🛑 AI Chat API: Stream aborted by user', {
-                userId: maskIdentifier(userId!),
-                pageId: chatId,
-                model: currentModel,
-                provider: currentProvider
-              });
-            },
           });
 
           usagePromise = aiResult.totalUsage
@@ -774,8 +768,15 @@ export async function POST(request: Request) {
             });
 
           // Stream the AI response directly to the client
+          // Wrap in try-catch to handle client disconnection gracefully - the AI stream
+          // will continue processing server-side even if writes fail
           for await (const chunk of aiResult.toUIMessageStream()) {
-            writer.write(chunk);
+            try {
+              writer.write(chunk);
+            } catch {
+              // Client disconnected - continue processing to ensure onFinish fires
+              // and the message is saved to the database
+            }
           }
         },
         onFinish: async ({ responseMessage }) => {
