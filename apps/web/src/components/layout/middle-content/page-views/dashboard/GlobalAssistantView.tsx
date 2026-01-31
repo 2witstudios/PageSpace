@@ -276,8 +276,17 @@ const GlobalAssistantView: React.FC = () => {
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
-  const stop = selectedAgent ? agentStop : globalStop;
+  const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Wrap stop handler to abort server-side stream before client-side stop
+  // This ensures the server stops processing when user clicks Stop
+  const stop = useCallback(async () => {
+    if (currentConversationId) {
+      await abortActiveStream({ chatId: currentConversationId });
+    }
+    rawStop();
+  }, [currentConversationId, rawStop]);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
