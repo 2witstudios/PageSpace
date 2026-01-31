@@ -1,7 +1,9 @@
 "use client";
 
-import { memo, useCallback } from 'react';
+import { memo, useCallback, type CSSProperties } from 'react';
 import { X, Pin } from 'lucide-react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { useDirtyStore } from '@/stores/useDirtyStore';
@@ -40,6 +42,23 @@ export const TabItem = memo(function TabItem({
 }: TabItemProps) {
   const isDirty = useDirtyStore((state) => state.isDirty(tab.id));
 
+  // Drag and drop sortable
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: tab.id });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.8 : undefined,
+  };
+
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     onActivate(tab.id);
@@ -71,6 +90,8 @@ export const TabItem = memo(function TabItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          ref={setNodeRef}
+          style={style}
           role="tab"
           aria-selected={isActive}
           tabIndex={isActive ? 0 : -1}
@@ -85,8 +106,11 @@ export const TabItem = memo(function TabItem({
             isActive
               ? "bg-white/15 text-white"
               : "text-white/70 hover:bg-white/10 hover:text-white",
-            tab.isPinned && "min-w-0 max-w-[60px] px-2"
+            tab.isPinned && "min-w-0 max-w-[60px] px-2",
+            isDragging && "shadow-lg ring-2 ring-primary/50"
           )}
+          {...attributes}
+          {...listeners}
         >
           {/* Page type icon */}
           <PageTypeIcon
