@@ -5,4 +5,5 @@
 
 export * from './guards';
 export * from './notifications';
+export * from './push-notifications';
 export * from './types';

@@ -209,9 +209,9 @@
       "require": "./dist/auth/index.js"
     },
     "./notifications": {
-      "types": "./dist/notifications/notifications.d.ts",
-      "import": "./dist/notifications/notifications.js",
-      "require": "./dist/notifications/notifications.js"
+      "types": "./dist/notifications/index.d.ts",
+      "import": "./dist/notifications/index.js",
+      "require": "./dist/notifications/index.js"
     },
     "./validators": {
       "types": "./dist/validators/index.d.ts",
@@ -336,7 +336,7 @@
         "./dist/auth/index.d.ts"
       ],
       "notifications": [
-        "./dist/notifications/notifications.d.ts"
+        "./dist/notifications/index.d.ts"
       ],
       "validators": [
         "./dist/validators/index.d.ts"
