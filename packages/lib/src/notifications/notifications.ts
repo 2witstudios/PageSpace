@@ -2,6 +2,7 @@ import { db, notifications, users, pages, drives, eq, and, desc, count, sql } fr
 import { createId } from '@paralleldrive/cuid2';
 import { sendNotificationEmail } from '../services/notification-email-service';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
+import { sendPushNotification } from './push-notifications';
 
 // Export types and guards
 export * from './types';
@@ -53,6 +54,21 @@ export async function createNotification(params: CreateNotificationParams) {
     notificationId: notification[0].id,
     type: params.type,
     metadata: params.metadata || {},
+  });
+
+  // Send push notification (fire-and-forget - don't block on push sending)
+  void sendPushNotification(params.userId, {
+    title: params.title,
+    body: params.message,
+    data: {
+      notificationId: notification[0].id,
+      type: params.type,
+      ...(params.pageId && { pageId: params.pageId }),
+      ...(params.driveId && { driveId: params.driveId }),
+      ...params.metadata,
+    },
+  }).catch((error) => {
+    console.error('Failed to send push notification:', error);
   });
 
   return notification[0];
