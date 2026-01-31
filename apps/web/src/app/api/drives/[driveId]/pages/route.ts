@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pagePermissions, driveMembers, taskItems, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
+import { pages, drives, pagePermissions, driveMembers, taskItems, userPageViews, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -123,13 +123,35 @@ export async function GET(
       .where(isNotNull(taskItems.pageId));
     const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
 
-    // Add isTaskLinked flag to each page
-    const pagesWithTaskInfo = pageResults.map(page => ({
-      ...page,
-      isTaskLinked: taskLinkedSet.has(page.id),
-    }));
+    // Get user's page view timestamps to determine which pages have changes
+    const pageIds = pageResults.map(p => p.id);
+    const pageViewsResult = pageIds.length > 0
+      ? await db
+          .select({ pageId: userPageViews.pageId, viewedAt: userPageViews.viewedAt })
+          .from(userPageViews)
+          .where(and(
+            eq(userPageViews.userId, userId),
+            inArray(userPageViews.pageId, pageIds)
+          ))
+      : [];
+    const pageViewsMap = new Map(pageViewsResult.map(pv => [pv.pageId, pv.viewedAt]));
 
-    const pageTree = buildTree(pagesWithTaskInfo);
+    // Add isTaskLinked and hasChanges flags to each page
+    const pagesWithFlags = pageResults.map(page => {
+      const viewedAt = pageViewsMap.get(page.id);
+      // hasChanges is true if:
+      // 1. User has never viewed this page, OR
+      // 2. Page was updated after the user's last view
+      const hasChanges = !viewedAt || (page.updatedAt ? page.updatedAt > viewedAt : false);
+
+      return {
+        ...page,
+        isTaskLinked: taskLinkedSet.has(page.id),
+        hasChanges,
+      };
+    });
+
+    const pageTree = buildTree(pagesWithFlags);
     return jsonResponse(pageTree);
   } catch (error) {
     loggers.api.error('Error fetching pages:', error as Error);

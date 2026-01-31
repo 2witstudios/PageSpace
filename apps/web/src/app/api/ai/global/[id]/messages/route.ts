@@ -39,6 +39,11 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
+import {
+  createStreamAbortController,
+  removeStream,
+  STREAM_ID_HEADER,
+} from '@/lib/ai/core/stream-abort-registry';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -711,13 +716,17 @@ MENTION PROCESSING:
       wasTruncated: contextCalculation.wasTruncated,
     });
 
+    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
+    // This is separate from request.signal which fires on any client disconnect
+    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
+
     const result = streamText({
       model,
       system: finalSystemPrompt,
       messages: modelMessages,
       tools: finalTools,
       stopWhen: stepCountIs(100),
-      abortSignal: request.signal, // Enable stop/abort functionality from client
+      abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
       experimental_context: {
         userId,
         aiProvider: currentProvider,
@@ -728,11 +737,12 @@ MENTION PROCESSING:
       },
       maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
       onAbort: () => {
-        loggers.api.info('🛑 Global Assistant Chat API: Stream aborted by user', {
+        loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
           userId: maskIdentifier(userId),
           conversationId,
+          streamId,
           model: currentModel,
-          provider: currentProvider
+          provider: currentProvider,
         });
       },
     });
@@ -748,7 +758,14 @@ MENTION PROCESSING:
       // Provide the server-generated ID to the stream response
       // The client's useChat will use this ID instead of generating its own
       generateMessageId: () => serverAssistantMessageId,
+      // Pass streamId via headers so client can call /api/ai/abort for explicit stop
+      headers: {
+        [STREAM_ID_HEADER]: streamId,
+      },
       onFinish: async ({ responseMessage }) => {
+        // Clean up abort controller from registry
+        removeStream({ streamId });
+
         loggers.api.debug('🏁 Global Assistant Chat API: onFinish callback triggered for AI response', {});
 
         if (responseMessage) {

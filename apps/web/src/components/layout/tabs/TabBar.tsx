@@ -3,6 +3,20 @@
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  horizontalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { useOpenTabsStore, selectHasMultipleTabs } from '@/stores/useOpenTabsStore';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { TabItem } from './TabItem';
@@ -29,6 +43,33 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const pinTab = useOpenTabsStore((state) => state.pinTab);
   const unpinTab = useOpenTabsStore((state) => state.unpinTab);
   const cycleTab = useOpenTabsStore((state) => state.cycleTab);
+  const reorderTab = useOpenTabsStore((state) => state.reorderTab);
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before drag starts (allows clicks)
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // Handle drag end - reorder tabs
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = tabs.findIndex((tab) => tab.id === active.id);
+      const newIndex = tabs.findIndex((tab) => tab.id === over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1) {
+        reorderTab(oldIndex, newIndex);
+      }
+    }
+  }, [tabs, reorderTab]);
 
   // Navigate when active tab changes
   const handleActivate = useCallback((tabId: string) => {
@@ -150,27 +191,38 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
           className
         )}
       >
-        <div
-          ref={scrollContainerRef}
-          role="tablist"
-          aria-label="Open pages"
-          className="flex items-stretch overflow-x-auto scrollbar-none"
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
         >
-          {tabs.map((tab, index) => (
-            <TabItem
-              key={tab.id}
-              tab={tab}
-              index={index}
-              isActive={tab.id === activeTabId}
-              onActivate={handleActivate}
-              onClose={handleClose}
-              onCloseOthers={closeOtherTabs}
-              onCloseToRight={closeTabsToRight}
-              onPin={pinTab}
-              onUnpin={unpinTab}
-            />
-          ))}
-        </div>
+          <SortableContext
+            items={tabs.map((tab) => tab.id)}
+            strategy={horizontalListSortingStrategy}
+          >
+            <div
+              ref={scrollContainerRef}
+              role="tablist"
+              aria-label="Open pages"
+              className="flex items-stretch overflow-x-auto scrollbar-none"
+            >
+              {tabs.map((tab, index) => (
+                <TabItem
+                  key={tab.id}
+                  tab={tab}
+                  index={index}
+                  isActive={tab.id === activeTabId}
+                  onActivate={handleActivate}
+                  onClose={handleClose}
+                  onCloseOthers={closeOtherTabs}
+                  onCloseToRight={closeTabsToRight}
+                  onPin={pinTab}
+                  onUnpin={unpinTab}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </motion.div>
     </AnimatePresence>
   );

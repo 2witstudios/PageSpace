@@ -61,6 +61,8 @@ import {
   useProviderSettings,
   LocationContext,
 } from '@/lib/ai/shared';
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -233,10 +235,9 @@ const GlobalAssistantView: React.FC = () => {
       messages: agentInitialMessages,
       transport: new DefaultChatTransport({
         api: '/api/ai/chat',
-        fetch: (url, options) => {
-          const urlString = url instanceof Request ? url.url : url.toString();
-          return fetchWithAuth(urlString, options);
-        },
+        // Use stream tracking fetch to capture streamId from response headers
+        // This enables explicit abort via /api/ai/abort endpoint
+        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
       }),
       experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
@@ -275,8 +276,21 @@ const GlobalAssistantView: React.FC = () => {
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
-  const stop = selectedAgent ? agentStop : globalStop;
+  const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Wrap stop handler to abort server-side stream before client-side stop
+  // This ensures the server stops processing when user clicks Stop
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
+  const stop = useCallback(async () => {
+    try {
+      if (currentConversationId) {
+        await abortActiveStream({ chatId: currentConversationId });
+      }
+    } finally {
+      rawStop();
+    }
+  }, [currentConversationId, rawStop]);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -362,6 +376,22 @@ const GlobalAssistantView: React.FC = () => {
     setGlobalLocalMessages,
   ]);
 
+  // App state recovery - refresh messages when returning from background
+  // This catches completed AI responses that finished while the app was backgrounded
+  useAppStateRecovery({
+    onResume: handlePullUpRefresh,
+    enabled: !isStreaming && currentConversationId !== null,
+  });
+
+  // Clean up stream tracking on unmount
+  useEffect(() => {
+    return () => {
+      if (currentConversationId) {
+        clearActiveStreamId({ chatId: currentConversationId });
+      }
+    };
+  }, [currentConversationId]);
+
   // ============================================
   // GLOBAL MODE SYNC EFFECTS
   // ============================================
@@ -404,14 +434,26 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
 
   // Register stop function to global context (global mode only)
+  // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   useEffect(() => {
     if (selectedAgent) return;
     if (globalStatus === 'submitted' || globalStatus === 'streaming') {
-      setGlobalStopStreaming(() => globalStop);
+      setGlobalStopStreaming(() => async () => {
+        try {
+          // Call abort endpoint to stop server-side processing
+          if (globalConversationId) {
+            await abortActiveStream({ chatId: globalConversationId });
+          }
+        } finally {
+          // Call useChat's stop to abort client-side fetch
+          globalStop();
+        }
+      });
     } else {
       setGlobalStopStreaming(null);
     }
-  }, [selectedAgent, globalStatus, globalStop, setGlobalStopStreaming]);
+  }, [selectedAgent, globalStatus, globalStop, globalConversationId, setGlobalStopStreaming]);
 
   // ============================================
   // AGENT MODE SYNC EFFECTS
@@ -431,14 +473,26 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, agentStatus, setAgentStreaming]);
 
   // Register stop function to dashboard store (agent mode only)
+  // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
   useEffect(() => {
     if (!selectedAgent) return;
     if (agentStatus === 'submitted' || agentStatus === 'streaming') {
-      setAgentStopStreaming(() => agentStop);
+      setAgentStopStreaming(() => async () => {
+        try {
+          // Call abort endpoint to stop server-side processing
+          if (agentConversationId) {
+            await abortActiveStream({ chatId: agentConversationId });
+          }
+        } finally {
+          // Call useChat's stop to abort client-side fetch
+          agentStop();
+        }
+      });
     } else {
       setAgentStopStreaming(null);
     }
-  }, [selectedAgent, agentStatus, agentStop, setAgentStopStreaming]);
+  }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
   // Register streaming state with editing store
   useEffect(() => {

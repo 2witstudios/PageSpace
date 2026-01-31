@@ -18,6 +18,7 @@ export * from './schema/feedback';
 export * from './schema/storage';
 export * from './schema/tasks';
 export * from './schema/security-audit';
+export * from './schema/page-views';
 export * from './schema/push-notifications';
 
 import * as auth from './schema/auth';
@@ -40,6 +41,7 @@ import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
 import * as securityAudit from './schema/security-audit';
+import * as pageViews from './schema/page-views';
 import * as pushNotifications from './schema/push-notifications';
 
 export const schema = {
@@ -63,5 +65,6 @@ export const schema = {
   ...storage,
   ...tasks,
   ...securityAudit,
+  ...pageViews,
   ...pushNotifications,
 };

@@ -23,6 +23,9 @@ import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
+import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+
 // Shared hooks and components
 import {
   useMCPTools,
@@ -69,6 +72,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
   const inputRef = useRef<ChatInputRef>(null);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
+  const prevConversationIdRef = useRef<string | null>(null);
 
   // ============================================
   // SHARED HOOKS
@@ -128,30 +132,43 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // CHAT CONFIGURATION
   // ============================================
+  // Use conversation ID for stream tracking (falls back to page.id before conversation is created)
+  const streamTrackingId = currentConversationId || page.id;
   const chatConfig = useMemo(
     () => ({
       id: page.id,
       messages: initialMessages,
       transport: new DefaultChatTransport({
         api: '/api/ai/chat',
-        fetch: (url, options) => {
-          const urlString = url instanceof Request ? url.url : url.toString();
-          return fetchWithAuth(urlString, options);
-        },
+        // Use stream tracking fetch to capture streamId from response headers
+        // This enables explicit abort via /api/ai/abort endpoint
+        fetch: createStreamTrackingFetch({ chatId: streamTrackingId }),
       }),
       experimental_throttle: 100, // Increased from 50ms for better performance
       onError: (error: Error) => {
         console.error('AiChatView: Chat error:', error);
       },
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [page.id]
+    // Re-create transport when conversation changes for proper stream tracking
+    [page.id, streamTrackingId, initialMessages]
   );
 
-  const { messages, sendMessage, status, error, regenerate, setMessages, stop } =
+  const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
     useChat(chatConfig);
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // Combined stop function that calls both abort endpoint (server-side) and useChat stop (client-side)
+  // Use try/finally to guarantee client-side stop runs even if server abort fails
+  const stop = useCallback(async () => {
+    try {
+      // Call abort endpoint to stop server-side processing
+      await abortActiveStream({ chatId: streamTrackingId });
+    } finally {
+      // Call useChat's stop to abort client-side fetch
+      chatStop();
+    }
+  }, [streamTrackingId, chatStop]);
   const isLoading = !isInitialized;
 
   // ============================================
@@ -341,6 +358,28 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       console.error('Failed to refresh messages:', error);
     }
   }, [currentConversationId, page.id, setMessages]);
+
+  // App state recovery - refresh messages when returning from background
+  // This catches completed AI responses that finished while the app was backgrounded
+  useAppStateRecovery({
+    onResume: handlePullUpRefresh,
+    enabled: !isStreaming && currentConversationId !== null,
+  });
+
+  // Clean up stream tracking when conversation changes or on unmount
+  // Uses prevConversationIdRef to track the previous conversation and clear its stream ID
+  useEffect(() => {
+    // Clear previous conversation's stream ID when switching conversations
+    if (prevConversationIdRef.current && prevConversationIdRef.current !== streamTrackingId) {
+      clearActiveStreamId({ chatId: prevConversationIdRef.current });
+    }
+    prevConversationIdRef.current = streamTrackingId;
+
+    // Clear current conversation's stream ID on unmount
+    return () => {
+      clearActiveStreamId({ chatId: streamTrackingId });
+    };
+  }, [streamTrackingId]);
 
   // ============================================
   // RENDER

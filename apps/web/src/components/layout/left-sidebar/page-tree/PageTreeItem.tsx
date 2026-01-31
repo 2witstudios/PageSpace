@@ -276,6 +276,15 @@ export function PageTreeItem({
                 />
               </div>
 
+              {/* Change indicator dot */}
+              {item.hasChanges && (
+                <span
+                  role="img"
+                  className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 ml-1"
+                  aria-label="Has changes since last viewed"
+                />
+              )}
+
               {/* Title - Click to Navigate */}
               <Link
                 href={linkHref}
