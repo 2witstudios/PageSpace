@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray } from '@pagespace/db';
+import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray, SQL } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -13,6 +13,207 @@ interface SearchResult {
   driveName?: string;
   description?: string;
   avatarUrl?: string | null;
+  matchLocation?: 'title' | 'content' | 'both';
+  relevanceScore?: number;
+}
+
+/**
+ * Escape LIKE pattern metacharacters to prevent injection
+ */
+function escapeLikePattern(input: string): string {
+  return input
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_');
+}
+
+/**
+ * Build multi-word search conditions where all words must be present
+ * For title: all words must appear in title (any order)
+ * For content: at least one word in content OR all words in title
+ */
+function buildMultiWordTitleCondition(query: string): SQL | undefined {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return undefined;
+
+  const conditions = words.map(word =>
+    ilike(pages.title, `%${escapeLikePattern(word)}%`)
+  );
+
+  return conditions.length === 1 ? conditions[0] : and(...conditions);
+}
+
+function buildMultiWordContentCondition(query: string): SQL | undefined {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return undefined;
+
+  // For content, we search for any word (more lenient)
+  const conditions = words.map(word =>
+    ilike(pages.content, `%${escapeLikePattern(word)}%`)
+  );
+
+  return conditions.length === 1 ? conditions[0] : or(...conditions);
+}
+
+/**
+ * Build multi-word search for drives (name or slug)
+ */
+function buildMultiWordDriveCondition(query: string): SQL | undefined {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return undefined;
+
+  // Each word must appear in name or slug
+  const conditions = words.map(word =>
+    or(
+      ilike(drives.name, `%${escapeLikePattern(word)}%`),
+      ilike(drives.slug, `%${escapeLikePattern(word)}%`)
+    )
+  );
+
+  return conditions.length === 1 ? conditions[0] : and(...conditions);
+}
+
+/**
+ * Build multi-word search for user profiles
+ */
+function buildMultiWordUserCondition(query: string): SQL | undefined {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return undefined;
+
+  // Each word must appear in username or display name
+  const conditions = words.map(word =>
+    or(
+      ilike(userProfiles.username, `%${escapeLikePattern(word)}%`),
+      ilike(userProfiles.displayName, `%${escapeLikePattern(word)}%`)
+    )
+  );
+
+  return conditions.length === 1 ? conditions[0] : and(...conditions);
+}
+
+/**
+ * Calculate relevance score for search results
+ * Higher score = more relevant
+ *
+ * Priority (highest to lowest):
+ * 1. Exact title match
+ * 2. Title starts with query
+ * 3. Title contains exact query phrase
+ * 4. All query words match title word boundaries
+ * 5. Partial word matches in title
+ * 6. Content matches (significantly lower)
+ * 7. Shorter titles preferred (more specific)
+ */
+function calculateRelevanceScore(
+  title: string,
+  query: string,
+  matchLocation: 'title' | 'content' | 'both'
+): number {
+  const lowerTitle = title.toLowerCase();
+  const lowerQuery = query.toLowerCase().trim();
+  const queryWords = lowerQuery.split(/\s+/).filter(Boolean);
+
+  let score = 0;
+
+  // Base score based on where the match occurred
+  // Title matches are WAY more valuable than content matches
+  if (matchLocation === 'title' || matchLocation === 'both') {
+    score += 1000; // Big boost for title matches
+  } else if (matchLocation === 'content') {
+    score += 100; // Content-only matches are lower priority
+  }
+
+  // Exact title match (highest priority)
+  if (lowerTitle === lowerQuery) {
+    score += 5000;
+  }
+
+  // Title starts with exact query
+  if (lowerTitle.startsWith(lowerQuery)) {
+    score += 2000;
+  }
+
+  // Title contains exact query phrase
+  if (lowerTitle.includes(lowerQuery)) {
+    score += 1000;
+  }
+
+  // Word boundary matching - check each query word
+  const titleWords = lowerTitle.split(/[\s\-_.,;:!?()[\]{}]+/).filter(Boolean);
+  let wordBoundaryMatches = 0;
+  let prefixMatches = 0;
+  let partialMatches = 0;
+
+  for (const queryWord of queryWords) {
+    let foundMatch = false;
+
+    for (const titleWord of titleWords) {
+      if (titleWord === queryWord) {
+        // Exact word match
+        wordBoundaryMatches++;
+        foundMatch = true;
+        break;
+      } else if (titleWord.startsWith(queryWord)) {
+        // Title word starts with query word (prefix match)
+        prefixMatches++;
+        foundMatch = true;
+        break;
+      } else if (titleWord.includes(queryWord)) {
+        // Partial match within word
+        partialMatches++;
+        foundMatch = true;
+        break;
+      }
+    }
+
+    if (!foundMatch && matchLocation === 'title') {
+      // Query word not found in title at all - reduce score
+      score -= 50;
+    }
+  }
+
+  // Award points for word matches
+  score += wordBoundaryMatches * 500;
+  score += prefixMatches * 300;
+  score += partialMatches * 100;
+
+  // Bonus for matching ALL query words (complete multi-word match)
+  if (queryWords.length > 1) {
+    const matchedCount = wordBoundaryMatches + prefixMatches + partialMatches;
+    if (matchedCount >= queryWords.length) {
+      score += 800; // Bonus for complete multi-word match
+    }
+  }
+
+  // Prefer shorter titles (more specific/focused results)
+  // Penalty scales with length but caps at 100 points
+  score -= Math.min(title.length, 100);
+
+  return score;
+}
+
+/**
+ * Determine where the match occurred (title, content, or both)
+ */
+function getMatchLocation(
+  title: string,
+  content: string | null,
+  query: string
+): 'title' | 'content' | 'both' {
+  const lowerQuery = query.toLowerCase().trim();
+  const queryWords = lowerQuery.split(/\s+/).filter(Boolean);
+  const lowerTitle = title.toLowerCase();
+  const lowerContent = (content || '').toLowerCase();
+
+  // Check if ANY query word matches title
+  const titleMatches = queryWords.some(word => lowerTitle.includes(word));
+
+  // Check if ANY query word matches content
+  const contentMatches = queryWords.some(word => lowerContent.includes(word));
+
+  if (titleMatches && contentMatches) return 'both';
+  if (titleMatches) return 'title';
+  return 'content';
 }
 
 export async function GET(request: Request) {
@@ -30,10 +231,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ results: [] });
     }
 
-    const searchPattern = `%${query}%`;
     const results: SearchResult[] = [];
 
-    // 1. Search drives the user owns
+    // 1. Search drives the user owns (with multi-word support)
+    const driveCondition = buildMultiWordDriveCondition(query);
     const driveResults = await db.select({
       id: drives.id,
       name: drives.name,
@@ -44,10 +245,7 @@ export async function GET(request: Request) {
       and(
         eq(drives.ownerId, user.id),
         eq(drives.isTrashed, false),
-        or(
-          ilike(drives.name, searchPattern),
-          ilike(drives.slug, searchPattern)
-        )
+        driveCondition
       )
     )
     .limit(10);
@@ -79,7 +277,11 @@ export async function GET(request: Request) {
     const driveMap = new Map(allUserDrives.map(d => [d.id, d.name]));
 
     // 2. Search pages in accessible drives
+    // We use multi-word search: all query words must appear in title OR content
     if (allDriveIds.length > 0) {
+      const titleCondition = buildMultiWordTitleCondition(query);
+      const contentCondition = buildMultiWordContentCondition(query);
+
       const pageResults = await db.select({
         id: pages.id,
         title: pages.title,
@@ -93,25 +295,28 @@ export async function GET(request: Request) {
           inArray(pages.driveId, allDriveIds),
           eq(pages.isTrashed, false),
           or(
-            ilike(pages.title, searchPattern),
-            // Optional: search in content for documents
+            titleCondition,
+            // Search content for documents
             and(
               eq(pages.type, 'DOCUMENT'),
-              ilike(pages.content, searchPattern)
+              contentCondition
             )
           )
         )
       )
-      .limit(20);
+      .limit(50); // Fetch more to allow better ranking
 
       // Batch check permissions for all pages at once (eliminates N+1 queries)
       const pageIds = pageResults.map(page => page.id);
       const permissionsMap = await getBatchPagePermissions(user.id, pageIds);
 
-      // Filter by permissions and add to results
+      // Filter by permissions and calculate relevance
       for (const page of pageResults) {
         const permissions = permissionsMap.get(page.id);
         if (!permissions?.canView) continue;
+
+        const matchLocation = getMatchLocation(page.title, page.content, query);
+        const relevanceScore = calculateRelevanceScore(page.title, query, matchLocation);
 
         results.push({
           id: page.id,
@@ -121,11 +326,14 @@ export async function GET(request: Request) {
           driveId: page.driveId,
           driveName: driveMap.get(page.driveId) || 'Unknown Drive',
           description: `${page.type.toLowerCase()} in ${driveMap.get(page.driveId) || 'drive'}`,
+          matchLocation,
+          relevanceScore,
         });
       }
     }
 
-    // 3. Search users (with public profiles)
+    // 3. Search users (with public profiles) - multi-word support
+    const userCondition = buildMultiWordUserCondition(query);
     const profileResults = await db.select({
       userId: userProfiles.userId,
       username: userProfiles.username,
@@ -138,10 +346,7 @@ export async function GET(request: Request) {
     .where(
       and(
         eq(userProfiles.isPublic, true),
-        or(
-          ilike(userProfiles.username, searchPattern),
-          ilike(userProfiles.displayName, searchPattern)
-        )
+        userCondition
       )
     )
     .limit(10);
@@ -156,23 +361,40 @@ export async function GET(request: Request) {
       });
     }
 
-    // Sort results by relevance
+    // Calculate relevance scores for drives and users (pages already have scores)
+    for (const result of results) {
+      if (result.type === 'drive') {
+        // Drives always match on title
+        result.matchLocation = 'title';
+        result.relevanceScore = calculateRelevanceScore(result.title, query, 'title');
+      } else if (result.type === 'user') {
+        // Users always match on name (title)
+        result.matchLocation = 'title';
+        result.relevanceScore = calculateRelevanceScore(result.title, query, 'title');
+      }
+      // Pages already have relevanceScore calculated
+    }
+
+    // Sort results by relevance score (highest first)
     results.sort((a, b) => {
-      // Exact matches first
-      const aExact = a.title.toLowerCase() === query.toLowerCase();
-      const bExact = b.title.toLowerCase() === query.toLowerCase();
+      const aScore = a.relevanceScore ?? 0;
+      const bScore = b.relevanceScore ?? 0;
 
-      if (aExact && !bExact) return -1;
-      if (!aExact && bExact) return 1;
+      // Primary: Sort by relevance score (higher = better)
+      if (aScore !== bScore) {
+        return bScore - aScore;
+      }
 
-      // Then by type priority: drives > pages > users
+      // Secondary: Type priority (drives > pages > users) as tiebreaker
       const typePriority = { drive: 0, page: 1, user: 2 };
       const aPriority = typePriority[a.type];
       const bPriority = typePriority[b.type];
 
-      if (aPriority !== bPriority) return aPriority - bPriority;
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
 
-      // Finally alphabetical
+      // Tertiary: Alphabetical
       return a.title.localeCompare(b.title);
     });
 
