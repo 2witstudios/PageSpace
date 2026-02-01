@@ -24,6 +24,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { FloatingCellEditor } from './FloatingCellEditor';
+import { useSheetHistory } from './useSheetHistory';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
@@ -177,7 +178,15 @@ const getCellRect = (row: number, column: number, gridElement: HTMLElement | nul
 
 const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const initialSheet = useMemo(() => sanitizeSheetData(parseSheetContent(page.content)), [page.content]);
-  const [sheet, setSheet] = useState<SheetData>(initialSheet);
+  const {
+    sheet,
+    setSheet,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    reset: resetHistory,
+  } = useSheetHistory(initialSheet);
   const [selection, setSelection] = useState<SelectionState>({
     type: 'single',
     cell: { row: 0, column: 0 }
@@ -579,6 +588,56 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const currentRaw = sheet.cells[currentAddress] ?? '';
   const selectionAddress = getSelectionAddress(selection);
 
+  // Calculate selection statistics for the status bar
+  const selectionStats = useMemo(() => {
+    const cells: { value: number; hasValue: boolean }[] = [];
+
+    if (selection.type === 'single') {
+      const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
+      const cellData = evaluation.byAddress[cellAddress];
+      if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
+        cells.push({ value: cellData.value, hasValue: true });
+      } else if (cellData && cellData.value !== '') {
+        cells.push({ value: 0, hasValue: true });
+      }
+    } else {
+      const { start, end } = selection.range;
+      const minRow = Math.min(start.row, end.row);
+      const maxRow = Math.max(start.row, end.row);
+      const minCol = Math.min(start.column, end.column);
+      const maxCol = Math.max(start.column, end.column);
+
+      for (let row = minRow; row <= maxRow; row++) {
+        for (let col = minCol; col <= maxCol; col++) {
+          const cellAddress = encodeCellAddress(row, col);
+          const cellData = evaluation.byAddress[cellAddress];
+          if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
+            cells.push({ value: cellData.value, hasValue: true });
+          } else if (cellData && cellData.value !== '') {
+            cells.push({ value: 0, hasValue: true });
+          }
+        }
+      }
+    }
+
+    const numericCells = cells.filter(c => c.hasValue && !isNaN(c.value));
+    const nonEmptyCells = cells.filter(c => c.hasValue);
+
+    if (numericCells.length === 0) {
+      return { sum: null, average: null, count: nonEmptyCells.length, numericCount: 0 };
+    }
+
+    const sum = numericCells.reduce((acc, c) => acc + c.value, 0);
+    const average = sum / numericCells.length;
+
+    return {
+      sum,
+      average,
+      count: nonEmptyCells.length,
+      numericCount: numericCells.length,
+    };
+  }, [selection, evaluation.byAddress]);
+
   const suggestionContext = useSuggestionContext();
   const handleFormulaValueChange = useCallback(
     (value: string) => {
@@ -776,6 +835,34 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       columnCount: previous.columnCount + 1,
     }));
   }, [applySheetUpdate, isReadOnly]);
+
+  // Undo handler
+  const handleUndo = useCallback(() => {
+    if (isReadOnly || !canUndo) return;
+
+    const previousState = undo();
+    if (previousState) {
+      const serialized = serializeSheetContent(previousState);
+      updateContent(serialized);
+      saveWithDebounce(serialized);
+      toast.success('Undo', { duration: 1500 });
+      setAnnouncement('Undo performed');
+    }
+  }, [isReadOnly, canUndo, undo, updateContent, saveWithDebounce]);
+
+  // Redo handler
+  const handleRedo = useCallback(() => {
+    if (isReadOnly || !canRedo) return;
+
+    const nextState = redo();
+    if (nextState) {
+      const serialized = serializeSheetContent(nextState);
+      updateContent(serialized);
+      saveWithDebounce(serialized);
+      toast.success('Redo', { duration: 1500 });
+      setAnnouncement('Redo performed');
+    }
+  }, [isReadOnly, canRedo, redo, updateContent, saveWithDebounce]);
 
   const handleCellMouseDown = useCallback(
     (row: number, column: number, event: React.MouseEvent) => {
@@ -1408,12 +1495,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     });
   }, [page.id]);
 
-  // Update sheet when document content updates
+  // Update sheet when document content updates from server
   useEffect(() => {
     if (documentState) {
-      setSheet(sanitizeSheetData(parseSheetContent(documentState.content)));
+      const newSheet = sanitizeSheetData(parseSheetContent(documentState.content));
+      // Reset history when content is loaded/reloaded from server
+      // This prevents undo from going back to a stale state
+      resetHistory(newSheet);
     }
-  }, [documentState]);
+  }, [documentState, resetHistory]);
 
   // Update cell rectangle when editing cell changes or on scroll/resize
   useEffect(() => {
@@ -1554,6 +1644,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     };
   }, []); // ✅ Empty deps - uses refs for latest state
 
+  // Store undo/redo handlers in refs to avoid re-adding event listeners
+  const handleUndoRef = useRef(handleUndo);
+  const handleRedoRef = useRef(handleRedo);
+  useEffect(() => {
+    handleUndoRef.current = handleUndo;
+    handleRedoRef.current = handleRedo;
+  }, [handleUndo, handleRedo]);
+
   // Handle keyboard shortcuts
   useEffect(() => {
     // Only run on client side with proper document API
@@ -1564,6 +1662,21 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         forceSaveRef.current();
+        return;
+      }
+
+      // Ctrl+Z / Cmd+Z to undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndoRef.current();
+        return;
+      }
+
+      // Ctrl+Shift+Z / Cmd+Shift+Z or Ctrl+Y / Cmd+Y to redo
+      if ((e.ctrlKey || e.metaKey) && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) {
+        e.preventDefault();
+        handleRedoRef.current();
+        return;
       }
     };
 
@@ -1573,7 +1686,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         document.removeEventListener('keydown', handleKeyDown);
       }
     };
-  }, []); // ✅ Empty deps - uses ref for latest forceSave
+  }, []); // ✅ Empty deps - uses refs for latest handlers
 
   return (
     <div className="flex h-full flex-col">
@@ -1592,6 +1705,32 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           </div>
           {/* Mobile action buttons - visible only on small screens */}
           <div className="ml-auto flex items-center gap-1 sm:hidden">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleUndo}
+              disabled={isReadOnly || !canUndo}
+              className="h-7 w-7 p-0"
+              aria-label="Undo"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7v6h6" />
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+              </svg>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRedo}
+              disabled={isReadOnly || !canRedo}
+              className="h-7 w-7 p-0"
+              aria-label="Redo"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 7v6h-6" />
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+              </svg>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -1664,6 +1803,33 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           </div>
           {/* Desktop action buttons */}
           <div className="hidden items-center gap-2 sm:flex">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleUndo}
+              disabled={isReadOnly || !canUndo}
+              title="Undo (Ctrl+Z)"
+              className="h-8 w-8 p-0"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7v6h6" />
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+              </svg>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRedo}
+              disabled={isReadOnly || !canRedo}
+              title="Redo (Ctrl+Shift+Z)"
+              className="h-8 w-8 p-0"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 7v6h-6" />
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+              </svg>
+            </Button>
+            <div className="mx-1 h-4 w-px bg-border" />
             <Button variant="outline" size="sm" onClick={handleAddColumn} disabled={isReadOnly}>
               + Column
             </Button>
@@ -1977,6 +2143,36 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         className="sr-only"
       >
         {announcement}
+      </div>
+
+      {/* Quick Stats Footer */}
+      <div className="flex items-center justify-between border-t bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground sm:px-4">
+        <div className="flex items-center gap-4">
+          <span className="font-medium">{selectionAddress}</span>
+          {selection.type === 'range' && (
+            <span className="text-muted-foreground/70">
+              {Math.abs(selection.range.end.row - selection.range.start.row) + 1} × {Math.abs(selection.range.end.column - selection.range.start.column) + 1} cells
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 sm:gap-4">
+          {selectionStats.numericCount > 0 && (
+            <>
+              <span className="hidden sm:inline">
+                <span className="text-muted-foreground/70">Sum: </span>
+                <span className="font-medium tabular-nums">{selectionStats.sum?.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
+              </span>
+              <span>
+                <span className="text-muted-foreground/70">Avg: </span>
+                <span className="font-medium tabular-nums">{selectionStats.average?.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
+              </span>
+            </>
+          )}
+          <span>
+            <span className="text-muted-foreground/70">Count: </span>
+            <span className="font-medium tabular-nums">{selectionStats.count}</span>
+          </span>
+        </div>
       </div>
     </div>
   );
