@@ -48,7 +48,7 @@ interface FormatButton {
   shortcut: string;
 }
 
-const formatButtons: FormatButton[] = [
+const FORMAT_BUTTONS: FormatButton[] = [
   { id: 'bold', icon: Bold, label: 'Bold', shortcut: '⌘B' },
   { id: 'italic', icon: Italic, label: 'Italic', shortcut: '⌘I' },
   { id: 'code', icon: Code, label: 'Code', shortcut: '⌘E' },
@@ -116,7 +116,7 @@ export function ChannelInputFooter({
             sideOffset={8}
           >
             <div className="flex items-center gap-0.5">
-              {formatButtons.map((btn) => (
+              {FORMAT_BUTTONS.map((btn) => (
                 <Tooltip key={btn.id}>
                   <TooltipTrigger asChild>
                     <Button

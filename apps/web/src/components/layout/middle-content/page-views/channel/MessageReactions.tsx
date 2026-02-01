@@ -134,7 +134,7 @@ export function MessageReactions({
   }
 
   return (
-    <div className={cn('flex flex-wrap items-center gap-1 mt-1', className)}>
+    <div className={cn('group flex flex-wrap items-center gap-1 mt-1', className)}>
       {/* Reaction chips */}
       {groupedReactions.map((group) => (
         <Tooltip key={group.emoji}>

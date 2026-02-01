@@ -125,6 +125,18 @@ export async function DELETE(req: Request, { params }: RouteParams) {
     return NextResponse.json({ error: 'Emoji is required' }, { status: 400 });
   }
 
+  // Verify message exists and belongs to this channel (same validation as POST)
+  const message = await db.query.channelMessages.findFirst({
+    where: and(
+      eq(channelMessages.id, messageId),
+      eq(channelMessages.pageId, pageId)
+    ),
+  });
+
+  if (!message) {
+    return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
+
   // Delete the reaction (only the user's own reaction)
   const result = await db.delete(channelMessageReactions)
     .where(and(
