@@ -20,9 +20,9 @@ import {
 } from 'lucide-react';
 
 import { FileTreeRenderer } from './FileTreeRenderer';
-import { DocumentRenderer } from './DocumentRenderer';
+import { RichContentRenderer } from './RichContentRenderer';
+import { RichDiffRenderer } from './RichDiffRenderer';
 import { TaskRenderer } from './TaskRenderer';
-import { getLanguageFromPath } from '@/lib/utils/formatters';
 
 interface TreeItem {
   path: string;
@@ -284,30 +284,50 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
                   return <div className="border rounded-md overflow-hidden"><FileTreeRenderer tree={result.tree as TreeItem[]} /></div>;
                 }
 
-                if (toolName === 'read_page' && result.content) {
+                if (toolName === 'read_page' && (result.rawContent || result.content)) {
                   return (
                     <div className="border rounded-md overflow-hidden">
-                      <DocumentRenderer
-                        title={(result.title as string) || (result.path as string) || 'Document'}
-                        content={result.content as string}
-                        language={getLanguageFromPath(result.path as string)}
-                        description={`${result.lineCount ?? '?'} lines`}
+                      <RichContentRenderer
+                        title={(result.title as string) || 'Document'}
+                        content={(result.rawContent as string) || (result.content as string)}
+                        pageId={result.pageId as string | undefined}
+                        pageType={result.type as string | undefined}
+                        maxHeight={200}
                       />
                     </div>
                   );
                 }
 
-                if (toolName === 'replace_lines' && result.content) {
-                  return (
-                    <div className="border rounded-md overflow-hidden">
-                      <DocumentRenderer
-                        title={(result.title as string) || "Modified"}
-                        content={result.content as string}
-                        language={getLanguageFromPath(result.path as string)}
-                        description="Updated"
-                      />
-                    </div>
-                  );
+                if (toolName === 'replace_lines' && result.success) {
+                  // Show diff if both old and new content available
+                  if (result.oldContent && result.newContent) {
+                    return (
+                      <div className="border rounded-md overflow-hidden">
+                        <RichDiffRenderer
+                          title={(result.title as string) || 'Modified Document'}
+                          oldContent={result.oldContent as string}
+                          newContent={result.newContent as string}
+                          pageId={result.pageId as string | undefined}
+                          changeSummary={result.summary as string | undefined}
+                          maxHeight={200}
+                        />
+                      </div>
+                    );
+                  }
+                  // Fallback to showing new content
+                  if (result.newContent) {
+                    return (
+                      <div className="border rounded-md overflow-hidden">
+                        <RichContentRenderer
+                          title={(result.title as string) || 'Modified Document'}
+                          content={result.newContent as string}
+                          pageId={result.pageId as string | undefined}
+                          pageType={result.type as string | undefined}
+                          maxHeight={200}
+                        />
+                      </div>
+                    );
+                  }
                 }
 
                 return (

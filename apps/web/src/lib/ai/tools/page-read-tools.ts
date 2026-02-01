@@ -343,12 +343,17 @@ export const pageReadTools = {
 
         const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
 
+        // Raw content for rich rendering (without line numbers)
+        const rawContent = selectedLines.join('\n');
+
         return {
           success: true,
+          pageId: page.id,
           title: page.title,
           type: page.type,
           isTaskLinked,
           content: numberedContent,
+          rawContent,
           lineCount: selectedLines.length,
           totalLines,
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
