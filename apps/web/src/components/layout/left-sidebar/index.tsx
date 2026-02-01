@@ -25,6 +25,7 @@ import CreatePageDialog from "./CreatePageDialog";
 import DashboardSidebar from "./DashboardSidebar";
 import DriveFooter from "./DriveFooter";
 import PageTree from "./page-tree/PageTree";
+import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
 
 export interface SidebarProps {
   className?: string;
@@ -79,6 +80,11 @@ export default function Sidebar({ className }: SidebarProps) {
           <Home className="h-4 w-4" />
           Dashboard
         </Link>
+
+        {/* Drive Switcher - below Dashboard */}
+        <div className="mb-3">
+          <DriveSwitcher />
+        </div>
 
         {/* Main content area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">

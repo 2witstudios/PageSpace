@@ -12,7 +12,6 @@ import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
 import RecentsDropdown from "@/components/shared/RecentsDropdown";
 import { UsageCounter } from "@/components/billing/UsageCounter";
-import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
 
 interface TopBarProps {
   onToggleLeftPanel: () => void;
@@ -54,8 +53,6 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
             <Home className="mr-2 h-4 w-4" />
             <span>/</span>
           </Link>
-
-          <DriveSwitcher />
 
           <div className="hidden min-w-[200px] flex-1 md:flex">
             <InlineSearch />
