@@ -41,6 +41,8 @@ const createTestTool = (overrides: Partial<ToolDefinition> = {}): ToolDefinition
 });
 
 const createTestProvider = (overrides: Partial<IntegrationProviderConfig> = {}): IntegrationProviderConfig => ({
+  id: 'github',
+  name: 'GitHub',
   baseUrl: 'https://api.github.com',
   authMethod: { type: 'bearer_token', config: {} },
   tools: [createTestTool()],
@@ -261,6 +263,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'list_repos',
@@ -291,6 +295,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'delete_repo',
@@ -326,6 +332,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'list_repos',
@@ -373,6 +381,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'list_repos',
@@ -420,6 +430,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'list_repos',
@@ -467,6 +479,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'list_repos',
@@ -497,6 +511,8 @@ describe('executeToolSaga', () => {
     mockLogAudit.mockResolvedValue(undefined);
 
     const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
       connectionId: 'conn-123',
       agentId: 'agent-1',
       toolName: 'list_repos',

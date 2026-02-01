@@ -22,8 +22,10 @@ interface IntegrationRateLimitConfig {
 }
 
 // Mock rate limiter
-const mockCheckRateLimit = vi.fn<[string, { maxAttempts: number; windowMs: number }], Promise<RateLimitResult>>();
-const mockResetRateLimit = vi.fn<[string], Promise<void>>();
+const mockCheckRateLimit = vi.fn<
+  (key: string, config: { maxAttempts: number; windowMs: number }) => Promise<RateLimitResult>
+>();
+const mockResetRateLimit = vi.fn<(key: string) => Promise<void>>();
 
 // Inline implementation for testing
 const buildRateLimitKey = (config: IntegrationRateLimitConfig): string => {
@@ -170,7 +172,7 @@ describe('resetIntegrationRateLimit', () => {
   });
 
   it('given window expiration, should reset count', async () => {
-    mockResetRateLimit.mockResolvedValue();
+    mockResetRateLimit.mockResolvedValue(undefined);
 
     await resetIntegrationRateLimit({
       connectionId: 'conn-123',

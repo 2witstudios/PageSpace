@@ -147,6 +147,7 @@ export interface IntegrationProviderConfig {
   tools: ToolDefinition[];
   credentialSchema?: Record<string, unknown>;
   healthCheck?: HealthCheckConfig;
+  rateLimit?: { requests: number; windowMs: number };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -197,6 +198,13 @@ export interface GlobalAssistantConfigData {
 // EXECUTION CONTEXT
 // ═══════════════════════════════════════════════════════════════════════════════
 
+export interface ToolGrant {
+  allowedTools: string[] | null;
+  deniedTools: string[] | null;
+  readOnly: boolean;
+  rateLimitOverride?: { requestsPerMinute: number };
+}
+
 export interface ToolCallRequest {
   userId: string;
   agentId: string;
@@ -204,13 +212,24 @@ export interface ToolCallRequest {
   connectionId: string;
   toolName: string;
   input: Record<string, unknown>;
+  grant?: ToolGrant;
 }
+
+export type ToolCallErrorType =
+  | 'validation'
+  | 'rate_limit'
+  | 'http'
+  | 'internal'
+  | 'timeout'
+  | 'network';
 
 export interface ToolCallResult {
   success: boolean;
   data?: unknown;
   error?: string;
   errorCode?: string;
+  errorType?: ToolCallErrorType;
+  retryAfter?: number;
 }
 
 export interface AuthResult {

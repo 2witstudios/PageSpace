@@ -137,10 +137,10 @@ describe('createGrant', () => {
     };
 
     const expectedResult: MockGrant = {
+      ...newGrant,
       id: 'grant-123',
-      ...newGrant as MockGrant,
       createdAt: new Date(),
-    };
+    } as MockGrant;
 
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
@@ -165,10 +165,10 @@ describe('createGrant', () => {
     };
 
     const expectedResult: MockGrant = {
+      ...newGrant,
       id: 'grant-456',
-      ...newGrant as MockGrant,
       createdAt: new Date(),
-    };
+    } as MockGrant;
 
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({

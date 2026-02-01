@@ -36,7 +36,7 @@ interface ExecuteResult {
 }
 
 // Mock fetch for testing
-const mockFetch = vi.fn<[string, RequestInit], Promise<Response>>();
+const mockFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
 
 // Helper to create mock Response
 const createMockResponse = (
@@ -59,7 +59,7 @@ const createMockResponse = (
 const executeHttpRequest = async (
   request: HttpRequest,
   options: ExecuteOptions = {},
-  fetchFn: typeof fetch = mockFetch
+  fetchFn = mockFetch as unknown as typeof fetch
 ): Promise<ExecuteResult> => {
   const { timeoutMs = 30000, maxRetries = 3, retryDelayMs = 1000 } = options;
   let lastError: string | undefined;
