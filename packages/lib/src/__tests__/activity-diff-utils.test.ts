@@ -360,6 +360,52 @@ describe('activity-diff-utils', () => {
       expect(result!.unifiedDiff).toContain('too large');
       expect(result!.stats.additions).toBeGreaterThan(0);
     });
+
+    // P2: Large same-length edits stats accuracy tests
+    it('reports full replacement for same-length large content changes', () => {
+      // 60KB of 'a' replaced with 60KB of 'b'
+      const oldContent = 'a'.repeat(60 * 1024);
+      const newContent = 'b'.repeat(60 * 1024);
+      const group = createMockGroup();
+      const result = generateStackedDiff(oldContent, newContent, group);
+
+      expect(result).not.toBeNull();
+      expect(result!.unifiedDiff).toContain('too large');
+      // Same length but different content = full replacement
+      expect(result!.stats.additions).toBe(newContent.length);
+      expect(result!.stats.deletions).toBe(oldContent.length);
+      expect(result!.stats.unchanged).toBe(0);
+    });
+
+    it('reports correct stats for large content growth', () => {
+      // 10KB growing to 60KB
+      const oldContent = 'x'.repeat(10 * 1024);
+      const newContent = 'x'.repeat(60 * 1024);
+      const group = createMockGroup();
+      const result = generateStackedDiff(oldContent, newContent, group);
+
+      expect(result).not.toBeNull();
+      expect(result!.unifiedDiff).toContain('too large');
+      // Growth: 60KB - 10KB = 50KB additions, 0 deletions
+      expect(result!.stats.additions).toBe(50 * 1024);
+      expect(result!.stats.deletions).toBe(0);
+      expect(result!.stats.unchanged).toBe(10 * 1024);
+    });
+
+    it('reports correct stats for large content shrink', () => {
+      // 60KB shrinking to 10KB
+      const oldContent = 'x'.repeat(60 * 1024);
+      const newContent = 'x'.repeat(10 * 1024);
+      const group = createMockGroup();
+      const result = generateStackedDiff(oldContent, newContent, group);
+
+      expect(result).not.toBeNull();
+      expect(result!.unifiedDiff).toContain('too large');
+      // Shrink: 0 additions, 60KB - 10KB = 50KB deletions
+      expect(result!.stats.additions).toBe(0);
+      expect(result!.stats.deletions).toBe(50 * 1024);
+      expect(result!.stats.unchanged).toBe(10 * 1024);
+    });
   });
 
   describe('truncateDiffsToTokenBudget', () => {

@@ -160,8 +160,22 @@ export function generateStackedDiff(
   // Check for very large content (>50KB) - skip diff generation, return stats only
   const MAX_CONTENT_SIZE = 50 * 1024;
   if (oldContent.length > MAX_CONTENT_SIZE || newContent.length > MAX_CONTENT_SIZE) {
-    const additions = newContent.length > oldContent.length ? newContent.length - oldContent.length : 0;
-    const deletions = oldContent.length > newContent.length ? oldContent.length - newContent.length : 0;
+    // Calculate stats based on length difference or full replacement if same length
+    let additions: number;
+    let deletions: number;
+    let unchanged: number;
+
+    if (oldContent.length !== newContent.length) {
+      // Length-based stats for size changes
+      additions = newContent.length > oldContent.length ? newContent.length - oldContent.length : 0;
+      deletions = oldContent.length > newContent.length ? oldContent.length - newContent.length : 0;
+      unchanged = Math.min(oldContent.length, newContent.length);
+    } else {
+      // Same length but different content = full replacement
+      additions = newContent.length;
+      deletions = oldContent.length;
+      unchanged = 0;
+    }
 
     return {
       pageId: group.first.pageId!,
@@ -182,7 +196,7 @@ export function generateStackedDiff(
       stats: {
         additions,
         deletions,
-        unchanged: Math.min(oldContent.length, newContent.length),
+        unchanged,
         totalChanges: additions + deletions > 0 ? 1 : 0,
       },
       isAiGenerated: group.activities.some(a => a.isAiGenerated),

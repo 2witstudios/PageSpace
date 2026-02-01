@@ -275,7 +275,7 @@ The AI should use this data to form intuition about ongoing work and provide con
 
       includeContentDiffs: z
         .boolean()
-        .default(false)
+        .default(true)
         .describe(
           'Include semantic content diffs for pages with changes. Returns unified diffs showing actual content changes. Use for pulse notifications to see what collaborators actually wrote.'
         ),
@@ -643,9 +643,11 @@ The AI should use this data to form intuition about ongoing work and provide con
               let beforeContent: string | null = null;
               let afterContent: string | null = null;
 
-              if (group.last.changeGroupId) {
+              if (group.last.changeGroupId && group.last.pageId) {
                 // Use version resolver for accurate before/after
-                const versionPair = versionContentPairs.get(group.last.changeGroupId);
+                // Composite key prevents cross-page content leaks
+                const compositeKey = `${group.last.pageId}:${group.last.changeGroupId}`;
+                const versionPair = versionContentPairs.get(compositeKey);
                 if (versionPair) {
                   // Resolve content refs to actual content
                   if (versionPair.beforeContentRef) {

@@ -12,7 +12,7 @@
  * the two to provide accurate before/after pairs for diffing.
  */
 
-import { db, pageVersions, eq, and, inArray, desc } from '@pagespace/db';
+import { db, pageVersions, eq, and, or, desc } from '@pagespace/db';
 
 /**
  * Content pair for generating diffs
@@ -108,7 +108,7 @@ export async function resolveVersionContent(
  * Single query for efficiency - eliminates N+1 queries.
  *
  * @param requests - Array of page ID, change group ID, and optional activity content ref
- * @returns Map of changeGroupId -> VersionContentPair
+ * @returns Map of "pageId:changeGroupId" -> VersionContentPair (composite key for security)
  */
 export async function batchResolveVersionContent(
   requests: VersionResolveRequest[]
@@ -119,10 +119,12 @@ export async function batchResolveVersionContent(
     return results;
   }
 
-  // Extract unique changeGroupIds
-  const changeGroupIds = [...new Set(requests.map((r) => r.changeGroupId))];
+  // Build OR conditions for each (pageId, changeGroupId) pair - ensures proper scoping
+  const conditions = requests.map((r) =>
+    and(eq(pageVersions.pageId, r.pageId), eq(pageVersions.changeGroupId, r.changeGroupId))
+  );
 
-  // Batch query for all versions with matching changeGroupIds
+  // Batch query for all versions with matching (pageId, changeGroupId) pairs
   const versions = await db
     .select({
       id: pageVersions.id,
@@ -132,34 +134,39 @@ export async function batchResolveVersionContent(
       changeGroupId: pageVersions.changeGroupId,
     })
     .from(pageVersions)
-    .where(inArray(pageVersions.changeGroupId, changeGroupIds))
+    .where(or(...conditions))
     .orderBy(desc(pageVersions.pageRevision));
 
-  // Build lookup map: changeGroupId -> version
+  // Build lookup map: "pageId:changeGroupId" -> version (composite key prevents cross-page leaks)
   const versionMap = new Map<string, PageVersionRecord>();
   for (const version of versions) {
-    if (version.changeGroupId && !versionMap.has(version.changeGroupId)) {
-      // Keep first (highest revision) for each changeGroupId
-      versionMap.set(version.changeGroupId, version);
+    if (version.changeGroupId) {
+      const compositeKey = `${version.pageId}:${version.changeGroupId}`;
+      if (!versionMap.has(compositeKey)) {
+        // Keep first (highest revision) for each (pageId, changeGroupId) pair
+        versionMap.set(compositeKey, version);
+      }
     }
   }
 
-  // Build activity content ref lookup
+  // Build activity content ref lookup using composite key
   const activityContentRefMap = new Map<string, string | null>();
   for (const request of requests) {
-    activityContentRefMap.set(request.changeGroupId, request.activityContentRef ?? null);
+    const compositeKey = `${request.pageId}:${request.changeGroupId}`;
+    activityContentRefMap.set(compositeKey, request.activityContentRef ?? null);
   }
 
-  // Build results
+  // Build results using composite key
   for (const request of requests) {
-    const version = versionMap.get(request.changeGroupId);
+    const compositeKey = `${request.pageId}:${request.changeGroupId}`;
+    const version = versionMap.get(compositeKey);
     if (!version) {
       continue;
     }
 
-    const activityContentRef = activityContentRefMap.get(request.changeGroupId);
+    const activityContentRef = activityContentRefMap.get(compositeKey);
 
-    results.set(request.changeGroupId, {
+    results.set(compositeKey, {
       pageId: request.pageId,
       beforeContentRef: activityContentRef ?? null,
       afterContentRef: version.contentRef,
