@@ -4,17 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSWRConfig } from "swr";
-import {
-  Activity,
-  CheckSquare,
-  Home,
-  Lock,
-  Plus,
-  Search,
-  Settings,
-  Trash2,
-  Users,
-} from "lucide-react";
+import { Home, Lock, Plus, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,8 +22,8 @@ import { useDriveStore } from "@/hooks/useDrive";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 
 import CreatePageDialog from "./CreatePageDialog";
-import DriveList from "./DriveList";
-import DriveSwitcher from "./workspace-selector";
+import DashboardSidebar from "./DashboardSidebar";
+import DriveFooter from "./DriveFooter";
 import PageTree from "./page-tree/PageTree";
 
 export interface SidebarProps {
@@ -48,11 +38,11 @@ export default function Sidebar({ className }: SidebarProps) {
   const { driveId: driveIdParams } = params;
   const { user } = useAuth();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
-  const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
+  const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
-  const drives = useDriveStore(state => state.drives);
-  const fetchDrives = useDriveStore(state => state.fetchDrives);
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
   const { mutate } = useSWRConfig();
@@ -61,10 +51,10 @@ export default function Sidebar({ className }: SidebarProps) {
   const canManage = canManageDrive(drive);
 
   useEffect(() => {
-    if (driveId && user?.id) {
+    if (user?.id) {
       fetchDrives();
     }
-  }, [driveId, user?.id, fetchDrives]);
+  }, [user?.id, fetchDrives]);
 
   const handlePageCreated = () => {
     if (driveId) {
@@ -76,37 +66,43 @@ export default function Sidebar({ className }: SidebarProps) {
     <aside
       className={cn(
         "flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden",
-        className,
+        className
       )}
     >
-      <div className="flex h-full flex-col gap-3 px-4 py-4 sm:px-3">
+      <div className="flex h-full flex-col px-3 py-3">
+        {/* Dashboard link - always visible */}
         <Link
           href="/dashboard"
           onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg p-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3"
         >
           <Home className="h-4 w-4" />
           Dashboard
         </Link>
 
-        <DriveSwitcher />
-
-        <div className="flex-1 overflow-hidden py-2 flex flex-col">
+        {/* Main content area */}
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {driveId ? (
             <>
-              <div className="mb-4 flex items-center gap-2 flex-shrink-0">
+              {/* Drive view: Search + PageTree */}
+              <div className="flex items-center gap-2 mb-3 flex-shrink-0">
                 <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     placeholder="Search pages..."
-                    className="h-9 pl-9"
+                    className="h-8 pl-8"
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                   />
                 </div>
                 {canManage ? (
-                  <Button variant="ghost" size="icon" onClick={() => setCreatePageOpen(true)}>
-                    <Plus className="h-5 w-5" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    onClick={() => setCreatePageOpen(true)}
+                  >
+                    <Plus className="h-4 w-4" />
                   </Button>
                 ) : (
                   <TooltipProvider>
@@ -116,9 +112,9 @@ export default function Sidebar({ className }: SidebarProps) {
                           variant="ghost"
                           size="icon"
                           disabled
-                          className="cursor-not-allowed opacity-50"
+                          className="h-8 w-8 shrink-0 cursor-not-allowed opacity-50"
                         >
-                          <Lock className="h-5 w-5" />
+                          <Lock className="h-4 w-4" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
@@ -129,61 +125,20 @@ export default function Sidebar({ className }: SidebarProps) {
                 )}
               </div>
 
-              <div className="flex-1 min-h-0">
+              <div className="flex-1 min-h-0 overflow-hidden">
                 <PageTree driveId={driveId as string} searchQuery={searchQuery} />
               </div>
             </>
           ) : (
-            <DriveList />
+            /* Dashboard view: Pulse, Favorites, Recents */
+            <DashboardSidebar />
           )}
         </div>
 
-        <div className="mt-auto space-y-1">
-          {driveId && canManage && (
-            <Link
-              href={`/dashboard/${driveId}/members`}
-              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Users className="h-4 w-4" />
-              Members
-            </Link>
-          )}
-          {driveId && (
-            <Link
-              href={`/dashboard/${driveId}/activity`}
-              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Activity className="h-4 w-4" />
-              Activity
-            </Link>
-          )}
-          {driveId && (
-            <Link
-              href={`/dashboard/${driveId}/tasks`}
-              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <CheckSquare className="h-4 w-4" />
-              Tasks
-            </Link>
-          )}
-          {driveId && canManage && (
-            <Link
-              href={`/dashboard/${driveId}/settings`}
-              className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Settings className="h-4 w-4" />
-              Drive Settings
-            </Link>
-          )}
-          <Link
-            href={driveId ? `/dashboard/${driveId}/trash` : "/dashboard/trash"}
-            className="flex items-center gap-2 rounded-lg p-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Trash2 className="h-4 w-4" />
-            Trash
-          </Link>
-        </div>
+        {/* Drive footer - only shown when in a drive */}
+        {driveId && <DriveFooter canManage={canManage} />}
 
+        {/* Create page dialog */}
         <CreatePageDialog
           parentId={null}
           isOpen={isCreatePageOpen}

@@ -1,6 +1,6 @@
 {
-  "id": "5fe16c13-7aed-474f-baac-07c244c0a449",
-  "prevId": "3e59734b-ea9c-411e-bdd6-0463e909685a",
+  "id": "684f2100-fe7d-4dc0-a16e-89b30955c874",
+  "prevId": "5fe16c13-7aed-474f-baac-07c244c0a449",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1492,11 +1492,39 @@
           "primaryKey": false,
           "notNull": true
         },
+        "itemType": {
+          "name": "itemType",
+          "type": "FavoriteItemType",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'page'"
+        },
         "pageId": {
           "name": "pageId",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         }
       },
       "indexes": {
@@ -1511,6 +1539,48 @@
             },
             {
               "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "favorites_user_id_drive_id_key": {
+          "name": "favorites_user_id_drive_id_key",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "favorites_user_id_position_idx": {
+          "name": "favorites_user_id_position_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1542,6 +1612,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "pageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "favorites_driveId_drives_id_fk": {
+          "name": "favorites_driveId_drives_id_fk",
+          "tableFrom": "favorites",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
           ],
           "columnsTo": [
             "id"
@@ -9304,6 +9387,98 @@
       },
       "uniqueConstraints": {}
     },
+    "public.user_hotkey_preferences": {
+      "name": "user_hotkey_preferences",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hotkeyId": {
+          "name": "hotkeyId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding": {
+          "name": "binding",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_hotkey_preferences_user_hotkey_idx": {
+          "name": "user_hotkey_preferences_user_hotkey_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "hotkeyId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_hotkey_preferences_user_idx": {
+          "name": "user_hotkey_preferences_user_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_hotkey_preferences_userId_users_id_fk": {
+          "name": "user_hotkey_preferences_userId_users_id_fk",
+          "tableFrom": "user_hotkey_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
     "public.push_notification_tokens": {
       "name": "push_notification_tokens",
       "schema": "",
@@ -9506,6 +9681,14 @@
       "values": [
         "user",
         "admin"
+      ]
+    },
+    "public.FavoriteItemType": {
+      "name": "FavoriteItemType",
+      "schema": "public",
+      "values": [
+        "page",
+        "drive"
       ]
     },
     "public.PageType": {

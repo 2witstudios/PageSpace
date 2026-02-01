@@ -123,13 +123,21 @@ export const storageEvents = pgTable('storage_events', {
   }
 });
 
+export const favoriteItemType = pgEnum('FavoriteItemType', ['page', 'drive']);
+
 export const favorites = pgTable('favorites', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  itemType: favoriteItemType('itemType').notNull().default('page'),
+  pageId: text('pageId').references(() => pages.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').references(() => drives.id, { onDelete: 'cascade' }),
+  position: integer('position').default(0).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => {
     return {
         userIdPageIdKey: index('favorites_user_id_page_id_key').on(table.userId, table.pageId),
+        userIdDriveIdKey: index('favorites_user_id_drive_id_key').on(table.userId, table.driveId),
+        userPositionIdx: index('favorites_user_id_position_idx').on(table.userId, table.position),
     }
 });
 
@@ -240,6 +248,10 @@ export const favoritesRelations = relations(favorites, ({ one }) => ({
     page: one(pages, {
         fields: [favorites.pageId],
         references: [pages.id],
+    }),
+    drive: one(drives, {
+        fields: [favorites.driveId],
+        references: [drives.id],
     }),
 }));
 
