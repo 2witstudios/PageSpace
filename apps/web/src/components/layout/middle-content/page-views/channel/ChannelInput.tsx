@@ -108,10 +108,9 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       textareaRef.current?.focus();
     };
 
-    // Handle emoji button (placeholder for future emoji picker)
-    const handleEmojiClick = () => {
-      // Future: Open emoji picker popover
-      // For now, just focus the input
+    // Handle emoji selection from picker
+    const handleEmojiSelect = (emoji: string) => {
+      onChange(value + emoji);
       textareaRef.current?.focus();
     };
 
@@ -186,7 +185,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
           <ChannelInputFooter
             onFormatClick={handleFormatClick}
             onMentionClick={handleMentionClick}
-            onEmojiClick={handleEmojiClick}
+            onEmojiSelect={handleEmojiSelect}
             attachmentsEnabled={attachmentsEnabled}
             disabled={disabled}
           />

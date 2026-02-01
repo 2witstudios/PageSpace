@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -22,14 +22,15 @@ import {
   AtSign,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { EmojiPickerPopover } from '@/components/ui/emoji-picker';
 
 export interface ChannelInputFooterProps {
   /** Callback when formatting button clicked */
   onFormatClick?: (format: 'bold' | 'italic' | 'code' | 'list') => void;
   /** Callback when attachment button clicked */
   onAttachmentClick?: () => void;
-  /** Callback when emoji button clicked */
-  onEmojiClick?: () => void;
+  /** Callback when emoji is selected */
+  onEmojiSelect?: (emoji: string) => void;
   /** Callback when mention button clicked */
   onMentionClick?: () => void;
   /** Whether attachments are supported */
@@ -68,12 +69,13 @@ const formatButtons: FormatButton[] = [
 export function ChannelInputFooter({
   onFormatClick,
   onAttachmentClick,
-  onEmojiClick,
+  onEmojiSelect,
   onMentionClick,
   attachmentsEnabled = false,
   disabled = false,
   className,
 }: ChannelInputFooterProps) {
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   return (
     <div
       className={cn(
@@ -161,26 +163,37 @@ export function ChannelInputFooter({
           <TooltipContent side="top">Mention someone</TooltipContent>
         </Tooltip>
 
-        {/* Emoji button */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onEmojiClick}
-              disabled={disabled}
-              className={cn(
-                'h-8 w-8 p-0',
-                'text-muted-foreground hover:text-foreground',
-                'hover:bg-muted/50'
-              )}
-            >
-              <Smile className="h-4 w-4" />
-              <span className="sr-only">Emoji</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Add emoji</TooltipContent>
-        </Tooltip>
+        {/* Emoji picker */}
+        <EmojiPickerPopover
+          open={emojiPickerOpen}
+          onOpenChange={setEmojiPickerOpen}
+          onEmojiSelect={(emoji) => {
+            onEmojiSelect?.(emoji);
+            setEmojiPickerOpen(false);
+          }}
+          side="top"
+          align="start"
+          showQuickReactions={false}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={disabled}
+                className={cn(
+                  'h-8 w-8 p-0',
+                  'text-muted-foreground hover:text-foreground',
+                  'hover:bg-muted/50'
+                )}
+              >
+                <Smile className="h-4 w-4" />
+                <span className="sr-only">Emoji</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Add emoji</TooltipContent>
+          </Tooltip>
+        </EmojiPickerPopover>
       </div>
 
       {/* Right group - Attachments (future) */}

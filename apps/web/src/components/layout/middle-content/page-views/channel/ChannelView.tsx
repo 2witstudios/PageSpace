@@ -9,9 +9,10 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
 import { ChannelInput, type ChannelInputRef } from './ChannelInput';
+import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
-import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 
@@ -19,9 +20,14 @@ interface ChannelViewProps {
   page: TreePage;
 }
 
+// Extended message type with reactions
+interface MessageWithReactions extends MessageWithUser {
+  reactions?: Reaction[];
+}
+
 export default function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
-  const [messages, setMessages] = useState<MessageWithUser[]>([]);
+  const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const channelInputRef = useRef<ChannelInputRef>(null);
@@ -144,21 +150,142 @@ export default function ChannelView({ page }: ChannelViewProps) {
     }
   }, [page.id]);
 
+  // Reaction handlers
+  const handleAddReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    // Optimistic update
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const optimisticReaction: Reaction = {
+          id: `temp-${Date.now()}`,
+          emoji,
+          userId: user.id,
+          user: { id: user.id, name: user.name || 'You' },
+        };
+        return {
+          ...m,
+          reactions: [...(m.reactions || []), optimisticReaction],
+        };
+      })
+    );
+
+    try {
+      await post(`/api/channels/${page.id}/messages/${messageId}/reactions`, { emoji });
+    } catch (error) {
+      // Revert optimistic update on error
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m;
+          return {
+            ...m,
+            reactions: (m.reactions || []).filter(
+              (r) => !(r.emoji === emoji && r.userId === user.id)
+            ),
+          };
+        })
+      );
+      toast.error('Failed to add reaction');
+    }
+  }, [page.id, user]);
+
+  const handleRemoveReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    // Optimistic update
+    const removedReaction = messages
+      .find((m) => m.id === messageId)
+      ?.reactions?.find((r) => r.emoji === emoji && r.userId === user.id);
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        return {
+          ...m,
+          reactions: (m.reactions || []).filter(
+            (r) => !(r.emoji === emoji && r.userId === user.id)
+          ),
+        };
+      })
+    );
+
+    try {
+      await del(`/api/channels/${page.id}/messages/${messageId}/reactions`, { emoji });
+    } catch (error) {
+      // Revert optimistic update on error
+      if (removedReaction) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== messageId) return m;
+            return {
+              ...m,
+              reactions: [...(m.reactions || []), removedReaction],
+            };
+          })
+        );
+      }
+      toast.error('Failed to remove reaction');
+    }
+  }, [page.id, user, messages]);
+
+  // Handle real-time reaction updates
+  useEffect(() => {
+    if (!socket || connectionStatus !== 'connected') return;
+
+    const handleReactionAdded = (data: { messageId: string; reaction: Reaction }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.messageId) return m;
+          // Avoid duplicates
+          const exists = m.reactions?.some((r) => r.id === data.reaction.id);
+          if (exists) return m;
+          return {
+            ...m,
+            reactions: [...(m.reactions || []).filter(r => !r.id.startsWith('temp-')), data.reaction],
+          };
+        })
+      );
+    };
+
+    const handleReactionRemoved = (data: { messageId: string; emoji: string; userId: string }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.messageId) return m;
+          return {
+            ...m,
+            reactions: (m.reactions || []).filter(
+              (r) => !(r.emoji === data.emoji && r.userId === data.userId)
+            ),
+          };
+        })
+      );
+    };
+
+    socket.on('reaction_added', handleReactionAdded);
+    socket.on('reaction_removed', handleReactionRemoved);
+
+    return () => {
+      socket.off('reaction_added', handleReactionAdded);
+      socket.off('reaction_removed', handleReactionRemoved);
+    };
+  }, [socket, connectionStatus]);
+
   return (
     <div className="flex flex-col h-full">
         <PullToRefresh direction="top" onRefresh={handleRefresh}>
           <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
               <div className="p-4 space-y-4">
                   {messages.map((m) => (
-                      <div key={m.id} className="flex items-start gap-4">
-                          <Avatar>
+                      <div key={m.id} className="group flex items-start gap-4">
+                          <Avatar className="shrink-0">
                               <AvatarImage src={m.user?.image || ''} />
                               <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
                           </Avatar>
-                          <div className="flex flex-col">
+                          <div className="flex flex-col min-w-0 flex-1">
                               <div className="flex items-center gap-2">
-                                  <span className="font-bold">{m.user?.name}</span>
-                                  <span className="text-xs text-gray-500">
+                                  <span className="font-semibold text-sm">{m.user?.name}</span>
+                                  <span className="text-xs text-muted-foreground">
                                       {new Date(m.createdAt).toLocaleTimeString()}
                                   </span>
                               </div>
@@ -168,6 +295,16 @@ export default function ChannelView({ page }: ChannelViewProps) {
                                   isStreaming={false}
                                 />
                               </div>
+                              {/* Reactions */}
+                              {user && !m.id.startsWith('temp-') && (
+                                <MessageReactions
+                                  reactions={m.reactions || []}
+                                  currentUserId={user.id}
+                                  onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                  onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                                  canReact={permissions?.canView || false}
+                                />
+                              )}
                           </div>
                       </div>
                   ))}
