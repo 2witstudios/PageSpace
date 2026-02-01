@@ -8,6 +8,7 @@ interface LayoutState {
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
   taskListViewMode: TaskListViewMode;
+  driveFooterCollapsed: boolean;
 
   // Mobile sheet state (NOT persisted - sheets start closed on page load)
   leftSheetOpen: boolean;
@@ -25,6 +26,7 @@ interface LayoutState {
   setLeftSheetOpen: (open: boolean) => void;
   setRightSheetOpen: (open: boolean) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
+  setDriveFooterCollapsed: (collapsed: boolean) => void;
 }
 
 export const useLayoutStore = create<LayoutState>()(
@@ -34,6 +36,7 @@ export const useLayoutStore = create<LayoutState>()(
       leftSidebarOpen: true,
       rightSidebarOpen: false,
       taskListViewMode: 'table',
+      driveFooterCollapsed: true,
       rehydrated: false,
 
       // Mobile sheet state (NOT persisted)
@@ -71,6 +74,10 @@ export const useLayoutStore = create<LayoutState>()(
       setRightSheetOpen: (open: boolean) => {
         set({ rightSheetOpen: open });
       },
+
+      setDriveFooterCollapsed: (collapsed: boolean) => {
+        set({ driveFooterCollapsed: collapsed });
+      },
     }),
     {
       name: 'layout-storage',
@@ -78,6 +85,7 @@ export const useLayoutStore = create<LayoutState>()(
         leftSidebarOpen: state.leftSidebarOpen,
         rightSidebarOpen: state.rightSidebarOpen,
         taskListViewMode: state.taskListViewMode,
+        driveFooterCollapsed: state.driveFooterCollapsed,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setRehydrated();
