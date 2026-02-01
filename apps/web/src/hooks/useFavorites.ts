@@ -38,6 +38,9 @@ export const useFavorites = create<FavoritesState>()(
         set({ isLoading: true });
         try {
           const response = await fetchWithAuth('/api/user/favorites');
+          if (!response.ok) {
+            throw new Error(`Failed to fetch favorites: ${response.status}`);
+          }
           const data = await response.json() as { favorites: FavoriteItem[] };
           const favorites = data.favorites || [];
 
@@ -55,7 +58,7 @@ export const useFavorites = create<FavoritesState>()(
           set({ favorites, pageIds, driveIds, isSynced: true, isLoading: false });
         } catch (error) {
           console.error('Error fetching favorites:', error);
-          set({ isLoading: false });
+          set({ isLoading: false, isSynced: false });
         }
       },
 

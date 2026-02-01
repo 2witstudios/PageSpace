@@ -1,4 +1,5 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, integer } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, integer, check } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
@@ -138,6 +139,7 @@ export const favorites = pgTable('favorites', {
         userIdPageIdKey: index('favorites_user_id_page_id_key').on(table.userId, table.pageId),
         userIdDriveIdKey: index('favorites_user_id_drive_id_key').on(table.userId, table.driveId),
         userPositionIdx: index('favorites_user_id_position_idx').on(table.userId, table.position),
+        itemTypeConsistency: check('favorites_item_type_consistency_chk', sql`(("itemType" = 'page' AND "pageId" IS NOT NULL AND "driveId" IS NULL) OR ("itemType" = 'drive' AND "driveId" IS NOT NULL AND "pageId" IS NULL))`),
     }
 });
 

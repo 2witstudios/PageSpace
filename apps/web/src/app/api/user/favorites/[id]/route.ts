@@ -24,7 +24,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Favorite not found' }, { status: 404 });
     }
 
-    await db.delete(favorites).where(eq(favorites.id, id));
+    await db.delete(favorites).where(and(eq(favorites.id, id), eq(favorites.userId, userId)));
 
     return NextResponse.json({ success: true });
   } catch (error) {

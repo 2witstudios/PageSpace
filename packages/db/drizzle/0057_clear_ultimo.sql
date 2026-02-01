@@ -32,4 +32,14 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "favorites_user_id_drive_id_key" ON "favorites" USING btree ("userId","driveId");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "favorites_user_id_position_idx" ON "favorites" USING btree ("userId","position");
+CREATE INDEX IF NOT EXISTS "favorites_user_id_position_idx" ON "favorites" USING btree ("userId","position");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "favorites_user_page_unique" ON "favorites" ("userId", "pageId") WHERE "pageId" IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "favorites_user_drive_unique" ON "favorites" ("userId", "driveId") WHERE "driveId" IS NOT NULL;--> statement-breakpoint
+DO $$ BEGIN
+  ALTER TABLE "favorites" ADD CONSTRAINT "favorites_item_type_consistency_chk" CHECK (
+    (("itemType" = 'page' AND "pageId" IS NOT NULL AND "driveId" IS NULL) OR
+     ("itemType" = 'drive' AND "driveId" IS NOT NULL AND "pageId" IS NULL))
+  );
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;

@@ -267,25 +267,36 @@ describe('useFavorites', () => {
 
   describe('favorites workflow', () => {
     it('given typical user workflow, should manage favorites correctly', async () => {
-      // Setup mocks
-      (post as Mock).mockResolvedValue({});
-      (del as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockResolvedValue({
-        ok: true,
-        json: async () => ({ favorites: [] }),
-      });
+      // Track added favorites to return realistic API responses
+      const addedFavorites: FavoriteItem[] = [];
 
-      const { addFavorite, isFavorite } = useFavorites.getState();
+      // Setup mocks
+      (post as Mock).mockImplementation(async (_url: string, body: { itemType: string; itemId: string }) => {
+        // Simulate API adding the favorite
+        const newFav = createMockFavorite({
+          id: `fav-${body.itemId}`,
+          itemType: body.itemType as 'page' | 'drive',
+          page: body.itemType === 'page' ? { id: body.itemId, title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } : undefined,
+          drive: body.itemType === 'drive' ? { id: body.itemId, name: 'Test Drive' } : undefined,
+        });
+        addedFavorites.push(newFav);
+        return {};
+      });
+      (del as Mock).mockResolvedValue({});
+      (fetchWithAuth as Mock).mockImplementation(async () => ({
+        ok: true,
+        json: async () => ({ favorites: [...addedFavorites] }),
+      }));
 
       // User favorites a page
-      await addFavorite('page-1', 'page');
+      await useFavorites.getState().addFavorite('page-1', 'page');
 
-      // Optimistic update should be visible
-      expect(isFavorite('page-1', 'page')).toBe(true);
+      // After refetch, the favorite should be visible
+      expect(useFavorites.getState().isFavorite('page-1', 'page')).toBe(true);
 
       // User favorites a drive
-      await addFavorite('drive-1', 'drive');
-      expect(isFavorite('drive-1', 'drive')).toBe(true);
+      await useFavorites.getState().addFavorite('drive-1', 'drive');
+      expect(useFavorites.getState().isFavorite('drive-1', 'drive')).toBe(true);
     });
   });
 });
