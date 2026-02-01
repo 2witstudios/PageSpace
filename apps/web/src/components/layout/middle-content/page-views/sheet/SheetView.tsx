@@ -1869,7 +1869,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           />
           {/* Action Sheet */}
           <div
-            className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-background p-4 pb-8 shadow-lg sm:hidden"
+            className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-background p-4 pb-[calc(2rem+env(safe-area-inset-bottom))] shadow-lg sm:hidden"
             role="dialog"
             aria-modal="true"
             aria-label="Cell actions"
