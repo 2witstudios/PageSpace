@@ -15,7 +15,7 @@ import {
   isNull,
   inArray,
 } from '@pagespace/db';
-import { isUserDriveMember, getBatchPagePermissions } from '@pagespace/lib';
+import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import {
   groupActivitiesForDiff,
   resolveStackedVersionContent,
@@ -563,6 +563,21 @@ The AI should use this data to form intuition about ongoing work and provide con
                 .map(([pageId]) => pageId)
             );
 
+            // Drive admins have view access to all pages in their drives
+            const uniqueDriveIds = [...new Set(
+              pageActivities.map(a => a.driveId).filter(Boolean)
+            )] as string[];
+
+            for (const driveId of uniqueDriveIds) {
+              if (await isDriveOwnerOrAdmin(userId, driveId)) {
+                for (const activity of pageActivities) {
+                  if (activity.driveId === driveId && activity.pageId) {
+                    viewablePageIds.add(activity.pageId);
+                  }
+                }
+              }
+            }
+
             pageActivities = pageActivities.filter(
               a => a.pageId && viewablePageIds.has(a.pageId)
             );
@@ -572,11 +587,14 @@ The AI should use this data to form intuition about ongoing work and provide con
             // Convert to ActivityForDiff format
             // Note: Content in activity logs is pre-update state (for rollback)
             const activitiesForDiff: (ActivityForDiff & { driveId: string })[] = [];
+            // Track contentRefs separately for version resolution
+            const activityContentRefs = new Map<string, string>();
 
             for (const activity of pageActivities) {
-              // Get pre-update content ref from activity
-              // This represents what the content was BEFORE this change
-              const contentRef = activity.contentRef ?? null;
+              // Track contentRef separately for version resolution
+              if (activity.contentRef) {
+                activityContentRefs.set(activity.id, activity.contentRef);
+              }
 
               activitiesForDiff.push({
                 id: activity.id,
@@ -588,8 +606,8 @@ The AI should use this data to form intuition about ongoing work and provide con
                 isAiGenerated: activity.isAiGenerated,
                 actorEmail: activity.actorEmail,
                 actorDisplayName: activity.actorDisplayName,
-                // Store contentRef for later resolution, not the content itself
-                content: contentRef,
+                // Store inline snapshot for fallback (legacy data without contentRef)
+                content: activity.contentSnapshot ?? null,
                 driveId: activity.driveId!,
               });
             }
@@ -599,17 +617,18 @@ The AI should use this data to form intuition about ongoing work and provide con
 
             // P2 Semantic: Use page versions for post-update content
             // Activity logs store pre-update content; page versions store post-update content
+            // Use LAST activity's changeGroupId (AI sessions have multiple changeGroupIds per group)
             const groupsWithChangeGroupId = diffGroups.filter(
-              (g) => g.first.changeGroupId && g.first.pageId
+              (g) => g.last.changeGroupId && g.last.pageId
             );
 
             // Resolve post-update content from page versions
             const versionContentPairs = await resolveStackedVersionContent(
               groupsWithChangeGroupId.map((g) => ({
-                changeGroupId: g.first.changeGroupId!,
-                pageId: g.first.pageId!,
-                // Use first activity's contentRef as "before" state
-                firstContentRef: activitiesForDiff.find((a) => a.id === g.first.id)?.content ?? null,
+                changeGroupId: g.last.changeGroupId!,
+                pageId: g.last.pageId!,
+                // Use FIRST activity's contentRef as "before" state (from the Map)
+                firstContentRef: activityContentRefs.get(g.first.id) ?? null,
               }))
             );
 
@@ -624,9 +643,9 @@ The AI should use this data to form intuition about ongoing work and provide con
               let beforeContent: string | null = null;
               let afterContent: string | null = null;
 
-              if (group.first.changeGroupId) {
+              if (group.last.changeGroupId) {
                 // Use version resolver for accurate before/after
-                const versionPair = versionContentPairs.get(group.first.changeGroupId);
+                const versionPair = versionContentPairs.get(group.last.changeGroupId);
                 if (versionPair) {
                   // Resolve content refs to actual content
                   if (versionPair.beforeContentRef) {
@@ -644,6 +663,11 @@ The AI should use this data to form intuition about ongoing work and provide con
                     }
                   }
                 }
+              }
+
+              // Fallback: use inline snapshot if no contentRef and no version found
+              if (beforeContent === null && firstActivity.content) {
+                beforeContent = firstActivity.content;
               }
 
               // Skip if we can't generate a meaningful diff
