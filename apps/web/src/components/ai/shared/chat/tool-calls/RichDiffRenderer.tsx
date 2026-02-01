@@ -149,8 +149,9 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
   };
 
   // Sanitize the diff HTML using allowlist approach
+  // SSR safety: return empty string on server to prevent unsanitized HTML emission
   const sanitizedHtml = useMemo(() => {
-    if (typeof window === 'undefined') return diffHtml;
+    if (typeof window === 'undefined') return '';
     return DOMPurify.sanitize(diffHtml, {
       ALLOWED_TAGS: ['span', 'br', 'p', 'div'],
       ALLOWED_ATTR: ['class'],

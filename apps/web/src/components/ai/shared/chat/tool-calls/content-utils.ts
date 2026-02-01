@@ -81,10 +81,15 @@ export function markdownToHtml(markdown: string): string {
 /**
  * Sanitizes HTML content using allowlist approach for security
  * More secure than blocklist as it's resilient to new attack vectors
+ *
+ * SSR Safety: Returns empty string on server to prevent unsanitized HTML emission.
+ * Content will be sanitized and rendered client-side after hydration.
  */
 export function sanitizeHtmlAllowlist(html: string): string {
+  // SSR safety: return empty string on server to prevent unsanitized HTML
+  // The component will re-render client-side with proper sanitization
   if (typeof window === 'undefined') {
-    return html;
+    return '';
   }
 
   return DOMPurify.sanitize(html, {
