@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import DOMPurify from 'dompurify';
 import { FileEdit, ExternalLink, Plus, Minus } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { stripLineNumbers, escapeHtml, DIFF_STYLES } from './content-utils';
 
 interface DiffChange {
   type: 'add' | 'remove' | 'unchanged';
@@ -26,19 +27,6 @@ interface RichDiffRendererProps {
   maxHeight?: number;
   /** Additional CSS class */
   className?: string;
-}
-
-/**
- * Strips line numbers from content formatted as "123→content"
- */
-function stripLineNumbers(content: string): string {
-  return content
-    .split('\n')
-    .map(line => {
-      const match = line.match(/^\d+→(.*)$/);
-      return match ? match[1] : line;
-    })
-    .join('\n');
 }
 
 /**
@@ -98,18 +86,6 @@ function computeDiff(oldText: string, newText: string): DiffChange[] {
 }
 
 /**
- * Escapes HTML entities for safe rendering
- */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-/**
  * RichDiffRenderer - Shows beautiful visual diffs of content changes
  *
  * Features:
@@ -117,6 +93,7 @@ function escapeHtml(text: string): string {
  * - Renders content as rich text, not code
  * - Clickable header to navigate to the page
  * - Shows change statistics
+ * - Uses Tailwind dark mode for proper theme support
  */
 export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function RichDiffRenderer({
   title,
@@ -142,7 +119,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
     let additions = 0;
     let deletions = 0;
 
-    // Build HTML with diff highlighting
+    // Build HTML with diff highlighting using Tailwind classes
     const parts = changes.map(change => {
       const escapedValue = escapeHtml(change.value);
       const htmlValue = escapedValue.replace(/\n/g, '<br/>');
@@ -150,10 +127,10 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
       switch (change.type) {
         case 'add':
           additions += change.value.length;
-          return `<span class="diff-add">${htmlValue}</span>`;
+          return `<span class="${DIFF_STYLES.add}">${htmlValue}</span>`;
         case 'remove':
           deletions += change.value.length;
-          return `<span class="diff-remove">${htmlValue}</span>`;
+          return `<span class="${DIFF_STYLES.remove}">${htmlValue}</span>`;
         default:
           return htmlValue;
       }
@@ -171,7 +148,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
     }
   };
 
-  // Sanitize the diff HTML
+  // Sanitize the diff HTML using allowlist approach
   const sanitizedHtml = useMemo(() => {
     if (typeof window === 'undefined') return diffHtml;
     return DOMPurify.sanitize(diffHtml, {
@@ -230,38 +207,12 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
 
       {/* Content with diff highlighting */}
       <div
-        className="bg-white dark:bg-gray-50 overflow-auto"
+        className="bg-white dark:bg-gray-900 overflow-auto"
         style={{ maxHeight: `${maxHeight}px` }}
       >
-        <style dangerouslySetInnerHTML={{ __html: `
-          .diff-add {
-            background-color: rgb(187 247 208 / 0.8);
-            color: rgb(22 101 52);
-            padding: 1px 2px;
-            border-radius: 2px;
-            text-decoration: none;
-          }
-          .diff-remove {
-            background-color: rgb(254 202 202 / 0.8);
-            color: rgb(153 27 27);
-            padding: 1px 2px;
-            border-radius: 2px;
-            text-decoration: line-through;
-          }
-          @media (prefers-color-scheme: dark) {
-            .diff-add {
-              background-color: rgb(34 197 94 / 0.3);
-              color: rgb(134 239 172);
-            }
-            .diff-remove {
-              background-color: rgb(239 68 68 / 0.3);
-              color: rgb(252 165 165);
-            }
-          }
-        `}} />
         <div
           className={cn(
-            "p-4 text-gray-900 prose prose-sm max-w-none",
+            "p-4 text-gray-900 dark:text-gray-100 prose prose-sm max-w-none",
             "leading-relaxed whitespace-pre-wrap font-sans text-sm"
           )}
           dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
