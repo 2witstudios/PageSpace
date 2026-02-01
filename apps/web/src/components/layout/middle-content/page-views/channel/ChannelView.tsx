@@ -6,10 +6,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
-import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
+import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { ChannelInput, type ChannelInputRef } from './ChannelInput';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -25,7 +24,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const [messages, setMessages] = useState<MessageWithUser[]>([]);
   const [inputValue, setInputValue] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const chatInputRef = useRef<ChatInputRef>(null);
+  const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
   const { socket, connectionStatus, connect } = useSocketStore();
@@ -130,7 +129,8 @@ export default function ChannelView({ page }: ChannelViewProps) {
       return;
     }
     handleSubmit(inputValue);
-    chatInputRef.current?.clear();
+    channelInputRef.current?.clear();
+    setInputValue('');
   };
 
   // Pull-to-refresh handler for mobile - re-fetch messages if real-time missed any
@@ -162,35 +162,28 @@ export default function ChannelView({ page }: ChannelViewProps) {
                                       {new Date(m.createdAt).toLocaleTimeString()}
                                   </span>
                               </div>
-                              {(() => {
-                                // Channel messages are always user messages with rich text support
-                                const parts = convertToMessageParts(m.content);
-                                return renderMessageParts(parts, 'message');
-                              })()}
+                              <div className="prose prose-sm dark:prose-invert max-w-none">
+                                <StreamingMarkdown
+                                  content={m.content}
+                                  isStreaming={false}
+                                />
+                              </div>
                           </div>
                       </div>
                   ))}
               </div>
           </ScrollArea>
         </PullToRefresh>
-        <div className="p-4 border-t">
+        <div className="p-4">
           {canEdit ? (
-            <div className="flex w-full items-center space-x-2">
-              <ChatInput
-                ref={chatInputRef}
-                value={inputValue}
-                onChange={setInputValue}
-                onSendMessage={handleSendMessage}
-                placeholder="Type your message... (use @ to mention)"
-                driveId={page.driveId}
-              />
-              <Button
-                onClick={handleSendMessage}
-                disabled={!inputValue.trim()}
-              >
-                Send
-              </Button>
-            </div>
+            <ChannelInput
+              ref={channelInputRef}
+              value={inputValue}
+              onChange={setInputValue}
+              onSend={handleSendMessage}
+              placeholder="Type a message... (use @ to mention, supports **markdown**)"
+              driveId={page.driveId}
+            />
           ) : (
             <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
               <Lock className="h-4 w-4" />
