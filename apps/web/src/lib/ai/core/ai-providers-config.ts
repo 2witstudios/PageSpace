@@ -111,6 +111,7 @@ export const AI_PROVIDERS = {
 
       // Other Models
       'inception/mercury': 'Mercury',
+      'writer/palmyra-x5': 'Palmyra X5',
     },
   },
   openrouter_free: {
