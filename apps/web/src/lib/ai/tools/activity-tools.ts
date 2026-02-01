@@ -22,7 +22,6 @@ import {
   generateDiffsWithinBudget,
   calculateDiffBudget,
   type ActivityForDiff,
-  type StackedDiff,
   type DiffRequest,
 } from '@pagespace/lib/content';
 import { readPageContent } from '@pagespace/lib/server';
