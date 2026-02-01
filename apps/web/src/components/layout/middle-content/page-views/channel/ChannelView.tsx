@@ -173,7 +173,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
 
     try {
       await post(`/api/channels/${page.id}/messages/${messageId}/reactions`, { emoji });
-    } catch (error) {
+    } catch (_error) {
       // Revert optimistic update on error
       setMessages((prev) =>
         prev.map((m) => {
@@ -212,7 +212,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
 
     try {
       await del(`/api/channels/${page.id}/messages/${messageId}/reactions`, { emoji });
-    } catch (error) {
+    } catch (_error) {
       // Revert optimistic update on error
       if (removedReaction) {
         setMessages((prev) =>

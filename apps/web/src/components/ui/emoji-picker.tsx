@@ -10,7 +10,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import { Button } from '@/components/ui/button';
 import { Smile, Search, Clock, Heart, ThumbsUp, PartyPopper, Lightbulb, Flag } from 'lucide-react';
 
 // Common emoji categories with frequently used emojis
