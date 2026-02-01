@@ -64,6 +64,16 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logTokenActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn().mockResolvedValue({
+    isOwner: true,
+    isAdmin: true,
+    isMember: true,
+    role: 'OWNER',
+  }),
+  listAccessibleDrives: vi.fn().mockResolvedValue([]),
+}));
+
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';

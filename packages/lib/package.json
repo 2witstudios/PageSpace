@@ -133,6 +133,11 @@
       "import": "./dist/services/permission-cache.js",
       "require": "./dist/services/permission-cache.js"
     },
+    "./services/drive-service": {
+      "types": "./dist/services/drive-service.d.ts",
+      "import": "./dist/services/drive-service.js",
+      "require": "./dist/services/drive-service.js"
+    },
     "./services/validated-service-token": {
       "types": "./dist/services/validated-service-token.d.ts",
       "import": "./dist/services/validated-service-token.js",
@@ -289,6 +294,9 @@
       ],
       "services/permission-cache": [
         "./dist/services/permission-cache.d.ts"
+      ],
+      "services/drive-service": [
+        "./dist/services/drive-service.d.ts"
       ],
       "services/validated-service-token": [
         "./dist/services/validated-service-token.d.ts"

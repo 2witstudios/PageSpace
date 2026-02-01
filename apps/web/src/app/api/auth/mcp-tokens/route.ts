@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, mcpTokens, mcpTokenDrives, drives, eq, and, inArray } from '@pagespace/db';
+import { db, mcpTokens, mcpTokenDrives } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -27,23 +28,23 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { name, driveIds } = createTokenSchema.parse(body);
 
-    // Validate that the user owns/has access to the specified drives
+    // Zero Trust: Validate that the user has access to each specified drive
+    // Users can scope tokens to any drive they have access to (owned OR member)
     if (driveIds && driveIds.length > 0) {
-      const userDrives = await db.query.drives.findMany({
-        where: and(
-          eq(drives.ownerId, userId),
-          inArray(drives.id, driveIds)
-        ),
-        columns: { id: true },
-      });
+      const invalidDriveIds: string[] = [];
 
-      const validDriveIds = new Set(userDrives.map(d => d.id));
-      const invalidDriveIds = driveIds.filter(id => !validDriveIds.has(id));
+      for (const driveId of driveIds) {
+        const access = await getDriveAccess(driveId, userId);
+        // User must be owner, admin, or member to scope a token to this drive
+        if (!access.isOwner && !access.isMember) {
+          invalidDriveIds.push(driveId);
+        }
+      }
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(
-          { error: 'Invalid drive IDs: ' + invalidDriveIds.join(', ') },
-          { status: 400 }
+          { error: 'You do not have access to these drives: ' + invalidDriveIds.join(', ') },
+          { status: 403 }
         );
       }
     }
