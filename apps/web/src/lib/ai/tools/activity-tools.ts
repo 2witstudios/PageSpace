@@ -16,6 +16,14 @@ import {
   inArray,
 } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
+import {
+  groupActivitiesForDiff,
+  generateStackedDiff,
+  truncateDiffsToTokenBudget,
+  type ActivityForDiff,
+  type StackedDiff,
+} from '@pagespace/lib/content';
+import { readPageContent } from '@pagespace/lib/server';
 import { type ToolExecutionContext } from '../core';
 
 /**
@@ -104,6 +112,17 @@ interface CompactActivity {
   delta?: Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }>;
 }
 
+interface ContentDiffSummary {
+  pageId: string;
+  pageTitle: string | null;
+  collapsedCount: number;
+  timeRange: { from: string; to: string };
+  actors: string[];
+  unifiedDiff: string;
+  stats: { additions: number; deletions: number };
+  isAiGenerated: boolean;
+}
+
 interface CompactDriveGroup {
   drive: {
     id: string;
@@ -117,6 +136,7 @@ interface CompactDriveGroup {
     byOp: Record<string, number>;
     aiCount: number;
   };
+  contentDiffs?: ContentDiffSummary[];  // Optional: actual content diffs when includeContentDiffs=true
 }
 
 interface CompactActor {
@@ -251,6 +271,13 @@ The AI should use this data to form intuition about ongoing work and provide con
         .describe(
           'Include change diffs. Set false for lighter response'
         ),
+
+      includeContentDiffs: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Include semantic content diffs for pages with changes. Returns unified diffs showing actual content changes. Use for pulse notifications to see what collaborators actually wrote.'
+        ),
     }),
 
     execute: async (
@@ -263,6 +290,7 @@ The AI should use this data to form intuition about ongoing work and provide con
         limit,
         maxOutputChars,
         includeDiffs,
+        includeContentDiffs,
       },
       { experimental_context: context }
     ) => {
@@ -506,6 +534,114 @@ The AI should use this data to form intuition about ongoing work and provide con
         const driveGroups = Array.from(driveGroupsMap.values()).sort(
           (a, b) => b.stats.total - a.stats.total
         );
+
+        // Generate content diffs if requested
+        if (includeContentDiffs) {
+          // Budget: ~50k chars total (~12k tokens), ~10k chars per page (~2.5k tokens)
+          const TOTAL_DIFF_BUDGET = 50000;
+          const PER_PAGE_BUDGET = 10000;
+
+          // Collect all activities with page content changes
+          const pageActivities = activities.filter(
+            (a) =>
+              a.pageId &&
+              a.resourceType === 'page' &&
+              (a.operation === 'update' || a.operation === 'create') &&
+              (a.contentRef || a.contentSnapshot)
+          );
+
+          if (pageActivities.length > 0) {
+            // Convert to ActivityForDiff format
+            const activitiesForDiff: (ActivityForDiff & { driveId: string })[] = [];
+
+            for (const activity of pageActivities) {
+              // Resolve content - prefer contentRef for larger content
+              let content: string | null = null;
+              if (activity.contentRef) {
+                try {
+                  content = await readPageContent(activity.contentRef);
+                } catch {
+                  // Content may have been deleted or is inaccessible
+                  content = null;
+                }
+              } else if (activity.contentSnapshot) {
+                content = activity.contentSnapshot;
+              }
+
+              activitiesForDiff.push({
+                id: activity.id,
+                timestamp: activity.timestamp,
+                pageId: activity.pageId,
+                resourceTitle: activity.resourceTitle,
+                changeGroupId: activity.changeGroupId,
+                aiConversationId: activity.aiConversationId,
+                isAiGenerated: activity.isAiGenerated,
+                actorEmail: activity.actorEmail,
+                actorDisplayName: activity.actorDisplayName,
+                content,
+                driveId: activity.driveId!,
+              });
+            }
+
+            // Group activities for diffing
+            const diffGroups = groupActivitiesForDiff(activitiesForDiff);
+
+            // Generate stacked diffs
+            const allDiffs: (StackedDiff & { driveId: string })[] = [];
+
+            for (const group of diffGroups) {
+              // Get first and last content
+              const firstActivity = activitiesForDiff.find((a) => a.id === group.first.id);
+              const lastActivity = activitiesForDiff.find((a) => a.id === group.last.id);
+
+              if (!firstActivity || !lastActivity) continue;
+
+              const diff = generateStackedDiff(
+                firstActivity.content,
+                lastActivity.content,
+                group
+              );
+
+              if (diff) {
+                allDiffs.push({
+                  ...diff,
+                  driveId: firstActivity.driveId,
+                });
+              }
+            }
+
+            // Apply token budget truncation
+            const truncatedDiffs = truncateDiffsToTokenBudget(
+              allDiffs,
+              TOTAL_DIFF_BUDGET,
+              PER_PAGE_BUDGET
+            );
+
+            // Assign diffs to their respective drive groups
+            for (const diff of truncatedDiffs) {
+              const driveGroup = driveGroups.find((g) => g.drive.id === (diff as StackedDiff & { driveId: string }).driveId);
+              if (driveGroup) {
+                if (!driveGroup.contentDiffs) {
+                  driveGroup.contentDiffs = [];
+                }
+                // Convert to ContentDiffSummary (strip driveId)
+                driveGroup.contentDiffs.push({
+                  pageId: diff.pageId,
+                  pageTitle: diff.pageTitle,
+                  collapsedCount: diff.collapsedCount,
+                  timeRange: diff.timeRange,
+                  actors: diff.actors,
+                  unifiedDiff: diff.unifiedDiff,
+                  stats: {
+                    additions: diff.stats.additions,
+                    deletions: diff.stats.deletions,
+                  },
+                  isAiGenerated: diff.isAiGenerated,
+                });
+              }
+            }
+          }
+        }
 
         // Calculate overall summary
         const totalActivities = activities.length;
