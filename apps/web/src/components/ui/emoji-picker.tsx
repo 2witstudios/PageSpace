@@ -204,7 +204,7 @@ export function EmojiPicker({
         // Search results
         <ScrollArea className="h-48">
           <div className="p-2 grid grid-cols-8 gap-0.5">
-            {Object.values(filteredCategories)[0]?.emojis.map((emoji, idx) => (
+            {Object.values(filteredCategories)[0]?.emojis.map((emoji: string, idx: number) => (
               <button
                 key={`${emoji}-${idx}`}
                 onClick={() => handleSelect(emoji)}
