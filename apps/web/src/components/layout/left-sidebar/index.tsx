@@ -14,7 +14,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, isElectron } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
@@ -35,6 +35,7 @@ export interface SidebarProps {
 export default function Sidebar({ className }: SidebarProps) {
   const [isCreatePageOpen, setCreatePageOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isElectronMac, setIsElectronMac] = useState(false);
   const params = useParams();
   const { driveId: driveIdParams } = params;
   const { user } = useAuth();
@@ -57,6 +58,11 @@ export default function Sidebar({ className }: SidebarProps) {
     }
   }, [user?.id, fetchDrives]);
 
+  // Detect macOS Electron for stoplight button accommodation
+  useEffect(() => {
+    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
+  }, []);
+
   const handlePageCreated = () => {
     if (driveId) {
       void mutate(`/api/drives/${driveId}/pages`);
@@ -72,10 +78,14 @@ export default function Sidebar({ className }: SidebarProps) {
     >
       <div className="flex h-full flex-col px-3 py-3">
         {/* Dashboard link - always visible */}
+        {/* On macOS Electron in sheet mode, add left padding to clear stoplight buttons */}
         <Link
           href="/dashboard"
           onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3"
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3",
+            isElectronMac && isSheetBreakpoint && "pl-[60px]"
+          )}
         >
           <Home className="h-4 w-4" />
           Dashboard
