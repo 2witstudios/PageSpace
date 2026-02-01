@@ -231,15 +231,19 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         {showPullUpSpinner && (
           <div
             className={cn(
-              'absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none',
+              'absolute inset-x-0 flex justify-center z-50 pointer-events-none',
               'transition-opacity duration-150'
             )}
             style={{
-              bottom: 100,
+              bottom: 140,
               opacity: spinnerOpacity,
-              transform: `translateX(-50%) translateY(${Math.min(0, -(pullDistance - 20))}px) scale(${spinnerScale})`,
             }}
           >
+            <div
+              style={{
+                transform: `translateY(${Math.min(0, -(pullDistance - 20))}px) scale(${spinnerScale})`,
+              }}
+            >
             <div
               className={cn(
                 'flex items-center justify-center w-10 h-10 rounded-full',
@@ -257,6 +261,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
                   transform: !isPullUpRefreshing ? `rotate(${spinnerRotation}deg)` : undefined,
                 }}
               />
+            </div>
             </div>
           </div>
         )}
