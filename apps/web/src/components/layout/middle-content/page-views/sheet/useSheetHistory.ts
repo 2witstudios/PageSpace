@@ -39,6 +39,10 @@ export function useSheetHistory(initialSheet: SheetData): UseSheetHistoryReturn 
     future: [],
   });
 
+  // Keep a ref to current history for synchronous reads in undo/redo
+  const historyRef = useRef(history);
+  historyRef.current = history;
+
   // Track whether we're in the middle of an undo/redo operation
   const isUndoRedoRef = useRef(false);
 
@@ -75,51 +79,45 @@ export function useSheetHistory(initialSheet: SheetData): UseSheetHistoryReturn 
   );
 
   const undo = useCallback((): SheetData | null => {
-    let result: SheetData | null = null;
+    const current = historyRef.current;
 
-    setHistory((prev) => {
-      if (prev.past.length === 0) {
-        return prev;
-      }
+    if (current.past.length === 0) {
+      return null;
+    }
 
-      const newPast = prev.past.slice(0, -1);
-      const newPresent = prev.past[prev.past.length - 1];
-      const newFuture = [prev.present, ...prev.future].slice(0, MAX_HISTORY_SIZE);
+    const newPast = current.past.slice(0, -1);
+    const newPresent = current.past[current.past.length - 1];
+    const newFuture = [current.present, ...current.future].slice(0, MAX_HISTORY_SIZE);
 
-      result = newPresent;
+    const newHistory: HistoryState = {
+      past: newPast,
+      present: newPresent,
+      future: newFuture,
+    };
 
-      return {
-        past: newPast,
-        present: newPresent,
-        future: newFuture,
-      };
-    });
-
-    return result;
+    setHistory(newHistory);
+    return newPresent;
   }, []);
 
   const redo = useCallback((): SheetData | null => {
-    let result: SheetData | null = null;
+    const current = historyRef.current;
 
-    setHistory((prev) => {
-      if (prev.future.length === 0) {
-        return prev;
-      }
+    if (current.future.length === 0) {
+      return null;
+    }
 
-      const newPresent = prev.future[0];
-      const newFuture = prev.future.slice(1);
-      const newPast = [...prev.past, prev.present].slice(-MAX_HISTORY_SIZE);
+    const newPresent = current.future[0];
+    const newFuture = current.future.slice(1);
+    const newPast = [...current.past, current.present].slice(-MAX_HISTORY_SIZE);
 
-      result = newPresent;
+    const newHistory: HistoryState = {
+      past: newPast,
+      present: newPresent,
+      future: newFuture,
+    };
 
-      return {
-        past: newPast,
-        present: newPresent,
-        future: newFuture,
-      };
-    });
-
-    return result;
+    setHistory(newHistory);
+    return newPresent;
   }, []);
 
   const reset = useCallback((initial: SheetData) => {

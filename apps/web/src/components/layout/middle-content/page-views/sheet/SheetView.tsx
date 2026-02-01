@@ -598,7 +598,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
         cells.push({ value: cellData.value, hasValue: true });
       } else if (cellData && cellData.value !== '') {
-        cells.push({ value: 0, hasValue: true });
+        cells.push({ value: NaN, hasValue: true });
       }
     } else {
       const { start, end } = selection.range;
@@ -614,13 +614,13 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
             cells.push({ value: cellData.value, hasValue: true });
           } else if (cellData && cellData.value !== '') {
-            cells.push({ value: 0, hasValue: true });
+            cells.push({ value: NaN, hasValue: true });
           }
         }
       }
     }
 
-    const numericCells = cells.filter(c => c.hasValue && !isNaN(c.value));
+    const numericCells = cells.filter(c => c.hasValue && Number.isFinite(c.value));
     const nonEmptyCells = cells.filter(c => c.hasValue);
 
     if (numericCells.length === 0) {

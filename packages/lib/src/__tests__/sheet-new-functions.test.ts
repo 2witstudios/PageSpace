@@ -57,9 +57,11 @@ describe('new string functions', () => {
     sheet.cells.A1 = 'hello world';
     sheet.cells.A2 = '=RIGHT(A1, 5)';
     sheet.cells.A3 = '=RIGHT(A1)';
+    sheet.cells.A4 = '=RIGHT(A1, 0)';
     const result = evaluateSheet(sheet);
     expect(getDisplay(result, 'A2')).toBe('world');
     expect(getDisplay(result, 'A3')).toBe('d');
+    expect(getDisplay(result, 'A4')).toBe('');
   });
 
   it('MID extracts characters from the middle', () => {

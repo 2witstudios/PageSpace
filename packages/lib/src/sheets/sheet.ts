@@ -1747,7 +1747,7 @@ function evaluateFunction(
       const text = String(values[0]);
       const numChars = values.length > 1 ? coerceNumber(values[1]) : 1;
       const chars = Math.max(0, Math.floor(numChars));
-      return text.slice(-chars || text.length);
+      return chars > 0 ? text.slice(-chars) : '';
     }
     case 'MID': {
       if (values.length !== 3) {
