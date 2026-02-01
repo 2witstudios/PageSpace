@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Folder, MoreHorizontal, Star } from "lucide-react";
+import { ExternalLink, Folder, MoreHorizontal, Star } from "lucide-react";
+import { useTabsStore } from "@/stores/useTabsStore";
+import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +26,7 @@ export default function FavoritesSection() {
   const { favorites, isLoading, isSynced, fetchFavorites, removeFavoriteById } = useFavorites();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
+  const createTab = useTabsStore((state) => state.createTab);
 
   useEffect(() => {
     if (!isSynced) {
@@ -31,12 +34,22 @@ export default function FavoritesSection() {
     }
   }, [isSynced, fetchFavorites]);
 
-  const handleNavigate = (href: string) => {
+  const handleNavigate = useCallback((href: string, e?: MouseEvent) => {
+    if (e && shouldOpenInNewTab(e)) {
+      e.preventDefault();
+      createTab({ path: href });
+      return;
+    }
+
     router.push(href);
     if (isSheetBreakpoint) {
       setLeftSheetOpen(false);
     }
-  };
+  }, [router, isSheetBreakpoint, setLeftSheetOpen, createTab]);
+
+  const handleOpenInNewTab = useCallback((href: string) => {
+    createTab({ path: href });
+  }, [createTab]);
 
   const handleRemoveFavorite = async (favoriteId: string) => {
     const toastId = toast.loading("Removing from favorites...");
@@ -63,14 +76,24 @@ export default function FavoritesSection() {
         Favorites
       </h3>
       <div className="space-y-0.5">
-        {favorites.map((favorite) => (
-          <FavoriteItem
-            key={favorite.id}
-            favorite={favorite}
-            onNavigate={handleNavigate}
-            onRemove={() => handleRemoveFavorite(favorite.id)}
-          />
-        ))}
+        {favorites.map((favorite) => {
+          const href =
+            favorite.itemType === "drive" && favorite.drive
+              ? `/dashboard/${favorite.drive.id}`
+              : favorite.itemType === "page" && favorite.page
+                ? `/dashboard/${favorite.page.driveId}/${favorite.page.id}`
+                : "#";
+          return (
+            <FavoriteItem
+              key={favorite.id}
+              favorite={favorite}
+              href={href}
+              onNavigate={(e) => handleNavigate(href, e)}
+              onOpenInNewTab={() => handleOpenInNewTab(href)}
+              onRemove={() => handleRemoveFavorite(favorite.id)}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -92,19 +115,14 @@ interface FavoriteItemProps {
       name: string;
     };
   };
-  onNavigate: (href: string) => void;
+  href: string;
+  onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
+  onOpenInNewTab: () => void;
   onRemove: () => void;
 }
 
-function FavoriteItem({ favorite, onNavigate, onRemove }: FavoriteItemProps) {
+function FavoriteItem({ favorite, href, onNavigate, onOpenInNewTab, onRemove }: FavoriteItemProps) {
   const [isHovered, setIsHovered] = useState(false);
-
-  const href =
-    favorite.itemType === "drive" && favorite.drive
-      ? `/dashboard/${favorite.drive.id}`
-      : favorite.itemType === "page" && favorite.page
-        ? `/dashboard/${favorite.page.driveId}/${favorite.page.id}`
-        : "#";
 
   const title =
     favorite.itemType === "drive"
@@ -121,7 +139,13 @@ function FavoriteItem({ favorite, onNavigate, onRemove }: FavoriteItemProps) {
       onMouseLeave={() => setIsHovered(false)}
     >
       <button
-        onClick={() => onNavigate(href)}
+        onClick={onNavigate}
+        onAuxClick={(e) => {
+          if (e.button === 1) {
+            e.preventDefault();
+            onOpenInNewTab();
+          }
+        }}
         className={cn(
           "flex items-center gap-2.5 w-full py-1.5 px-2 rounded-md text-sm transition-colors",
           "hover:bg-accent hover:text-accent-foreground",
@@ -161,6 +185,10 @@ function FavoriteItem({ favorite, onNavigate, onRemove }: FavoriteItemProps) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem onSelect={onOpenInNewTab}>
+            <ExternalLink className="mr-2 h-4 w-4" />
+            Open in new tab
+          </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={onRemove}
             className="text-muted-foreground"
