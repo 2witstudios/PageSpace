@@ -63,12 +63,11 @@ export const useFavorites = create<FavoritesState>()(
       },
 
       addFavorite: async (id: string, itemType: 'page' | 'drive' = 'page') => {
-        // Optimistic update
-        const prevState = get();
+        // Optimistic update using functional set to prevent race conditions
         if (itemType === 'page') {
-          set({ pageIds: new Set(prevState.pageIds).add(id) });
+          set(state => ({ pageIds: new Set(state.pageIds).add(id) }));
         } else {
-          set({ driveIds: new Set(prevState.driveIds).add(id) });
+          set(state => ({ driveIds: new Set(state.driveIds).add(id) }));
         }
 
         try {
@@ -76,53 +75,50 @@ export const useFavorites = create<FavoritesState>()(
           // Refetch to get the full favorite object with ID
           await get().fetchFavorites();
         } catch (error) {
-          // Rollback on error
+          // Rollback on error using functional set
           if (itemType === 'page') {
-            const rollbackIds = new Set(prevState.pageIds);
-            rollbackIds.delete(id);
-            set({ pageIds: rollbackIds });
+            set(state => {
+              const rollbackIds = new Set(state.pageIds);
+              rollbackIds.delete(id);
+              return { pageIds: rollbackIds };
+            });
           } else {
-            const rollbackIds = new Set(prevState.driveIds);
-            rollbackIds.delete(id);
-            set({ driveIds: rollbackIds });
+            set(state => {
+              const rollbackIds = new Set(state.driveIds);
+              rollbackIds.delete(id);
+              return { driveIds: rollbackIds };
+            });
           }
           throw error;
         }
       },
 
       removeFavorite: async (id: string, itemType: 'page' | 'drive' = 'page') => {
-        const state = get();
-
-        // Find the favorite ID
-        const favorite = state.favorites.find(f => {
+        // Find the favorite ID from current state
+        const favorite = get().favorites.find(f => {
           if (itemType === 'page' && f.page?.id === id) return true;
           if (itemType === 'drive' && f.drive?.id === id) return true;
           return false;
         });
 
-        if (!favorite) {
-          // Not found in synced data - just remove from local set
-          if (itemType === 'page') {
+        // Optimistic update using functional set to prevent race conditions
+        if (itemType === 'page') {
+          set(state => {
             const newPageIds = new Set(state.pageIds);
             newPageIds.delete(id);
-            set({ pageIds: newPageIds });
-          } else {
+            return { pageIds: newPageIds };
+          });
+        } else {
+          set(state => {
             const newDriveIds = new Set(state.driveIds);
             newDriveIds.delete(id);
-            set({ driveIds: newDriveIds });
-          }
-          return;
+            return { driveIds: newDriveIds };
+          });
         }
 
-        // Optimistic update
-        if (itemType === 'page') {
-          const newPageIds = new Set(state.pageIds);
-          newPageIds.delete(id);
-          set({ pageIds: newPageIds });
-        } else {
-          const newDriveIds = new Set(state.driveIds);
-          newDriveIds.delete(id);
-          set({ driveIds: newDriveIds });
+        if (!favorite) {
+          // Not found in synced data - local set already updated above
+          return;
         }
 
         try {
@@ -130,37 +126,51 @@ export const useFavorites = create<FavoritesState>()(
           // Refetch to sync state
           await get().fetchFavorites();
         } catch (error) {
-          // Rollback on error
+          // Rollback on error using functional set
           if (itemType === 'page') {
-            set({ pageIds: new Set(state.pageIds).add(id) });
+            set(state => ({ pageIds: new Set(state.pageIds).add(id) }));
           } else {
-            set({ driveIds: new Set(state.driveIds).add(id) });
+            set(state => ({ driveIds: new Set(state.driveIds).add(id) }));
           }
           throw error;
         }
       },
 
       removeFavoriteById: async (favoriteId: string) => {
-        const state = get();
-        const favorite = state.favorites.find(f => f.id === favoriteId);
+        const favorite = get().favorites.find(f => f.id === favoriteId);
 
         if (!favorite) return;
 
-        // Optimistic update
-        const newFavorites = state.favorites.filter(f => f.id !== favoriteId);
-        const newPageIds = new Set(state.pageIds);
-        const newDriveIds = new Set(state.driveIds);
+        // Capture what we're removing for rollback
+        const removedPageId = favorite.page?.id;
+        const removedDriveId = favorite.drive?.id;
 
-        if (favorite.page) newPageIds.delete(favorite.page.id);
-        if (favorite.drive) newDriveIds.delete(favorite.drive.id);
+        // Optimistic update using functional set to prevent race conditions
+        set(state => {
+          const newFavorites = state.favorites.filter(f => f.id !== favoriteId);
+          const newPageIds = new Set(state.pageIds);
+          const newDriveIds = new Set(state.driveIds);
 
-        set({ favorites: newFavorites, pageIds: newPageIds, driveIds: newDriveIds });
+          if (removedPageId) newPageIds.delete(removedPageId);
+          if (removedDriveId) newDriveIds.delete(removedDriveId);
+
+          return { favorites: newFavorites, pageIds: newPageIds, driveIds: newDriveIds };
+        });
 
         try {
           await del(`/api/user/favorites/${favoriteId}`);
         } catch (error) {
-          // Rollback
-          set({ favorites: state.favorites, pageIds: state.pageIds, driveIds: state.driveIds });
+          // Rollback using functional set
+          set(state => {
+            const restoredFavorites = [...state.favorites, favorite];
+            const restoredPageIds = new Set(state.pageIds);
+            const restoredDriveIds = new Set(state.driveIds);
+
+            if (removedPageId) restoredPageIds.add(removedPageId);
+            if (removedDriveId) restoredDriveIds.add(removedDriveId);
+
+            return { favorites: restoredFavorites, pageIds: restoredPageIds, driveIds: restoredDriveIds };
+          });
           throw error;
         }
       },
