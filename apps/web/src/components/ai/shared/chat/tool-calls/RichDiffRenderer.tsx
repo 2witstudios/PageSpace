@@ -29,9 +29,16 @@ interface RichDiffRendererProps {
   className?: string;
 }
 
+// Maximum cells for LCS matrix to prevent UI freezing on large inputs
+// 10000 words × 10000 words = 100M cells would freeze the browser
+const MAX_DIFF_WORDS = 5000;
+
 /**
  * Simple diff algorithm using longest common subsequence approach
  * Returns an array of changes with type (add/remove/unchanged) and value
+ *
+ * For large inputs exceeding MAX_DIFF_WORDS, falls back to a simple
+ * remove-old/add-new pair to prevent UI freezing.
  */
 function computeDiff(oldText: string, newText: string): DiffChange[] {
   const oldWords = oldText.split(/(\s+)/);
@@ -42,6 +49,20 @@ function computeDiff(oldText: string, newText: string): DiffChange[] {
   // Build LCS table
   const m = oldWords.length;
   const n = newWords.length;
+
+  // Guard: bail out to cheap fallback for large inputs to prevent UI freeze
+  // O(m×n) matrix allocation and computation would be too expensive
+  if (m > MAX_DIFF_WORDS || n > MAX_DIFF_WORDS) {
+    // Simple fallback: show old as removed, new as added
+    if (oldText) {
+      changes.push({ type: 'remove', value: oldText });
+    }
+    if (newText) {
+      changes.push({ type: 'add', value: newText });
+    }
+    return changes;
+  }
+
   const lcs: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
 
   for (let i = 1; i <= m; i++) {
@@ -162,6 +183,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
     <div className={cn("rounded-lg border bg-card overflow-hidden my-2 shadow-sm", className)}>
       {/* Header - clickable to navigate */}
       <button
+        type="button"
         onClick={handleNavigate}
         disabled={!pageId}
         className={cn(

@@ -90,6 +90,7 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
     <div className={cn("rounded-lg border bg-card overflow-hidden my-2 shadow-sm", className)}>
       {/* Header - clickable to navigate */}
       <button
+        type="button"
         onClick={handleNavigate}
         disabled={!pageId}
         className={cn(
