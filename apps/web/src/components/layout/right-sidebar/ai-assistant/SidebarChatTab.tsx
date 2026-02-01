@@ -765,7 +765,7 @@ const SidebarChatTab: React.FC = () => {
             displayIsStreaming={displayIsStreaming}
           />
           {/* Scroll-to-bottom button - visible when user scrolls up */}
-          <ConversationScrollButton className="z-10" />
+          <ConversationScrollButton className="z-10 bottom-8" />
         </Conversation>
       </div>
 
