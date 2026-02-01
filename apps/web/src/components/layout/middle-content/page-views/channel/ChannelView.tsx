@@ -237,12 +237,19 @@ export default function ChannelView({ page }: ChannelViewProps) {
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id !== data.messageId) return m;
-          // Avoid duplicates
+          // Avoid duplicates - check if this exact reaction already exists
           const exists = m.reactions?.some((r) => r.id === data.reaction.id);
           if (exists) return m;
+          // Only remove the specific temp reaction that matches this confirmed reaction
+          // (same emoji and userId), keep other temp reactions intact
+          const filteredReactions = (m.reactions || []).filter((r) => {
+            if (!r.id.startsWith('temp-')) return true;
+            // Remove temp reaction only if it matches the confirmed reaction
+            return !(r.emoji === data.reaction.emoji && r.userId === data.reaction.userId);
+          });
           return {
             ...m,
-            reactions: [...(m.reactions || []).filter(r => !r.id.startsWith('temp-')), data.reaction],
+            reactions: [...filteredReactions, data.reaction],
           };
         })
       );
