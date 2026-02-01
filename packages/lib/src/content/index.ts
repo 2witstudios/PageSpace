@@ -11,3 +11,5 @@ export * from './page-content-format';
 export * from './page-type-validators';
 export * from './page-types.config';
 export * from './tree-utils';
+export * from './version-resolver';
+export * from './diff-generator';

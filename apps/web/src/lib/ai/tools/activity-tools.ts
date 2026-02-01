@@ -15,13 +15,15 @@ import {
   isNull,
   inArray,
 } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember, getBatchPagePermissions } from '@pagespace/lib';
 import {
   groupActivitiesForDiff,
-  generateStackedDiff,
-  truncateDiffsToTokenBudget,
+  resolveStackedVersionContent,
+  generateDiffsWithinBudget,
+  calculateDiffBudget,
   type ActivityForDiff,
   type StackedDiff,
+  type DiffRequest,
 } from '@pagespace/lib/content';
 import { readPageContent } from '@pagespace/lib/server';
 import { type ToolExecutionContext } from '../core';
@@ -537,12 +539,11 @@ The AI should use this data to form intuition about ongoing work and provide con
 
         // Generate content diffs if requested
         if (includeContentDiffs) {
-          // Budget: ~50k chars total (~12k tokens), ~10k chars per page (~2.5k tokens)
-          const TOTAL_DIFF_BUDGET = 50000;
-          const PER_PAGE_BUDGET = 10000;
+          // P2 Budget: Use maxOutputChars parameter to calculate proportional budget
+          const diffBudget = calculateDiffBudget(maxOutputChars);
 
           // Collect all activities with page content changes
-          const pageActivities = activities.filter(
+          let pageActivities = activities.filter(
             (a) =>
               a.pageId &&
               a.resourceType === 'page' &&
@@ -550,23 +551,33 @@ The AI should use this data to form intuition about ongoing work and provide con
               (a.contentRef || a.contentSnapshot)
           );
 
+          // P1 Security: Filter to pages user has permission to view
+          // Drive membership alone doesn't grant page-level content access
+          if (pageActivities.length > 0) {
+            const uniquePageIds = [...new Set(pageActivities.map(a => a.pageId).filter(Boolean))] as string[];
+            const permissions = await getBatchPagePermissions(userId, uniquePageIds);
+
+            // Filter to pages user can view
+            const viewablePageIds = new Set(
+              Array.from(permissions.entries())
+                .filter(([, perm]) => perm?.canView)
+                .map(([pageId]) => pageId)
+            );
+
+            pageActivities = pageActivities.filter(
+              a => a.pageId && viewablePageIds.has(a.pageId)
+            );
+          }
+
           if (pageActivities.length > 0) {
             // Convert to ActivityForDiff format
+            // Note: Content in activity logs is pre-update state (for rollback)
             const activitiesForDiff: (ActivityForDiff & { driveId: string })[] = [];
 
             for (const activity of pageActivities) {
-              // Resolve content - prefer contentRef for larger content
-              let content: string | null = null;
-              if (activity.contentRef) {
-                try {
-                  content = await readPageContent(activity.contentRef);
-                } catch {
-                  // Content may have been deleted or is inaccessible
-                  content = null;
-                }
-              } else if (activity.contentSnapshot) {
-                content = activity.contentSnapshot;
-              }
+              // Get pre-update content ref from activity
+              // This represents what the content was BEFORE this change
+              const contentRef = activity.contentRef ?? null;
 
               activitiesForDiff.push({
                 id: activity.id,
@@ -578,7 +589,8 @@ The AI should use this data to form intuition about ongoing work and provide con
                 isAiGenerated: activity.isAiGenerated,
                 actorEmail: activity.actorEmail,
                 actorDisplayName: activity.actorDisplayName,
-                content,
+                // Store contentRef for later resolution, not the content itself
+                content: contentRef,
                 driveId: activity.driveId!,
               });
             }
@@ -586,40 +598,78 @@ The AI should use this data to form intuition about ongoing work and provide con
             // Group activities for diffing
             const diffGroups = groupActivitiesForDiff(activitiesForDiff);
 
-            // Generate stacked diffs
-            const allDiffs: (StackedDiff & { driveId: string })[] = [];
-
-            for (const group of diffGroups) {
-              // Get first and last content
-              const firstActivity = activitiesForDiff.find((a) => a.id === group.first.id);
-              const lastActivity = activitiesForDiff.find((a) => a.id === group.last.id);
-
-              if (!firstActivity || !lastActivity) continue;
-
-              const diff = generateStackedDiff(
-                firstActivity.content,
-                lastActivity.content,
-                group
-              );
-
-              if (diff) {
-                allDiffs.push({
-                  ...diff,
-                  driveId: firstActivity.driveId,
-                });
-              }
-            }
-
-            // Apply token budget truncation
-            const truncatedDiffs = truncateDiffsToTokenBudget(
-              allDiffs,
-              TOTAL_DIFF_BUDGET,
-              PER_PAGE_BUDGET
+            // P2 Semantic: Use page versions for post-update content
+            // Activity logs store pre-update content; page versions store post-update content
+            const groupsWithChangeGroupId = diffGroups.filter(
+              (g) => g.first.changeGroupId && g.first.pageId
             );
 
+            // Resolve post-update content from page versions
+            const versionContentPairs = await resolveStackedVersionContent(
+              groupsWithChangeGroupId.map((g) => ({
+                changeGroupId: g.first.changeGroupId!,
+                pageId: g.first.pageId!,
+                // Use first activity's contentRef as "before" state
+                firstContentRef: activitiesForDiff.find((a) => a.id === g.first.id)?.content ?? null,
+              }))
+            );
+
+            // Build DiffRequests for budget-aware generation
+            const diffRequests: DiffRequest[] = [];
+
+            for (const group of diffGroups) {
+              const firstActivity = activitiesForDiff.find((a) => a.id === group.first.id);
+              if (!firstActivity || !firstActivity.pageId) continue;
+
+              // Resolve before/after content
+              let beforeContent: string | null = null;
+              let afterContent: string | null = null;
+
+              if (group.first.changeGroupId) {
+                // Use version resolver for accurate before/after
+                const versionPair = versionContentPairs.get(group.first.changeGroupId);
+                if (versionPair) {
+                  // Resolve content refs to actual content
+                  if (versionPair.beforeContentRef) {
+                    try {
+                      beforeContent = await readPageContent(versionPair.beforeContentRef);
+                    } catch {
+                      beforeContent = null;
+                    }
+                  }
+                  if (versionPair.afterContentRef) {
+                    try {
+                      afterContent = await readPageContent(versionPair.afterContentRef);
+                    } catch {
+                      afterContent = null;
+                    }
+                  }
+                }
+              }
+
+              // Skip if we can't generate a meaningful diff
+              if (afterContent === null && firstActivity.content) {
+                continue;
+              }
+              if (beforeContent === null && afterContent === null) {
+                continue;
+              }
+
+              diffRequests.push({
+                pageId: firstActivity.pageId,
+                beforeContent,
+                afterContent,
+                group,
+                driveId: firstActivity.driveId,
+              });
+            }
+
+            // P2 Budget: Generate diffs within budget, prioritized by change magnitude
+            const budgetedDiffs = generateDiffsWithinBudget(diffRequests, diffBudget);
+
             // Assign diffs to their respective drive groups
-            for (const diff of truncatedDiffs) {
-              const driveGroup = driveGroups.find((g) => g.drive.id === (diff as StackedDiff & { driveId: string }).driveId);
+            for (const diff of budgetedDiffs) {
+              const driveGroup = driveGroups.find((g) => g.drive.id === diff.driveId);
               if (driveGroup) {
                 if (!driveGroup.contentDiffs) {
                   driveGroup.contentDiffs = [];
