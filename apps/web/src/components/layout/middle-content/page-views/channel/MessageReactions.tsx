@@ -117,7 +117,7 @@ export function MessageReactions({
   };
 
   // Format user names for tooltip
-  const formatUserNames = (users: { id: string; name: string | null }[], hasReacted: boolean) => {
+  const formatUserNames = (users: { id: string; name: string | null }[]) => {
     const names = users
       .map((u) => (u.id === currentUserId ? 'You' : u.name || 'Unknown'))
       .slice(0, 10);
@@ -157,7 +157,7 @@ export function MessageReactions({
             </button>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-xs">
-            <p className="text-sm">{formatUserNames(group.users, group.hasReacted)}</p>
+            <p className="text-sm">{formatUserNames(group.users)}</p>
           </TooltipContent>
         </Tooltip>
       ))}

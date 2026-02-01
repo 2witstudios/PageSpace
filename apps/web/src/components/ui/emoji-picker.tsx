@@ -145,9 +145,8 @@ export function EmojiPicker({
       return EMOJI_CATEGORIES;
     }
 
-    // Simple search - filter emojis (we can't search by name without a mapping)
-    // For now, show all emojis that visually match the query
-    const query = searchQuery.toLowerCase();
+    // Simple search - show all emojis when searching
+    // (Full text search would require emoji name mapping)
     const results: string[] = [];
 
     Object.values(EMOJI_CATEGORIES).forEach((category) => {
