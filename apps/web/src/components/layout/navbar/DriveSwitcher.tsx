@@ -153,7 +153,7 @@ export default function DriveSwitcher() {
 
           <DropdownMenuSeparator />
 
-          <CustomScrollArea className="max-h-[320px]">
+          <CustomScrollArea className="max-h-[320px] overflow-x-hidden">
             {/* Favorites Section */}
             {favoriteDrives.length > 0 && (
               <>
