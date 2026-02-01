@@ -263,7 +263,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
         {/* Scroll-to-bottom button - only visible when user scrolls up */}
         {/* Positioned higher (bottom-36) to appear above floating input in middle content area */}
-        <ConversationScrollButton className="z-20 bottom-36" />
+        <ConversationScrollButton className="z-20 bottom-44 sm:bottom-36" />
 
         <UndoAiChangesDialog
           open={!!undoDialogMessageId}
