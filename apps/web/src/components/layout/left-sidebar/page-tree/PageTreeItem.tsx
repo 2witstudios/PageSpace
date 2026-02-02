@@ -16,6 +16,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { TreePage } from "@/hooks/usePageTree";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
@@ -98,6 +99,7 @@ export function PageTreeItem({
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const createTab = useTabsStore((state) => state.createTab);
   const isTouchDevice = useTouchDevice();
+  const { isNative } = useCapacitor();
   const hasChildren = item.children && item.children.length > 0;
 
   const linkHref = `/dashboard/${params.driveId}/${item.id}`;
@@ -283,7 +285,7 @@ export function PageTreeItem({
               <Link
                 href={linkHref}
                 onClick={handleLinkClick}
-                onMouseDown={handleMouseDown}
+                onMouseDown={isNative ? undefined : handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}
                 onTouchEnd={(e) => e.stopPropagation()}
                 className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer touch-manipulation"
@@ -336,10 +338,12 @@ export function PageTreeItem({
               </>
             ) : (
               <>
-                <ContextMenuItem onSelect={handleOpenInNewTab}>
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  <span>Open in new tab</span>
-                </ContextMenuItem>
+                {!isNative && (
+                  <ContextMenuItem onSelect={handleOpenInNewTab}>
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    <span>Open in new tab</span>
+                  </ContextMenuItem>
+                )}
                 <ContextMenuItem onSelect={() => onOpenCreateDialog(item.id)}>
                   <FolderPlus className="mr-2 h-4 w-4" />
                   <span>Add child page</span>

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
@@ -48,6 +49,7 @@ export default function RecentsSection() {
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const createTab = useTabsStore((state) => state.createTab);
+  const { isNative } = useCapacitor();
 
   const { data, isLoading, error } = useSWR<{ recents: RecentPage[] }>(
     "/api/user/recents?limit=8",
@@ -98,6 +100,7 @@ export default function RecentsSection() {
             page={page}
             onNavigate={(e) => handleNavigate(page, e)}
             onOpenInNewTab={() => handleOpenInNewTab(page)}
+            isNative={isNative}
           />
         ))}
       </div>
@@ -109,35 +112,45 @@ interface RecentItemProps {
   page: RecentPage;
   onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
   onOpenInNewTab: () => void;
+  isNative: boolean;
 }
 
-function RecentItem({ page, onNavigate, onOpenInNewTab }: RecentItemProps) {
+function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemProps) {
+  const content = (
+    <button
+      onClick={onNavigate}
+      onAuxClick={isNative ? undefined : (e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          onOpenInNewTab();
+        }
+      }}
+      className={cn(
+        "flex items-center gap-2.5 w-full py-1.5 px-2 rounded-md text-sm transition-colors",
+        "hover:bg-accent hover:text-accent-foreground",
+        "text-left"
+      )}
+    >
+      <PageTypeIcon
+        type={page.type as PageType}
+        className="h-4 w-4 shrink-0 text-muted-foreground"
+      />
+      <span className="flex-1 truncate">{page.title}</span>
+      <span className="text-[10px] text-muted-foreground/60 shrink-0">
+        {formatRelativeTime(page.viewedAt)}
+      </span>
+    </button>
+  );
+
+  // On native apps, don't show the context menu with "Open in new tab"
+  if (isNative) {
+    return content;
+  }
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
-          onClick={onNavigate}
-          onAuxClick={(e) => {
-            if (e.button === 1) {
-              e.preventDefault();
-              onOpenInNewTab();
-            }
-          }}
-          className={cn(
-            "flex items-center gap-2.5 w-full py-1.5 px-2 rounded-md text-sm transition-colors",
-            "hover:bg-accent hover:text-accent-foreground",
-            "text-left"
-          )}
-        >
-          <PageTypeIcon
-            type={page.type as PageType}
-            className="h-4 w-4 shrink-0 text-muted-foreground"
-          />
-          <span className="flex-1 truncate">{page.title}</span>
-          <span className="text-[10px] text-muted-foreground/60 shrink-0">
-            {formatRelativeTime(page.viewedAt)}
-          </span>
-        </button>
+        {content}
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={onOpenInNewTab}>
