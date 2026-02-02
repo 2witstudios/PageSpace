@@ -1,7 +1,7 @@
 'use client';
 
 import React, { MouseEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 
 // Define the structure for message parts
 export interface MessagePart {
@@ -21,12 +21,12 @@ interface MessagePartRendererProps {
 }
 
 const MessagePartRenderer: React.FC<MessagePartRendererProps> = ({ part, index }) => {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
 
-  // Handle mention link clicks - use router.push to stay in WebView on Capacitor
+  // Handle mention link clicks - use navigateToPage to stay in WebView on Capacitor/Electron
   const handleMentionClick = (e: MouseEvent<HTMLAnchorElement>, pageId: string) => {
     e.preventDefault();
-    router.push(`/p/${pageId}`);
+    navigateToPage(pageId);
   };
 
   switch (part.type) {
