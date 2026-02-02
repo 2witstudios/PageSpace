@@ -24,6 +24,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "PageSpaceKeychain")
 public class PageSpaceSecureStoragePlugin extends Plugin {
     private SharedPreferences sharedPreferences;
+    private String initializationError;
     private static final String PREFS_NAME = "ai.pagespace.secure";
 
     @Override
@@ -41,16 +42,24 @@ public class PageSpaceSecureStoragePlugin extends Plugin {
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             );
+            initializationError = null;
         } catch (Exception e) {
-            // Fallback to regular SharedPreferences if encryption fails
-            // This should rarely happen but prevents app crashes
-            sharedPreferences = getContext()
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            sharedPreferences = null;
+            initializationError = "Secure storage unavailable: " + e.getMessage();
         }
+    }
+
+    private boolean rejectIfNotInitialized(PluginCall call) {
+        if (sharedPreferences == null) {
+            call.reject(initializationError != null ? initializationError : "Secure storage not initialized");
+            return true;
+        }
+        return false;
     }
 
     @PluginMethod
     public void get(PluginCall call) {
+        if (rejectIfNotInitialized(call)) return;
         String key = call.getString("key");
         if (key == null) {
             call.reject("Missing key");
@@ -64,6 +73,7 @@ public class PageSpaceSecureStoragePlugin extends Plugin {
 
     @PluginMethod
     public void set(PluginCall call) {
+        if (rejectIfNotInitialized(call)) return;
         String key = call.getString("key");
         String value = call.getString("value");
         if (key == null || value == null) {
@@ -78,6 +88,7 @@ public class PageSpaceSecureStoragePlugin extends Plugin {
 
     @PluginMethod
     public void remove(PluginCall call) {
+        if (rejectIfNotInitialized(call)) return;
         String key = call.getString("key");
         if (key == null) {
             call.reject("Missing key");
