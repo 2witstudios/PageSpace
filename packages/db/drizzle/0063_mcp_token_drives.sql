@@ -3,6 +3,10 @@
 -- If a token has no entries here, it has access to ALL user's drives (backward compatible)
 -- If a token has entries here, it ONLY has access to those specific drives
 
+-- Add isScoped column to mcp_tokens (fail-closed security)
+-- When isScoped=true and driveScopes is empty, deny all access (prevents privilege escalation on drive deletion)
+ALTER TABLE "mcp_tokens" ADD COLUMN IF NOT EXISTS "isScoped" boolean NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS "mcp_token_drives" (
   "id" text PRIMARY KEY NOT NULL,
   "tokenId" text NOT NULL,

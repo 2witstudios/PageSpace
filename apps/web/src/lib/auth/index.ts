@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
+import { db, mcpTokens, pages, eq, and, isNull } from '@pagespace/db';
 import { hashToken, sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/server';
 import { getSessionFromCookies } from './cookie-config';
@@ -73,6 +73,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       columns: {
         id: true,
         userId: true,
+        isScoped: true,
       },
       with: {
         user: {
@@ -96,14 +97,23 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       return null;
     }
 
+    // Extract allowed drive IDs from the scopes
+    const allowedDriveIds = tokenRecord.driveScopes.map(scope => scope.driveId);
+
+    // Fail-closed security: if token was originally scoped but all drives have been deleted,
+    // deny access entirely (prevents privilege escalation from scoped -> unrestricted)
+    if (tokenRecord.isScoped && allowedDriveIds.length === 0) {
+      console.warn('MCP token denied - scoped token with no remaining drives', {
+        tokenId: tokenRecord.id,
+        userId: tokenRecord.userId,
+      });
+      return null;
+    }
+
     await db
       .update(mcpTokens)
       .set({ lastUsed: new Date() })
       .where(eq(mcpTokens.id, tokenRecord.id));
-
-    // Extract allowed drive IDs from the scopes
-    // Empty array means no restrictions (access to all user's drives)
-    const allowedDriveIds = tokenRecord.driveScopes.map(scope => scope.driveId);
 
     return {
       userId: tokenRecord.userId,
@@ -226,6 +236,45 @@ export function isMCPAuthResult(result: AuthenticationResult): result is MCPAuth
 
 export function isSessionAuthResult(result: AuthenticationResult): result is SessionAuthResult {
   return !('error' in result) && result.tokenType === 'session';
+}
+
+/**
+ * Check if the auth result allows access to a specific drive.
+ * For session auth, always returns true (no scope restrictions).
+ * For MCP auth, checks if driveId is in allowedDriveIds (empty array = no restrictions).
+ */
+export function checkMCPDriveScope(auth: AuthResult, driveId: string): boolean {
+  if (auth.tokenType === 'session') {
+    return true; // Session auth has no drive scope restrictions
+  }
+  // MCP auth - check if drive is in allowed list (empty = all allowed)
+  if (auth.allowedDriveIds.length === 0) {
+    return true;
+  }
+  return auth.allowedDriveIds.includes(driveId);
+}
+
+/**
+ * Get the page's driveId and check if the auth result allows access to it.
+ * Returns null if page not found, true if access allowed, false if denied.
+ */
+export async function checkMCPPageScope(auth: AuthResult, pageId: string): Promise<boolean | null> {
+  if (auth.tokenType === 'session') {
+    return true; // Session auth has no drive scope restrictions
+  }
+  // MCP auth with no scope restrictions
+  if (auth.allowedDriveIds.length === 0) {
+    return true;
+  }
+  // Need to look up page's driveId
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+  if (!page) {
+    return null;
+  }
+  return auth.allowedDriveIds.includes(page.driveId);
 }
 
 export async function authenticateRequestWithOptions(

@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { pageService } from '@/services/api';
 
@@ -17,6 +17,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return auth.error;
   }
   const userId = auth.userId;
+
+  // MCP drive scope check: ensure token has access to this page's drive
+  const scopeCheck = await checkMCPPageScope(auth, pageId);
+  if (scopeCheck === null) {
+    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+  }
+  if (scopeCheck === false) {
+    return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+  }
 
   try {
     const result = await pageService.getPage(pageId, userId);
@@ -50,6 +59,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     return auth.error;
   }
   const userId = auth.userId;
+
+  // MCP drive scope check: ensure token has access to this page's drive
+  const scopeCheck = await checkMCPPageScope(auth, pageId);
+  if (scopeCheck === null) {
+    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+  }
+  if (scopeCheck === false) {
+    return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+  }
 
   try {
     const body = await req.json();
@@ -136,6 +154,15 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     return auth.error;
   }
   const userId = auth.userId;
+
+  // MCP drive scope check: ensure token has access to this page's drive
+  const scopeCheck = await checkMCPPageScope(auth, pageId);
+  if (scopeCheck === null) {
+    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+  }
+  if (scopeCheck === false) {
+    return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+  }
 
   try {
     // Safely parse JSON body - handle empty or malformed bodies

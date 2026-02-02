@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
@@ -94,6 +94,9 @@ export const mcpTokens = pgTable('mcp_tokens', {
   tokenPrefix: text('tokenPrefix').notNull(),
 
   name: text('name').notNull(),
+  // Fail-closed security: if true and driveScopes is empty (all drives deleted), deny all access
+  // Default false for backward compatibility with existing tokens
+  isScoped: boolean('isScoped').notNull().default(false),
   lastUsed: timestamp('lastUsed', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   revokedAt: timestamp('revokedAt', { mode: 'date' }),

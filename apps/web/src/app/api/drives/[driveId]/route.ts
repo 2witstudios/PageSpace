@@ -9,7 +9,7 @@ import {
 } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -37,6 +37,11 @@ export async function GET(
       return auth.error;
     }
     const userId = auth.userId;
+
+    // MCP drive scope check: ensure token has access to this drive
+    if (!checkMCPDriveScope(auth, driveId)) {
+      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+    }
 
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
@@ -71,6 +76,11 @@ export async function PATCH(
       return auth.error;
     }
     const userId = auth.userId;
+
+    // MCP drive scope check: ensure token has access to this drive
+    if (!checkMCPDriveScope(auth, driveId)) {
+      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+    }
 
     const body = await request.json();
     const validatedBody = patchSchema.parse(body);
@@ -164,6 +174,11 @@ export async function DELETE(
       return auth.error;
     }
     const userId = auth.userId;
+
+    // MCP drive scope check: ensure token has access to this drive
+    if (!checkMCPDriveScope(auth, driveId)) {
+      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+    }
 
     // Check drive exists
     const drive = await getDriveById(driveId);

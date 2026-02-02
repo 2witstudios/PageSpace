@@ -53,15 +53,20 @@ export async function POST(req: NextRequest) {
     // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
     const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
+    // Determine if this token is scoped (fail-closed security)
+    const isScoped = !!(driveIds && driveIds.length > 0);
+
     // Use transaction to ensure token and drive scopes are created atomically
     // If drive scope insertion fails, the token should not exist
     const newToken = await db.transaction(async (tx) => {
       // Store ONLY the hash in the database
+      // isScoped=true means if all scoped drives are deleted, deny access (not grant all)
       const [token] = await tx.insert(mcpTokens).values({
         userId,
         tokenHash,
         tokenPrefix,
         name,
+        isScoped,
       }).returning();
 
       // If drive scopes are specified, create the junction table entries

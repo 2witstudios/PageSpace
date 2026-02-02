@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, pagePermissions, driveMembers, taskItems, userPageViews, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -73,6 +73,11 @@ export async function GET(
 
   try {
     const { driveId } = await context.params;
+
+    // MCP drive scope check: ensure token has access to this drive
+    if (!checkMCPDriveScope(auth, driveId)) {
+      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
+    }
 
     // Find drive by id, but don't scope to owner yet
     const drive = await db.query.drives.findFirst({
