@@ -49,6 +49,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   const tokenRef = useRef<string | null>(null);
   const hasRegisteredRef = useRef(false);
   const pushNotificationsRef = useRef<typeof import('@capacitor/push-notifications').PushNotifications | null>(null);
+  const registerTokenWithServerRef = useRef<(token: string) => Promise<void>>(async () => {});
 
   // Check if push notifications are supported
   useEffect(() => {
@@ -108,7 +109,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
         (token: { value: string }) => {
           console.log('[PushNotifications] Registered with token:', token.value.substring(0, 20) + '...');
           tokenRef.current = token.value;
-          registerTokenWithServer(token.value);
+          registerTokenWithServerRef.current(token.value);
         }
       );
       listeners.push(() => registrationListener.remove());
@@ -200,6 +201,9 @@ export function usePushNotifications(): PushNotificationState & PushNotification
       }));
     }
   }, [isAuthenticated, platform]);
+
+  // Keep ref updated with latest callback to avoid stale closure in listeners
+  registerTokenWithServerRef.current = registerTokenWithServer;
 
   // Request permission and register for push notifications
   const requestPermission = useCallback(async (): Promise<boolean> => {

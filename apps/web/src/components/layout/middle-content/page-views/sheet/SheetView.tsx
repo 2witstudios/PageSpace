@@ -679,7 +679,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         return sanitized;
       });
     },
-    [saveWithDebounce, updateContent]
+    [saveWithDebounce, updateContent, setSheet]
   );
 
   // Start editing a cell with optional initial key
