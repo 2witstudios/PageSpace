@@ -487,6 +487,10 @@ describe('WebSocket Connection Manager', () => {
       vi.mocked(sessionService.validateSession).mockResolvedValueOnce({
         userId: 'user_1',
         sessionId: 'session_1',
+        userRole: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        type: 'device',
         scopes: ['*'],
         expiresAt: new Date(Date.now() + 86400000),
       });
@@ -524,6 +528,10 @@ describe('WebSocket Connection Manager', () => {
       vi.mocked(sessionService.validateSession).mockResolvedValue({
         userId: 'user_1',
         sessionId: 'session_1',
+        userRole: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        type: 'device',
         scopes: ['*'],
         expiresAt: new Date(Date.now() + 86400000),
       });
@@ -553,6 +561,10 @@ describe('WebSocket Connection Manager', () => {
         return {
           userId: 'user',
           sessionId: 'session',
+          userRole: 'user',
+          tokenVersion: 1,
+          adminRoleVersion: 0,
+          type: 'device',
           scopes: ['*'],
           expiresAt: new Date(Date.now() + 86400000),
         };
