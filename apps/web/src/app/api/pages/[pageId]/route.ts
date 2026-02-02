@@ -23,15 +23,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const userId = auth.userId;
 
-  // MCP drive scope check: ensure token has access to this page's drive
-  const scopeCheck = await checkMCPPageScope(auth, pageId);
-  if (scopeCheck === null) {
-    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
-  }
-  if (scopeCheck === false) {
-    return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-  }
-
   try {
     const result = await pageService.getPage(pageId, userId);
 
@@ -69,15 +60,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   if (scopeError) return scopeError;
 
   const userId = auth.userId;
-
-  // MCP drive scope check: ensure token has access to this page's drive
-  const scopeCheck = await checkMCPPageScope(auth, pageId);
-  if (scopeCheck === null) {
-    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
-  }
-  if (scopeCheck === false) {
-    return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-  }
 
   try {
     const body = await req.json();
@@ -169,15 +151,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   if (scopeError) return scopeError;
 
   const userId = auth.userId;
-
-  // MCP drive scope check: ensure token has access to this page's drive
-  const scopeCheck = await checkMCPPageScope(auth, pageId);
-  if (scopeCheck === null) {
-    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
-  }
-  if (scopeCheck === false) {
-    return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-  }
 
   try {
     // Safely parse JSON body - handle empty or malformed bodies

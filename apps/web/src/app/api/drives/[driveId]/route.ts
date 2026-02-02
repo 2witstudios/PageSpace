@@ -43,11 +43,6 @@ export async function GET(
 
     const userId = auth.userId;
 
-    // MCP drive scope check: ensure token has access to this drive
-    if (!checkMCPDriveScope(auth, driveId)) {
-      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-    }
-
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
 
     if (!driveWithAccess) {
@@ -86,11 +81,6 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     const userId = auth.userId;
-
-    // MCP drive scope check: ensure token has access to this drive
-    if (!checkMCPDriveScope(auth, driveId)) {
-      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-    }
 
     const body = await request.json();
     const validatedBody = patchSchema.parse(body);
@@ -189,11 +179,6 @@ export async function DELETE(
     if (scopeError) return scopeError;
 
     const userId = auth.userId;
-
-    // MCP drive scope check: ensure token has access to this drive
-    if (!checkMCPDriveScope(auth, driveId)) {
-      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-    }
 
     // Check drive exists
     const drive = await getDriveById(driveId);

@@ -238,45 +238,6 @@ export function isSessionAuthResult(result: AuthenticationResult): result is Ses
   return !('error' in result) && result.tokenType === 'session';
 }
 
-/**
- * Check if the auth result allows access to a specific drive.
- * For session auth, always returns true (no scope restrictions).
- * For MCP auth, checks if driveId is in allowedDriveIds (empty array = no restrictions).
- */
-export function checkMCPDriveScope(auth: AuthResult, driveId: string): boolean {
-  if (auth.tokenType === 'session') {
-    return true; // Session auth has no drive scope restrictions
-  }
-  // MCP auth - check if drive is in allowed list (empty = all allowed)
-  if (auth.allowedDriveIds.length === 0) {
-    return true;
-  }
-  return auth.allowedDriveIds.includes(driveId);
-}
-
-/**
- * Get the page's driveId and check if the auth result allows access to it.
- * Returns null if page not found, true if access allowed, false if denied.
- */
-export async function checkMCPPageScope(auth: AuthResult, pageId: string): Promise<boolean | null> {
-  if (auth.tokenType === 'session') {
-    return true; // Session auth has no drive scope restrictions
-  }
-  // MCP auth with no scope restrictions
-  if (auth.allowedDriveIds.length === 0) {
-    return true;
-  }
-  // Need to look up page's driveId
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, pageId),
-    columns: { driveId: true },
-  });
-  if (!page) {
-    return null;
-  }
-  return auth.allowedDriveIds.includes(page.driveId);
-}
-
 export async function authenticateRequestWithOptions(
   request: Request,
   options: AuthenticateOptions,
