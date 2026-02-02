@@ -87,7 +87,6 @@ export default function FavoritesSection() {
             <FavoriteItem
               key={favorite.id}
               favorite={favorite}
-              href={href}
               onNavigate={(e) => handleNavigate(href, e)}
               onOpenInNewTab={() => handleOpenInNewTab(href)}
               onRemove={() => handleRemoveFavorite(favorite.id)}
