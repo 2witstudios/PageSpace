@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { logger } from '@pagespace/lib';
+import { logger, sessionService } from '@pagespace/lib';
 
 /**
  * WebSocket Connection Manager
@@ -276,12 +276,20 @@ async function cleanupStaleConnections(): Promise<void> {
  * - User's tokenVersion changed (password change)
  * - User was suspended
  *
+ * Uses parallel validation for scale - all connections are validated concurrently
+ * to minimize total validation time when many connections exist.
+ *
  * This closes the security gap where 90-day tokens could persist after revocation.
  */
 async function revalidateSessions(): Promise<void> {
-  const { sessionService } = await import('@pagespace/lib');
   const now = Date.now();
-  const connectionsToClose: Array<{ userId: string; ws: WebSocket; reason: string }> = [];
+
+  // Collect connections that need revalidation
+  const connectionsToValidate: Array<{
+    userId: string;
+    ws: WebSocket;
+    metadata: ConnectionMetadata;
+  }> = [];
 
   for (const [userId, ws] of connections.entries()) {
     const metadata = connectionMetadata.get(ws);
@@ -291,11 +299,30 @@ async function revalidateSessions(): Promise<void> {
     const lastRevalidated = metadata.lastRevalidated?.getTime() || 0;
     if (now - lastRevalidated < SESSION_REVALIDATION_INTERVAL_MS) continue;
 
-    try {
-      const claims = await sessionService.validateSession(metadata.wsToken);
+    connectionsToValidate.push({ userId, ws, metadata });
+  }
+
+  if (connectionsToValidate.length === 0) return;
+
+  // Validate all sessions in parallel for scale
+  const validationResults = await Promise.allSettled(
+    connectionsToValidate.map(async ({ userId, ws, metadata }) => {
+      const claims = await sessionService.validateSession(metadata.wsToken!);
+      return { userId, ws, metadata, claims };
+    })
+  );
+
+  const connectionsToClose: Array<{ userId: string; ws: WebSocket; reason: string }> = [];
+
+  // Process results
+  for (let i = 0; i < validationResults.length; i++) {
+    const result = validationResults[i];
+    const { userId, ws, metadata } = connectionsToValidate[i];
+
+    if (result.status === 'fulfilled') {
       metadata.lastRevalidated = new Date();
 
-      if (!claims) {
+      if (!result.value.claims) {
         wsLogger.warn('Session revalidation failed', {
           userId,
           sessionId: metadata.sessionId,
@@ -303,11 +330,11 @@ async function revalidateSessions(): Promise<void> {
         });
         connectionsToClose.push({ userId, ws, reason: 'session_revoked' });
       }
-    } catch (error) {
+    } else {
       // Don't close on transient errors - will retry next interval
       wsLogger.error('Session revalidation error', {
         userId,
-        error: error instanceof Error ? error.message : String(error),
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
         action: 'revalidation_error',
       });
     }

@@ -516,5 +516,68 @@ describe('WebSocket Connection Manager', () => {
       expect(getConnection('user_1')).toBe(mockClient);
       expect(mockClient.close).not.toHaveBeenCalled();
     });
+
+    it('should skip recently revalidated connections', async () => {
+      const { sessionService } = await import('@pagespace/lib');
+
+      // Mock validateSession to return valid claims
+      vi.mocked(sessionService.validateSession).mockResolvedValue({
+        userId: 'user_1',
+        sessionId: 'session_1',
+        scopes: ['*'],
+        expiresAt: new Date(Date.now() + 86400000),
+      });
+
+      // Register with wsToken
+      registerConnection('user_1', mockClient, 'fingerprint', 'session_1', undefined, 'test_token');
+      markChallengeVerified(mockClient);
+
+      // First cleanup - should trigger revalidation
+      await triggerCleanup();
+      expect(sessionService.validateSession).toHaveBeenCalledTimes(1);
+
+      // Second cleanup immediately after - should skip (recently revalidated)
+      await triggerCleanup();
+      expect(sessionService.validateSession).toHaveBeenCalledTimes(1); // Still 1, not 2
+
+      // Connection should still exist
+      expect(getConnection('user_1')).toBe(mockClient);
+    });
+
+    it('should validate multiple connections in parallel', async () => {
+      const { sessionService } = await import('@pagespace/lib');
+
+      // Mock validateSession with a delay to test parallelism
+      vi.mocked(sessionService.validateSession).mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return {
+          userId: 'user',
+          sessionId: 'session',
+          scopes: ['*'],
+          expiresAt: new Date(Date.now() + 86400000),
+        };
+      });
+
+      // Register multiple connections with wsTokens
+      registerConnection('user_1', mockClient, 'fingerprint', 'session_1', undefined, 'token_1');
+      registerConnection('user_2', mockClient2, 'fingerprint', 'session_2', undefined, 'token_2');
+      markChallengeVerified(mockClient);
+      markChallengeVerified(mockClient2);
+
+      const startTime = Date.now();
+      await triggerCleanup();
+      const elapsed = Date.now() - startTime;
+
+      // Both should be validated
+      expect(sessionService.validateSession).toHaveBeenCalledTimes(2);
+
+      // If serial, would take ~20ms. If parallel, ~10ms.
+      // Allow some buffer for test environment variance
+      expect(elapsed).toBeLessThan(50);
+
+      // Both connections should still exist
+      expect(getConnection('user_1')).toBe(mockClient);
+      expect(getConnection('user_2')).toBe(mockClient2);
+    });
   });
 });
