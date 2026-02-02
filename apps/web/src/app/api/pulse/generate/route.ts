@@ -378,7 +378,7 @@ Create a 2-4 sentence summary that highlights the most important information. St
       userId,
       summary,
       greeting,
-      type: 'scheduled',
+      type: 'on_demand',
       contextData,
       aiProvider: providerResult.provider,
       aiModel: providerResult.modelName,
