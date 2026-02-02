@@ -50,7 +50,7 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   const handleLinkClick = (e: MouseEvent<HTMLAnchorElement>, href: string) => {
     if (shouldOpenInNewTab(e)) {
       e.preventDefault();
-      createTab({ path: href });
+      createTab({ path: href, activate: false });
       return;
     }
 
@@ -60,7 +60,7 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   };
 
   const handleOpenInNewTab = (href: string) => {
-    createTab({ path: href });
+    createTab({ path: href, activate: false });
   };
 
   const actions = [

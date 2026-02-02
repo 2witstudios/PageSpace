@@ -110,8 +110,9 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-next'), e)) {
         e.preventDefault();
         cycleTab('next');
-        const newActiveTabId = useTabsStore.getState().activeTabId;
-        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
+        // Use fresh state to avoid stale closure
+        const state = useTabsStore.getState();
+        const newActiveTab = state.tabs.find(t => t.id === state.activeTabId);
         if (newActiveTab) {
           router.push(newActiveTab.path);
         }
@@ -121,8 +122,9 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-prev'), e)) {
         e.preventDefault();
         cycleTab('prev');
-        const newActiveTabId = useTabsStore.getState().activeTabId;
-        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
+        // Use fresh state to avoid stale closure
+        const state = useTabsStore.getState();
+        const newActiveTab = state.tabs.find(t => t.id === state.activeTabId);
         if (newActiveTab) {
           router.push(newActiveTab.path);
         }

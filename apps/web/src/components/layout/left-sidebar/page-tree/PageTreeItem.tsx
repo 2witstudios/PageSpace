@@ -120,9 +120,9 @@ export function PageTreeItem({
     }
   }, [linkHref, createTab]);
 
-  // Open in new tab from context menu
+  // Open in new tab from context menu (opens in background like browsers)
   const handleOpenInNewTab = useCallback(() => {
-    createTab({ path: linkHref });
+    createTab({ path: linkHref, activate: false });
   }, [linkHref, createTab]);
 
   // Combine file drops AND internal dnd-kit drags for drop indicators
