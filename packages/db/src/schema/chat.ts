@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, boolean, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, boolean, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages, drives } from './core';
@@ -70,6 +70,28 @@ export const channelMessageReactionsRelations = relations(channelMessageReaction
     user: one(users, {
         fields: [channelMessageReactions.userId],
         references: [users.id],
+    }),
+}));
+
+// Channel read status - tracks when users last read channel messages (watermark-based)
+export const channelReadStatus = pgTable('channel_read_status', {
+    userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    channelId: text('channelId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+    lastReadAt: timestamp('lastReadAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.channelId] }),
+    userIdx: index('channel_read_status_user_id_idx').on(table.userId),
+    channelIdx: index('channel_read_status_channel_id_idx').on(table.channelId),
+}));
+
+export const channelReadStatusRelations = relations(channelReadStatus, ({ one }) => ({
+    user: one(users, {
+        fields: [channelReadStatus.userId],
+        references: [users.id],
+    }),
+    channel: one(pages, {
+        fields: [channelReadStatus.channelId],
+        references: [pages.id],
     }),
 }));
 

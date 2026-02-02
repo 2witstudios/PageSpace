@@ -68,3 +68,25 @@ export interface Drive {
   isOwned: boolean;
   role?: 'OWNER' | 'ADMIN' | 'MEMBER';
 }
+
+// Inbox types for unified DM/Channel inbox
+export interface InboxItem {
+  id: string;
+  type: 'dm' | 'channel';
+  name: string;
+  avatarUrl: string | null;
+  lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+  lastMessageSender: string | null;
+  unreadCount: number;
+  driveId?: string;
+  driveName?: string;
+}
+
+export interface InboxResponse {
+  items: InboxItem[];
+  pagination: {
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+}

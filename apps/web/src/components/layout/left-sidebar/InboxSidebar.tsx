@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
@@ -16,6 +16,9 @@ import type { SidebarProps } from './index';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useInboxSocket } from '@/hooks/useInboxSocket';
+import { isEditingActive } from '@/stores/useEditingStore';
+import type { InboxItem, InboxResponse } from '@pagespace/lib';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -24,27 +27,6 @@ const fetcher = async (url: string) => {
   }
   return response.json();
 };
-
-interface InboxItem {
-  id: string;
-  type: 'dm' | 'channel';
-  name: string;
-  avatarUrl: string | null;
-  lastMessageAt: string | null;
-  lastMessagePreview: string | null;
-  lastMessageSender: string | null;
-  unreadCount: number;
-  driveId?: string;
-  driveName?: string;
-}
-
-interface InboxResponse {
-  items: InboxItem[];
-  pagination: {
-    hasMore: boolean;
-    nextCursor: string | null;
-  };
-}
 
 export default function InboxSidebar({ className }: SidebarProps) {
   const params = useParams();
@@ -65,8 +47,14 @@ export default function InboxSidebar({ className }: SidebarProps) {
     ? `/api/inbox?driveId=${driveId}&limit=20`
     : '/api/inbox?limit=20';
 
+  // Socket integration for real-time updates
+  const { hasLoadedRef } = useInboxSocket({ driveId });
+
   const { data, error } = useSWR<InboxResponse>(apiUrl, fetcher, {
-    refreshInterval: 10000,
+    refreshInterval: 0, // Disable polling - socket handles updates
+    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    onSuccess: () => { hasLoadedRef.current = true; },
+    revalidateOnFocus: false,
   });
 
   useEffect(() => {

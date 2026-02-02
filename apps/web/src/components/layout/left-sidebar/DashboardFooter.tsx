@@ -48,7 +48,7 @@ const actions = [
   {
     icon: Settings,
     label: "Settings",
-    href: "/dashboard/settings",
+    href: "/settings",
   },
   {
     icon: Trash2,

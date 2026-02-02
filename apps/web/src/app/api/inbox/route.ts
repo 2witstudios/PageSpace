@@ -2,21 +2,9 @@ import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import type { InboxItem, InboxResponse } from '@pagespace/lib';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-
-interface InboxItem {
-  id: string;
-  type: 'dm' | 'channel';
-  name: string;
-  avatarUrl: string | null;
-  lastMessageAt: string | null;
-  lastMessagePreview: string | null;
-  lastMessageSender: string | null;
-  unreadCount: number;
-  driveId?: string;
-  driveName?: string;
-}
 
 // Helper to convert raw PostgreSQL timestamp strings to ISO format
 const toISOTimestamp = (timestamp: string | null): string | null => {
@@ -36,12 +24,20 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
-    const cursor = searchParams.get('cursor'); // ISO timestamp
+    const cursor = searchParams.get('cursor'); // ISO timestamp or "id:<id>" for null timestamps
     const driveId = searchParams.get('driveId'); // Optional: filter to specific drive
+
+    // Fetch one extra row to determine if there are more results
+    const fetchLimit = limit + 1;
 
     const items: InboxItem[] = [];
 
     if (driveId) {
+      // Parse cursor - can be ISO timestamp or "id:<channelId>" for null timestamps
+      const isIdCursor = cursor !== null && cursor.startsWith('id:');
+      const cursorId = isIdCursor ? cursor.slice(3) : null;
+      const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
+
       // Drive-specific inbox: only channels from this drive
       const channelResults = await db.execute(sql`
         WITH drive_channels AS (
@@ -67,6 +63,15 @@ export async function GET(request: Request) {
           INNER JOIN drive_channels dc ON dc.id = cm."pageId"
           LEFT JOIN users u ON u.id = cm."userId"
           ORDER BY cm."pageId", cm."createdAt" DESC
+        ),
+        channel_unread AS (
+          SELECT cm."pageId", COUNT(*) as unread_count
+          FROM channel_messages cm
+          LEFT JOIN channel_read_status crs
+            ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
+          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+            AND cm."userId" != ${userId}
+          GROUP BY cm."pageId"
         )
         SELECT
           dc.id,
@@ -75,12 +80,18 @@ export async function GET(request: Request) {
           dc.drive_name,
           clm.last_message,
           clm.last_message_at,
-          clm.sender_name
+          clm.sender_name,
+          COALESCE(cu.unread_count, 0) as unread_count
         FROM drive_channels dc
         LEFT JOIN channel_last_messages clm ON clm."pageId" = dc.id
-        ${cursor ? sql`WHERE clm.last_message_at < ${cursor} OR clm.last_message_at IS NULL` : sql``}
-        ORDER BY clm.last_message_at DESC NULLS LAST
-        LIMIT ${limit}
+        LEFT JOIN channel_unread cu ON cu."pageId" = dc.id
+        ${cursorTimestamp
+          ? sql`WHERE (clm.last_message_at < ${cursorTimestamp} OR clm.last_message_at IS NULL)`
+          : cursorId
+            ? sql`WHERE clm.last_message_at IS NULL AND dc.id < ${cursorId}`
+            : sql``}
+        ORDER BY clm.last_message_at DESC NULLS LAST, dc.id DESC
+        LIMIT ${fetchLimit}
       `);
 
       interface ChannelRow {
@@ -91,6 +102,7 @@ export async function GET(request: Request) {
         last_message: string | null;
         last_message_at: string | null;
         sender_name: string | null;
+        unread_count: string;
       }
 
       for (const row of channelResults.rows) {
@@ -103,11 +115,27 @@ export async function GET(request: Request) {
           lastMessageAt: toISOTimestamp(typedRow.last_message_at),
           lastMessagePreview: typedRow.last_message ? typedRow.last_message.substring(0, 100) : null,
           lastMessageSender: typedRow.sender_name,
-          unreadCount: 0, // Channel unread tracking not implemented yet
+          unreadCount: parseInt(typedRow.unread_count) || 0,
           driveId: typedRow.drive_id,
           driveName: typedRow.drive_name,
         });
       }
+
+      // Determine pagination for drive-specific query
+      const hasMore = items.length > limit;
+      const paginatedItems = items.slice(0, limit);
+      const lastItem = paginatedItems[paginatedItems.length - 1];
+      const nextCursor = lastItem
+        ? lastItem.lastMessageAt || `id:${lastItem.id}`
+        : null;
+
+      return NextResponse.json({
+        items: paginatedItems,
+        pagination: {
+          hasMore,
+          nextCursor,
+        },
+      } satisfies InboxResponse);
     } else {
       // Dashboard inbox: DMs + all channels from all drives
 
@@ -198,6 +226,15 @@ export async function GET(request: Request) {
           INNER JOIN user_channels uc ON uc.id = cm."pageId"
           LEFT JOIN users u ON u.id = cm."userId"
           ORDER BY cm."pageId", cm."createdAt" DESC
+        ),
+        channel_unread AS (
+          SELECT cm."pageId", COUNT(*) as unread_count
+          FROM channel_messages cm
+          LEFT JOIN channel_read_status crs
+            ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
+          WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
+            AND cm."userId" != ${userId}
+          GROUP BY cm."pageId"
         )
         SELECT
           uc.id,
@@ -206,9 +243,11 @@ export async function GET(request: Request) {
           uc.drive_name,
           clm.last_message,
           clm.last_message_at,
-          clm.sender_name
+          clm.sender_name,
+          COALESCE(cu.unread_count, 0) as unread_count
         FROM user_channels uc
         LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
+        LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
         ORDER BY clm.last_message_at DESC NULLS LAST
       `);
 
@@ -220,6 +259,7 @@ export async function GET(request: Request) {
         last_message: string | null;
         last_message_at: string | null;
         sender_name: string | null;
+        unread_count: string;
       }
 
       for (const row of channelResults.rows) {
@@ -232,7 +272,7 @@ export async function GET(request: Request) {
           lastMessageAt: toISOTimestamp(typedRow.last_message_at),
           lastMessagePreview: typedRow.last_message ? typedRow.last_message.substring(0, 100) : null,
           lastMessageSender: typedRow.sender_name,
-          unreadCount: 0,
+          unreadCount: parseInt(typedRow.unread_count) || 0,
           driveId: typedRow.drive_id,
           driveName: typedRow.drive_name,
         });
@@ -248,22 +288,34 @@ export async function GET(request: Request) {
     }
 
     // Apply cursor-based pagination for combined results
+    // Parse cursor - can be ISO timestamp or "id:<itemId>" for null timestamps
+    const isIdCursor = cursor !== null && cursor.startsWith('id:');
+    const cursorId = isIdCursor ? cursor.slice(3) : null;
+    const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
+
     let filteredItems = items;
-    if (cursor && !driveId) {
-      const cursorDate = new Date(cursor);
+    if (cursorTimestamp) {
+      const cursorDate = new Date(cursorTimestamp);
       filteredItems = items.filter(item => {
-        if (!item.lastMessageAt) return true;
+        if (!item.lastMessageAt) return true; // Include items with no timestamp
         return new Date(item.lastMessageAt) < cursorDate;
       });
+    } else if (cursorId) {
+      // For id-based cursor, skip items until we find the cursor id, then skip that item too
+      const cursorIndex = items.findIndex(item => item.id === cursorId);
+      if (cursorIndex >= 0) {
+        filteredItems = items.slice(cursorIndex + 1);
+      }
     }
 
-    // Apply limit
+    // Apply limit (we fetch extra to check for more, but only for drive queries)
     const paginatedItems = filteredItems.slice(0, limit);
 
     // Determine pagination info
     const hasMore = filteredItems.length > limit;
-    const nextCursor = paginatedItems.length > 0
-      ? paginatedItems[paginatedItems.length - 1].lastMessageAt
+    const lastItem = paginatedItems[paginatedItems.length - 1];
+    const nextCursor = lastItem
+      ? lastItem.lastMessageAt || `id:${lastItem.id}`
       : null;
 
     return NextResponse.json({
@@ -272,7 +324,7 @@ export async function GET(request: Request) {
         hasMore,
         nextCursor,
       },
-    });
+    } satisfies InboxResponse);
   } catch (error) {
     loggers.api.error('Error fetching inbox:', error as Error);
     return NextResponse.json(
