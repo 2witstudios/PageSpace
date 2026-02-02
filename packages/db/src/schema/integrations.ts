@@ -15,8 +15,9 @@ import {
   pgEnum,
   index,
   unique,
+  check,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
@@ -158,6 +159,10 @@ export const integrationConnections = pgTable(
     driveProviderUnique: unique('integration_connections_drive_provider').on(
       table.driveId,
       table.providerId
+    ),
+    userOrDriveScope: check(
+      'integration_connections_scope_chk',
+      sql`(${table.userId} IS NOT NULL AND ${table.driveId} IS NULL) OR (${table.userId} IS NULL AND ${table.driveId} IS NOT NULL)`
     ),
   })
 );

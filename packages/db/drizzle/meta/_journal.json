@@ -414,6 +414,13 @@
       "when": 1769990064501,
       "tag": "0058_third_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1770002659951,
+      "tag": "0059_smart_fantastic_four",
+      "breakpoints": true
     }
   ]
 }

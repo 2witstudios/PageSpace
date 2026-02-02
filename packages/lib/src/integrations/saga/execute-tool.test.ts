@@ -160,8 +160,11 @@ const executeToolSaga = async (
       };
     }
 
-    // 4. Decrypt credentials
-    const credentials = await deps.decryptCredentials(connection.credentials as Record<string, string>);
+    // 4. Decrypt credentials (skip for 'none' auth or null credentials)
+    const credentials =
+      providerConfig.authMethod.type === 'none' || !connection.credentials
+        ? {}
+        : await deps.decryptCredentials(connection.credentials as Record<string, string>);
 
     // 5. Find tool definition
     const tool = providerConfig.tools.find((t) => t.id === request.toolName);
@@ -537,5 +540,62 @@ describe('executeToolSaga', () => {
       success: false,
       errorType: 'INTEGRATION_INACTIVE',
     }));
+  });
+
+  it('given connection with authMethod none and null credentials, should execute without crash', async () => {
+    const noneAuthProvider = createTestProvider({
+      authMethod: { type: 'none' },
+    });
+    mockLoadConnection.mockResolvedValue(
+      createTestConnection({
+        credentials: null,
+        provider: {
+          id: 'public-api',
+          slug: 'public-api',
+          name: 'Public API',
+          config: noneAuthProvider,
+        },
+      })
+    );
+    mockIsToolAllowed.mockReturnValue({ allowed: true });
+    mockCheckRateLimit.mockResolvedValue({ allowed: true });
+    mockBuildHttpRequest.mockReturnValue({
+      url: 'https://api.github.com/user/repos',
+      method: 'GET',
+      headers: {},
+    });
+    mockApplyAuth.mockReturnValue({
+      headers: {},
+      queryParams: {},
+    });
+    mockExecuteHttp.mockResolvedValue({
+      success: true,
+      response: { status: 200, body: [] },
+    });
+    mockLogAudit.mockResolvedValue(undefined);
+
+    const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
+      connectionId: 'conn-123',
+      agentId: 'agent-1',
+      toolName: 'list_repos',
+      input: {},
+    };
+
+    const result = await executeToolSaga(request, {
+      loadConnection: mockLoadConnection,
+      decryptCredentials: mockDecryptCredentials,
+      checkRateLimit: mockCheckRateLimit,
+      executeHttp: mockExecuteHttp,
+      logAudit: mockLogAudit,
+      isToolAllowed: mockIsToolAllowed,
+      buildHttpRequest: mockBuildHttpRequest,
+      applyAuth: mockApplyAuth,
+      transformOutput: mockTransformOutput,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockDecryptCredentials).not.toHaveBeenCalled();
   });
 });

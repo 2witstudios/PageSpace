@@ -150,11 +150,12 @@ export const executeToolSaga = async (
       };
     }
 
-    // 4. Calculate and check rate limit
+    // 4. Calculate and check rate limit (includes tool-specific limit)
     const effectiveRateLimit = calculateEffectiveRateLimit({
       provider: providerConfig.rateLimit,
-      connection: undefined, // TODO: Load from connection config
+      connection: undefined, // TODO: Load from connection.configOverrides
       grant: request.grant?.rateLimitOverride ?? undefined,
+      tool: tool.rateLimit,
     });
 
     const rateCheck = await checkIntegrationRateLimit({
@@ -180,10 +181,13 @@ export const executeToolSaga = async (
       };
     }
 
-    // 5. Decrypt credentials
-    const credentials = await decryptCredentials(
-      connection.credentials as Record<string, string>
-    );
+    // 5. Decrypt credentials (skip for 'none' auth or null credentials)
+    const credentials =
+      providerConfig.authMethod.type === 'none' || !connection.credentials
+        ? {}
+        : await decryptCredentials(
+            connection.credentials as Record<string, string>
+          );
 
     // 6. Build HTTP request (pure function)
     const baseUrl = connection.baseUrlOverride || providerConfig.baseUrl;

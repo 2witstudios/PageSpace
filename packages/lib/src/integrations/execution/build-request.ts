@@ -128,9 +128,16 @@ export const buildHttpRequest = (
   // Build path
   const path = interpolatePath(config.pathTemplate, input);
 
-  // Build URL
-  const normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-  const url = new URL(path, normalizedBaseUrl);
+  // Build URL - properly merge base path with request path
+  const baseUrlObj = new URL(baseUrl);
+  const basePath = baseUrlObj.pathname.endsWith('/')
+    ? baseUrlObj.pathname.slice(0, -1)
+    : baseUrlObj.pathname;
+  const fullPath = path.startsWith('/')
+    ? basePath + path
+    : basePath + '/' + path;
+  baseUrlObj.pathname = fullPath;
+  const url = baseUrlObj;
 
   // Add query params
   if (config.queryParams) {

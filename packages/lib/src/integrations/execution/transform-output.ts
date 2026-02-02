@@ -19,10 +19,12 @@ export const extractPath = (data: unknown, path: string): unknown => {
   const parts = path.slice(2).split('.');
   let current: unknown = data;
 
-  for (const part of parts) {
+  for (let i = 0; i < parts.length; i++) {
     if (current === null || current === undefined) {
       return null;
     }
+
+    const part = parts[i];
 
     // Handle array indexing: array[0] or array[*]
     const arrayMatch = part.match(/^(\w+)\[(\d+|\*)\]$/);
@@ -36,7 +38,12 @@ export const extractPath = (data: unknown, path: string): unknown => {
       }
 
       if (index === '*') {
-        // Return all elements (for further processing)
+        // If there are more parts after wildcard, map over elements
+        const remainingPath = parts.slice(i + 1).join('.');
+        if (remainingPath) {
+          return arr.map((item) => extractPath(item, '$.' + remainingPath));
+        }
+        // Otherwise return the array
         current = arr;
       } else {
         current = arr[parseInt(index, 10)];

@@ -265,4 +265,26 @@ describe('buildHttpRequest', () => {
 
     expect(result.url).toBe('https://api.example.com/items');
   });
+
+  it('given base URL with path segment, should preserve base path', () => {
+    const config: HttpExecutionConfig = {
+      method: 'POST',
+      pathTemplate: '/mail/send',
+    };
+
+    const result = buildHttpRequest(config, {}, 'https://api.sendgrid.com/v3');
+
+    expect(result.url).toBe('https://api.sendgrid.com/v3/mail/send');
+  });
+
+  it('given base URL with path and trailing slash, should handle correctly', () => {
+    const config: HttpExecutionConfig = {
+      method: 'GET',
+      pathTemplate: '/users',
+    };
+
+    const result = buildHttpRequest(config, {}, 'https://api.example.com/v1/');
+
+    expect(result.url).toBe('https://api.example.com/v1/users');
+  });
 });

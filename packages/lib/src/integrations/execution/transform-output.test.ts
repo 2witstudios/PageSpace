@@ -39,6 +39,31 @@ describe('extractPath', () => {
 
     expect(extractPath(data, 'not-a-path')).toEqual(data);
   });
+
+  it('given wildcard with field access, should extract field from each element', () => {
+    const data = {
+      users: [
+        { id: 1, name: 'Alice' },
+        { id: 2, name: 'Bob' },
+      ],
+    };
+    expect(extractPath(data, '$.users[*].name')).toEqual(['Alice', 'Bob']);
+  });
+
+  it('given wildcard with nested path, should extract nested values', () => {
+    const data = {
+      items: [
+        { meta: { status: 'active' } },
+        { meta: { status: 'pending' } },
+      ],
+    };
+    expect(extractPath(data, '$.items[*].meta.status')).toEqual(['active', 'pending']);
+  });
+
+  it('given wildcard at end of path, should return full array', () => {
+    const data = { items: [1, 2, 3] };
+    expect(extractPath(data, '$.items[*]')).toEqual([1, 2, 3]);
+  });
 });
 
 describe('applyMapping', () => {
