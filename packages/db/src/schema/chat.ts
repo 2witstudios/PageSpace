@@ -2,6 +2,7 @@ import { pgTable, text, timestamp, jsonb, boolean, index, uniqueIndex } from 'dr
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages, drives } from './core';
+import { files } from './storage';
 import { createId } from '@paralleldrive/cuid2';
 
 export const channelMessages = pgTable('channel_messages', {
@@ -10,9 +11,19 @@ export const channelMessages = pgTable('channel_messages', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // File attachment (optional)
+  fileId: text('fileId').references(() => files.id, { onDelete: 'set null' }),
+  // Attachment metadata: {originalName, size, mimeType, contentHash}
+  attachmentMeta: jsonb('attachmentMeta').$type<{
+    originalName: string;
+    size: number;
+    mimeType: string;
+    contentHash: string;
+  } | null>(),
 }, (table) => {
     return {
         pageIdx: index('channel_messages_page_id_idx').on(table.pageId),
+        fileIdx: index('channel_messages_file_id_idx').on(table.fileId),
     }
 });
 
@@ -24,6 +35,10 @@ export const channelMessagesRelations = relations(channelMessages, ({ one, many 
     user: one(users, {
         fields: [channelMessages.userId],
         references: [users.id],
+    }),
+    file: one(files, {
+        fields: [channelMessages.fileId],
+        references: [files.id],
     }),
     reactions: many(channelMessageReactions),
 }));
