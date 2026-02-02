@@ -65,7 +65,7 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   // UI refresh protection: pause revalidation during editing after initial load
   const hasLoadedRef = useRef(false);
 
-  const { data: pageData, isLoading: isPageLoading } = useSWR<PageMetaResponse>(
+  const { data: pageData, isLoading: isPageLoading, error: pageError } = useSWR<PageMetaResponse>(
     pageKey,
     fetcher,
     {
@@ -128,10 +128,19 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
       };
     }
 
+    // Fetch failed or completed with no data - return stable fallback
+    if (pageError || (!pageData && !isPageLoading)) {
+      return {
+        title: 'Untitled',
+        iconName: 'File',
+        isLoading: false,
+      };
+    }
+
     return {
       title: 'Loading...',
       iconName: 'File',
-      isLoading: isPageLoading,
+      isLoading: true,
     };
   }
 
