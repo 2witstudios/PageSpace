@@ -58,12 +58,16 @@ Do NOT:
 - Mention exact numbers unless they're significant`;
 
 export async function POST(req: Request) {
-  // Verify cron secret if configured
-  if (CRON_SECRET) {
-    const authHeader = req.headers.get('authorization');
-    if (authHeader !== `Bearer ${CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  // Require cron secret - fail-closed for security
+  if (!CRON_SECRET) {
+    return NextResponse.json(
+      { error: 'Cron endpoint not configured' },
+      { status: 503 }
+    );
+  }
+  const authHeader = req.headers.get('authorization');
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
