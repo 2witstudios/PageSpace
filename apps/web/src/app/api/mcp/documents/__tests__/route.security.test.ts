@@ -25,6 +25,7 @@ const mockGetActorInfo = vi.fn();
 vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
   isAuthError: (result: unknown) => 'error' in (result as object),
+  isMCPAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -105,6 +106,7 @@ describe('MCP Documents API - Security Tests', () => {
       role: 'user',
       tokenVersion: 1,
       adminRoleVersion: 0,
+      allowedDriveIds: [], // Empty array means no drive restrictions
     });
 
     // Default actor info
@@ -335,6 +337,7 @@ describe('MCP Documents API - Security Tests', () => {
           role: 'user',
           tokenVersion: 1,
           adminRoleVersion: 0,
+          allowedDriveIds: [], // Empty array means no drive restrictions
         });
 
         mockGetUserAccessLevel.mockResolvedValue({
