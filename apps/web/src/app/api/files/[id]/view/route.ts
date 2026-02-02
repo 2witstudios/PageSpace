@@ -25,7 +25,8 @@ async function fetchAndServeFile(
   const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {
     headers: {
       'Authorization': `Bearer ${serviceToken}`
-    }
+    },
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!fileResponse.ok) {
@@ -59,6 +60,8 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const { searchParams } = new URL(request.url);
+    const filenameParam = searchParams.get('filename');
 
     const user = await verifyAuth(request);
     if (!user) {
@@ -99,15 +102,17 @@ export async function GET(
           page.fileSize ?? undefined
         );
       } catch (fileError) {
+        const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
         console.error('Error fetching file page from processor:', {
           pageId: page.id,
           contentHash,
+          isTimeout,
           error: fileError instanceof Error ? fileError.message : 'Unknown error',
         });
         return NextResponse.json({
-          error: 'File not accessible',
+          error: isTimeout ? 'Request timed out' : 'File not accessible',
           details: fileError instanceof Error ? fileError.message : 'Unknown error'
-        }, { status: 500 });
+        }, { status: isTimeout ? 504 : 500 });
       }
     }
 
@@ -145,20 +150,22 @@ export async function GET(
       return await fetchAndServeFile(
         contentHash,
         serviceToken,
-        contentHash, // Use contentHash as filename since we don't store original name in files table
+        filenameParam || contentHash,
         file.mimeType || 'application/octet-stream',
         file.sizeBytes
       );
     } catch (fileError) {
+      const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
       console.error('Error fetching file from processor:', {
         fileId: file.id,
         contentHash,
+        isTimeout,
         error: fileError instanceof Error ? fileError.message : 'Unknown error',
       });
       return NextResponse.json({
-        error: 'File not accessible',
+        error: isTimeout ? 'Request timed out' : 'File not accessible',
         details: fileError instanceof Error ? fileError.message : 'Unknown error'
-      }, { status: 500 });
+      }, { status: isTimeout ? 504 : 500 });
     }
 
   } catch (error) {
