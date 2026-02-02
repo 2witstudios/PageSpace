@@ -83,7 +83,7 @@ export const useTabsStore = create<TabsState>()(
       },
 
       closeTab: (tabId) => {
-        const { tabs, activeTabId, createTab } = get();
+        const { tabs, activeTabId } = get();
         const tabIndex = tabs.findIndex(t => t.id === tabId);
         if (tabIndex === -1) return;
 
@@ -275,7 +275,7 @@ export const useTabsStore = create<TabsState>()(
       },
 
       duplicateTab: (tabId) => {
-        const { tabs, activeTabId } = get();
+        const { tabs } = get();
         const tab = tabs.find(t => t.id === tabId);
         if (!tab) return;
 

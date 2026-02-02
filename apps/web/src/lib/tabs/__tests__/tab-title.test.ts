@@ -7,8 +7,6 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTabPath,
   getStaticTabMeta,
-  type TabMeta,
-  type ParsedPath,
 } from '../tab-title';
 
 describe('tab-title', () => {

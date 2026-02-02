@@ -115,13 +115,12 @@ interface FavoriteItemProps {
       name: string;
     };
   };
-  href: string;
   onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
   onOpenInNewTab: () => void;
   onRemove: () => void;
 }
 
-function FavoriteItem({ favorite, href, onNavigate, onOpenInNewTab, onRemove }: FavoriteItemProps) {
+function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove }: FavoriteItemProps) {
   const [isHovered, setIsHovered] = useState(false);
 
   const title =

@@ -5,7 +5,6 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useTabsStore } from '../useTabsStore';
-import type { Tab } from '@/lib/tabs/tab-navigation';
 
 // Mock localStorage
 const mockLocalStorage = (() => {
@@ -19,15 +18,6 @@ const mockLocalStorage = (() => {
 })();
 
 Object.defineProperty(global, 'localStorage', { value: mockLocalStorage });
-
-// Factory for test tabs
-const createTestTab = (overrides: Partial<Tab> = {}): Tab => ({
-  id: overrides.id ?? 'tab-1',
-  path: overrides.path ?? '/dashboard',
-  history: overrides.history ?? ['/dashboard'],
-  historyIndex: overrides.historyIndex ?? 0,
-  isPinned: overrides.isPinned ?? false,
-});
 
 describe('useTabsStore', () => {
   beforeEach(() => {

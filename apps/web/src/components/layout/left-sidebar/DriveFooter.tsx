@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, type MouseEvent } from "react";
+import { type MouseEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
