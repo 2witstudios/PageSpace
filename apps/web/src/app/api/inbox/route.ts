@@ -176,6 +176,7 @@ export async function GET(request: Request) {
         LEFT JOIN user_profiles up ON up."userId" = dd.other_user_id
         LEFT JOIN unread_counts uc ON uc."conversationId" = dd.id
         ORDER BY dd."lastMessageAt" DESC NULLS LAST
+        LIMIT ${fetchLimit}
       `);
 
       interface DMRow {
@@ -249,6 +250,7 @@ export async function GET(request: Request) {
         LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
         LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
         ORDER BY clm.last_message_at DESC NULLS LAST
+        LIMIT ${fetchLimit}
       `);
 
       interface ChannelRow {

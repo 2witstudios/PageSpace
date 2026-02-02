@@ -61,6 +61,10 @@ export function useInboxSocket({ driveId }: UseInboxSocketOptions = {}) {
                 ? payload.unreadCount
                 : (payload.operation === 'read_status_changed' ? 0 : (existingItem.unreadCount + 1)),
             };
+          } else {
+            // New conversation not in cache - trigger revalidation to fetch full data
+            mutate(cacheKey);
+            return currentData;
           }
 
           // Re-sort by lastMessageAt (most recent first)

@@ -151,7 +151,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
   }
 
-  // Broadcast inbox update to all channel members (for real-time inbox refresh)
+  // Broadcast inbox update to channel members who have view permission
   try {
     // Get channel's driveId
     const channel = await db.query.pages.findFirst({
@@ -171,9 +171,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         ? content.substring(0, 100) + '...'
         : content;
 
-      // Broadcast to all members except the sender
-      const broadcastPromises = members
-        .filter(m => m.userId !== userId)
+      // Filter to members with view permission and broadcast
+      // Check permissions in parallel for efficiency
+      const memberPermissions = await Promise.all(
+        members
+          .filter(m => m.userId !== userId)
+          .map(async member => ({
+            userId: member.userId,
+            canView: await canUserViewPage(member.userId, pageId),
+          }))
+      );
+
+      const broadcastPromises = memberPermissions
+        .filter(m => m.canView)
         .map(member =>
           broadcastInboxEvent(member.userId, {
             operation: 'channel_updated',
