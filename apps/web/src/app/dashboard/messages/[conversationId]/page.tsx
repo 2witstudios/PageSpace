@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
+import { ChannelInput, type ChannelInputRef } from '@/components/layout/middle-content/page-views/channel/ChannelInput';
 import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
 import useSWR from 'swr';
 import { toast } from 'sonner';
@@ -54,7 +54,7 @@ export default function ConversationPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const chatInputRef = useRef<ChatInputRef>(null);
+  const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
 
   // Fetch conversation details
@@ -226,13 +226,15 @@ export default function ConversationPage() {
 
       {/* Input */}
       <div className="border-t border-border p-4">
-        <ChatInput
-          ref={chatInputRef}
-          value={inputValue}
-          onChange={setInputValue}
-          onSendMessage={handleSendMessage}
-          placeholder="Type a message..."
-        />
+        <div className="max-w-4xl mx-auto">
+          <ChannelInput
+            ref={chatInputRef}
+            value={inputValue}
+            onChange={setInputValue}
+            onSend={handleSendMessage}
+            placeholder="Type a message... (use @ to mention, supports **markdown**)"
+          />
+        </div>
       </div>
     </div>
   );

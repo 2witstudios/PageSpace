@@ -1,5 +1,5 @@
 {
-  "id": "83cf7637-010f-450c-b887-8b0edcfdcaac",
+  "id": "131f54ae-dfa3-4dba-b12a-bde039f8e391",
   "prevId": "e2d05a34-4fb9-4577-85e7-6c79079dec58",
   "version": "7",
   "dialect": "postgresql",
@@ -3433,18 +3433,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "fileId": {
-          "name": "fileId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "attachmentMeta": {
-          "name": "attachmentMeta",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -3453,21 +3441,6 @@
           "columns": [
             {
               "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "channel_messages_file_id_idx": {
-          "name": "channel_messages_file_id_idx",
-          "columns": [
-            {
-              "expression": "fileId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3504,19 +3477,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "channel_messages_fileId_files_id_fk": {
-          "name": "channel_messages_fileId_files_id_fk",
-          "tableFrom": "channel_messages",
-          "tableTo": "files",
-          "columnsFrom": [
-            "fileId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -9803,6 +9763,836 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
+    },
+    "public.global_assistant_config": {
+      "name": "global_assistant_config",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled_user_integrations": {
+          "name": "enabled_user_integrations",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "drive_overrides": {
+          "name": "drive_overrides",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "inherit_drive_integrations": {
+          "name": "inherit_drive_integrations",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "global_assistant_config_user_id_users_id_fk": {
+          "name": "global_assistant_config_user_id_users_id_fk",
+          "tableFrom": "global_assistant_config",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "global_assistant_config_user_id_unique": {
+          "name": "global_assistant_config_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id"
+          ]
+        }
+      }
+    },
+    "public.integration_audit_log": {
+      "name": "integration_audit_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "drive_id": {
+          "name": "drive_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tool_name": {
+          "name": "tool_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_summary": {
+          "name": "input_summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "success": {
+          "name": "success",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "response_code": {
+          "name": "response_code",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_type": {
+          "name": "error_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_audit_log_drive_id_idx": {
+          "name": "integration_audit_log_drive_id_idx",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_audit_log_connection_id_idx": {
+          "name": "integration_audit_log_connection_id_idx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_audit_log_created_at_idx": {
+          "name": "integration_audit_log_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_audit_log_drive_created_at_idx": {
+          "name": "integration_audit_log_drive_created_at_idx",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_audit_log_drive_id_drives_id_fk": {
+          "name": "integration_audit_log_drive_id_drives_id_fk",
+          "tableFrom": "integration_audit_log",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "drive_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "integration_audit_log_agent_id_pages_id_fk": {
+          "name": "integration_audit_log_agent_id_pages_id_fk",
+          "tableFrom": "integration_audit_log",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "integration_audit_log_user_id_users_id_fk": {
+          "name": "integration_audit_log_user_id_users_id_fk",
+          "tableFrom": "integration_audit_log",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "integration_audit_log_connection_id_integration_connections_id_fk": {
+          "name": "integration_audit_log_connection_id_integration_connections_id_fk",
+          "tableFrom": "integration_audit_log",
+          "tableTo": "integration_connections",
+          "columnsFrom": [
+            "connection_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.integration_connections": {
+      "name": "integration_connections",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "drive_id": {
+          "name": "drive_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "integration_connection_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "status_message": {
+          "name": "status_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "credentials": {
+          "name": "credentials",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_url_override": {
+          "name": "base_url_override",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "config_overrides": {
+          "name": "config_overrides",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "account_metadata": {
+          "name": "account_metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "integration_visibility",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'owned_drives'"
+        },
+        "oauth_state": {
+          "name": "oauth_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "connected_by": {
+          "name": "connected_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "connected_at": {
+          "name": "connected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_used_at": {
+          "name": "last_used_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_health_check": {
+          "name": "last_health_check",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_connections_provider_id_idx": {
+          "name": "integration_connections_provider_id_idx",
+          "columns": [
+            {
+              "expression": "provider_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_connections_user_id_idx": {
+          "name": "integration_connections_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_connections_drive_id_idx": {
+          "name": "integration_connections_drive_id_idx",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_connections_provider_id_integration_providers_id_fk": {
+          "name": "integration_connections_provider_id_integration_providers_id_fk",
+          "tableFrom": "integration_connections",
+          "tableTo": "integration_providers",
+          "columnsFrom": [
+            "provider_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "integration_connections_user_id_users_id_fk": {
+          "name": "integration_connections_user_id_users_id_fk",
+          "tableFrom": "integration_connections",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "integration_connections_drive_id_drives_id_fk": {
+          "name": "integration_connections_drive_id_drives_id_fk",
+          "tableFrom": "integration_connections",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "drive_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "integration_connections_connected_by_users_id_fk": {
+          "name": "integration_connections_connected_by_users_id_fk",
+          "tableFrom": "integration_connections",
+          "tableTo": "users",
+          "columnsFrom": [
+            "connected_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "integration_connections_user_provider": {
+          "name": "integration_connections_user_provider",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "provider_id"
+          ]
+        },
+        "integration_connections_drive_provider": {
+          "name": "integration_connections_drive_provider",
+          "nullsNotDistinct": false,
+          "columns": [
+            "drive_id",
+            "provider_id"
+          ]
+        }
+      }
+    },
+    "public.integration_providers": {
+      "name": "integration_providers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "icon_url": {
+          "name": "icon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "documentation_url": {
+          "name": "documentation_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_type": {
+          "name": "provider_type",
+          "type": "integration_provider_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "openapi_spec": {
+          "name": "openapi_spec",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_system": {
+          "name": "is_system",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "drive_id": {
+          "name": "drive_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_providers_slug_idx": {
+          "name": "integration_providers_slug_idx",
+          "columns": [
+            {
+              "expression": "slug",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_providers_drive_id_idx": {
+          "name": "integration_providers_drive_id_idx",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_providers_created_by_users_id_fk": {
+          "name": "integration_providers_created_by_users_id_fk",
+          "tableFrom": "integration_providers",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "integration_providers_drive_id_drives_id_fk": {
+          "name": "integration_providers_drive_id_drives_id_fk",
+          "tableFrom": "integration_providers",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "drive_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "integration_providers_slug_unique": {
+          "name": "integration_providers_slug_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "slug"
+          ]
+        }
+      }
+    },
+    "public.integration_tool_grants": {
+      "name": "integration_tool_grants",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allowed_tools": {
+          "name": "allowed_tools",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "denied_tools": {
+          "name": "denied_tools",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "read_only": {
+          "name": "read_only",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "rate_limit_override": {
+          "name": "rate_limit_override",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_tool_grants_agent_id_idx": {
+          "name": "integration_tool_grants_agent_id_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_tool_grants_connection_id_idx": {
+          "name": "integration_tool_grants_connection_id_idx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_tool_grants_agent_id_pages_id_fk": {
+          "name": "integration_tool_grants_agent_id_pages_id_fk",
+          "tableFrom": "integration_tool_grants",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "integration_tool_grants_connection_id_integration_connections_id_fk": {
+          "name": "integration_tool_grants_connection_id_integration_connections_id_fk",
+          "tableFrom": "integration_tool_grants",
+          "tableTo": "integration_connections",
+          "columnsFrom": [
+            "connection_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "integration_tool_grants_agent_connection": {
+          "name": "integration_tool_grants_agent_connection",
+          "nullsNotDistinct": false,
+          "columns": [
+            "agent_id",
+            "connection_id"
+          ]
+        }
+      }
     }
   },
   "enums": {
@@ -10115,6 +10905,37 @@
         "ios",
         "android",
         "web"
+      ]
+    },
+    "public.integration_connection_status": {
+      "name": "integration_connection_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "expired",
+        "error",
+        "pending",
+        "revoked"
+      ]
+    },
+    "public.integration_provider_type": {
+      "name": "integration_provider_type",
+      "schema": "public",
+      "values": [
+        "builtin",
+        "openapi",
+        "custom",
+        "mcp",
+        "webhook"
+      ]
+    },
+    "public.integration_visibility": {
+      "name": "integration_visibility",
+      "schema": "public",
+      "values": [
+        "private",
+        "owned_drives",
+        "all_drives"
       ]
     }
   },
