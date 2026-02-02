@@ -358,7 +358,7 @@ Create a 2-4 sentence summary that highlights the most important information. St
     const result = await generateText({
       model: providerResult.model,
       system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt()}`,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: userPrompt }] }],
       temperature: 0.7,
       maxRetries: 3,
     });

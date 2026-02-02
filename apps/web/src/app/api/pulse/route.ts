@@ -29,8 +29,8 @@ export type PulseResponse = {
     id: string;
     text: string;
     greeting: string | null;
-    generatedAt: Date;
-    expiresAt: Date;
+    generatedAt: string;
+    expiresAt: string;
     isStale: boolean; // True if older than 2 hours
   } | null;
 
@@ -206,8 +206,8 @@ export async function GET(req: Request) {
             id: latestSummary.id,
             text: latestSummary.summary,
             greeting: latestSummary.greeting,
-            generatedAt: latestSummary.generatedAt,
-            expiresAt: latestSummary.expiresAt,
+            generatedAt: latestSummary.generatedAt.toISOString(),
+            expiresAt: latestSummary.expiresAt.toISOString(),
             isStale,
           }
         : null,
