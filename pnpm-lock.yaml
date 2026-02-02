@@ -73,6 +73,49 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@24.5.2)(@vitest/ui@2.1.9)(jsdom@25.0.1)(lightningcss@1.30.1)(msw@2.11.3(@types/node@24.5.2)(typescript@5.9.2))(terser@5.44.0)
 
+  apps/android:
+    dependencies:
+      '@capacitor/android':
+        specifier: ^7.0.3
+        version: 7.4.5(@capacitor/core@7.4.5)
+      '@capacitor/app':
+        specifier: ^7.0.3
+        version: 7.1.1(@capacitor/core@7.4.5)
+      '@capacitor/browser':
+        specifier: ^7.0.3
+        version: 7.0.3(@capacitor/core@7.4.5)
+      '@capacitor/core':
+        specifier: ^7.4.5
+        version: 7.4.5
+      '@capacitor/keyboard':
+        specifier: ^7.0.3
+        version: 7.0.4(@capacitor/core@7.4.5)
+      '@capacitor/preferences':
+        specifier: ^7.0.3
+        version: 7.0.3(@capacitor/core@7.4.5)
+      '@capacitor/push-notifications':
+        specifier: ^7.0.0
+        version: 7.0.4(@capacitor/core@7.4.5)
+      '@capacitor/splash-screen':
+        specifier: ^7.0.3
+        version: 7.0.4(@capacitor/core@7.4.5)
+      '@capacitor/status-bar':
+        specifier: ^7.0.3
+        version: 7.0.4(@capacitor/core@7.4.5)
+      '@capgo/capacitor-social-login':
+        specifier: ^7.20.0
+        version: 7.20.0(@capacitor/core@7.4.5)
+    devDependencies:
+      '@capacitor/cli':
+        specifier: ^7.0.0
+        version: 7.4.5
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.2
+      web:
+        specifier: workspace:*
+        version: link:../web
+
   apps/desktop:
     dependencies:
       electron-store:
@@ -1070,6 +1113,11 @@ packages:
 
   '@bundled-es-modules/statuses@1.0.1':
     resolution: {integrity: sha512-yn7BklA5acgcBr+7w064fGV+SGIFySjCKpqjcWgBAIfrAkY+4GQTJJHQMeT3V/sgz23VTEVV8TtOmkvJAhFVfg==}
+
+  '@capacitor/android@7.4.5':
+    resolution: {integrity: sha512-G76C+PGIFkG+hxj6JLlY003txRaGZwsXBPo4b4xiZMZaD6DG++sDCoumYl/5xL40dL2b8P5tb3CKf/khWyL2Gw==}
+    peerDependencies:
+      '@capacitor/core': ^7.4.0
 
   '@capacitor/app@7.1.1':
     resolution: {integrity: sha512-H4rmMXlL6GEDs2Yds5JvYqZxz4mdp7R4XdGJ7p+oGV+YapuQ2kW38UabuhdP6qSrKfIeLde6qx+8FEX02krypA==}
@@ -10493,6 +10541,10 @@ snapshots:
   '@bundled-es-modules/statuses@1.0.1':
     dependencies:
       statuses: 2.0.1
+
+  '@capacitor/android@7.4.5(@capacitor/core@7.4.5)':
+    dependencies:
+      '@capacitor/core': 7.4.5
 
   '@capacitor/app@7.1.1(@capacitor/core@7.4.5)':
     dependencies:
