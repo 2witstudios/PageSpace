@@ -145,8 +145,56 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     }
   }, [output]);
 
-  // Memoize output content to avoid recreating JSX on each render
+  // Check if this tool uses a rich renderer (no Parameters/Result wrappers needed)
+  const richContent = useMemo((): React.ReactNode | null => {
+    if (!output || !parsedOutput) return null;
+
+    // Read page - show rich rendered content directly
+    if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
+      return (
+        <RichContentRenderer
+          title={parsedOutput.title || 'Document'}
+          content={parsedOutput.rawContent || parsedOutput.content}
+          pageId={parsedOutput.pageId}
+          pageType={parsedOutput.type}
+        />
+      );
+    }
+
+    // Replace lines - show visual diff directly
+    if (toolName === 'replace_lines' && parsedOutput.success) {
+      // If we have both old and new content, show diff
+      if (parsedOutput.oldContent && parsedOutput.newContent) {
+        return (
+          <RichDiffRenderer
+            title={parsedOutput.title || 'Modified Document'}
+            oldContent={parsedOutput.oldContent}
+            newContent={parsedOutput.newContent}
+            pageId={parsedOutput.pageId}
+            changeSummary={parsedOutput.summary}
+          />
+        );
+      }
+      // Fallback: show the new content if no diff available
+      if (parsedOutput.newContent) {
+        return (
+          <RichContentRenderer
+            title={parsedOutput.title || 'Modified Document'}
+            content={parsedOutput.newContent}
+            pageId={parsedOutput.pageId}
+            pageType={parsedOutput.type}
+          />
+        );
+      }
+    }
+
+    return null;
+  }, [output, parsedOutput, toolName]);
+
+  // Memoize output content for tools that use standard wrappers
   const outputContent = useMemo((): ToolOutputType | null => {
+    // Rich content is handled separately
+    if (richContent) return null;
     if (!output) return null;
 
     if (parsedOutput) {
@@ -154,51 +202,28 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         return <FileTreeRenderer tree={parsedOutput.tree} />;
       }
 
-      // Read page - show rich rendered content
-      if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
-        return (
-          <RichContentRenderer
-            title={parsedOutput.title || 'Document'}
-            content={parsedOutput.rawContent || parsedOutput.content}
-            pageId={parsedOutput.pageId}
-            pageType={parsedOutput.type}
-          />
-        );
-      }
-
-      // Replace lines - show visual diff
-      if (toolName === 'replace_lines' && parsedOutput.success) {
-        // If we have both old and new content, show diff
-        if (parsedOutput.oldContent && parsedOutput.newContent) {
-          return (
-            <RichDiffRenderer
-              title={parsedOutput.title || 'Modified Document'}
-              oldContent={parsedOutput.oldContent}
-              newContent={parsedOutput.newContent}
-              pageId={parsedOutput.pageId}
-              changeSummary={parsedOutput.summary}
-            />
-          );
-        }
-        // Fallback: show the new content if no diff available
-        if (parsedOutput.newContent) {
-          return (
-            <RichContentRenderer
-              title={parsedOutput.title || 'Modified Document'}
-              content={parsedOutput.newContent}
-              pageId={parsedOutput.pageId}
-              pageType={parsedOutput.type}
-            />
-          );
-        }
-      }
-
       // Generic JSON output for others
       return typeof output === 'string' ? output : JSON.stringify(parsedOutput, null, 2);
     }
 
     return String(output);
-  }, [output, parsedOutput, toolName]);
+  }, [output, parsedOutput, toolName, richContent]);
+
+  // For tools with rich renderers, render content directly without Parameters/Result wrappers
+  if (richContent) {
+    return (
+      <Tool className="my-2">
+        <ToolHeader
+          title={descriptiveTitle}
+          type={`tool-${toolName}`}
+          state={toolState}
+        />
+        <ToolContent>
+          {richContent}
+        </ToolContent>
+      </Tool>
+    );
+  }
 
   return (
     <Tool className="my-2">
