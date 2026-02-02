@@ -77,24 +77,21 @@ export default function Sidebar({ className }: SidebarProps) {
       )}
     >
       <div className="flex h-full flex-col px-3 py-3">
-        {/* Dashboard link - always visible */}
+        {/* Drive Switcher - always visible, at top */}
         {/* On macOS Electron in sheet mode, add left padding to clear stoplight buttons */}
+        <div className={cn("mb-3", isElectronMac && isSheetBreakpoint && "pl-[60px]")}>
+          <DriveSwitcher />
+        </div>
+
+        {/* Dashboard link - always visible */}
         <Link
           href="/dashboard"
           onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3",
-            isElectronMac && isSheetBreakpoint && "pl-[60px]"
-          )}
+          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3"
         >
           <Home className="h-4 w-4" />
           Dashboard
         </Link>
-
-        {/* Drive Switcher - below Dashboard */}
-        <div className="mb-3">
-          <DriveSwitcher />
-        </div>
 
         {/* Main content area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
