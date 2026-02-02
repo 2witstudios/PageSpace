@@ -16,6 +16,9 @@ import {
   activityLogs,
   users,
   pulseSummaries,
+  userMentions,
+  notifications,
+  pagePermissions,
   eq,
   and,
   or,
@@ -33,27 +36,35 @@ import { loggers } from '@pagespace/lib/server';
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
 // System prompt for generating pulse summaries
-const PULSE_SYSTEM_PROMPT = `You are a helpful workspace assistant generating a brief, personalized activity summary for a user's dashboard.
+const PULSE_SYSTEM_PROMPT = `You are a workspace assistant generating a brief, personalized activity summary.
 
-Your task is to create a SHORT, conversational pulse summary (2-4 sentences max) that helps the user understand:
-- What's happened since they last checked in
-- What needs their attention
-- Any notable activity from collaborators
+Create a SHORT summary (2-4 sentences) telling the user what specifically needs attention.
 
-Guidelines:
-- Be concise and friendly, like a helpful colleague giving a quick update
-- Prioritize actionable information (overdue tasks, unread messages)
-- Mention specific page titles or task names when relevant
-- Use natural language, not bullet points
-- Include a brief greeting appropriate to the time of day if provided
-- If there's not much activity, acknowledge that briefly
+RULES:
+- ALWAYS name specific tasks, pages, or people - never just counts
+- If there are overdue tasks, name them: "'Finalize budget' and 'Review proposal' are overdue"
+- High-priority overdue tasks should be mentioned first
+- For messages, summarize content: "Noah asked about the pricing update" not "Noah messaged you"
+- For mentions: "Sarah mentioned you in Q1 Planning"
+- For shares: "Noah shared 'Product Roadmap' with you"
+- For content changes: Describe WHAT changed: "Sarah updated Product Pricing" with who made the change
+- NEVER mention categories with zero items - omit them entirely
+- NEVER say "no messages", "nothing new", or similar - just skip empty categories
+- Be direct and specific, like a colleague giving a quick heads-up
+- Include a brief time-appropriate greeting
+
+PRIORITY ORDER (mention most important first):
+1. Overdue high-priority tasks
+2. Pages shared with you / mentions
+3. Meaningful content changes by collaborators
+4. Unread messages with context
 
 Do NOT:
 - Use excessive exclamation marks or emojis
-- Be overly enthusiastic or salesy
+- Be overly enthusiastic
 - List every single activity
 - Include generic filler content
-- Mention exact numbers unless they're significant`;
+- Mention counts without naming the items`;
 
 export async function POST(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
@@ -94,6 +105,20 @@ export async function POST(req: Request) {
           lt(taskItems.dueDate, startOfToday)
         )
       );
+
+    // Get overdue task details with priority
+    const overdueTasksList = await db
+      .select({ title: taskItems.title, priority: taskItems.priority })
+      .from(taskItems)
+      .where(
+        and(
+          or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+          ne(taskItems.status, 'completed'),
+          lt(taskItems.dueDate, startOfToday)
+        )
+      )
+      .orderBy(desc(taskItems.priority), taskItems.dueDate)
+      .limit(5);
 
     const [tasksDueToday] = await db
       .select({ count: count() })
@@ -171,6 +196,7 @@ export async function POST(req: Request) {
 
     let unreadCount = 0;
     const recentSenders: string[] = [];
+    const recentMessages: { from: string; preview?: string }[] = [];
 
     if (userConversations.length > 0) {
       const conversationIds = userConversations.map(c => c.id);
@@ -186,12 +212,13 @@ export async function POST(req: Request) {
         );
       unreadCount = unreadResult?.count ?? 0;
 
-      // Get recent unread message senders
+      // Get recent unread messages with content preview
       if (unreadCount > 0) {
-        const unreadMessages = await db
+        const unreadMessagesList = await db
           .select({
             senderId: directMessages.senderId,
             senderName: users.name,
+            content: directMessages.content,
           })
           .from(directMessages)
           .leftJoin(users, eq(users.id, directMessages.senderId))
@@ -202,15 +229,75 @@ export async function POST(req: Request) {
               eq(directMessages.isRead, false)
             )
           )
-          .limit(5);
+          .orderBy(desc(directMessages.createdAt))
+          .limit(3);
 
         const uniqueSenders = new Set<string>();
-        unreadMessages.forEach(m => {
+        unreadMessagesList.forEach(m => {
           if (m.senderName) uniqueSenders.add(m.senderName);
+          recentMessages.push({
+            from: m.senderName || 'Someone',
+            preview: m.content?.substring(0, 100),
+          });
         });
         recentSenders.push(...Array.from(uniqueSenders).slice(0, 3));
       }
     }
+
+    // Get recent @mentions of the user
+    const recentMentions = await db
+      .select({
+        mentionedByName: users.name,
+        pageTitle: pages.title,
+      })
+      .from(userMentions)
+      .leftJoin(users, eq(users.id, userMentions.mentionedByUserId))
+      .leftJoin(pages, eq(pages.id, userMentions.sourcePageId))
+      .where(
+        and(
+          eq(userMentions.targetUserId, userId),
+          gte(userMentions.createdAt, twoHoursAgo)
+        )
+      )
+      .orderBy(desc(userMentions.createdAt))
+      .limit(3);
+
+    // Get unread notifications
+    const unreadNotifications = await db
+      .select({
+        type: notifications.type,
+        triggeredByName: users.name,
+        pageTitle: pages.title,
+      })
+      .from(notifications)
+      .leftJoin(users, eq(users.id, notifications.triggeredByUserId))
+      .leftJoin(pages, eq(pages.id, notifications.pageId))
+      .where(
+        and(
+          eq(notifications.userId, userId),
+          eq(notifications.isRead, false)
+        )
+      )
+      .orderBy(desc(notifications.createdAt))
+      .limit(5);
+
+    // Get pages recently shared with user
+    const recentShares = await db
+      .select({
+        pageTitle: pages.title,
+        sharedByName: users.name,
+      })
+      .from(pagePermissions)
+      .leftJoin(pages, eq(pages.id, pagePermissions.pageId))
+      .leftJoin(users, eq(users.id, pagePermissions.grantedBy))
+      .where(
+        and(
+          eq(pagePermissions.userId, userId),
+          gte(pagePermissions.grantedAt, twoHoursAgo)
+        )
+      )
+      .orderBy(desc(pagePermissions.grantedAt))
+      .limit(3);
 
     // Pages updated
     let pagesUpdatedToday = 0;
@@ -310,11 +397,33 @@ export async function POST(req: Request) {
         completedThisWeek: tasksCompletedThisWeek?.count ?? 0,
         recentlyCompleted: recentlyCompletedTasks.map(t => t.title).filter((t): t is string => !!t),
         upcoming: upcomingTasks.map(t => t.title).filter((t): t is string => !!t),
+        overdueItems: overdueTasksList.map(t => ({
+          title: t.title ?? '',
+          priority: t.priority,
+        })).filter(t => t.title),
       },
       messages: {
         unreadCount,
         recentSenders,
+        recentMessages,
       },
+      mentions: recentMentions.map(m => ({
+        by: m.mentionedByName || 'Someone',
+        inPage: m.pageTitle || 'a page',
+      })),
+      notifications: unreadNotifications.map(n => ({
+        type: n.type,
+        from: n.triggeredByName,
+        page: n.pageTitle,
+      })),
+      sharedWithYou: recentShares.map(s => ({
+        page: s.pageTitle || 'a page',
+        by: s.sharedByName || 'Someone',
+      })),
+      contentChanges: recentlyUpdatedPages.slice(0, 3).map(p => ({
+        page: p.title,
+        by: p.updatedBy,
+      })),
       pages: {
         updatedToday: pagesUpdatedToday,
         updatedThisWeek: pagesUpdatedThisWeek,

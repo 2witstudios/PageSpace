@@ -48,11 +48,21 @@ export const pulseSummaries = pgTable('pulse_summaries', {
       completedThisWeek: number;
       recentlyCompleted: string[]; // Task titles
       upcoming: string[]; // Task titles
+      overdueItems: { title: string; priority: string | null }[]; // Overdue task details
     };
     messages: {
       unreadCount: number;
-      recentSenders: string[]; // Display names
+      recentSenders: string[]; // Display names (legacy)
+      recentMessages: { from: string; preview?: string }[]; // Messages with previews
     };
+    mentions: { by: string; inPage: string }[]; // @mentions of the user
+    notifications: { type: string; from?: string | null; page?: string | null }[]; // Unread notifications
+    sharedWithYou: { page: string; by: string }[]; // Recently shared pages
+    contentChanges: {
+      page: string;
+      by: string;
+      summary?: string; // Brief description of changes
+    }[]; // Recent content updates by others
     pages: {
       updatedToday: number;
       updatedThisWeek: number;
