@@ -118,7 +118,7 @@ export const mcpTokenDrives = pgTable('mcp_token_drives', {
   return {
     tokenIdx: index('mcp_token_drives_token_id_idx').on(table.tokenId),
     driveIdx: index('mcp_token_drives_drive_id_idx').on(table.driveId),
-    tokenDriveUnique: index('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
+    tokenDriveUnique: uniqueIndex('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
   };
 });
 

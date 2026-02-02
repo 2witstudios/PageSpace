@@ -53,23 +53,29 @@ export async function POST(req: NextRequest) {
     // SECURITY: Only the hash is stored - plaintext token is returned once and never persisted
     const { token: rawToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
 
-    // Store ONLY the hash in the database
-    const [newToken] = await db.insert(mcpTokens).values({
-      userId,
-      tokenHash,
-      tokenPrefix,
-      name,
-    }).returning();
+    // Use transaction to ensure token and drive scopes are created atomically
+    // If drive scope insertion fails, the token should not exist
+    const newToken = await db.transaction(async (tx) => {
+      // Store ONLY the hash in the database
+      const [token] = await tx.insert(mcpTokens).values({
+        userId,
+        tokenHash,
+        tokenPrefix,
+        name,
+      }).returning();
 
-    // If drive scopes are specified, create the junction table entries
-    if (driveIds && driveIds.length > 0) {
-      await db.insert(mcpTokenDrives).values(
-        driveIds.map(driveId => ({
-          tokenId: newToken.id,
-          driveId,
-        }))
-      );
-    }
+      // If drive scopes are specified, create the junction table entries
+      if (driveIds && driveIds.length > 0) {
+        await tx.insert(mcpTokenDrives).values(
+          driveIds.map(driveId => ({
+            tokenId: token.id,
+            driveId,
+          }))
+        );
+      }
+
+      return token;
+    });
 
     // Log activity for audit trail (token creation is a security event)
     const actorInfo = await getActorInfo(userId);
@@ -133,15 +139,18 @@ export async function GET(req: NextRequest) {
     });
 
     // Transform the response to include drive info
+    // Filter out any scopes where the drive may have been deleted
     const tokensWithDrives = tokens.map(token => ({
       id: token.id,
       name: token.name,
       lastUsed: token.lastUsed,
       createdAt: token.createdAt,
-      driveScopes: token.driveScopes.map(scope => ({
-        id: scope.drive.id,
-        name: scope.drive.name,
-      })),
+      driveScopes: token.driveScopes
+        .filter(scope => scope.drive != null)
+        .map(scope => ({
+          id: scope.drive.id,
+          name: scope.drive.name,
+        })),
     }));
 
     return NextResponse.json(tokensWithDrives);
