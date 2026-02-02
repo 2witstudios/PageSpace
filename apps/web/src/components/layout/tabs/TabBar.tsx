@@ -17,7 +17,7 @@ import {
   sortableKeyboardCoordinates,
   horizontalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { useOpenTabsStore, selectHasMultipleTabs } from '@/stores/useOpenTabsStore';
+import { useTabsStore, selectHasMultipleTabs } from '@/stores/useTabsStore';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { TabItem } from './TabItem';
 import { cn } from '@/lib/utils';
@@ -33,17 +33,17 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isMobile = useBreakpoint('(max-width: 1023px)');
 
-  const tabs = useOpenTabsStore((state) => state.tabs);
-  const activeTabId = useOpenTabsStore((state) => state.activeTabId);
-  const hasMultipleTabs = useOpenTabsStore(selectHasMultipleTabs);
-  const setActiveTab = useOpenTabsStore((state) => state.setActiveTab);
-  const closeTab = useOpenTabsStore((state) => state.closeTab);
-  const closeOtherTabs = useOpenTabsStore((state) => state.closeOtherTabs);
-  const closeTabsToRight = useOpenTabsStore((state) => state.closeTabsToRight);
-  const pinTab = useOpenTabsStore((state) => state.pinTab);
-  const unpinTab = useOpenTabsStore((state) => state.unpinTab);
-  const cycleTab = useOpenTabsStore((state) => state.cycleTab);
-  const reorderTab = useOpenTabsStore((state) => state.reorderTab);
+  const tabs = useTabsStore((state) => state.tabs);
+  const activeTabId = useTabsStore((state) => state.activeTabId);
+  const hasMultipleTabs = useTabsStore(selectHasMultipleTabs);
+  const setActiveTab = useTabsStore((state) => state.setActiveTab);
+  const closeTab = useTabsStore((state) => state.closeTab);
+  const closeOtherTabs = useTabsStore((state) => state.closeOtherTabs);
+  const closeTabsToRight = useTabsStore((state) => state.closeTabsToRight);
+  const pinTab = useTabsStore((state) => state.pinTab);
+  const unpinTab = useTabsStore((state) => state.unpinTab);
+  const cycleTab = useTabsStore((state) => state.cycleTab);
+  const reorderTab = useTabsStore((state) => state.reorderTab);
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -76,7 +76,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
     const tab = tabs.find(t => t.id === tabId);
     if (tab) {
       setActiveTab(tabId);
-      router.push(`/dashboard/${tab.driveId}/${tab.id}`);
+      router.push(tab.path);
     }
   }, [tabs, setActiveTab, router]);
 
@@ -94,9 +94,9 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
         // Prefer the tab at the same index, or the last one
         const newActiveIndex = Math.min(tabIndex, remainingTabs.length - 1);
         const newActiveTab = remainingTabs[newActiveIndex];
-        router.push(`/dashboard/${newActiveTab.driveId}/${newActiveTab.id}`);
+        router.push(newActiveTab.path);
       } else {
-        // No tabs left, go to dashboard
+        // No tabs left, go to dashboard (closeTab creates a new dashboard tab)
         const driveId = params.driveId as string;
         router.push(`/dashboard${driveId ? `/${driveId}` : ''}`);
       }
@@ -110,10 +110,11 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-next'), e)) {
         e.preventDefault();
         cycleTab('next');
-        const newActiveTabId = useOpenTabsStore.getState().activeTabId;
-        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
+        // Use fresh state to avoid stale closure
+        const state = useTabsStore.getState();
+        const newActiveTab = state.tabs.find(t => t.id === state.activeTabId);
         if (newActiveTab) {
-          router.push(`/dashboard/${newActiveTab.driveId}/${newActiveTab.id}`);
+          router.push(newActiveTab.path);
         }
         return;
       }
@@ -121,10 +122,11 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       if (matchesKeyEvent(getEffectiveBinding('tabs.cycle-prev'), e)) {
         e.preventDefault();
         cycleTab('prev');
-        const newActiveTabId = useOpenTabsStore.getState().activeTabId;
-        const newActiveTab = tabs.find(t => t.id === newActiveTabId);
+        // Use fresh state to avoid stale closure
+        const state = useTabsStore.getState();
+        const newActiveTab = state.tabs.find(t => t.id === state.activeTabId);
         if (newActiveTab) {
-          router.push(`/dashboard/${newActiveTab.driveId}/${newActiveTab.id}`);
+          router.push(newActiveTab.path);
         }
         return;
       }
