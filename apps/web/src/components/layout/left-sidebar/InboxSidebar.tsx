@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';

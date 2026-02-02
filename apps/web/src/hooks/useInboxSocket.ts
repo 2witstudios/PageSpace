@@ -5,7 +5,7 @@ import { useSWRConfig } from 'swr';
 import { useSocket } from './useSocket';
 import { isEditingActive } from '@/stores/useEditingStore';
 import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
-import type { InboxItem, InboxResponse } from '@pagespace/lib';
+import type { InboxResponse } from '@pagespace/lib';
 
 interface UseInboxSocketOptions {
   driveId?: string;

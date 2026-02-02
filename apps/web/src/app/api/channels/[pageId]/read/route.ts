@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, channelReadStatus, sql, pages, eq } from '@pagespace/db';
+import { db, sql, pages, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
