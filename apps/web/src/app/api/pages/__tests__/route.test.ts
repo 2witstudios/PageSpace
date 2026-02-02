@@ -24,6 +24,7 @@ vi.mock('@/services/api', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
 }));
 
 vi.mock('@/lib/websocket', () => ({
