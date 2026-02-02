@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "107236466397",
+    "project_id": "pagespace-f328e",
+    "storage_bucket": "pagespace-f328e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:107236466397:android:931c03aeb94c42dd904534",
+        "android_client_info": {
+          "package_name": "ai.pagespace.android"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDsbaTral3mH28xMxesfO5FMIz3-ORzcLg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
