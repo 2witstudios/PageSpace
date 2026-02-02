@@ -33,7 +33,7 @@ const config: CapacitorConfig = {
     SocialLogin: {
       google: {
         // You'll need to add your Android client ID from Google Cloud Console
-        androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+        androidClientId: '636969838408-s5s3ts6nubc6c29ur81o2ipf6tmu9gqq.apps.googleusercontent.com',
       },
     },
     PushNotifications: {
