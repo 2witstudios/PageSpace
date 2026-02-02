@@ -19,8 +19,6 @@ CREATE TABLE IF NOT EXISTS "pulse_summaries" (
 	"expiresAt" timestamp NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "channel_messages" ADD COLUMN "fileId" text;--> statement-breakpoint
-ALTER TABLE "channel_messages" ADD COLUMN "attachmentMeta" jsonb;--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "pulse_summaries" ADD CONSTRAINT "pulse_summaries_userId_users_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
@@ -30,11 +28,4 @@ END $$;
 CREATE INDEX IF NOT EXISTS "idx_pulse_summaries_user_id" ON "pulse_summaries" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_pulse_summaries_generated_at" ON "pulse_summaries" USING btree ("generatedAt");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_pulse_summaries_expires_at" ON "pulse_summaries" USING btree ("expiresAt");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_pulse_summaries_user_generated" ON "pulse_summaries" USING btree ("userId","generatedAt");--> statement-breakpoint
-DO $$ BEGIN
- ALTER TABLE "channel_messages" ADD CONSTRAINT "channel_messages_fileId_files_id_fk" FOREIGN KEY ("fileId") REFERENCES "public"."files"("id") ON DELETE set null ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "channel_messages_file_id_idx" ON "channel_messages" USING btree ("fileId");
+CREATE INDEX IF NOT EXISTS "idx_pulse_summaries_user_generated" ON "pulse_summaries" USING btree ("userId","generatedAt");

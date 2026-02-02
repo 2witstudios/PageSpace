@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import useSWR from "swr";
 import { CheckSquare, FileText, Mail, AlertTriangle, TrendingUp, RefreshCw, Sparkles } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,15 +28,7 @@ export default function Pulse() {
     }
   );
 
-  // Auto-generate summary if needed (once per session)
-  useEffect(() => {
-    if (data?.shouldRefresh && !hasAutoRefreshed.current && !isGenerating) {
-      hasAutoRefreshed.current = true;
-      handleRefresh();
-    }
-  }, [data?.shouldRefresh, isGenerating]);
-
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     if (isGenerating) return;
 
     setIsGenerating(true);
@@ -54,7 +46,15 @@ export default function Pulse() {
     } finally {
       setIsGenerating(false);
     }
-  };
+  }, [isGenerating, mutate]);
+
+  // Auto-generate summary if needed (once per session)
+  useEffect(() => {
+    if (data?.shouldRefresh && !hasAutoRefreshed.current && !isGenerating) {
+      hasAutoRefreshed.current = true;
+      handleRefresh();
+    }
+  }, [data?.shouldRefresh, isGenerating, handleRefresh]);
 
   if (isLoading) {
     return <PulseSkeleton />;
