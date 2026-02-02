@@ -18,8 +18,8 @@ import {
   activityLogs,
   pulseSummaries,
   userMentions,
-  notifications,
   pagePermissions,
+  chatMessages,
   eq,
   and,
   or,
@@ -27,53 +27,45 @@ import {
   gte,
   ne,
   desc,
-  sql,
-  count,
   inArray,
   isNull,
 } from '@pagespace/db';
-import type { PulseSummaryContextData } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 
 // This endpoint should be protected by a cron secret in production
 const CRON_SECRET = process.env.CRON_SECRET;
 
 // System prompt for generating pulse summaries
-const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion giving the user a natural, conversational update about their workspace.
+const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion who deeply understands the user's workspace and can give them genuinely useful, contextual updates.
 
-Your job is to tell them something INTERESTING or USEFUL about what's happening - not give them a robotic status report.
+You have access to RICH context about what's happening - actual page content, full messages, aggregated activity patterns, and more. Use this to give MEANINGFUL updates, not robotic summaries.
+
+YOUR JOB:
+- Tell them something they'd actually want to know
+- Be specific about WHAT people are working on (you can see page content!)
+- If someone messaged them, tell them what the message actually says
+- Notice interesting patterns: "Noah's been really focused on the roadmap today"
+- Connect the dots: "Sarah's updates to the Budget doc might be related to what Alex was asking about"
 
 TONE:
-- Like a thoughtful colleague catching you up over coffee
-- Natural and conversational, not a bullet-point readout
-- If it's a quiet day, just say hi warmly - don't manufacture urgency
-- If there's interesting activity, share what's actually happening
+- Like a thoughtful colleague who's been paying attention
+- Natural and conversational
+- Warm but not fake-enthusiastic
+- If it's quiet, just say hi - don't manufacture activity
 
-WHAT TO FOCUS ON (pick what's most interesting, not everything):
-- What are people actually working on? "Noah's been making progress on the Product Roadmap"
-- Interesting updates: "Sarah added some new ideas to the Q1 Planning doc"
-- Meaningful messages: If someone asked a specific question, mention it
-- Recent shares/mentions: "Alex shared the Budget proposal with you"
-- If someone left you a message, summarize WHAT they said, not just that they messaged
+EXAMPLES OF GREAT SUMMARIES:
+- "Morning! Noah's been heads-down on the Product Roadmap - he's added a whole new Q2 section with timeline estimates. Also, Sarah left you a DM asking if you've reviewed the pricing changes yet."
+- "Hey! Looks like the team's been active on Sprint Planning today. Alex added some notes about the API migration, and there's a thread going in the comments about the timeline."
+- "Afternoon! Things are pretty quiet. Sarah shared the Budget Analysis with you earlier if you want to take a look."
+- "Evening! Quick catch-up: Noah finished that Q4 Projections doc you were both discussing. The final revenue numbers look different from the draft."
 
 WHAT TO AVOID:
-- Robotic stat dumps: "You have 5 tasks, 26 pages updated" - USELESS
-- Vague summaries: "activity has occurred in your workspace" - BORING
-- Task-list mentality: Don't treat this as a to-do reminder
-- Counts without context: Never say "X tasks" or "X pages" without specifics
-- Filler when there's nothing: If it's quiet, a simple warm greeting is fine
+- "You have X tasks and Y pages were updated" - useless without specifics
+- "Activity occurred in your workspace" - vague nonsense
+- Listing every single thing that happened - pick what matters
+- Admitting you don't have information - just focus on what you DO know
 
-EXAMPLES OF GOOD SUMMARIES:
-- "Hey! Noah's been working on the Product Roadmap this morning - looks like he added the Q2 timeline. Sarah also dropped some comments on your Budget doc."
-- "Good afternoon! Alex shared the Marketing Brief with you, and it looks pretty comprehensive. Also, Sarah was asking about the launch date in your DMs."
-- "Morning! Things are quiet right now. The team was active yesterday on the Sprint Planning doc if you want to catch up."
-
-EXAMPLES OF BAD SUMMARIES:
-- "Good morning. You have 3 tasks due today and 12 pages were updated this week." (robotic, no context)
-- "Evening, Jonathan. Activity has occurred in your drives." (vague, useless)
-- "You've completed 5 tasks this week, though no specific details were provided." (never admit lack of context - just omit)
-
-Keep it to 2-3 natural sentences. Start with a brief, time-appropriate greeting.`;
+Keep it to 2-4 natural sentences. Be genuinely helpful.`;
 
 export async function POST(req: Request) {
   // Require cron secret - fail-closed for security
@@ -177,23 +169,22 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   if (!user) throw new Error('User not found');
 
   const userName = user.name || user.email?.split('@')[0] || 'there';
-  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+
+  // Time windows
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-  // Week boundaries
-  const dayOfWeek = now.getDay();
-  const startOfWeek = new Date(startOfToday);
-  startOfWeek.setDate(startOfWeek.getDate() - dayOfWeek);
-
-  // Get user's drives with full context
+  // Get user's drives
   const userDrives = await db
     .select({ driveId: driveMembers.driveId })
     .from(driveMembers)
     .where(eq(driveMembers.userId, userId));
   const driveIds = userDrives.map(d => d.driveId);
 
-  // Get drive details for workspace context
+  // ========================================
+  // 1. WORKSPACE CONTEXT - Drives and team members
+  // ========================================
   const driveDetails = driveIds.length > 0 ? await db
     .select({
       id: drives.id,
@@ -206,96 +197,122 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       eq(drives.isTrashed, false)
     )) : [];
 
-  // Gather task data
-  const [tasksOverdue] = await db
-    .select({ count: count() })
-    .from(taskItems)
-    .where(
-      and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        ne(taskItems.status, 'completed'),
-        lt(taskItems.dueDate, startOfToday)
-      )
-    );
+  // Get team members for each drive
+  const teamMembers = driveIds.length > 0 ? await db
+    .select({
+      driveId: driveMembers.driveId,
+      userName: users.name,
+      userEmail: users.email,
+    })
+    .from(driveMembers)
+    .leftJoin(users, eq(users.id, driveMembers.userId))
+    .where(and(
+      inArray(driveMembers.driveId, driveIds),
+      ne(driveMembers.userId, userId)
+    )) : [];
 
-  // Get overdue task details with priority
-  const overdueTasksList = await db
-    .select({ title: taskItems.title, priority: taskItems.priority })
-    .from(taskItems)
-    .where(
-      and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        ne(taskItems.status, 'completed'),
-        lt(taskItems.dueDate, startOfToday)
-      )
-    )
-    .orderBy(desc(taskItems.priority), taskItems.dueDate)
-    .limit(5);
+  const teamByDrive = teamMembers.reduce((acc, m) => {
+    if (!acc[m.driveId]) acc[m.driveId] = [];
+    acc[m.driveId].push(m.userName || m.userEmail?.split('@')[0] || 'Unknown');
+    return acc;
+  }, {} as Record<string, string[]>);
 
-  const [tasksDueToday] = await db
-    .select({ count: count() })
-    .from(taskItems)
+  // ========================================
+  // 2. AGGREGATED ACTIVITY
+  // ========================================
+  const rawActivity = driveIds.length > 0 ? await db
+    .select({
+      actorId: activityLogs.userId,
+      actorName: activityLogs.actorDisplayName,
+      operation: activityLogs.operation,
+      resourceType: activityLogs.resourceType,
+      resourceId: activityLogs.resourceId,
+      resourceTitle: activityLogs.resourceTitle,
+      driveId: activityLogs.driveId,
+      timestamp: activityLogs.timestamp,
+    })
+    .from(activityLogs)
     .where(
       and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        ne(taskItems.status, 'completed'),
-        gte(taskItems.dueDate, startOfToday),
-        lt(taskItems.dueDate, endOfToday)
-      )
-    );
-
-  const [tasksDueThisWeek] = await db
-    .select({ count: count() })
-    .from(taskItems)
-    .where(
-      and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        ne(taskItems.status, 'completed'),
-        gte(taskItems.dueDate, startOfToday),
-        lt(taskItems.dueDate, new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000))
-      )
-    );
-
-  const [tasksCompletedThisWeek] = await db
-    .select({ count: count() })
-    .from(taskItems)
-    .where(
-      and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        eq(taskItems.status, 'completed'),
-        gte(taskItems.completedAt, startOfWeek)
-      )
-    );
-
-  // Recently completed tasks
-  const recentlyCompletedTasks = await db
-    .select({ title: taskItems.title })
-    .from(taskItems)
-    .where(
-      and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        eq(taskItems.status, 'completed'),
-        gte(taskItems.completedAt, new Date(now.getTime() - 24 * 60 * 60 * 1000))
+        inArray(activityLogs.driveId, driveIds),
+        gte(activityLogs.timestamp, fortyEightHoursAgo)
       )
     )
-    .orderBy(desc(taskItems.completedAt))
-    .limit(3);
+    .orderBy(desc(activityLogs.timestamp))
+    .limit(200) : [];
 
-  // Upcoming tasks
-  const upcomingTasks = await db
-    .select({ title: taskItems.title })
-    .from(taskItems)
-    .where(
-      and(
-        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-        ne(taskItems.status, 'completed'),
-        gte(taskItems.dueDate, startOfToday)
-      )
-    )
-    .orderBy(taskItems.dueDate)
-    .limit(3);
+  const activityByPersonPage: Record<string, {
+    person: string;
+    pageId: string;
+    pageTitle: string;
+    driveName: string;
+    editCount: number;
+    lastEdit: Date;
+    operations: Set<string>;
+    isOwnActivity: boolean;
+  }> = {};
 
-  // Unread messages
+  rawActivity.forEach(a => {
+    if (a.resourceType !== 'page' || !a.resourceId) return;
+    const key = `${a.actorId}-${a.resourceId}`;
+    const driveName = driveDetails.find(d => d.id === a.driveId)?.name || 'Unknown';
+
+    if (!activityByPersonPage[key]) {
+      activityByPersonPage[key] = {
+        person: a.actorName || 'Someone',
+        pageId: a.resourceId,
+        pageTitle: a.resourceTitle || 'Untitled',
+        driveName,
+        editCount: 0,
+        lastEdit: a.timestamp,
+        operations: new Set(),
+        isOwnActivity: a.actorId === userId,
+      };
+    }
+    activityByPersonPage[key].editCount++;
+    activityByPersonPage[key].operations.add(a.operation);
+    if (a.timestamp > activityByPersonPage[key].lastEdit) {
+      activityByPersonPage[key].lastEdit = a.timestamp;
+    }
+  });
+
+  const aggregatedActivity = Object.values(activityByPersonPage)
+    .sort((a, b) => b.editCount - a.editCount)
+    .slice(0, 15);
+
+  const othersActivity = aggregatedActivity.filter(a => !a.isOwnActivity);
+  const ownActivity = aggregatedActivity.filter(a => a.isOwnActivity);
+
+  // ========================================
+  // 3. PAGE CONTENT
+  // ========================================
+  const activePageIds = othersActivity.slice(0, 8).map(a => a.pageId);
+
+  const pageContents = activePageIds.length > 0 ? await db
+    .select({
+      id: pages.id,
+      title: pages.title,
+      content: pages.content,
+      type: pages.type,
+      updatedAt: pages.updatedAt,
+    })
+    .from(pages)
+    .where(and(
+      inArray(pages.id, activePageIds),
+      eq(pages.isTrashed, false)
+    )) : [];
+
+  const pageSnippets = pageContents.map(p => ({
+    id: p.id,
+    title: p.title,
+    type: p.type,
+    contentPreview: p.content?.substring(0, 1500) || '',
+    updatedAt: p.updatedAt,
+  }));
+
+  // ========================================
+  // 4. DIRECT MESSAGES
+  // ========================================
   const userConversations = await db
     .select({ id: dmConversations.id })
     .from(dmConversations)
@@ -306,61 +323,88 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       )
     );
 
-  let unreadCount = 0;
-  const recentSenders: string[] = [];
-  const recentMessages: { from: string; preview?: string }[] = [];
+  let unreadDMs: { from: string; content: string; sentAt: Date }[] = [];
 
   if (userConversations.length > 0) {
     const conversationIds = userConversations.map(c => c.id);
-    const [unreadResult] = await db
-      .select({ count: count() })
+    const unreadMessagesList = await db
+      .select({
+        senderName: users.name,
+        senderEmail: users.email,
+        content: directMessages.content,
+        createdAt: directMessages.createdAt,
+      })
       .from(directMessages)
+      .leftJoin(users, eq(users.id, directMessages.senderId))
       .where(
         and(
           inArray(directMessages.conversationId, conversationIds),
           ne(directMessages.senderId, userId),
           eq(directMessages.isRead, false)
         )
-      );
-    unreadCount = unreadResult?.count ?? 0;
+      )
+      .orderBy(desc(directMessages.createdAt))
+      .limit(10);
 
-    // Get recent unread messages with content preview
-    if (unreadCount > 0) {
-      const unreadMessagesList = await db
-        .select({
-          senderId: directMessages.senderId,
-          senderName: users.name,
-          content: directMessages.content,
-        })
-        .from(directMessages)
-        .leftJoin(users, eq(users.id, directMessages.senderId))
-        .where(
-          and(
-            inArray(directMessages.conversationId, conversationIds),
-            ne(directMessages.senderId, userId),
-            eq(directMessages.isRead, false)
-          )
-        )
-        .orderBy(desc(directMessages.createdAt))
-        .limit(3);
-
-      const uniqueSenders = new Set<string>();
-      unreadMessagesList.forEach(m => {
-        if (m.senderName) uniqueSenders.add(m.senderName);
-        recentMessages.push({
-          from: m.senderName || 'Someone',
-          preview: m.content?.substring(0, 300), // Longer preview for context
-        });
-      });
-      recentSenders.push(...Array.from(uniqueSenders).slice(0, 5));
-    }
+    unreadDMs = unreadMessagesList.map(m => ({
+      from: m.senderName || m.senderEmail?.split('@')[0] || 'Someone',
+      content: m.content || '',
+      sentAt: m.createdAt,
+    }));
   }
 
-  // Get recent @mentions of the user
+  // ========================================
+  // 5. PAGE CHAT MESSAGES
+  // ========================================
+  const recentPageChats = driveIds.length > 0 ? await db
+    .select({
+      pageId: chatMessages.pageId,
+      pageTitle: pages.title,
+      senderName: users.name,
+      senderEmail: users.email,
+      content: chatMessages.content,
+      role: chatMessages.role,
+      createdAt: chatMessages.createdAt,
+    })
+    .from(chatMessages)
+    .leftJoin(pages, eq(pages.id, chatMessages.pageId))
+    .leftJoin(users, eq(users.id, chatMessages.userId))
+    .where(
+      and(
+        inArray(pages.driveId, driveIds),
+        eq(chatMessages.role, 'user'),
+        eq(chatMessages.isActive, true),
+        gte(chatMessages.createdAt, twentyFourHoursAgo),
+        ne(chatMessages.userId, userId)
+      )
+    )
+    .orderBy(desc(chatMessages.createdAt))
+    .limit(15) : [];
+
+  const chatsByPage = recentPageChats.reduce((acc, chat) => {
+    const key = chat.pageId;
+    if (!acc[key]) {
+      acc[key] = {
+        pageTitle: chat.pageTitle || 'Untitled',
+        messages: [],
+      };
+    }
+    acc[key].messages.push({
+      from: chat.senderName || chat.senderEmail?.split('@')[0] || 'Someone',
+      content: chat.content?.substring(0, 500) || '',
+      sentAt: chat.createdAt,
+    });
+    return acc;
+  }, {} as Record<string, { pageTitle: string; messages: { from: string; content: string; sentAt: Date }[] }>);
+
+  // ========================================
+  // 6. MENTIONS & SHARES
+  // ========================================
   const recentMentions = await db
     .select({
       mentionedByName: users.name,
       pageTitle: pages.title,
+      createdAt: userMentions.createdAt,
     })
     .from(userMentions)
     .leftJoin(users, eq(users.id, userMentions.mentionedByUserId))
@@ -368,36 +412,18 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .where(
       and(
         eq(userMentions.targetUserId, userId),
-        gte(userMentions.createdAt, twoHoursAgo)
+        gte(userMentions.createdAt, fortyEightHoursAgo)
       )
     )
     .orderBy(desc(userMentions.createdAt))
-    .limit(3);
-
-  // Get unread notifications
-  const unreadNotifications = await db
-    .select({
-      type: notifications.type,
-      triggeredByName: users.name,
-      pageTitle: pages.title,
-    })
-    .from(notifications)
-    .leftJoin(users, eq(users.id, notifications.triggeredByUserId))
-    .leftJoin(pages, eq(pages.id, notifications.pageId))
-    .where(
-      and(
-        eq(notifications.userId, userId),
-        eq(notifications.isRead, false)
-      )
-    )
-    .orderBy(desc(notifications.createdAt))
     .limit(5);
 
-  // Get pages recently shared with user
   const recentShares = await db
     .select({
       pageTitle: pages.title,
+      pageContent: pages.content,
       sharedByName: users.name,
+      grantedAt: pagePermissions.grantedAt,
     })
     .from(pagePermissions)
     .leftJoin(pages, eq(pages.id, pagePermissions.pageId))
@@ -405,182 +431,133 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .where(
       and(
         eq(pagePermissions.userId, userId),
-        gte(pagePermissions.grantedAt, twoHoursAgo)
+        gte(pagePermissions.grantedAt, fortyEightHoursAgo)
       )
     )
     .orderBy(desc(pagePermissions.grantedAt))
-    .limit(3);
+    .limit(5);
 
-  // Pages updated
-  let pagesUpdatedToday = 0;
-  let pagesUpdatedThisWeek = 0;
-  const recentlyUpdatedPages: { title: string; updatedBy: string }[] = [];
+  // ========================================
+  // 7. TASKS
+  // ========================================
+  const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-  if (driveIds.length > 0) {
-    const [todayResult] = await db
-      .select({ count: count() })
-      .from(pages)
-      .where(
-        and(
-          inArray(pages.driveId, driveIds),
-          eq(pages.isTrashed, false),
-          gte(pages.updatedAt, startOfToday)
-        )
-      );
-    pagesUpdatedToday = todayResult?.count ?? 0;
-
-    const [weekResult] = await db
-      .select({ count: count() })
-      .from(pages)
-      .where(
-        and(
-          inArray(pages.driveId, driveIds),
-          eq(pages.isTrashed, false),
-          gte(pages.updatedAt, startOfWeek)
-        )
-      );
-    pagesUpdatedThisWeek = weekResult?.count ?? 0;
-
-    // Recent page updates by others
-    const recentUpdates = await db
-      .select({
-        pageTitle: pages.title,
-        actorName: activityLogs.actorDisplayName,
-      })
-      .from(activityLogs)
-      .leftJoin(pages, eq(pages.id, activityLogs.pageId))
-      .where(
-        and(
-          inArray(activityLogs.driveId, driveIds),
-          eq(activityLogs.operation, 'update'),
-          eq(activityLogs.resourceType, 'page'),
-          ne(activityLogs.userId, userId),
-          gte(activityLogs.timestamp, twoHoursAgo)
-        )
-      )
-      .orderBy(desc(activityLogs.timestamp))
-      .limit(5);
-
-    const seenPages = new Set<string>();
-    recentUpdates.forEach(u => {
-      if (u.pageTitle && !seenPages.has(u.pageTitle)) {
-        seenPages.add(u.pageTitle);
-        recentlyUpdatedPages.push({
-          title: u.pageTitle,
-          updatedBy: u.actorName || 'Someone',
-        });
-      }
-    });
-  }
-
-  // Extended time window for "what you missed" context (24 hours)
-  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-  // Recent activity by collaborators - get more detail about what's happening
-  const collaboratorActivity = await db
+  const overdueTasks = await db
     .select({
-      actorName: activityLogs.actorDisplayName,
-      operation: activityLogs.operation,
-      resourceType: activityLogs.resourceType,
-      resourceTitle: activityLogs.resourceTitle,
-      driveId: activityLogs.driveId,
-      timestamp: activityLogs.timestamp,
+      title: taskItems.title,
+      priority: taskItems.priority,
+      dueDate: taskItems.dueDate,
     })
-    .from(activityLogs)
+    .from(taskItems)
     .where(
       and(
-        driveIds.length > 0 ? inArray(activityLogs.driveId, driveIds) : sql`false`,
-        ne(activityLogs.userId, userId),
-        gte(activityLogs.timestamp, twentyFourHoursAgo)
+        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+        ne(taskItems.status, 'completed'),
+        lt(taskItems.dueDate, startOfToday)
       )
     )
-    .orderBy(desc(activityLogs.timestamp))
-    .limit(20);
+    .orderBy(desc(taskItems.priority), taskItems.dueDate)
+    .limit(10);
 
-  // Build rich activity summaries - group by person and what they're working on
-  const collaboratorNames = new Set<string>();
-  const recentOperations: string[] = [];
-  const workingOn: { person: string; page: string; driveName?: string; action: string }[] = [];
+  const todayTasks = await db
+    .select({
+      title: taskItems.title,
+      priority: taskItems.priority,
+    })
+    .from(taskItems)
+    .where(
+      and(
+        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+        ne(taskItems.status, 'completed'),
+        gte(taskItems.dueDate, startOfToday),
+        lt(taskItems.dueDate, endOfToday)
+      )
+    )
+    .orderBy(desc(taskItems.priority))
+    .limit(10);
 
-  collaboratorActivity.forEach(a => {
-    if (a.actorName) collaboratorNames.add(a.actorName);
-    if (a.resourceTitle && a.resourceType === 'page') {
-      const driveName = driveDetails.find(d => d.id === a.driveId)?.name;
-      workingOn.push({
-        person: a.actorName || 'Someone',
-        page: a.resourceTitle,
-        driveName,
-        action: a.operation,
-      });
-    }
-    if (a.resourceTitle && recentOperations.length < 5) {
-      recentOperations.push(`${a.actorName || 'Someone'} ${a.operation}d "${a.resourceTitle}"`);
-    }
-  });
+  const recentlyCompletedTasks = await db
+    .select({ title: taskItems.title, completedAt: taskItems.completedAt })
+    .from(taskItems)
+    .where(
+      and(
+        or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+        eq(taskItems.status, 'completed'),
+        gte(taskItems.completedAt, twentyFourHoursAgo)
+      )
+    )
+    .orderBy(desc(taskItems.completedAt))
+    .limit(5);
 
-  // Dedupe and limit workingOn to most relevant
-  const uniqueWorkingOn = workingOn.reduce((acc, curr) => {
-    const key = `${curr.person}-${curr.page}`;
-    if (!acc.some(x => `${x.person}-${x.page}` === key)) {
-      acc.push(curr);
-    }
-    return acc;
-  }, [] as typeof workingOn).slice(0, 5);
-
-  // Build context data with rich workspace context
-  const contextData: PulseSummaryContextData = {
-    // Workspace context - what projects/drives exist
+  // ========================================
+  // BUILD THE RICH CONTEXT OBJECT
+  // ========================================
+  const contextData = {
+    userName,
     workspace: {
       drives: driveDetails.map(d => ({
         name: d.name,
-        description: d.description?.substring(0, 200) || undefined,
+        description: d.description || undefined,
+        teamMembers: teamByDrive[d.id] || [],
       })),
     },
-    // What people are actively working on (most valuable context)
-    workingOn: uniqueWorkingOn,
-    tasks: {
-      dueToday: tasksDueToday?.count ?? 0,
-      dueThisWeek: tasksDueThisWeek?.count ?? 0,
-      overdue: tasksOverdue?.count ?? 0,
-      completedThisWeek: tasksCompletedThisWeek?.count ?? 0,
-      recentlyCompleted: recentlyCompletedTasks.map(t => t.title).filter((t): t is string => !!t),
-      upcoming: upcomingTasks.map(t => t.title).filter((t): t is string => !!t),
-      overdueItems: overdueTasksList.map(t => ({
-        title: t.title ?? '',
-        priority: t.priority,
-      })).filter(t => t.title),
-    },
-    messages: {
-      unreadCount,
-      recentSenders,
-      recentMessages,
-    },
+    colleagueActivity: othersActivity.map(a => ({
+      person: a.person,
+      page: a.pageTitle,
+      drive: a.driveName,
+      editCount: a.editCount,
+      actions: Array.from(a.operations),
+      lastActive: a.lastEdit.toISOString(),
+    })),
+    activePageContent: pageSnippets.map(p => ({
+      title: p.title,
+      type: p.type,
+      preview: p.contentPreview,
+    })),
+    directMessages: unreadDMs.map(m => ({
+      from: m.from,
+      message: m.content,
+      sentAt: m.sentAt.toISOString(),
+    })),
+    pageDiscussions: Object.entries(chatsByPage).map(([_, data]) => ({
+      page: data.pageTitle,
+      messages: data.messages.map(m => ({
+        from: m.from,
+        message: m.content,
+        sentAt: m.sentAt.toISOString(),
+      })),
+    })),
     mentions: recentMentions.map(m => ({
       by: m.mentionedByName || 'Someone',
       inPage: m.pageTitle || 'a page',
-    })),
-    notifications: unreadNotifications.map(n => ({
-      type: n.type,
-      from: n.triggeredByName,
-      page: n.pageTitle,
+      when: m.createdAt.toISOString(),
     })),
     sharedWithYou: recentShares.map(s => ({
       page: s.pageTitle || 'a page',
       by: s.sharedByName || 'Someone',
+      preview: s.pageContent?.substring(0, 500) || '',
+      when: s.grantedAt?.toISOString(),
     })),
-    contentChanges: recentlyUpdatedPages.slice(0, 5).map(p => ({
-      page: p.title,
-      by: p.updatedBy,
+    tasks: {
+      overdue: overdueTasks.map(t => ({
+        title: t.title,
+        priority: t.priority,
+        dueDate: t.dueDate?.toISOString(),
+      })),
+      dueToday: todayTasks.map(t => ({
+        title: t.title,
+        priority: t.priority,
+      })),
+      recentlyCompleted: recentlyCompletedTasks.map(t => ({
+        title: t.title,
+        completedAt: t.completedAt?.toISOString(),
+      })),
+    },
+    ownRecentActivity: ownActivity.slice(0, 5).map(a => ({
+      page: a.pageTitle,
+      editCount: a.editCount,
+      lastActive: a.lastEdit.toISOString(),
     })),
-    pages: {
-      updatedToday: pagesUpdatedToday,
-      updatedThisWeek: pagesUpdatedThisWeek,
-      recentlyUpdated: recentlyUpdatedPages.slice(0, 5),
-    },
-    activity: {
-      collaboratorNames: Array.from(collaboratorNames).slice(0, 8),
-      recentOperations: recentOperations.slice(0, 5),
-    },
   };
 
   // Determine time of day
@@ -590,15 +567,19 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   else if (hour < 17) timeOfDay = 'afternoon';
   else timeOfDay = 'evening';
 
-  // Build prompt for AI - focus on what's interesting, not a data dump
-  const userPrompt = `Generate a friendly workspace update for ${userName}.
+  // Build prompt
+  const userPrompt = `Generate a personalized workspace update for ${userName}.
 
-Time of day: ${timeOfDay}
+Time: ${timeOfDay}
+Current time: ${now.toISOString()}
 
-Here's what's been happening in their workspace:
+Here's the full context of what's happening in their workspace:
+
 ${JSON.stringify(contextData, null, 2)}
 
-Write a natural 2-3 sentence update. Focus on what's INTERESTING - who's working on what, any messages that need attention, or things that might be helpful to know. If nothing much is happening, just give a warm greeting. Don't list everything - pick the 1-2 most relevant things.`;
+Based on this rich context, write a natural 2-4 sentence update that tells them something genuinely useful. You can see actual page content, full message text, and aggregated activity patterns - use this to be specific and helpful.
+
+Focus on what would be most relevant to them right now. If colleagues have been active, tell them WHAT those colleagues are working on (you can see the content!). If there are messages, summarize what they actually say. If it's quiet, just give a warm greeting.`;
 
   // Get AI provider
   const providerResult = await createAIProvider(userId, {
@@ -629,13 +610,50 @@ Write a natural 2-3 sentence update. Focus on what's INTERESTING - who's working
   }
 
   // Save to database
+  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
   const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
   await db.insert(pulseSummaries).values({
     userId,
     summary,
     greeting,
     type: 'scheduled',
-    contextData,
+    contextData: {
+      workspace: contextData.workspace,
+      workingOn: contextData.colleagueActivity.slice(0, 5).map(a => ({
+        person: a.person,
+        page: a.page,
+        driveName: a.drive,
+        action: a.actions[0] || 'update',
+      })),
+      tasks: {
+        dueToday: contextData.tasks.dueToday.length,
+        dueThisWeek: 0,
+        overdue: contextData.tasks.overdue.length,
+        completedThisWeek: contextData.tasks.recentlyCompleted.length,
+        recentlyCompleted: contextData.tasks.recentlyCompleted.map(t => t.title).filter((t): t is string => !!t),
+        upcoming: contextData.tasks.dueToday.map(t => t.title).filter((t): t is string => !!t),
+        overdueItems: contextData.tasks.overdue.map(t => ({ title: t.title || '', priority: t.priority })),
+      },
+      messages: {
+        unreadCount: unreadDMs.length,
+        recentSenders: [...new Set(unreadDMs.map(m => m.from))],
+        recentMessages: unreadDMs.slice(0, 5).map(m => ({ from: m.from, preview: m.content.substring(0, 300) })),
+      },
+      mentions: contextData.mentions.map(m => ({ by: m.by, inPage: m.inPage })),
+      notifications: [],
+      sharedWithYou: contextData.sharedWithYou.map(s => ({ page: s.page, by: s.by })),
+      contentChanges: contextData.colleagueActivity.slice(0, 5).map(a => ({ page: a.page, by: a.person })),
+      pages: {
+        updatedToday: contextData.colleagueActivity.filter(a => new Date(a.lastActive) >= startOfToday).length,
+        updatedThisWeek: contextData.colleagueActivity.length,
+        recentlyUpdated: contextData.colleagueActivity.slice(0, 5).map(a => ({ title: a.page, updatedBy: a.person })),
+      },
+      activity: {
+        collaboratorNames: [...new Set(contextData.colleagueActivity.map(a => a.person))],
+        recentOperations: contextData.colleagueActivity.slice(0, 5).map(a => `${a.person} edited "${a.page}" (${a.editCount} times)`),
+      },
+    },
     aiProvider: providerResult.provider,
     aiModel: providerResult.modelName,
     periodStart: twoHoursAgo,
