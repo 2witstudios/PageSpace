@@ -9,10 +9,12 @@ import {
   navigateInTab as navigateInTabFn,
   goBack as goBackFn,
   goForward as goForwardFn,
+  updateTabMeta as updateTabMetaFn,
   canGoBack,
   canGoForward,
   type Tab,
   type CreateTabOptions,
+  type TabMetaUpdate,
 } from '@/lib/tabs/tab-navigation';
 
 export type { Tab };
@@ -40,6 +42,7 @@ interface TabsState {
   goBackInActiveTab: () => void;
   goForwardInActiveTab: () => void;
   duplicateTab: (tabId: string) => void;
+  updateTabMeta: (tabId: string, meta: TabMetaUpdate) => void;
 
   // Selectors (attached for convenience)
   selectActiveTab: (state: TabsState) => Tab | null;
@@ -279,7 +282,7 @@ export const useTabsStore = create<TabsState>()(
         const tab = tabs.find(t => t.id === tabId);
         if (!tab) return;
 
-        const newTab = createTabFn({ path: tab.path });
+        const newTab = createTabFn({ path: tab.path, title: tab.title, pageType: tab.pageType });
         const tabIndex = tabs.findIndex(t => t.id === tabId);
 
         const newTabs = [...tabs];
@@ -289,6 +292,17 @@ export const useTabsStore = create<TabsState>()(
           tabs: newTabs,
           activeTabId: newTab.id,
         });
+      },
+
+      updateTabMeta: (tabId, meta) => {
+        const { tabs } = get();
+        const tabIndex = tabs.findIndex(t => t.id === tabId);
+        if (tabIndex === -1) return;
+
+        const newTabs = [...tabs];
+        newTabs[tabIndex] = updateTabMetaFn(newTabs[tabIndex], meta);
+
+        set({ tabs: newTabs });
       },
 
       // Selectors
