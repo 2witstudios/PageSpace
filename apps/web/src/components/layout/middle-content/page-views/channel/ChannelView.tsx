@@ -282,7 +282,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
     <div className="flex flex-col h-full">
         <PullToRefresh direction="top" onRefresh={handleRefresh}>
           <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
-              <div className="p-4 space-y-4">
+              <div className="p-4 space-y-4 max-w-4xl mx-auto">
                   {messages.map((m) => (
                       <div key={m.id} className="group flex items-start gap-4">
                           <Avatar className="shrink-0">
@@ -319,23 +319,25 @@ export default function ChannelView({ page }: ChannelViewProps) {
           </ScrollArea>
         </PullToRefresh>
         <div className="p-4">
-          {canEdit ? (
-            <ChannelInput
-              ref={channelInputRef}
-              value={inputValue}
-              onChange={setInputValue}
-              onSend={handleSendMessage}
-              placeholder="Type a message... (use @ to mention, supports **markdown**)"
-              driveId={page.driveId}
-            />
-          ) : (
-            <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
-              <Lock className="h-4 w-4" />
-              <AlertDescription className="text-yellow-800 dark:text-yellow-200">
-                View-only access: {getPermissionErrorMessage('send', 'channel')}
-              </AlertDescription>
-            </Alert>
-          )}
+          <div className="max-w-4xl mx-auto">
+            {canEdit ? (
+              <ChannelInput
+                ref={channelInputRef}
+                value={inputValue}
+                onChange={setInputValue}
+                onSend={handleSendMessage}
+                placeholder="Type a message... (use @ to mention, supports **markdown**)"
+                driveId={page.driveId}
+              />
+            ) : (
+              <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
+                <Lock className="h-4 w-4" />
+                <AlertDescription className="text-yellow-800 dark:text-yellow-200">
+                  View-only access: {getPermissionErrorMessage('send', 'channel')}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
         </div>
     </div>
   );
