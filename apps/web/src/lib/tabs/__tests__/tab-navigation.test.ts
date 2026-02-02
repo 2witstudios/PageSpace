@@ -13,6 +13,7 @@ import {
   canGoForward,
   type Tab,
 } from '../tab-navigation';
+import { PageType } from '@pagespace/lib/client-safe';
 
 // Factory for creating test tabs
 const createTestTab = (overrides: Partial<Tab> = {}): Tab => ({
@@ -109,7 +110,7 @@ describe('tab-navigation', () => {
       const tab = createTestTab({
         path: '/dashboard/drive-1/page-1',
         title: 'Old Page Title',
-        pageType: 'DOCUMENT' as const,
+        pageType: PageType.DOCUMENT,
       });
 
       const updated = navigateInTab(tab, '/dashboard/drive-1/page-2');
@@ -122,7 +123,7 @@ describe('tab-navigation', () => {
       const tab = createTestTab({
         path: '/dashboard/drive-1/page-1',
         title: 'Page Title',
-        pageType: 'DOCUMENT' as const,
+        pageType: PageType.DOCUMENT,
       });
 
       const updated = navigateInTab(tab, '/dashboard/drive-1/page-1');
@@ -166,7 +167,7 @@ describe('tab-navigation', () => {
         history: ['/dashboard', '/page-1', '/page-2'],
         historyIndex: 2,
         title: 'Page 2 Title',
-        pageType: 'DOCUMENT' as const,
+        pageType: PageType.DOCUMENT,
       });
 
       const updated = goBack(tab);
@@ -209,7 +210,7 @@ describe('tab-navigation', () => {
         history: ['/dashboard', '/page-1', '/page-2'],
         historyIndex: 0,
         title: 'Dashboard',
-        pageType: 'DOCUMENT' as const,
+        pageType: PageType.DOCUMENT,
       });
 
       const updated = goForward(tab);
