@@ -8,10 +8,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
 import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
-import { ChannelInput, type ChannelInputRef } from './ChannelInput';
+import { ChannelInput, type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock } from 'lucide-react';
+import { Lock, FileIcon, FileText, Download } from 'lucide-react';
 import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
@@ -20,9 +20,24 @@ interface ChannelViewProps {
   page: TreePage;
 }
 
-// Extended message type with reactions
+// Attachment metadata stored in the database
+interface AttachmentMeta {
+  originalName: string;
+  size: number;
+  mimeType: string;
+  contentHash: string;
+}
+
+// Extended message type with reactions and file attachment
 interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
+  fileId?: string | null;
+  attachmentMeta?: AttachmentMeta | null;
+  file?: {
+    id: string;
+    mimeType: string | null;
+    sizeBytes: number;
+  } | null;
 }
 
 export default function ChannelView({ page }: ChannelViewProps) {
@@ -87,9 +102,9 @@ export default function ChannelView({ page }: ChannelViewProps) {
     }
   }, [messages]);
 
-  const handleSubmit = async (content: string) => {
+  const handleSubmit = async (content: string, attachment?: FileAttachment) => {
     if (!user) return;
-    
+
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
@@ -98,7 +113,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
     const messageContent = typeof content === 'string' ? content : JSON.stringify(content);
 
     const tempId = `temp-${Date.now()}`;
-    const optimisticMessage: MessageWithUser = {
+    const optimisticMessage: MessageWithReactions = {
       id: tempId,
       pageId: page.id,
       content: messageContent,
@@ -112,12 +127,29 @@ export default function ChannelView({ page }: ChannelViewProps) {
         name: user.name || 'You',
         image: null,
       },
+      // Include attachment info in optimistic message
+      fileId: attachment?.id || null,
+      attachmentMeta: attachment ? {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      } : null,
     };
 
     setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
-      await post(`/api/channels/${page.id}/messages`, { content: messageContent });
+      await post(`/api/channels/${page.id}/messages`, {
+        content: messageContent,
+        fileId: attachment?.id,
+        attachmentMeta: attachment ? {
+          originalName: attachment.originalName,
+          size: attachment.size,
+          mimeType: attachment.mimeType,
+          contentHash: attachment.contentHash,
+        } : undefined,
+      });
 
       // The new message will be received via the socket connection,
       // which will replace the optimistic one.
@@ -128,13 +160,14 @@ export default function ChannelView({ page }: ChannelViewProps) {
     }
   };
 
-  const handleSendMessage = () => {
-    if (!inputValue.trim()) return;
+  const handleSendMessage = (attachment?: FileAttachment) => {
+    // Allow sending if there's text or an attachment
+    if (!inputValue.trim() && !attachment) return;
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
-    handleSubmit(inputValue);
+    handleSubmit(inputValue, attachment);
     channelInputRef.current?.clear();
     setInputValue('');
   };
@@ -296,12 +329,59 @@ export default function ChannelView({ page }: ChannelViewProps) {
                                       {new Date(m.createdAt).toLocaleTimeString()}
                                   </span>
                               </div>
-                              <div className="prose prose-sm dark:prose-invert max-w-none">
-                                <StreamingMarkdown
-                                  content={m.content}
-                                  isStreaming={false}
-                                />
-                              </div>
+                              {m.content && (
+                                <div className="prose prose-sm dark:prose-invert max-w-none">
+                                  <StreamingMarkdown
+                                    content={m.content}
+                                    isStreaming={false}
+                                  />
+                                </div>
+                              )}
+                              {/* File attachment */}
+                              {m.attachmentMeta && (
+                                <div className="mt-2">
+                                  {m.attachmentMeta.mimeType.startsWith('image/') ? (
+                                    <a
+                                      href={`/api/files/${m.fileId}/view`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="block max-w-sm"
+                                    >
+                                      <img
+                                        src={`/api/files/${m.fileId}/view`}
+                                        alt={m.attachmentMeta.originalName}
+                                        className="rounded-lg max-h-64 object-contain border border-border/50"
+                                      />
+                                    </a>
+                                  ) : (
+                                    <a
+                                      href={`/api/files/${m.fileId}/download`}
+                                      className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
+                                    >
+                                      <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
+                                        {m.attachmentMeta.mimeType.includes('pdf') ? (
+                                          <FileText className="h-5 w-5 text-red-500" />
+                                        ) : m.attachmentMeta.mimeType.includes('document') || m.attachmentMeta.mimeType.includes('word') ? (
+                                          <FileText className="h-5 w-5 text-blue-500" />
+                                        ) : (
+                                          <FileIcon className="h-5 w-5 text-muted-foreground" />
+                                        )}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-medium truncate">{m.attachmentMeta.originalName}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {m.attachmentMeta.size < 1024
+                                            ? `${m.attachmentMeta.size} B`
+                                            : m.attachmentMeta.size < 1024 * 1024
+                                            ? `${(m.attachmentMeta.size / 1024).toFixed(1)} KB`
+                                            : `${(m.attachmentMeta.size / (1024 * 1024)).toFixed(1)} MB`}
+                                        </p>
+                                      </div>
+                                      <Download className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    </a>
+                                  )}
+                                </div>
+                              )}
                               {/* Reactions */}
                               {user && !m.id.startsWith('temp-') && (
                                 <MessageReactions
@@ -328,6 +408,8 @@ export default function ChannelView({ page }: ChannelViewProps) {
                 onSend={handleSendMessage}
                 placeholder="Type a message... (use @ to mention, supports **markdown**)"
                 driveId={page.driveId}
+                channelId={page.id}
+                attachmentsEnabled
               />
             ) : (
               <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">

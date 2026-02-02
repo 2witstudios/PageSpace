@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, db, eq, asc } from '@pagespace/db';
+import { channelMessages, db, eq, asc, files } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+
+// Type for attachment metadata stored in the database
+interface AttachmentMeta {
+  originalName: string;
+  size: number;
+  mimeType: string;
+  contentHash: string;
+}
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -31,6 +39,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         columns: {
           name: true,
           image: true,
+        },
+      },
+      file: {
+        columns: {
+          id: true,
+          mimeType: true,
+          sizeBytes: true,
         },
       },
       reactions: {
@@ -65,15 +80,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }, { status: 403 });
   }
 
-  const { content } = await req.json();
-  
+  const { content, fileId, attachmentMeta } = await req.json() as {
+    content: string;
+    fileId?: string;
+    attachmentMeta?: AttachmentMeta;
+  };
+
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
-  loggers.realtime.debug('API received content:', { content });
+  loggers.realtime.debug('API received content:', { content, fileId });
+
+  // If fileId is provided, verify it exists
+  if (fileId) {
+    const file = await db.query.files.findFirst({
+      where: eq(files.id, fileId),
+    });
+    if (!file) {
+      return NextResponse.json({ error: 'File not found' }, { status: 400 });
+    }
+  }
+
   const [createdMessage] = await db.insert(channelMessages).values({
     pageId: pageId,
     userId: userId,
     content,
+    fileId: fileId || null,
+    attachmentMeta: attachmentMeta || null,
   }).returning();
 
   const newMessage = await db.query.channelMessages.findFirst({
@@ -83,6 +115,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
               columns: {
                   name: true,
                   image: true,
+              }
+          },
+          file: {
+              columns: {
+                  id: true,
+                  mimeType: true,
+                  sizeBytes: true,
               }
           }
       }

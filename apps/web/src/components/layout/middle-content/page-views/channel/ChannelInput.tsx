@@ -2,19 +2,28 @@
 
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { ArrowUp } from 'lucide-react';
+import { ArrowUp, X, FileIcon, ImageIcon, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
+
+// File attachment info returned from upload
+export interface FileAttachment {
+  id: string;
+  originalName: string;
+  size: number;
+  mimeType: string;
+  contentHash: string;
+}
 
 export interface ChannelInputProps {
   /** Current input value */
   value: string;
   /** Input change handler */
   onChange: (value: string) => void;
-  /** Send message handler */
-  onSend: () => void;
+  /** Send message handler - receives optional attachment */
+  onSend: (attachment?: FileAttachment) => void;
   /** Whether the input is disabled */
   disabled?: boolean;
   /** Placeholder text */
@@ -23,8 +32,10 @@ export interface ChannelInputProps {
   driveId?: string;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
-  /** Whether attachments are enabled (future feature) */
+  /** Whether attachments are enabled */
   attachmentsEnabled?: boolean;
+  /** Channel page ID for uploads */
+  channelId?: string;
   /** Additional class names */
   className?: string;
 }
@@ -63,13 +74,17 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       driveId,
       crossDrive = false,
       attachmentsEnabled = false,
+      channelId,
       className,
     },
     ref
   ) => {
     const textareaRef = useRef<ChatTextareaRef>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const shouldReduceMotion = useReducedMotion();
     const [isFocused, setIsFocused] = useState(false);
+    const [attachment, setAttachment] = useState<FileAttachment | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
 
     useImperativeHandle(ref, () => ({
       focus: () => textareaRef.current?.focus(),
@@ -82,9 +97,75 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
     }));
 
     const handleSend = () => {
-      if (value.trim() && !disabled) {
-        onSend();
+      if ((value.trim() || attachment) && !disabled && !isUploading) {
+        onSend(attachment || undefined);
+        setAttachment(null);
       }
+    };
+
+    // Handle file selection
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file || !channelId) return;
+
+      setIsUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`/api/channels/${channelId}/upload`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Upload failed');
+        }
+
+        const result = await response.json();
+        setAttachment({
+          id: result.file.id,
+          originalName: result.file.originalName,
+          size: result.file.size,
+          mimeType: result.file.mimeType,
+          contentHash: result.file.contentHash,
+        });
+        textareaRef.current?.focus();
+      } catch (error) {
+        console.error('Failed to upload file:', error);
+      } finally {
+        setIsUploading(false);
+        // Reset file input
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      }
+    };
+
+    // Handle attachment button click
+    const handleAttachmentClick = () => {
+      fileInputRef.current?.click();
+    };
+
+    // Remove attachment
+    const handleRemoveAttachment = () => {
+      setAttachment(null);
+    };
+
+    // Get icon for file type
+    const getFileIcon = (mimeType: string) => {
+      if (mimeType.startsWith('image/')) return ImageIcon;
+      if (mimeType.includes('pdf') || mimeType.includes('document')) return FileText;
+      return FileIcon;
+    };
+
+    // Format file size
+    const formatFileSize = (bytes: number) => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     };
 
     // Handle formatting shortcuts
@@ -114,7 +195,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       textareaRef.current?.focus();
     };
 
-    const canSend = value.trim().length > 0 && !disabled;
+    const canSend = (value.trim().length > 0 || attachment) && !disabled && !isUploading;
 
     const sendButton = (
       <button
@@ -141,6 +222,15 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
 
     return (
       <div className={cn('w-full', className)}>
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleFileSelect}
+          accept="image/*,.pdf,.doc,.docx,.txt,.md"
+        />
+
         <InputCard
           className={cn(
             // Subtle focus ring for the card
@@ -148,6 +238,51 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             isFocused && 'ring-1 ring-primary/20'
           )}
         >
+          {/* Attachment preview */}
+          {(attachment || isUploading) && (
+            <div className="px-3 pt-3">
+              <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                {isUploading ? (
+                  <>
+                    <div className="w-8 h-8 rounded bg-muted animate-pulse" />
+                    <div className="flex-1 min-w-0">
+                      <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                      <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
+                    </div>
+                  </>
+                ) : attachment ? (
+                  <>
+                    {attachment.mimeType.startsWith('image/') ? (
+                      <img
+                        src={`/api/files/${attachment.id}/view`}
+                        alt={attachment.originalName}
+                        className="w-8 h-8 rounded object-cover"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
+                        {(() => {
+                          const Icon = getFileIcon(attachment.mimeType);
+                          return <Icon className="h-4 w-4 text-muted-foreground" />;
+                        })()}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{attachment.originalName}</p>
+                      <p className="text-xs text-muted-foreground">{formatFileSize(attachment.size)}</p>
+                    </div>
+                    <button
+                      onClick={handleRemoveAttachment}
+                      className="p-1 hover:bg-muted rounded"
+                      title="Remove attachment"
+                    >
+                      <X className="h-4 w-4 text-muted-foreground" />
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          )}
+
           {/* Input row */}
           <div
             className="flex items-end gap-2 p-3"
@@ -186,8 +321,9 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
             onFormatClick={handleFormatClick}
             onMentionClick={handleMentionClick}
             onEmojiSelect={handleEmojiSelect}
-            attachmentsEnabled={attachmentsEnabled}
-            disabled={disabled}
+            onAttachmentClick={handleAttachmentClick}
+            attachmentsEnabled={attachmentsEnabled && !!channelId}
+            disabled={disabled || isUploading}
           />
         </InputCard>
       </div>
