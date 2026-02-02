@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, db, eq, asc, files } from '@pagespace/db';
+import { channelMessages, db, eq, asc, files, pages, driveMembers } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 
 // Type for attachment metadata stored in the database
 interface AttachmentMeta {
@@ -148,6 +149,57 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     } catch (error) {
       loggers.realtime.error('Failed to broadcast message to socket server:', error as Error);
     }
+  }
+
+  // Broadcast inbox update to channel members who have view permission
+  try {
+    // Get channel's driveId
+    const channel = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true, title: true },
+    });
+
+    if (channel?.driveId) {
+      // Get all drive members
+      const members = await db.query.driveMembers.findMany({
+        where: eq(driveMembers.driveId, channel.driveId),
+        columns: { userId: true },
+      });
+
+      // Create message preview
+      const messagePreview = content.length > 100
+        ? content.substring(0, 100) + '...'
+        : content;
+
+      // Filter to members with view permission and broadcast
+      // Check permissions in parallel for efficiency
+      const memberPermissions = await Promise.all(
+        members
+          .filter(m => m.userId !== userId)
+          .map(async member => ({
+            userId: member.userId,
+            canView: await canUserViewPage(member.userId, pageId),
+          }))
+      );
+
+      const broadcastPromises = memberPermissions
+        .filter(m => m.canView)
+        .map(member =>
+          broadcastInboxEvent(member.userId, {
+            operation: 'channel_updated',
+            type: 'channel',
+            id: pageId,
+            driveId: channel.driveId,
+            lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
+            lastMessagePreview: messagePreview,
+            lastMessageSender: newMessage?.user?.name || undefined,
+          })
+        );
+
+      await Promise.all(broadcastPromises);
+    }
+  } catch (error) {
+    loggers.realtime.error('Failed to broadcast inbox update:', error as Error);
   }
 
   return NextResponse.json(newMessage, { status: 201 });

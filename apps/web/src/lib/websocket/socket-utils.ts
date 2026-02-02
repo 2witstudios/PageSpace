@@ -18,6 +18,7 @@ export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' 
 export type UsageOperation = 'updated';
 export type ActivityOperation = 'logged';
 export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
+export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed';
 
 export interface ActivityEventPayload {
   activityId: string;
@@ -98,6 +99,17 @@ export interface KickResult {
   kickedCount: number;
   rooms: string[];
   error?: string;
+}
+
+export interface InboxEventPayload {
+  operation: InboxOperation;
+  type: 'dm' | 'channel';
+  id: string;
+  driveId?: string;
+  lastMessageAt?: string;
+  lastMessagePreview?: string;
+  lastMessageSender?: string;
+  unreadCount?: number;
 }
 
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
@@ -381,6 +393,55 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
       {
         event: 'usage',
         channel: `notifications:${maskIdentifier(payload.userId)}`
+      }
+    );
+  }
+}
+
+/**
+ * Broadcasts an inbox event to a user's notification channel
+ * Used for real-time DM/channel updates in the inbox
+ * @param userId - The user to notify
+ * @param payload - The inbox event payload
+ */
+export async function broadcastInboxEvent(userId: string, payload: InboxEventPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping inbox event broadcast', {
+      event: 'inbox',
+      operation: payload.operation,
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId: `notifications:${userId}`,
+      event: `inbox:${payload.operation}`,
+      payload,
+    });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+    });
+
+    if (verboseRealtimeLogging) {
+      realtimeLogger.debug('Inbox event broadcasted', {
+        userId: maskIdentifier(userId),
+        operation: payload.operation,
+        type: payload.type,
+        id: maskIdentifier(payload.id),
+      });
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast inbox event',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'inbox',
+        channel: `notifications:${maskIdentifier(userId)}`,
       }
     );
   }

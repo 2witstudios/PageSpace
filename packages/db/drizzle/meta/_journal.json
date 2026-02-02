@@ -435,6 +435,13 @@
       "when": 1770010172186,
       "tag": "0061_dear_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1770044733258,
+      "tag": "0062_glossy_bushwacker",
+      "breakpoints": true
     }
   ]
 }
