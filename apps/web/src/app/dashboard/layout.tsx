@@ -8,6 +8,7 @@ import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 const FULL_PAGE_ROUTES = [
   '/dashboard/activity',
   '/dashboard/connections',
+  '/dashboard/inbox',
   '/dashboard/messages',
   '/dashboard/storage',
   '/dashboard/tasks',

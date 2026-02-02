@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSWRConfig } from "swr";
-import { Home, Lock, Plus, Search } from "lucide-react";
+import { Home, Inbox, Lock, Plus, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,10 +87,20 @@ export default function Sidebar({ className }: SidebarProps) {
         <Link
           href="/dashboard"
           onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3"
+          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
         >
           <Home className="h-4 w-4" />
           Dashboard
+        </Link>
+
+        {/* Inbox link - always visible */}
+        <Link
+          href="/dashboard/inbox"
+          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
+          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3"
+        >
+          <Inbox className="h-4 w-4" />
+          Inbox
         </Link>
 
         {/* Main content area */}
