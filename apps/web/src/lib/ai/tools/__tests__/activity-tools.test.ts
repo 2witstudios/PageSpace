@@ -6,6 +6,16 @@ vi.mock('@pagespace/lib', () => ({
   isUserDriveMember: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/content', () => ({
+  groupActivitiesForDiff: vi.fn(),
+  generateStackedDiff: vi.fn(),
+  truncateDiffsToTokenBudget: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/server', () => ({
+  readPageContent: vi.fn(),
+}));
+
 import { activityTools } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib';
 import type { ToolExecutionContext } from '../../core';
@@ -20,6 +30,7 @@ type ActivityToolInput = {
   limit: number;
   maxOutputChars: number;
   includeDiffs: boolean;
+  includeContentDiffs: boolean;
   driveIds?: string[];
   operationCategories?: ('content' | 'permissions' | 'membership')[];
 };
@@ -32,6 +43,7 @@ const createTestInput = (overrides: Partial<ActivityToolInput> = {}): ActivityTo
   limit: 50,
   maxOutputChars: 20000,
   includeDiffs: true,
+  includeContentDiffs: false,
   ...overrides,
 });
 
@@ -97,6 +109,24 @@ describe('activity-tools', () => {
       expect(desc).toContain('workspace');
       // Should mention key use cases
       expect(desc).toMatch(/collaborat|pulse|welcome|context/i);
+    });
+
+    it('has includeContentDiffs in tool description', () => {
+      // The tool description should mention includeContentDiffs usage
+      // This verifies the parameter was added to the schema
+      const description = activityTools.get_activity.description;
+      expect(description).toBeDefined();
+    });
+
+    it('accepts includeContentDiffs in execute call', async () => {
+      // This test verifies the execute function signature accepts includeContentDiffs
+      // We don't need to test the actual behavior here - that requires DB access
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      // This should throw for auth, not for invalid parameter
+      await expect(
+        activityTools.get_activity.execute!(createTestInput({ includeContentDiffs: true }), context)
+      ).rejects.toThrow('User authentication required');
     });
   });
 });

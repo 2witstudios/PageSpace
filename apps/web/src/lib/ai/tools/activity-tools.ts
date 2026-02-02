@@ -15,7 +15,16 @@ import {
   isNull,
   inArray,
 } from '@pagespace/db';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember, getBatchPagePermissions, isDriveOwnerOrAdmin } from '@pagespace/lib';
+import {
+  groupActivitiesForDiff,
+  resolveStackedVersionContent,
+  generateDiffsWithinBudget,
+  calculateDiffBudget,
+  type ActivityForDiff,
+  type DiffRequest,
+} from '@pagespace/lib/content';
+import { readPageContent } from '@pagespace/lib/server';
 import { type ToolExecutionContext } from '../core';
 
 /**
@@ -104,6 +113,17 @@ interface CompactActivity {
   delta?: Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }>;
 }
 
+interface ContentDiffSummary {
+  pageId: string;
+  pageTitle: string | null;
+  collapsedCount: number;
+  timeRange: { from: string; to: string };
+  actors: string[];
+  unifiedDiff: string;
+  stats: { additions: number; deletions: number };
+  isAiGenerated: boolean;
+}
+
 interface CompactDriveGroup {
   drive: {
     id: string;
@@ -117,6 +137,7 @@ interface CompactDriveGroup {
     byOp: Record<string, number>;
     aiCount: number;
   };
+  contentDiffs?: ContentDiffSummary[];  // Optional: actual content diffs when includeContentDiffs=true
 }
 
 interface CompactActor {
@@ -251,6 +272,13 @@ The AI should use this data to form intuition about ongoing work and provide con
         .describe(
           'Include change diffs. Set false for lighter response'
         ),
+
+      includeContentDiffs: z
+        .boolean()
+        .default(true)
+        .describe(
+          'Include semantic content diffs for pages with changes. Returns unified diffs showing actual content changes. Use for pulse notifications to see what collaborators actually wrote.'
+        ),
     }),
 
     execute: async (
@@ -263,6 +291,7 @@ The AI should use this data to form intuition about ongoing work and provide con
         limit,
         maxOutputChars,
         includeDiffs,
+        includeContentDiffs,
       },
       { experimental_context: context }
     ) => {
@@ -506,6 +535,188 @@ The AI should use this data to form intuition about ongoing work and provide con
         const driveGroups = Array.from(driveGroupsMap.values()).sort(
           (a, b) => b.stats.total - a.stats.total
         );
+
+        // Generate content diffs if requested
+        if (includeContentDiffs) {
+          // P2 Budget: Use maxOutputChars parameter to calculate proportional budget
+          const diffBudget = calculateDiffBudget(maxOutputChars);
+
+          // Collect all activities with page content changes
+          let pageActivities = activities.filter(
+            (a) =>
+              a.pageId &&
+              a.resourceType === 'page' &&
+              (a.operation === 'update' || a.operation === 'create') &&
+              (a.contentRef || a.contentSnapshot)
+          );
+
+          // P1 Security: Filter to pages user has permission to view
+          // Drive membership alone doesn't grant page-level content access
+          if (pageActivities.length > 0) {
+            const uniquePageIds = [...new Set(pageActivities.map(a => a.pageId).filter(Boolean))] as string[];
+            const permissions = await getBatchPagePermissions(userId, uniquePageIds);
+
+            // Filter to pages user can view
+            const viewablePageIds = new Set(
+              Array.from(permissions.entries())
+                .filter(([, perm]) => perm?.canView)
+                .map(([pageId]) => pageId)
+            );
+
+            // Drive admins have view access to all pages in their drives
+            const uniqueDriveIds = [...new Set(
+              pageActivities.map(a => a.driveId).filter(Boolean)
+            )] as string[];
+
+            for (const driveId of uniqueDriveIds) {
+              if (await isDriveOwnerOrAdmin(userId, driveId)) {
+                for (const activity of pageActivities) {
+                  if (activity.driveId === driveId && activity.pageId) {
+                    viewablePageIds.add(activity.pageId);
+                  }
+                }
+              }
+            }
+
+            pageActivities = pageActivities.filter(
+              a => a.pageId && viewablePageIds.has(a.pageId)
+            );
+          }
+
+          if (pageActivities.length > 0) {
+            // Convert to ActivityForDiff format
+            // Note: Content in activity logs is pre-update state (for rollback)
+            const activitiesForDiff: (ActivityForDiff & { driveId: string })[] = [];
+            // Track contentRefs separately for version resolution
+            const activityContentRefs = new Map<string, string>();
+
+            for (const activity of pageActivities) {
+              // Track contentRef separately for version resolution
+              if (activity.contentRef) {
+                activityContentRefs.set(activity.id, activity.contentRef);
+              }
+
+              activitiesForDiff.push({
+                id: activity.id,
+                timestamp: activity.timestamp,
+                pageId: activity.pageId,
+                resourceTitle: activity.resourceTitle,
+                changeGroupId: activity.changeGroupId,
+                aiConversationId: activity.aiConversationId,
+                isAiGenerated: activity.isAiGenerated,
+                actorEmail: activity.actorEmail,
+                actorDisplayName: activity.actorDisplayName,
+                // Store inline snapshot for fallback (legacy data without contentRef)
+                content: activity.contentSnapshot ?? null,
+                driveId: activity.driveId!,
+              });
+            }
+
+            // Group activities for diffing
+            const diffGroups = groupActivitiesForDiff(activitiesForDiff);
+
+            // P2 Semantic: Use page versions for post-update content
+            // Activity logs store pre-update content; page versions store post-update content
+            // Use LAST activity's changeGroupId (AI sessions have multiple changeGroupIds per group)
+            const groupsWithChangeGroupId = diffGroups.filter(
+              (g) => g.last.changeGroupId && g.last.pageId
+            );
+
+            // Resolve post-update content from page versions
+            const versionContentPairs = await resolveStackedVersionContent(
+              groupsWithChangeGroupId.map((g) => ({
+                changeGroupId: g.last.changeGroupId!,
+                pageId: g.last.pageId!,
+                // Use FIRST activity's contentRef as "before" state (from the Map)
+                firstContentRef: activityContentRefs.get(g.first.id) ?? null,
+              }))
+            );
+
+            // Build DiffRequests for budget-aware generation
+            const diffRequests: DiffRequest[] = [];
+
+            for (const group of diffGroups) {
+              const firstActivity = activitiesForDiff.find((a) => a.id === group.first.id);
+              if (!firstActivity || !firstActivity.pageId) continue;
+
+              // Resolve before/after content
+              let beforeContent: string | null = null;
+              let afterContent: string | null = null;
+
+              if (group.last.changeGroupId && group.last.pageId) {
+                // Use version resolver for accurate before/after
+                // Composite key prevents cross-page content leaks
+                const compositeKey = `${group.last.pageId}:${group.last.changeGroupId}`;
+                const versionPair = versionContentPairs.get(compositeKey);
+                if (versionPair) {
+                  // Resolve content refs to actual content
+                  if (versionPair.beforeContentRef) {
+                    try {
+                      beforeContent = await readPageContent(versionPair.beforeContentRef);
+                    } catch {
+                      beforeContent = null;
+                    }
+                  }
+                  if (versionPair.afterContentRef) {
+                    try {
+                      afterContent = await readPageContent(versionPair.afterContentRef);
+                    } catch {
+                      afterContent = null;
+                    }
+                  }
+                }
+              }
+
+              // Fallback: use inline snapshot if no contentRef and no version found
+              if (beforeContent === null && firstActivity.content) {
+                beforeContent = firstActivity.content;
+              }
+
+              // Skip if we can't generate a meaningful diff
+              if (afterContent === null && firstActivity.content) {
+                continue;
+              }
+              if (beforeContent === null && afterContent === null) {
+                continue;
+              }
+
+              diffRequests.push({
+                pageId: firstActivity.pageId,
+                beforeContent,
+                afterContent,
+                group,
+                driveId: firstActivity.driveId,
+              });
+            }
+
+            // P2 Budget: Generate diffs within budget, prioritized by change magnitude
+            const budgetedDiffs = generateDiffsWithinBudget(diffRequests, diffBudget);
+
+            // Assign diffs to their respective drive groups
+            for (const diff of budgetedDiffs) {
+              const driveGroup = driveGroups.find((g) => g.drive.id === diff.driveId);
+              if (driveGroup) {
+                if (!driveGroup.contentDiffs) {
+                  driveGroup.contentDiffs = [];
+                }
+                // Convert to ContentDiffSummary (strip driveId)
+                driveGroup.contentDiffs.push({
+                  pageId: diff.pageId,
+                  pageTitle: diff.pageTitle,
+                  collapsedCount: diff.collapsedCount,
+                  timeRange: diff.timeRange,
+                  actors: diff.actors,
+                  unifiedDiff: diff.unifiedDiff,
+                  stats: {
+                    additions: diff.stats.additions,
+                    deletions: diff.stats.deletions,
+                  },
+                  isAiGenerated: diff.isAiGenerated,
+                });
+              }
+            }
+          }
+        }
 
         // Calculate overall summary
         const totalActivities = activities.length;
