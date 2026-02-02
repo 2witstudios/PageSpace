@@ -108,63 +108,63 @@ describe('tab-title', () => {
     it('given dashboard type, should return Dashboard title', () => {
       const meta = getStaticTabMeta({ type: 'dashboard' });
 
-      expect(meta.title).toBe('Dashboard');
-      expect(meta.iconName).toBe('LayoutDashboard');
+      expect(meta!.title).toBe('Dashboard');
+      expect(meta!.iconName).toBe('LayoutDashboard');
     });
 
     it('given drive-tasks type, should return Tasks title', () => {
       const meta = getStaticTabMeta({ type: 'drive-tasks', driveId: 'drive-123' });
 
-      expect(meta.title).toBe('Tasks');
-      expect(meta.iconName).toBe('CheckSquare');
+      expect(meta!.title).toBe('Tasks');
+      expect(meta!.iconName).toBe('CheckSquare');
     });
 
     it('given drive-activity type, should return Activity title', () => {
       const meta = getStaticTabMeta({ type: 'drive-activity', driveId: 'drive-123' });
 
-      expect(meta.title).toBe('Activity');
-      expect(meta.iconName).toBe('Activity');
+      expect(meta!.title).toBe('Activity');
+      expect(meta!.iconName).toBe('Activity');
     });
 
     it('given drive-members type, should return Members title', () => {
       const meta = getStaticTabMeta({ type: 'drive-members', driveId: 'drive-123' });
 
-      expect(meta.title).toBe('Members');
-      expect(meta.iconName).toBe('Users');
+      expect(meta!.title).toBe('Members');
+      expect(meta!.iconName).toBe('Users');
     });
 
     it('given drive-settings type, should return Settings title', () => {
       const meta = getStaticTabMeta({ type: 'drive-settings', driveId: 'drive-123' });
 
-      expect(meta.title).toBe('Settings');
-      expect(meta.iconName).toBe('Settings');
+      expect(meta!.title).toBe('Settings');
+      expect(meta!.iconName).toBe('Settings');
     });
 
     it('given drive-trash type, should return Trash title', () => {
       const meta = getStaticTabMeta({ type: 'drive-trash', driveId: 'drive-123' });
 
-      expect(meta.title).toBe('Trash');
-      expect(meta.iconName).toBe('Trash2');
+      expect(meta!.title).toBe('Trash');
+      expect(meta!.iconName).toBe('Trash2');
     });
 
     it('given messages type, should return Messages title', () => {
       const meta = getStaticTabMeta({ type: 'messages' });
 
-      expect(meta.title).toBe('Messages');
-      expect(meta.iconName).toBe('MessageSquare');
+      expect(meta!.title).toBe('Messages');
+      expect(meta!.iconName).toBe('MessageSquare');
     });
 
     it('given settings type, should return Settings title', () => {
       const meta = getStaticTabMeta({ type: 'settings' });
 
-      expect(meta.title).toBe('Settings');
-      expect(meta.iconName).toBe('Settings');
+      expect(meta!.title).toBe('Settings');
+      expect(meta!.iconName).toBe('Settings');
     });
 
     it('given settings type with subpage, should return formatted title', () => {
       const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'mcp' });
 
-      expect(meta.title).toBe('Settings - MCP');
+      expect(meta!.title).toBe('Settings - MCP');
     });
 
     it('given page type, should return null (requires async lookup)', () => {
@@ -182,8 +182,8 @@ describe('tab-title', () => {
     it('given unknown type, should return path as fallback title', () => {
       const meta = getStaticTabMeta({ type: 'unknown', path: '/some/path' });
 
-      expect(meta.title).toBe('/some/path');
-      expect(meta.iconName).toBe('File');
+      expect(meta!.title).toBe('/some/path');
+      expect(meta!.iconName).toBe('File');
     });
   });
 });
