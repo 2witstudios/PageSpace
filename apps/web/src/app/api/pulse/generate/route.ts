@@ -29,38 +29,51 @@ import {
   desc,
   inArray,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import {
+  groupActivitiesForDiff,
+  resolveStackedVersionContent,
+  generateDiffsWithinBudget,
+  calculateDiffBudget,
+  type ActivityForDiff,
+  type ActivityDiffGroup,
+  type DiffRequest,
+  type StackedDiff,
+} from '@pagespace/lib/content';
+import { readPageContent, loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
 // System prompt for generating pulse summaries
 const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion who deeply understands the user's workspace and can give them genuinely useful, contextual updates.
 
-You have access to RICH context about what's happening - actual page content, full messages, aggregated activity patterns, and more. Use this to give MEANINGFUL updates, not robotic summaries.
+You have access to RICH context including ACTUAL CONTENT DIFFS showing exactly what changed. Use this to tell users WHAT was written/edited, not just that something changed.
 
 YOUR JOB:
-- Tell them something they'd actually want to know
-- Be specific about WHAT people are working on (you can see page content!)
+- Tell them WHAT changed, not just that changes happened
+- Read the diffs and summarize the actual content: "Noah added a section about Q2 pricing with 3 new tiers"
 - If someone messaged them, tell them what the message actually says
-- Notice interesting patterns: "Noah's been really focused on the roadmap today"
-- Connect the dots: "Sarah's updates to the Budget doc might be related to what Alex was asking about"
+- Be specific: "Sarah updated the API docs to include OAuth2 examples" not "Sarah edited the API docs"
+
+READING DIFFS:
+- Lines starting with + are additions (new content)
+- Lines starting with - are deletions (removed content)
+- Focus on the MEANING of what was added/removed, not line counts
+- Summarize the substance: "Added a troubleshooting section" not "added 15 lines"
 
 TONE:
-- Like a thoughtful colleague who's been paying attention
+- Like a thoughtful colleague who read the changes and can summarize them
 - Natural and conversational
-- Warm but not fake-enthusiastic
 - If it's quiet, just say hi - don't manufacture activity
 
 EXAMPLES OF GREAT SUMMARIES:
-- "Morning! Noah's been heads-down on the Product Roadmap - he's added a whole new Q2 section with timeline estimates. Also, Sarah left you a DM asking if you've reviewed the pricing changes yet."
-- "Hey! Looks like the team's been active on Sprint Planning today. Alex added some notes about the API migration, and there's a thread going in the comments about the timeline."
-- "Afternoon! Things are pretty quiet. Sarah shared the Budget Analysis with you earlier if you want to take a look."
-- "Evening! Quick catch-up: Noah finished that Q4 Projections doc you were both discussing. The final revenue numbers look different from the draft."
+- "Morning! Noah's been working on the Product Roadmap - he added a whole Q2 section covering the API migration timeline and new pricing tiers. Also, Sarah left you a DM asking if the launch date is still Feb 15th."
+- "Hey! Alex updated the onboarding guide with step-by-step screenshots for the new dashboard. There's also a discussion going on the Sprint Planning page about the deployment schedule."
+- "Afternoon! Things are pretty quiet. Sarah shared the Budget Analysis with you earlier - it has projections through Q3."
 
 WHAT TO AVOID:
-- "You have X tasks and Y pages were updated" - useless without specifics
-- "Activity occurred in your workspace" - vague nonsense
-- Listing every single thing that happened - pick what matters
+- "5 pages were updated" - useless without substance
+- "Changes were made to the document" - vague nonsense
+- Reporting diff statistics like "23 lines added" - focus on meaning instead
 - Admitting you don't have information - just focus on what you DO know
 
 Keep it to 2-4 natural sentences. Be genuinely helpful.`;
@@ -81,11 +94,6 @@ export async function POST(req: Request) {
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    // Week boundaries (Sunday start)
-    const dayOfWeek = now.getDay();
-    const startOfWeek = new Date(startOfToday);
-    startOfWeek.setDate(startOfWeek.getDate() - dayOfWeek);
-
     // Get user's drives
     const userDrives = await db
       .select({ driveId: driveMembers.driveId })
@@ -94,7 +102,7 @@ export async function POST(req: Request) {
     const driveIds = userDrives.map(d => d.driveId);
 
     // ========================================
-    // 1. WORKSPACE CONTEXT - Drives and team members
+    // 1. WORKSPACE CONTEXT
     // ========================================
     const driveDetails = driveIds.length > 0 ? await db
       .select({
@@ -108,7 +116,7 @@ export async function POST(req: Request) {
         eq(drives.isTrashed, false)
       )) : [];
 
-    // Get team members for each drive
+    // Get team members
     const teamMembers = driveIds.length > 0 ? await db
       .select({
         driveId: driveMembers.driveId,
@@ -119,10 +127,9 @@ export async function POST(req: Request) {
       .leftJoin(users, eq(users.id, driveMembers.userId))
       .where(and(
         inArray(driveMembers.driveId, driveIds),
-        ne(driveMembers.userId, userId) // Exclude current user
+        ne(driveMembers.userId, userId)
       )) : [];
 
-    // Group team members by drive
     const teamByDrive = teamMembers.reduce((acc, m) => {
       if (!acc[m.driveId]) acc[m.driveId] = [];
       acc[m.driveId].push(m.userName || m.userEmail?.split('@')[0] || 'Unknown');
@@ -130,31 +137,147 @@ export async function POST(req: Request) {
     }, {} as Record<string, string[]>);
 
     // ========================================
-    // 2. AGGREGATED ACTIVITY - What people are ACTUALLY working on
+    // 2. ACTIVITY WITH CONTENT DIFFS - The key improvement!
     // ========================================
-    // Get all activity in last 48 hours and aggregate intelligently
+    // Get activity logs WITH contentRef for diff generation
     const rawActivity = driveIds.length > 0 ? await db
       .select({
+        id: activityLogs.id,
         actorId: activityLogs.userId,
         actorName: activityLogs.actorDisplayName,
+        actorEmail: activityLogs.actorEmail,
         operation: activityLogs.operation,
         resourceType: activityLogs.resourceType,
         resourceId: activityLogs.resourceId,
+        pageId: activityLogs.pageId,
         resourceTitle: activityLogs.resourceTitle,
         driveId: activityLogs.driveId,
         timestamp: activityLogs.timestamp,
+        changeGroupId: activityLogs.changeGroupId,
+        aiConversationId: activityLogs.aiConversationId,
+        isAiGenerated: activityLogs.isAiGenerated,
+        contentRef: activityLogs.contentRef,
+        contentSnapshot: activityLogs.contentSnapshot,
       })
       .from(activityLogs)
       .where(
         and(
           inArray(activityLogs.driveId, driveIds),
+          ne(activityLogs.userId, userId), // Only others' activity
           gte(activityLogs.timestamp, fortyEightHoursAgo)
         )
       )
       .orderBy(desc(activityLogs.timestamp))
-      .limit(200) : [];
+      .limit(100) : [];
 
-    // Aggregate activity by person and page - count operations instead of listing each one
+    // ========================================
+    // 3. GENERATE ACTUAL CONTENT DIFFS
+    // ========================================
+    // Filter to page content changes that we can diff
+    const pageActivities = rawActivity.filter(
+      a => a.pageId &&
+           a.resourceType === 'page' &&
+           (a.operation === 'update' || a.operation === 'create') &&
+           (a.contentRef || a.contentSnapshot)
+    );
+
+    // Convert to ActivityForDiff format
+    const activitiesForDiff: (ActivityForDiff & { driveId: string })[] = [];
+    const activityContentRefs = new Map<string, string>();
+
+    for (const activity of pageActivities) {
+      if (activity.contentRef) {
+        activityContentRefs.set(activity.id, activity.contentRef);
+      }
+
+      activitiesForDiff.push({
+        id: activity.id,
+        timestamp: activity.timestamp,
+        pageId: activity.pageId,
+        resourceTitle: activity.resourceTitle,
+        changeGroupId: activity.changeGroupId,
+        aiConversationId: activity.aiConversationId,
+        isAiGenerated: activity.isAiGenerated,
+        actorEmail: activity.actorEmail,
+        actorDisplayName: activity.actorName,
+        content: activity.contentSnapshot ?? null,
+        driveId: activity.driveId!,
+      });
+    }
+
+    // Group activities to collapse autosaves
+    const diffGroups = groupActivitiesForDiff(activitiesForDiff);
+
+    // Resolve before/after content from page versions
+    const groupsWithChangeGroupId = diffGroups.filter(
+      (g: ActivityDiffGroup) => g.last.changeGroupId && g.last.pageId
+    );
+
+    const versionContentPairs = await resolveStackedVersionContent(
+      groupsWithChangeGroupId.map((g: ActivityDiffGroup) => ({
+        changeGroupId: g.last.changeGroupId!,
+        pageId: g.last.pageId!,
+        firstContentRef: activityContentRefs.get(g.first.id) ?? null,
+      }))
+    );
+
+    // Build diff requests
+    const diffRequests: DiffRequest[] = [];
+
+    for (const group of diffGroups) {
+      const firstActivity = activitiesForDiff.find(a => a.id === group.first.id);
+      if (!firstActivity || !firstActivity.pageId) continue;
+
+      let beforeContent: string | null = null;
+      let afterContent: string | null = null;
+
+      if (group.last.changeGroupId && group.last.pageId) {
+        const compositeKey = `${group.last.pageId}:${group.last.changeGroupId}`;
+        const versionPair = versionContentPairs.get(compositeKey);
+        if (versionPair) {
+          if (versionPair.beforeContentRef) {
+            try {
+              beforeContent = await readPageContent(versionPair.beforeContentRef);
+            } catch {
+              beforeContent = null;
+            }
+          }
+          if (versionPair.afterContentRef) {
+            try {
+              afterContent = await readPageContent(versionPair.afterContentRef);
+            } catch {
+              afterContent = null;
+            }
+          }
+        }
+      }
+
+      // Fallback to inline snapshot
+      if (beforeContent === null && firstActivity.content) {
+        beforeContent = firstActivity.content;
+      }
+
+      // Skip if we can't generate meaningful diff
+      if (afterContent === null && beforeContent === null) continue;
+      if (afterContent === null) continue;
+
+      diffRequests.push({
+        pageId: firstActivity.pageId,
+        beforeContent,
+        afterContent,
+        group,
+        driveId: firstActivity.driveId,
+      });
+    }
+
+    // Generate diffs within budget (generous budget for Pulse)
+    const diffBudget = calculateDiffBudget(30000); // ~7.5k tokens for diffs
+    const contentDiffs = generateDiffsWithinBudget(diffRequests, diffBudget);
+
+    // ========================================
+    // 4. AGGREGATE ACTIVITY SUMMARY
+    // ========================================
+    // Group by person+page for summary
     const activityByPersonPage: Record<string, {
       person: string;
       pageId: string;
@@ -162,8 +285,6 @@ export async function POST(req: Request) {
       driveName: string;
       editCount: number;
       lastEdit: Date;
-      operations: Set<string>;
-      isOwnActivity: boolean;
     }> = {};
 
     rawActivity.forEach(a => {
@@ -179,57 +300,20 @@ export async function POST(req: Request) {
           driveName,
           editCount: 0,
           lastEdit: a.timestamp,
-          operations: new Set(),
-          isOwnActivity: a.actorId === userId,
         };
       }
       activityByPersonPage[key].editCount++;
-      activityByPersonPage[key].operations.add(a.operation);
       if (a.timestamp > activityByPersonPage[key].lastEdit) {
         activityByPersonPage[key].lastEdit = a.timestamp;
       }
     });
 
-    // Convert to array and sort by edit count (most active first)
     const aggregatedActivity = Object.values(activityByPersonPage)
       .sort((a, b) => b.editCount - a.editCount)
-      .slice(0, 15);
-
-    // Separate own activity from others' activity
-    const othersActivity = aggregatedActivity.filter(a => !a.isOwnActivity);
-    const ownActivity = aggregatedActivity.filter(a => a.isOwnActivity);
+      .slice(0, 10);
 
     // ========================================
-    // 3. PAGE CONTENT - What these pages actually contain
-    // ========================================
-    // Get content snippets for the most active pages (by others)
-    const activePageIds = othersActivity.slice(0, 8).map(a => a.pageId);
-
-    const pageContents = activePageIds.length > 0 ? await db
-      .select({
-        id: pages.id,
-        title: pages.title,
-        content: pages.content,
-        type: pages.type,
-        updatedAt: pages.updatedAt,
-      })
-      .from(pages)
-      .where(and(
-        inArray(pages.id, activePageIds),
-        eq(pages.isTrashed, false)
-      )) : [];
-
-    // Create content snippets (first 1500 chars for rich context)
-    const pageSnippets = pageContents.map(p => ({
-      id: p.id,
-      title: p.title,
-      type: p.type,
-      contentPreview: p.content?.substring(0, 1500) || '',
-      updatedAt: p.updatedAt,
-    }));
-
-    // ========================================
-    // 4. DIRECT MESSAGES - Full content, not truncated
+    // 5. DIRECT MESSAGES - Full content
     // ========================================
     const userConversations = await db
       .select({ id: dmConversations.id })
@@ -266,15 +350,14 @@ export async function POST(req: Request) {
 
       unreadDMs = unreadMessagesList.map(m => ({
         from: m.senderName || m.senderEmail?.split('@')[0] || 'Someone',
-        content: m.content || '', // Full content, no truncation
+        content: m.content || '',
         sentAt: m.createdAt,
       }));
     }
 
     // ========================================
-    // 5. PAGE CHAT MESSAGES - Conversations happening on pages
+    // 6. PAGE CHAT DISCUSSIONS
     // ========================================
-    // Get recent chat messages on pages in user's drives (excluding AI responses)
     const recentPageChats = driveIds.length > 0 ? await db
       .select({
         pageId: chatMessages.pageId,
@@ -282,7 +365,6 @@ export async function POST(req: Request) {
         senderName: users.name,
         senderEmail: users.email,
         content: chatMessages.content,
-        role: chatMessages.role,
         createdAt: chatMessages.createdAt,
       })
       .from(chatMessages)
@@ -291,16 +373,15 @@ export async function POST(req: Request) {
       .where(
         and(
           inArray(pages.driveId, driveIds),
-          eq(chatMessages.role, 'user'), // Only human messages
+          eq(chatMessages.role, 'user'),
           eq(chatMessages.isActive, true),
           gte(chatMessages.createdAt, twentyFourHoursAgo),
-          ne(chatMessages.userId, userId) // Messages from others
+          ne(chatMessages.userId, userId)
         )
       )
       .orderBy(desc(chatMessages.createdAt))
       .limit(15) : [];
 
-    // Group chat messages by page
     const chatsByPage = recentPageChats.reduce((acc, chat) => {
       const key = chat.pageId;
       if (!acc[key]) {
@@ -318,7 +399,7 @@ export async function POST(req: Request) {
     }, {} as Record<string, { pageTitle: string; messages: { from: string; content: string; sentAt: Date }[] }>);
 
     // ========================================
-    // 6. MENTIONS & SHARES
+    // 7. MENTIONS & SHARES
     // ========================================
     const recentMentions = await db
       .select({
@@ -341,7 +422,6 @@ export async function POST(req: Request) {
     const recentShares = await db
       .select({
         pageTitle: pages.title,
-        pageContent: pages.content,
         sharedByName: users.name,
         grantedAt: pagePermissions.grantedAt,
       })
@@ -358,16 +438,12 @@ export async function POST(req: Request) {
       .limit(5);
 
     // ========================================
-    // 7. TASKS - With full context
+    // 8. TASKS
     // ========================================
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
     const overdueTasks = await db
-      .select({
-        title: taskItems.title,
-        priority: taskItems.priority,
-        dueDate: taskItems.dueDate,
-      })
+      .select({ title: taskItems.title, priority: taskItems.priority })
       .from(taskItems)
       .where(
         and(
@@ -376,14 +452,11 @@ export async function POST(req: Request) {
           lt(taskItems.dueDate, startOfToday)
         )
       )
-      .orderBy(desc(taskItems.priority), taskItems.dueDate)
-      .limit(10);
+      .orderBy(desc(taskItems.priority))
+      .limit(5);
 
     const todayTasks = await db
-      .select({
-        title: taskItems.title,
-        priority: taskItems.priority,
-      })
+      .select({ title: taskItems.title, priority: taskItems.priority })
       .from(taskItems)
       .where(
         and(
@@ -393,30 +466,14 @@ export async function POST(req: Request) {
           lt(taskItems.dueDate, endOfToday)
         )
       )
-      .orderBy(desc(taskItems.priority))
-      .limit(10);
-
-    const recentlyCompletedTasks = await db
-      .select({ title: taskItems.title, completedAt: taskItems.completedAt })
-      .from(taskItems)
-      .where(
-        and(
-          or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-          eq(taskItems.status, 'completed'),
-          gte(taskItems.completedAt, twentyFourHoursAgo)
-        )
-      )
-      .orderBy(desc(taskItems.completedAt))
       .limit(5);
 
     // ========================================
-    // BUILD THE RICH CONTEXT OBJECT
+    // BUILD THE RICH CONTEXT WITH DIFFS
     // ========================================
     const contextData = {
-      // User context
       userName,
 
-      // Workspace overview
       workspace: {
         drives: driveDetails.map(d => ({
           name: d.name,
@@ -425,21 +482,25 @@ export async function POST(req: Request) {
         })),
       },
 
-      // What others are working on (aggregated, not raw operations)
-      colleagueActivity: othersActivity.map(a => ({
+      // THE KEY: Actual content diffs showing WHAT changed
+      contentChanges: contentDiffs.map((diff: StackedDiff & { driveId: string }) => ({
+        page: diff.pageTitle || 'Untitled',
+        actors: diff.actors,
+        editCount: diff.collapsedCount,
+        timeRange: diff.timeRange,
+        isAiGenerated: diff.isAiGenerated,
+        // The actual diff showing what was written/changed
+        diff: diff.unifiedDiff,
+        stats: diff.stats,
+      })),
+
+      // Activity summary (for context on who's been active)
+      activitySummary: aggregatedActivity.map(a => ({
         person: a.person,
         page: a.pageTitle,
         drive: a.driveName,
         editCount: a.editCount,
-        actions: Array.from(a.operations),
         lastActive: a.lastEdit.toISOString(),
-      })),
-
-      // Actual page content for context
-      activePageContent: pageSnippets.map(p => ({
-        title: p.title,
-        type: p.type,
-        preview: p.contentPreview,
       })),
 
       // Direct messages - full content
@@ -449,7 +510,7 @@ export async function POST(req: Request) {
         sentAt: m.sentAt.toISOString(),
       })),
 
-      // Page chat discussions
+      // Page discussions
       pageDiscussions: Object.entries(chatsByPage).map(([_, data]) => ({
         page: data.pageTitle,
         messages: data.messages.map(m => ({
@@ -459,44 +520,20 @@ export async function POST(req: Request) {
         })),
       })),
 
-      // Mentions
       mentions: recentMentions.map(m => ({
         by: m.mentionedByName || 'Someone',
         inPage: m.pageTitle || 'a page',
-        when: m.createdAt.toISOString(),
       })),
 
-      // Shares (with content preview)
       sharedWithYou: recentShares.map(s => ({
         page: s.pageTitle || 'a page',
         by: s.sharedByName || 'Someone',
-        preview: s.pageContent?.substring(0, 500) || '',
-        when: s.grantedAt?.toISOString(),
       })),
 
-      // Tasks
       tasks: {
-        overdue: overdueTasks.map(t => ({
-          title: t.title,
-          priority: t.priority,
-          dueDate: t.dueDate?.toISOString(),
-        })),
-        dueToday: todayTasks.map(t => ({
-          title: t.title,
-          priority: t.priority,
-        })),
-        recentlyCompleted: recentlyCompletedTasks.map(t => ({
-          title: t.title,
-          completedAt: t.completedAt?.toISOString(),
-        })),
+        overdue: overdueTasks.map(t => ({ title: t.title, priority: t.priority })),
+        dueToday: todayTasks.map(t => ({ title: t.title, priority: t.priority })),
       },
-
-      // User's own recent activity (for context on what they've been doing)
-      ownRecentActivity: ownActivity.slice(0, 5).map(a => ({
-        page: a.pageTitle,
-        editCount: a.editCount,
-        lastActive: a.lastEdit.toISOString(),
-      })),
     };
 
     // Determine greeting based on time of day
@@ -512,15 +549,22 @@ export async function POST(req: Request) {
 Time: ${timeOfDay}
 Current time: ${now.toISOString()}
 
-Here's the full context of what's happening in their workspace:
+Here's what's happening in their workspace, INCLUDING ACTUAL CONTENT DIFFS:
 
 ${JSON.stringify(contextData, null, 2)}
 
-Based on this rich context, write a natural 2-4 sentence update that tells them something genuinely useful. You can see actual page content, full message text, and aggregated activity patterns - use this to be specific and helpful.
+IMPORTANT: The "contentChanges" array contains actual diffs showing what was written/changed. Read these diffs and summarize WHAT the content says, not just that changes were made.
 
-Focus on what would be most relevant to them right now. If colleagues have been active, tell them WHAT those colleagues are working on (you can see the content!). If there are messages, summarize what they actually say. If it's quiet, just give a warm greeting.`;
+For example, if you see a diff like:
++ ## Q2 Timeline
++ - Sprint 1: API Migration
++ - Sprint 2: New Dashboard
 
-    // Get AI provider (use standard model)
+Say something like "Noah added a Q2 timeline covering the API migration and new dashboard sprints"
+
+Write a natural 2-4 sentence update that tells them something genuinely useful about what changed.`;
+
+    // Get AI provider
     const providerResult = await createAIProvider(userId, {
       selectedProvider: 'pagespace',
       selectedModel: 'standard',
@@ -542,14 +586,14 @@ Focus on what would be most relevant to them right now. If colleagues have been 
 
     const summary = result.text.trim();
 
-    // Extract greeting if present (first sentence ending with !)
+    // Extract greeting
     let greeting: string | null = null;
     const greetingMatch = summary.match(/^([^.!?]+[!])\s*/);
     if (greetingMatch) {
       greeting = greetingMatch[1];
     }
 
-    // Save to database (store simplified context for transparency)
+    // Save to database
     const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
     const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
 
@@ -560,18 +604,18 @@ Focus on what would be most relevant to them right now. If colleagues have been 
       type: 'on_demand',
       contextData: {
         workspace: contextData.workspace,
-        workingOn: contextData.colleagueActivity.slice(0, 5).map(a => ({
+        workingOn: contextData.activitySummary.slice(0, 5).map(a => ({
           person: a.person,
           page: a.page,
           driveName: a.drive,
-          action: a.actions[0] || 'update',
+          action: 'update',
         })),
         tasks: {
           dueToday: contextData.tasks.dueToday.length,
           dueThisWeek: 0,
           overdue: contextData.tasks.overdue.length,
-          completedThisWeek: contextData.tasks.recentlyCompleted.length,
-          recentlyCompleted: contextData.tasks.recentlyCompleted.map(t => t.title).filter((t): t is string => !!t),
+          completedThisWeek: 0,
+          recentlyCompleted: [],
           upcoming: contextData.tasks.dueToday.map(t => t.title).filter((t): t is string => !!t),
           overdueItems: contextData.tasks.overdue.map(t => ({ title: t.title || '', priority: t.priority })),
         },
@@ -583,15 +627,18 @@ Focus on what would be most relevant to them right now. If colleagues have been 
         mentions: contextData.mentions.map(m => ({ by: m.by, inPage: m.inPage })),
         notifications: [],
         sharedWithYou: contextData.sharedWithYou.map(s => ({ page: s.page, by: s.by })),
-        contentChanges: contextData.colleagueActivity.slice(0, 5).map(a => ({ page: a.page, by: a.person })),
+        contentChanges: contextData.contentChanges.slice(0, 5).map((c: { page: string; actors: string[] }) => ({
+          page: c.page,
+          by: c.actors[0] || 'Someone',
+        })),
         pages: {
-          updatedToday: contextData.colleagueActivity.filter(a => new Date(a.lastActive) >= startOfToday).length,
-          updatedThisWeek: contextData.colleagueActivity.length,
-          recentlyUpdated: contextData.colleagueActivity.slice(0, 5).map(a => ({ title: a.page, updatedBy: a.person })),
+          updatedToday: contextData.activitySummary.filter(a => new Date(a.lastActive) >= startOfToday).length,
+          updatedThisWeek: contextData.activitySummary.length,
+          recentlyUpdated: contextData.activitySummary.slice(0, 5).map(a => ({ title: a.page, updatedBy: a.person })),
         },
         activity: {
-          collaboratorNames: [...new Set(contextData.colleagueActivity.map(a => a.person))],
-          recentOperations: contextData.colleagueActivity.slice(0, 5).map(a => `${a.person} edited "${a.page}" (${a.editCount} times)`),
+          collaboratorNames: [...new Set(contextData.activitySummary.map(a => a.person))],
+          recentOperations: contextData.activitySummary.slice(0, 5).map(a => `${a.person} edited "${a.page}"`),
         },
       },
       aiProvider: providerResult.provider,
@@ -606,6 +653,7 @@ Focus on what would be most relevant to them right now. If colleagues have been 
       userId,
       summaryId: savedSummary.id,
       summaryLength: summary.length,
+      diffCount: contentDiffs.length,
       contextSize: JSON.stringify(contextData).length,
     });
 
