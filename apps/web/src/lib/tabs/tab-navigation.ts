@@ -60,6 +60,9 @@ export const navigateInTab = (tab: Tab, newPath: string): Tab => {
     path: newPath,
     history: [...truncatedHistory, newPath],
     historyIndex: truncatedHistory.length,
+    // Clear cached metadata so useTabMeta fetches fresh data for new path
+    title: undefined,
+    pageType: undefined,
   };
 };
 
@@ -73,6 +76,9 @@ export const goBack = (tab: Tab): Tab => {
     ...tab,
     path: tab.history[newIndex],
     historyIndex: newIndex,
+    // Clear cached metadata so useTabMeta fetches fresh data for navigated path
+    title: undefined,
+    pageType: undefined,
   };
 };
 
@@ -86,6 +92,9 @@ export const goForward = (tab: Tab): Tab => {
     ...tab,
     path: tab.history[newIndex],
     historyIndex: newIndex,
+    // Clear cached metadata so useTabMeta fetches fresh data for navigated path
+    title: undefined,
+    pageType: undefined,
   };
 };
 

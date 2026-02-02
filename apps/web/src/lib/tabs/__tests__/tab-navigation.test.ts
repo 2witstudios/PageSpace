@@ -21,6 +21,8 @@ const createTestTab = (overrides: Partial<Tab> = {}): Tab => ({
   history: overrides.history ?? ['/dashboard'],
   historyIndex: overrides.historyIndex ?? 0,
   isPinned: overrides.isPinned ?? false,
+  title: overrides.title,
+  pageType: overrides.pageType,
 });
 
 describe('tab-navigation', () => {
@@ -102,6 +104,32 @@ describe('tab-navigation', () => {
 
       expect(updated.isPinned).toBe(true);
     });
+
+    it('given tab with cached metadata, should clear metadata when navigating to new path', () => {
+      const tab = createTestTab({
+        path: '/dashboard/drive-1/page-1',
+        title: 'Old Page Title',
+        pageType: 'DOCUMENT' as const,
+      });
+
+      const updated = navigateInTab(tab, '/dashboard/drive-1/page-2');
+
+      expect(updated.title).toBeUndefined();
+      expect(updated.pageType).toBeUndefined();
+    });
+
+    it('given same path as current, should preserve cached metadata', () => {
+      const tab = createTestTab({
+        path: '/dashboard/drive-1/page-1',
+        title: 'Page Title',
+        pageType: 'DOCUMENT' as const,
+      });
+
+      const updated = navigateInTab(tab, '/dashboard/drive-1/page-1');
+
+      expect(updated.title).toBe('Page Title');
+      expect(updated.pageType).toBe('DOCUMENT');
+    });
   });
 
   describe('goBack', () => {
@@ -131,6 +159,21 @@ describe('tab-navigation', () => {
       expect(updated.path).toBe('/dashboard');
       expect(updated.historyIndex).toBe(0);
     });
+
+    it('given tab with cached metadata, should clear metadata when going back', () => {
+      const tab = createTestTab({
+        path: '/page-2',
+        history: ['/dashboard', '/page-1', '/page-2'],
+        historyIndex: 2,
+        title: 'Page 2 Title',
+        pageType: 'DOCUMENT' as const,
+      });
+
+      const updated = goBack(tab);
+
+      expect(updated.title).toBeUndefined();
+      expect(updated.pageType).toBeUndefined();
+    });
   });
 
   describe('goForward', () => {
@@ -158,6 +201,21 @@ describe('tab-navigation', () => {
 
       expect(updated.path).toBe('/page-2');
       expect(updated.historyIndex).toBe(2);
+    });
+
+    it('given tab with cached metadata, should clear metadata when going forward', () => {
+      const tab = createTestTab({
+        path: '/dashboard',
+        history: ['/dashboard', '/page-1', '/page-2'],
+        historyIndex: 0,
+        title: 'Dashboard',
+        pageType: 'DOCUMENT' as const,
+      });
+
+      const updated = goForward(tab);
+
+      expect(updated.title).toBeUndefined();
+      expect(updated.pageType).toBeUndefined();
     });
   });
 
