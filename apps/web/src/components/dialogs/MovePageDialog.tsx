@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, FolderInput, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { useDriveStore, Drive } from "@/hooks/useDrive";
-import { post } from "@/lib/auth/auth-fetch";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { SelectedPageInfo } from "@/stores/useMultiSelectStore";
 import { cn } from "@/lib/utils";
 
@@ -65,7 +65,7 @@ export function MovePageDialog({
 
   // Filter drives to only show ones where user has edit access
   const availableDrives = drives.filter(
-    (d: Drive) => d.role === "owner" || d.role === "admin" || d.role === "editor"
+    (d: Drive) => d.isOwned || d.role === "OWNER" || d.role === "ADMIN"
   );
 
   // Fetch page tree when drive changes
@@ -78,8 +78,10 @@ export function MovePageDialog({
     const fetchTree = async () => {
       setTreeLoading(true);
       try {
-        const response = await post("/api/pages/tree", {
-          driveId: selectedDriveId,
+        const response = await fetchWithAuth("/api/pages/tree", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ driveId: selectedDriveId }),
         });
         if (response.ok) {
           const data = await response.json();
@@ -134,10 +136,14 @@ export function MovePageDialog({
     );
 
     try {
-      const response = await post("/api/pages/bulk-move", {
-        pageIds: pages.map((p) => p.id),
-        targetDriveId: selectedDriveId,
-        targetParentId: selectedParentId,
+      const response = await fetchWithAuth("/api/pages/bulk-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageIds: pages.map((p) => p.id),
+          targetDriveId: selectedDriveId,
+          targetParentId: selectedParentId,
+        }),
       });
 
       if (!response.ok) {

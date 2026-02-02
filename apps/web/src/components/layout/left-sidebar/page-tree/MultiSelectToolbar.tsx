@@ -22,7 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { del } from "@/lib/auth/auth-fetch";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
 interface MultiSelectToolbarProps {
   driveId: string;
@@ -65,9 +65,13 @@ export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProp
     );
 
     try {
-      const response = await del("/api/pages/bulk-delete", {
-        pageIds,
-        trashChildren: true,
+      const response = await fetchWithAuth("/api/pages/bulk-delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pageIds,
+          trashChildren: true,
+        }),
       });
 
       if (!response.ok) {

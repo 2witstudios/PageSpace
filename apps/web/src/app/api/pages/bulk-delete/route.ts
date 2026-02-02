@@ -55,7 +55,7 @@ export async function DELETE(request: Request) {
 
     // Track affected drives for cache invalidation
     const affectedDriveIds = new Set<string>();
-    const hasAIChatPages = sourcePages.some(p => p.type === 'AI_CHAT');
+    let hasAIChatPages = sourcePages.some(p => p.type === 'AI_CHAT');
 
     // Trash pages in transaction
     await db.transaction(async (tx) => {
@@ -75,7 +75,10 @@ export async function DELETE(request: Request) {
 
         // Recursively trash children if requested
         if (trashChildren) {
-          await trashChildrenRecursively(tx, page.id, now);
+          const trashedAIChat = await trashChildrenRecursively(tx, page.id, now);
+          if (trashedAIChat) {
+            hasAIChatPages = true;
+          }
         } else {
           // Move children to parent's parent
           await tx.update(pages)
@@ -97,10 +100,7 @@ export async function DELETE(request: Request) {
       }
 
       await broadcastPageEvent(
-        createPageEventPayload(driveId, '', 'trashed', {
-          count: pageIds.length,
-          action: 'bulk-delete',
-        })
+        createPageEventPayload(driveId, '', 'trashed')
       );
     }
 
@@ -117,17 +117,23 @@ export async function DELETE(request: Request) {
   }
 }
 
-// Recursively trash children
+// Recursively trash children and return whether any AI_CHAT pages were trashed
 async function trashChildrenRecursively(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   parentId: string,
   trashedAt: Date
-) {
+): Promise<boolean> {
   const children = await tx.query.pages.findMany({
     where: eq(pages.parentId, parentId),
   });
 
+  let hasAIChatChild = false;
+
   for (const child of children) {
+    if (child.type === 'AI_CHAT') {
+      hasAIChatChild = true;
+    }
+
     await tx.update(pages)
       .set({
         isTrashed: true,
@@ -137,6 +143,11 @@ async function trashChildrenRecursively(
       .where(eq(pages.id, child.id));
 
     // Recursively trash grandchildren
-    await trashChildrenRecursively(tx, child.id, trashedAt);
+    const grandchildHasAIChat = await trashChildrenRecursively(tx, child.id, trashedAt);
+    if (grandchildHasAIChat) {
+      hasAIChatChild = true;
+    }
   }
+
+  return hasAIChatChild;
 }

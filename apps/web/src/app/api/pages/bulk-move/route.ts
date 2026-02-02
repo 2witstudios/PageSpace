@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
-import { pages, drives, driveMembers, db, and, eq, inArray, desc } from '@pagespace/db';
+import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
           eq(driveMembers.userId, userId)
         ),
       });
-      canEditDrive = membership?.role === 'ADMIN' || membership?.role === 'EDITOR';
+      canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
     }
 
     if (!canEditDrive) {
@@ -113,7 +113,7 @@ export async function POST(request: Request) {
     const lastPage = await db.query.pages.findFirst({
       where: and(
         eq(pages.driveId, targetDriveId),
-        targetParentId ? eq(pages.parentId, targetParentId) : eq(pages.parentId, ''),
+        targetParentId ? eq(pages.parentId, targetParentId) : isNull(pages.parentId),
         eq(pages.isTrashed, false)
       ),
       orderBy: [desc(pages.position)],
@@ -154,11 +154,7 @@ export async function POST(request: Request) {
     for (const driveId of affectedDriveIds) {
       await pageTreeCache.invalidateDriveTree(driveId);
       await broadcastPageEvent(
-        createPageEventPayload(driveId, '', 'moved', {
-          count: pageIds.length,
-          targetDriveId,
-          targetParentId: targetParentId ?? undefined,
-        })
+        createPageEventPayload(driveId, '', 'moved')
       );
     }
 
