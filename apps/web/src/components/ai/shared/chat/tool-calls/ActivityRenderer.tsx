@@ -59,6 +59,12 @@ const ACTION_CONFIG: Record<ActivityAction, { icon: React.ElementType; label: st
 
 function formatRelativeTime(timestamp: string): string {
   const date = new Date(timestamp);
+
+  // Validate the date - check for Invalid Date
+  if (isNaN(date.getTime())) {
+    return timestamp; // Return original string if invalid
+  }
+
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);

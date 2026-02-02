@@ -105,15 +105,12 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     }
   }, [state]);
 
-  // Memoize parsed input/output
+  // Memoize parsed input/output using consistent parsing
   const parsedInput = useMemo(() => safeJsonParse(input), [input]);
   const parsedOutput = useMemo(() => {
-    if (!output) return null;
-    try {
-      return typeof output === 'string' ? JSON.parse(output) : output;
-    } catch {
-      return null;
-    }
+    // Use strict null/undefined check to preserve valid falsy values (0, false, "")
+    if (output == null) return null;
+    return safeJsonParse(output);
   }, [output]);
 
   // Memoize formatted tool name
@@ -481,8 +478,23 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
       );
     }
 
+    // Fallback: display raw output for unhandled tools (preserves debugging visibility)
+    if (output != null) {
+      const rawContent = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+      return (
+        <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
+          <div className="px-3 py-2 bg-muted/30 border-b">
+            <span className="text-sm font-medium text-muted-foreground">Result</span>
+          </div>
+          <pre className="p-3 text-xs overflow-auto max-h-[300px] bg-muted/20">
+            <code>{rawContent}</code>
+          </pre>
+        </div>
+      );
+    }
+
     return null;
-  }, [toolName, parsedInput, parsedOutput, error]);
+  }, [toolName, parsedInput, parsedOutput, error, output]);
 
   // Render with rich content (no Parameters/Result wrappers)
   return (

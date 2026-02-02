@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useState, useMemo } from 'react';
+import React, { memo, useState, useMemo, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronRight, FolderTree, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -49,9 +49,14 @@ const TreeNode: React.FC<TreeNodeProps> = memo(function TreeNode({
   const hasChildren = item.children && item.children.length > 0;
   const isExpanded = expandedIds.has(item.path);
   const isFolder = isFolderPage(item.type as PageType);
+  const canNavigate = item.pageId && driveId;
 
-  const handleNavigate = () => {
-    if (item.pageId && driveId) {
+  const handleRowClick = () => {
+    // For folders with children: toggle expansion
+    // For navigable items: navigate to page
+    if (hasChildren && isFolder) {
+      onToggle(item.path);
+    } else if (canNavigate) {
       router.push(`/dashboard/${driveId}/${item.pageId}`);
     }
   };
@@ -62,14 +67,15 @@ const TreeNode: React.FC<TreeNodeProps> = memo(function TreeNode({
         className={cn(
           "group flex items-center py-1.5 px-1 rounded-md transition-colors",
           "hover:bg-muted/50",
-          item.pageId && driveId && "cursor-pointer"
+          (canNavigate || hasChildren) && "cursor-pointer"
         )}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
-        onClick={handleNavigate}
+        onClick={handleRowClick}
       >
         {/* Expand/Collapse chevron */}
         {hasChildren ? (
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               onToggle(item.path);
@@ -101,8 +107,8 @@ const TreeNode: React.FC<TreeNodeProps> = memo(function TreeNode({
           {item.title}
         </span>
 
-        {/* Navigate hint on hover */}
-        {item.pageId && driveId && (
+        {/* Navigate hint on hover - only for navigable non-folder items */}
+        {canNavigate && !isFolder && (
           <ExternalLink className="h-3 w-3 ml-auto text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
         )}
       </div>
@@ -143,22 +149,30 @@ export const PageTreeRenderer: React.FC<PageTreeRendererProps> = memo(function P
   maxHeight = 350,
   className
 }) {
-  // Start with all folders expanded for visibility
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
+  // Helper to collect all folder IDs for expansion
+  const collectFolderIds = useCallback((items: TreeItem[]): Set<string> => {
     const ids = new Set<string>();
-    const collectFolderIds = (items: TreeItem[]) => {
-      for (const item of items) {
+    const traverse = (nodes: TreeItem[]) => {
+      for (const item of nodes) {
         if (item.children?.length > 0) {
           ids.add(item.path);
-          collectFolderIds(item.children);
+          traverse(item.children);
         }
       }
     };
-    collectFolderIds(tree);
+    traverse(items);
     return ids;
-  });
+  }, []);
 
-  const handleToggle = (id: string) => {
+  // Start with all folders expanded for visibility
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => collectFolderIds(tree));
+
+  // Reset expandedIds when tree prop changes
+  useEffect(() => {
+    setExpandedIds(collectFolderIds(tree));
+  }, [tree, collectFolderIds]);
+
+  const handleToggle = useCallback((id: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -168,7 +182,7 @@ export const PageTreeRenderer: React.FC<PageTreeRendererProps> = memo(function P
       }
       return next;
     });
-  };
+  }, []);
 
   // Count total pages
   const pageCount = useMemo(() => {

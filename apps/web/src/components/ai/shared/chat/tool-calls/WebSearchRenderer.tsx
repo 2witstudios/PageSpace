@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { Globe, ExternalLink, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -34,6 +34,24 @@ function extractDomain(url: string): string {
     return url;
   }
 }
+
+// Favicon component with React state for error handling
+const FaviconImage: React.FC<{ src: string }> = memo(function FaviconImage({ src }) {
+  const [hasError, setHasError] = useState(false);
+
+  if (hasError) {
+    return <Link2 className="h-3.5 w-3.5 text-muted-foreground" />;
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      className="w-4 h-4 rounded"
+      onError={() => setHasError(true)}
+    />
+  );
+});
 
 /**
  * WebSearchRenderer - Displays web search results
@@ -97,14 +115,7 @@ export const WebSearchRenderer: React.FC<WebSearchRendererProps> = memo(function
                 {/* Domain */}
                 <div className="flex items-center gap-1.5 mb-1">
                   {result.favicon ? (
-                    <img
-                      src={result.favicon}
-                      alt=""
-                      className="w-4 h-4 rounded"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
+                    <FaviconImage src={result.favicon} />
                   ) : (
                     <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
                   )}

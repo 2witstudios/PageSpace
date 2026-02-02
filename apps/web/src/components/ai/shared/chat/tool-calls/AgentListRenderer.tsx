@@ -12,7 +12,6 @@ interface AgentInfo {
   driveName?: string;
   description?: string;
   model?: string;
-  isConfigured?: boolean;
 }
 
 interface AgentListRendererProps {
