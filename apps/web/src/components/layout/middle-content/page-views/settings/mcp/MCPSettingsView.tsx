@@ -36,6 +36,7 @@ interface MCPToken {
   name: string;
   lastUsed: string | null;
   createdAt: string;
+  isScoped: boolean;
   driveScopes: DriveScope[];
 }
 
@@ -88,7 +89,8 @@ export default function MCPSettingsView() {
 
   const loadDrives = async () => {
     try {
-      const response = await fetchWithAuth('/api/drives');
+      // Only fetch drives that can be scoped to tokens (owned + member, not page-permission-only)
+      const response = await fetchWithAuth('/api/drives?tokenScopable=true');
       if (response.ok) {
         const driveList = await response.json();
         setDrives(driveList);
@@ -116,6 +118,7 @@ export default function MCPSettingsView() {
       // Add drive scopes to the token object for display
       const tokenWithScopes: MCPToken = {
         ...token,
+        isScoped: selectedDriveIds.length > 0,
         driveScopes: selectedDriveIds.map(id => {
           const drive = drives.find(d => d.id === id);
           return { id, name: drive?.name || 'Unknown' };
@@ -399,6 +402,11 @@ export default function MCPSettingsView() {
                         <Badge variant="outline" className="text-xs">
                           <Shield className="w-3 h-3 mr-1" />
                           {token.driveScopes.length} drive{token.driveScopes.length === 1 ? '' : 's'}
+                        </Badge>
+                      ) : token.isScoped ? (
+                        <Badge variant="destructive" className="text-xs">
+                          <AlertTriangle className="w-3 h-3 mr-1" />
+                          No access
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-xs text-muted-foreground">

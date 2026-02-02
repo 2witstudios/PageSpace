@@ -140,6 +140,7 @@ export async function GET(req: NextRequest) {
         name: true,
         lastUsed: true,
         createdAt: true,
+        isScoped: true,
       },
       with: {
         driveScopes: {
@@ -165,6 +166,7 @@ export async function GET(req: NextRequest) {
       name: token.name,
       lastUsed: token.lastUsed,
       createdAt: token.createdAt,
+      isScoped: token.isScoped,
       driveScopes: token.driveScopes
         .filter(scope => scope.drive != null)
         .map(scope => ({

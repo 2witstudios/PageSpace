@@ -21,9 +21,10 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const includeTrash = url.searchParams.get('includeTrash') === 'true';
+  const tokenScopable = url.searchParams.get('tokenScopable') === 'true';
 
   try {
-    const allDrives = await listAccessibleDrives(userId, { includeTrash });
+    const allDrives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
 
     // Filter drives by MCP token scope (no-op for session auth or unscoped tokens)
     const allowedDriveIds = filterDrivesByMCPScope(auth, allDrives.map(d => d.id));

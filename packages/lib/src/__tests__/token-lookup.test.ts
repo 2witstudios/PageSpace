@@ -55,6 +55,7 @@ describe('Token Lookup - Hash Only', () => {
           token: mockToken,
           name: 'Test MCP Token',
           revokedAt: null,
+          isScoped: false,
           createdAt: new Date(),
           lastUsed: new Date(),
         };
