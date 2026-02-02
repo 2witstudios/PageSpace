@@ -14,6 +14,13 @@ export interface ContextInfo {
   breadcrumbs?: string[];
 }
 
+export interface PersonalizationInfo {
+  bio?: string;
+  writingStyle?: string;
+  rules?: string;
+  enabled: boolean;
+}
+
 const CORE_PROMPT = `You are PageSpace AI. You can explore, read, and modify the user's workspace. Balance conversation with action based on what the user needs.`;
 
 const BEHAVIOR_PROMPT = `APPROACH:
@@ -32,6 +39,35 @@ const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 • You cannot modify, create, or delete any content
 • Focus on exploring, analyzing, and planning
 • Create actionable plans for the user to execute later`;
+
+/**
+ * Build personalization prompt section from user preferences
+ */
+function buildPersonalizationPrompt(personalization?: PersonalizationInfo): string | null {
+  if (!personalization?.enabled) {
+    return null;
+  }
+
+  const sections: string[] = [];
+
+  if (personalization.bio?.trim()) {
+    sections.push(`ABOUT THE USER:\n${personalization.bio.trim()}`);
+  }
+
+  if (personalization.writingStyle?.trim()) {
+    sections.push(`COMMUNICATION PREFERENCES:\n${personalization.writingStyle.trim()}`);
+  }
+
+  if (personalization.rules?.trim()) {
+    sections.push(`USER RULES:\n${personalization.rules.trim()}`);
+  }
+
+  if (sections.length === 0) {
+    return null;
+  }
+
+  return `# USER PERSONALIZATION\n\n${sections.join('\n\n')}`;
+}
 
 /**
  * Build context-specific prompt section
@@ -73,9 +109,11 @@ function buildContextPrompt(
 export function buildSystemPrompt(
   contextType: 'dashboard' | 'drive' | 'page',
   contextInfo?: ContextInfo,
-  isReadOnly: boolean = false
+  isReadOnly: boolean = false,
+  personalization?: PersonalizationInfo
 ): string {
   const contextPrompt = buildContextPrompt(contextType, contextInfo);
+  const personalizationPrompt = buildPersonalizationPrompt(personalization);
 
   const sections = [
     '# PAGESPACE AI',
@@ -85,6 +123,7 @@ export function buildSystemPrompt(
           'explore (read-only mode - no modifications)'
         )
       : CORE_PROMPT,
+    personalizationPrompt,
     contextPrompt,
     BEHAVIOR_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,

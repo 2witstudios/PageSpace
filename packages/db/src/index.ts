@@ -74,6 +74,14 @@ export {
   userHotkeyPreferencesRelations,
 } from './schema/hotkeys';
 
+// Personalization re-exports
+export {
+  userPersonalization,
+  userPersonalizationRelations,
+  type UserPersonalization,
+  type NewUserPersonalization,
+} from './schema/personalization';
+
 // Push notification tokens re-exports
 export {
   pushNotificationTokens,
