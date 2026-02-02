@@ -2,10 +2,9 @@
 
 import React, { memo, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import DOMPurify from 'dompurify';
 import { FileEdit, ExternalLink, Plus, Minus, MoreHorizontal } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { stripLineNumbers, markdownToHtml, DIFF_STYLES } from './content-utils';
+import { stripLineNumbers, markdownToHtml, sanitizeHtmlAllowlist, DIFF_STYLES } from './content-utils';
 
 interface LineDiff {
   type: 'add' | 'remove' | 'unchanged';
@@ -251,8 +250,10 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
   const renderHunk = (lines: LineDiff[], key: string) => {
     const htmlParts = lines.map((line, idx) => {
       const lineKey = `${key}-line-${idx}`;
-      // Convert markdown to HTML for rich rendering
-      const renderedContent = markdownToHtml(line.content) || '&nbsp;';
+      // Check if content is already HTML (from TipTap editor)
+      // If so, preserve it; otherwise convert markdown to HTML
+      const contentIsHtml = /<[a-z][\s\S]*>/i.test(line.content);
+      const renderedContent = contentIsHtml ? line.content : (markdownToHtml(line.content) || '&nbsp;');
 
       if (line.type === 'unchanged') {
         return `<div key="${lineKey}" class="pl-2 border-l-2 border-transparent">${renderedContent}</div>`;
@@ -271,13 +272,8 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
 
     const html = htmlParts.join('');
 
-    // Sanitize HTML (SSR safety) - allow markdown-rendered elements
-    const sanitizedHtml = typeof window === 'undefined'
-      ? ''
-      : DOMPurify.sanitize(html, {
-          ALLOWED_TAGS: ['div', 'span', 'p', 'h1', 'h2', 'h3', 'strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'br'],
-          ALLOWED_ATTR: ['class', 'key', 'href', 'target', 'rel'],
-        });
+    // Sanitize HTML using shared allowlist approach for security
+    const sanitizedHtml = sanitizeHtmlAllowlist(html);
 
     return (
       <div
