@@ -421,6 +421,13 @@
       "when": 1770003359293,
       "tag": "0059_spicy_zemo",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1770002659951,
+      "tag": "0060_smart_fantastic_four",
+      "breakpoints": true
     }
   ]
 }
