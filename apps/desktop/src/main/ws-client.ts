@@ -198,14 +198,25 @@ export class WSClient {
     });
 
     this.ws.on('close', (code: number, reason: Buffer) => {
+      const reasonStr = reason.toString();
       logger.info('Disconnected', {
         code,
-        reason: reason.toString(),
+        reason: reasonStr,
       });
       this.stopHeartbeat();
 
       if (!this.isIntentionallyClosed) {
-        this.scheduleReconnect();
+        // Session expired - reconnect immediately with fresh token (no backoff)
+        if (reasonStr === 'Session expired') {
+          logger.info('Session expired, reconnecting immediately with fresh token', {});
+          this.reconnectAttempts = 0;
+          this.reconnectDelay = 1000;
+          // Small delay to avoid hammering the server
+          // Track this timeout so close() can cancel it
+          this.reconnectTimeout = setTimeout(() => this.connect(), 500);
+        } else {
+          this.scheduleReconnect();
+        }
       }
     });
 
