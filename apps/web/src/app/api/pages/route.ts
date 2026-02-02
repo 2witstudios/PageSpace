@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { pageService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -42,6 +42,12 @@ export async function POST(request: Request) {
     }
 
     const validatedData = parseResult.data;
+
+    // Check MCP token scope - scoped tokens can only create pages in allowed drives
+    const scopeError = checkMCPCreateScope(auth, validatedData.driveId);
+    if (scopeError) {
+      return scopeError;
+    }
 
     const result = await pageService.createPage(userId, {
       title: validatedData.title,

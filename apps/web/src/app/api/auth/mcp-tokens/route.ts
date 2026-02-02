@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, mcpTokens, mcpTokenDrives } from '@pagespace/db';
+import { db, mcpTokens, mcpTokenDrives, drives, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
@@ -26,11 +26,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, driveIds } = createTokenSchema.parse(body);
+    const { name, driveIds: rawDriveIds } = createTokenSchema.parse(body);
+
+    // Deduplicate drive IDs to prevent unique constraint violations
+    const driveIds = rawDriveIds ? [...new Set(rawDriveIds)] : [];
 
     // Zero Trust: Validate that the user has access to each specified drive
     // Users can scope tokens to any drive they have access to (owned OR member)
-    if (driveIds && driveIds.length > 0) {
+    if (driveIds.length > 0) {
       const invalidDriveIds: string[] = [];
 
       for (const driveId of driveIds) {
@@ -70,7 +73,7 @@ export async function POST(req: NextRequest) {
       }).returning();
 
       // If drive scopes are specified, create the junction table entries
-      if (driveIds && driveIds.length > 0) {
+      if (driveIds.length > 0) {
         await tx.insert(mcpTokenDrives).values(
           driveIds.map(driveId => ({
             tokenId: token.id,
@@ -82,6 +85,16 @@ export async function POST(req: NextRequest) {
       return token;
     });
 
+    // Fetch drive names for consistent response format with GET
+    let driveScopes: { id: string; name: string }[] = [];
+    if (driveIds.length > 0) {
+      const driveRecords = await db.query.drives.findMany({
+        where: inArray(drives.id, driveIds),
+        columns: { id: true, name: true },
+      });
+      driveScopes = driveRecords.map(d => ({ id: d.id, name: d.name }));
+    }
+
     // Log activity for audit trail (token creation is a security event)
     const actorInfo = await getActorInfo(userId);
     logTokenActivity(userId, 'token_create', {
@@ -91,12 +104,14 @@ export async function POST(req: NextRequest) {
     }, actorInfo);
 
     // Return the raw token ONCE to the user - this is the only time they'll see it
+    // Response format matches GET for consistency
     return NextResponse.json({
       id: newToken.id,
       name: newToken.name,
       token: rawToken, // Return the actual token, not the hash
       createdAt: newToken.createdAt,
-      driveIds: driveIds || [], // Return the drive scopes
+      lastUsed: null, // New token hasn't been used yet
+      driveScopes, // Consistent format with GET: { id, name }[]
     });
   } catch (error) {
     loggers.auth.error('Error creating MCP token:', error as Error);

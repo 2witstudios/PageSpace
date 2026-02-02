@@ -69,16 +69,16 @@ export async function GET(
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  const { driveId } = await context.params;
+
+  // Check MCP token scope before drive access
+  const scopeError = checkMCPDriveScope(auth, driveId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   try {
-    const { driveId } = await context.params;
-
-    // MCP drive scope check: ensure token has access to this drive
-    if (!checkMCPDriveScope(auth, driveId)) {
-      return NextResponse.json({ error: 'Token does not have access to this drive' }, { status: 403 });
-    }
-
     // Find drive by id, but don't scope to owner yet
     const drive = await db.query.drives.findFirst({
       where: eq(drives.id, driveId),

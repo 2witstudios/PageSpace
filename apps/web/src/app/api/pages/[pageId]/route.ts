@@ -16,6 +16,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   // MCP drive scope check: ensure token has access to this page's drive
@@ -58,6 +63,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   // MCP drive scope check: ensure token has access to this page's drive
@@ -153,6 +163,11 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   // MCP drive scope check: ensure token has access to this page's drive

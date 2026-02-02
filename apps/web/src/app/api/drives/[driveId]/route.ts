@@ -36,6 +36,11 @@ export async function GET(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const userId = auth.userId;
 
     // MCP drive scope check: ensure token has access to this drive
@@ -75,6 +80,11 @@ export async function PATCH(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const userId = auth.userId;
 
     // MCP drive scope check: ensure token has access to this drive
@@ -173,6 +183,11 @@ export async function DELETE(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const userId = auth.userId;
 
     // MCP drive scope check: ensure token has access to this drive
