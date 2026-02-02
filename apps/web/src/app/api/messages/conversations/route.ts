@@ -104,18 +104,31 @@ export async function GET(request: Request) {
       unread_count: string;
     }
 
+    // Helper to convert raw PostgreSQL timestamp strings to ISO format
+    // Raw SQL returns timestamps without timezone info (e.g., "2026-02-02 15:30:00")
+    // which JavaScript incorrectly interprets as local time instead of UTC
+    const toISOTimestamp = (timestamp: string | null): string | null => {
+      if (!timestamp) return null;
+      // If it's already an ISO string with timezone, return as-is
+      if (timestamp.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(timestamp)) {
+        return timestamp;
+      }
+      // PostgreSQL timestamp without timezone - append Z to indicate UTC
+      return new Date(timestamp + 'Z').toISOString();
+    };
+
     const conversations = conversationDetails.rows.map((row) => {
       const typedRow = row as unknown as ConversationRow;
       return {
         id: typedRow.id,
         participant1Id: typedRow.participant1Id,
         participant2Id: typedRow.participant2Id,
-        lastMessageAt: typedRow.lastMessageAt,
+        lastMessageAt: toISOTimestamp(typedRow.lastMessageAt),
         lastMessagePreview: typedRow.lastMessagePreview,
-        participant1LastRead: typedRow.participant1LastRead,
-        participant2LastRead: typedRow.participant2LastRead,
-        createdAt: typedRow.createdAt,
-        lastRead: typedRow.last_read,
+        participant1LastRead: toISOTimestamp(typedRow.participant1LastRead),
+        participant2LastRead: toISOTimestamp(typedRow.participant2LastRead),
+        createdAt: toISOTimestamp(typedRow.createdAt),
+        lastRead: toISOTimestamp(typedRow.last_read),
         otherUser: {
           id: typedRow.other_user_id,
           name: typedRow.other_user_name,
