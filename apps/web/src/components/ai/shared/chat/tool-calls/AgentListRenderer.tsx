@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Sparkles, ExternalLink, MessageSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface AgentInfo {
+export interface AgentInfo {
   pageId: string;
   title: string;
   driveId?: string;

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { HardDrive, ExternalLink, Users, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface DriveInfo {
+export interface DriveInfo {
   id: string;
   name: string;
   slug: string;

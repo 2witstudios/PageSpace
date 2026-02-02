@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType, isFolderPage } from '@pagespace/lib/client-safe';
 
-interface TreeItem {
+export interface TreeItem {
   path: string;
   title: string;
   type: string;

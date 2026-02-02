@@ -19,7 +19,7 @@ import { PageType } from '@pagespace/lib/client-safe';
 
 type ActivityAction = 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'commented' | 'renamed';
 
-interface ActivityItem {
+export interface ActivityItem {
   id: string;
   action: ActivityAction;
   pageId?: string;

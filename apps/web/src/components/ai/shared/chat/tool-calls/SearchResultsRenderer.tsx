@@ -13,7 +13,7 @@ interface SearchMatch {
   context?: string;
 }
 
-interface SearchResult {
+export interface SearchResult {
   pageId: string;
   title: string;
   type?: string;

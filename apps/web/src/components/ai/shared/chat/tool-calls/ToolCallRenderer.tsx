@@ -9,13 +9,13 @@ import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { TaskRenderer } from './TaskRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
-import { PageTreeRenderer } from './PageTreeRenderer';
-import { DriveListRenderer } from './DriveListRenderer';
+import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
+import { DriveListRenderer, type DriveInfo } from './DriveListRenderer';
 import { ActionResultRenderer } from './ActionResultRenderer';
-import { SearchResultsRenderer } from './SearchResultsRenderer';
-import { AgentListRenderer } from './AgentListRenderer';
-import { ActivityRenderer } from './ActivityRenderer';
-import { WebSearchRenderer } from './WebSearchRenderer';
+import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
+import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
+import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
+import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 
 interface ToolPart {
   type: string;
@@ -162,7 +162,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
 
     // === DRIVE TOOLS ===
     if (toolName === 'list_drives' && parsedOutput.drives) {
-      return <DriveListRenderer drives={parsedOutput.drives} />;
+      return <DriveListRenderer drives={parsedOutput.drives as DriveInfo[]} />;
     }
 
     if (toolName === 'create_drive' || toolName === 'rename_drive') {
@@ -170,10 +170,10 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType={toolName === 'create_drive' ? 'create' : 'rename'}
           success={parsedOutput.success !== false}
-          title={parsedOutput.name || parsedOutput.title}
-          oldTitle={parsedOutput.oldName}
-          message={parsedOutput.message}
-          errorMessage={parsedOutput.error}
+          title={(parsedOutput.name || parsedOutput.title) as string | undefined}
+          oldTitle={parsedOutput.oldName as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -184,8 +184,8 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
           actionType="update"
           success={parsedOutput.success !== false}
           title="Workspace Context"
-          message={parsedOutput.message || 'Context updated successfully'}
-          errorMessage={parsedOutput.error}
+          message={(parsedOutput.message as string | undefined) || 'Context updated successfully'}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -194,9 +194,9 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'list_pages' && parsedOutput.tree) {
       return (
         <PageTreeRenderer
-          tree={parsedOutput.tree}
-          driveName={parsedOutput.driveName}
-          driveId={parsedOutput.driveId}
+          tree={parsedOutput.tree as TreeItem[]}
+          driveName={parsedOutput.driveName as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
         />
       );
     }
@@ -204,9 +204,9 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'list_trash' && parsedOutput.tree) {
       return (
         <PageTreeRenderer
-          tree={parsedOutput.tree}
-          driveName={parsedOutput.driveName}
-          driveId={parsedOutput.driveId}
+          tree={parsedOutput.tree as TreeItem[]}
+          driveName={parsedOutput.driveName as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
           title="Trash"
         />
       );
@@ -215,10 +215,10 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
       return (
         <RichContentRenderer
-          title={parsedOutput.title || 'Document'}
-          content={parsedOutput.rawContent || parsedOutput.content}
-          pageId={parsedOutput.pageId}
-          pageType={parsedOutput.type}
+          title={(parsedOutput.title as string | undefined) || 'Document'}
+          content={(parsedOutput.rawContent || parsedOutput.content) as string}
+          pageId={parsedOutput.pageId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
         />
       );
     }
@@ -243,9 +243,9 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'read_conversation' && parsedOutput.content) {
       return (
         <RichContentRenderer
-          title={parsedOutput.title || 'Conversation'}
-          content={parsedOutput.content}
-          pageId={parsedOutput.pageId}
+          title={(parsedOutput.title as string | undefined) || 'Conversation'}
+          content={parsedOutput.content as string}
+          pageId={parsedOutput.pageId as string | undefined}
           pageType="AI_CHAT"
         />
       );
@@ -256,20 +256,20 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
       if (parsedOutput.success && parsedOutput.oldContent && parsedOutput.newContent) {
         return (
           <RichDiffRenderer
-            title={parsedOutput.title || 'Document'}
-            oldContent={parsedOutput.oldContent}
-            newContent={parsedOutput.newContent}
-            pageId={parsedOutput.pageId}
-            changeSummary={parsedOutput.summary}
+            title={(parsedOutput.title as string | undefined) || 'Document'}
+            oldContent={parsedOutput.oldContent as string}
+            newContent={parsedOutput.newContent as string}
+            pageId={parsedOutput.pageId as string | undefined}
+            changeSummary={parsedOutput.summary as string | undefined}
           />
         );
       }
       if (parsedOutput.success && parsedOutput.newContent) {
         return (
           <RichContentRenderer
-            title={parsedOutput.title || 'Document'}
-            content={parsedOutput.newContent}
-            pageId={parsedOutput.pageId}
+            title={(parsedOutput.title as string | undefined) || 'Document'}
+            content={parsedOutput.newContent as string}
+            pageId={parsedOutput.pageId as string | undefined}
           />
         );
       }
@@ -277,10 +277,10 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="update"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title}
-          pageId={parsedOutput.pageId}
-          pageType={parsedOutput.type}
-          errorMessage={parsedOutput.error}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -290,12 +290,12 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="create"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title}
-          pageId={parsedOutput.pageId}
-          driveId={parsedOutput.driveId}
-          pageType={parsedOutput.type}
-          message={parsedOutput.message}
-          errorMessage={parsedOutput.error}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -305,12 +305,12 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="rename"
           success={parsedOutput.success !== false}
-          title={parsedOutput.newTitle || parsedOutput.title}
-          oldTitle={parsedOutput.oldTitle}
-          pageId={parsedOutput.pageId}
-          driveId={parsedOutput.driveId}
-          pageType={parsedOutput.type}
-          errorMessage={parsedOutput.error}
+          title={(parsedOutput.newTitle || parsedOutput.title) as string | undefined}
+          oldTitle={parsedOutput.oldTitle as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -320,10 +320,10 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="trash"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title}
-          pageType={parsedOutput.type}
-          message={parsedOutput.message}
-          errorMessage={parsedOutput.error}
+          title={parsedOutput.title as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -333,12 +333,12 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="restore"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title}
-          pageId={parsedOutput.pageId}
-          driveId={parsedOutput.driveId}
-          pageType={parsedOutput.type}
-          message={parsedOutput.message}
-          errorMessage={parsedOutput.error}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -348,13 +348,13 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="move"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title}
-          pageId={parsedOutput.pageId}
-          driveId={parsedOutput.driveId}
-          pageType={parsedOutput.type}
-          oldParent={parsedOutput.oldParentTitle}
-          newParent={parsedOutput.newParentTitle}
-          errorMessage={parsedOutput.error}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          oldParent={parsedOutput.oldParentTitle as string | undefined}
+          newParent={parsedOutput.newParentTitle as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -364,12 +364,12 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="update"
           success={parsedOutput.success !== false}
-          title={parsedOutput.title || 'Sheet'}
-          pageId={parsedOutput.pageId}
-          driveId={parsedOutput.driveId}
+          title={(parsedOutput.title as string | undefined) || 'Sheet'}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
           pageType="SHEET"
-          message={parsedOutput.summary || `${parsedOutput.updatedCount || 0} cells updated`}
-          errorMessage={parsedOutput.error}
+          message={(parsedOutput.summary as string | undefined) || `${(parsedOutput.updatedCount as number | undefined) || 0} cells updated`}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -378,10 +378,10 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'regex_search' && parsedOutput.results) {
       return (
         <SearchResultsRenderer
-          results={parsedOutput.results}
+          results={parsedOutput.results as SearchResult[]}
           query={parsedInput?.pattern as string}
           searchType="regex"
-          totalMatches={parsedOutput.totalMatches}
+          totalMatches={parsedOutput.totalMatches as number | undefined}
         />
       );
     }
@@ -389,7 +389,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'glob_search' && parsedOutput.results) {
       return (
         <SearchResultsRenderer
-          results={parsedOutput.results}
+          results={parsedOutput.results as SearchResult[]}
           query={parsedInput?.pattern as string}
           searchType="glob"
         />
@@ -399,21 +399,21 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'multi_drive_search' && parsedOutput.results) {
       return (
         <SearchResultsRenderer
-          results={parsedOutput.results}
-          query={parsedInput?.pattern as string || parsedInput?.query as string}
+          results={parsedOutput.results as SearchResult[]}
+          query={(parsedInput?.pattern || parsedInput?.query) as string}
           searchType="multi-drive"
-          totalMatches={parsedOutput.totalMatches}
+          totalMatches={parsedOutput.totalMatches as number | undefined}
         />
       );
     }
 
     // === AGENT TOOLS ===
     if (toolName === 'list_agents' && parsedOutput.agents) {
-      return <AgentListRenderer agents={parsedOutput.agents} />;
+      return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} />;
     }
 
     if (toolName === 'multi_drive_list_agents' && parsedOutput.agents) {
-      return <AgentListRenderer agents={parsedOutput.agents} isMultiDrive />;
+      return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} isMultiDrive />;
     }
 
     if (toolName === 'update_agent_config') {
@@ -421,9 +421,9 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="update"
           success={parsedOutput.success !== false}
-          title={parsedOutput.agentTitle || 'Agent Configuration'}
-          message={parsedOutput.message || 'Configuration updated'}
-          errorMessage={parsedOutput.error}
+          title={(parsedOutput.agentTitle as string | undefined) || 'Agent Configuration'}
+          message={(parsedOutput.message as string | undefined) || 'Configuration updated'}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }
@@ -432,7 +432,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'web_search' && parsedOutput.results) {
       return (
         <WebSearchRenderer
-          results={parsedOutput.results}
+          results={parsedOutput.results as WebSearchResult[]}
           query={parsedInput?.query as string}
         />
       );
@@ -442,8 +442,8 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     if (toolName === 'get_activity' && parsedOutput.activities) {
       return (
         <ActivityRenderer
-          activities={parsedOutput.activities}
-          period={parsedOutput.period}
+          activities={parsedOutput.activities as ActivityItem[]}
+          period={parsedOutput.period as string | undefined}
         />
       );
     }
@@ -471,9 +471,9 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         <ActionResultRenderer
           actionType="update"
           success={parsedOutput.success}
-          title={parsedOutput.title || parsedOutput.name}
-          message={parsedOutput.message}
-          errorMessage={parsedOutput.error}
+          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
         />
       );
     }

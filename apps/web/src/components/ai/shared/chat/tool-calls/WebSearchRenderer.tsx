@@ -4,7 +4,7 @@ import React, { memo, useState } from 'react';
 import { Globe, ExternalLink, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface WebSearchResult {
+export interface WebSearchResult {
   title: string;
   url: string;
   snippet?: string;
