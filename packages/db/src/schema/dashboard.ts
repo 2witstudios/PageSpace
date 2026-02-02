@@ -41,6 +41,12 @@ export const pulseSummaries = pgTable('pulse_summaries', {
 
   // Context data used to generate the summary (for debugging/transparency)
   contextData: jsonb('contextData').$type<{
+    // Workspace context - drives and projects
+    workspace?: {
+      drives: { name: string; description?: string }[];
+    };
+    // What people are actively working on (most valuable context)
+    workingOn?: { person: string; page: string; driveName?: string; action: string }[];
     tasks: {
       dueToday: number;
       dueThisWeek: number;

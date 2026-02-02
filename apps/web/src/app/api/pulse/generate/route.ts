@@ -12,6 +12,7 @@ import {
   directMessages,
   dmConversations,
   pages,
+  drives,
   driveMembers,
   activityLogs,
   users,
@@ -36,35 +37,41 @@ import { loggers } from '@pagespace/lib/server';
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
 // System prompt for generating pulse summaries
-const PULSE_SYSTEM_PROMPT = `You are a workspace assistant generating a brief, personalized activity summary.
+const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion giving the user a natural, conversational update about their workspace.
 
-Create a SHORT summary (2-4 sentences) telling the user what specifically needs attention.
+Your job is to tell them something INTERESTING or USEFUL about what's happening - not give them a robotic status report.
 
-RULES:
-- ALWAYS name specific tasks, pages, or people - never just counts
-- If there are overdue tasks, name them: "'Finalize budget' and 'Review proposal' are overdue"
-- High-priority overdue tasks should be mentioned first
-- For messages, summarize content: "Noah asked about the pricing update" not "Noah messaged you"
-- For mentions: "Sarah mentioned you in Q1 Planning"
-- For shares: "Noah shared 'Product Roadmap' with you"
-- For content changes: Describe WHAT changed: "Sarah updated Product Pricing" with who made the change
-- NEVER mention categories with zero items - omit them entirely
-- NEVER say "no messages", "nothing new", or similar - just skip empty categories
-- Be direct and specific, like a colleague giving a quick heads-up
-- Include a brief time-appropriate greeting
+TONE:
+- Like a thoughtful colleague catching you up over coffee
+- Natural and conversational, not a bullet-point readout
+- If it's a quiet day, just say hi warmly - don't manufacture urgency
+- If there's interesting activity, share what's actually happening
 
-PRIORITY ORDER (mention most important first):
-1. Overdue high-priority tasks
-2. Pages shared with you / mentions
-3. Meaningful content changes by collaborators
-4. Unread messages with context
+WHAT TO FOCUS ON (pick what's most interesting, not everything):
+- What are people actually working on? "Noah's been making progress on the Product Roadmap"
+- Interesting updates: "Sarah added some new ideas to the Q1 Planning doc"
+- Meaningful messages: If someone asked a specific question, mention it
+- Recent shares/mentions: "Alex shared the Budget proposal with you"
+- If someone left you a message, summarize WHAT they said, not just that they messaged
 
-Do NOT:
-- Use excessive exclamation marks or emojis
-- Be overly enthusiastic
-- List every single activity
-- Include generic filler content
-- Mention counts without naming the items`;
+WHAT TO AVOID:
+- Robotic stat dumps: "You have 5 tasks, 26 pages updated" - USELESS
+- Vague summaries: "activity has occurred in your workspace" - BORING
+- Task-list mentality: Don't treat this as a to-do reminder
+- Counts without context: Never say "X tasks" or "X pages" without specifics
+- Filler when there's nothing: If it's quiet, a simple warm greeting is fine
+
+EXAMPLES OF GOOD SUMMARIES:
+- "Hey! Noah's been working on the Product Roadmap this morning - looks like he added the Q2 timeline. Sarah also dropped some comments on your Budget doc."
+- "Good afternoon! Alex shared the Marketing Brief with you, and it looks pretty comprehensive. Also, Sarah was asking about the launch date in your DMs."
+- "Morning! Things are quiet right now. The team was active yesterday on the Sprint Planning doc if you want to catch up."
+
+EXAMPLES OF BAD SUMMARIES:
+- "Good morning. You have 3 tasks due today and 12 pages were updated this week." (robotic, no context)
+- "Evening, Jonathan. Activity has occurred in your drives." (vague, useless)
+- "You've completed 5 tasks this week, though no specific details were provided." (never admit lack of context - just omit)
+
+Keep it to 2-3 natural sentences. Start with a brief, time-appropriate greeting.`;
 
 export async function POST(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
@@ -87,12 +94,25 @@ export async function POST(req: Request) {
     const startOfWeek = new Date(startOfToday);
     startOfWeek.setDate(startOfWeek.getDate() - dayOfWeek);
 
-    // Get user's drives
+    // Get user's drives with full context
     const userDrives = await db
       .select({ driveId: driveMembers.driveId })
       .from(driveMembers)
       .where(eq(driveMembers.userId, userId));
     const driveIds = userDrives.map(d => d.driveId);
+
+    // Get drive details for workspace context
+    const driveDetails = driveIds.length > 0 ? await db
+      .select({
+        id: drives.id,
+        name: drives.name,
+        description: drives.drivePrompt, // Can contain project description
+      })
+      .from(drives)
+      .where(and(
+        inArray(drives.id, driveIds),
+        eq(drives.isTrashed, false)
+      )) : [];
 
     // Task data
     const [tasksOverdue] = await db
@@ -237,10 +257,10 @@ export async function POST(req: Request) {
           if (m.senderName) uniqueSenders.add(m.senderName);
           recentMessages.push({
             from: m.senderName || 'Someone',
-            preview: m.content?.substring(0, 100),
+            preview: m.content?.substring(0, 300), // Longer preview for context
           });
         });
-        recentSenders.push(...Array.from(uniqueSenders).slice(0, 3));
+        recentSenders.push(...Array.from(uniqueSenders).slice(0, 5));
       }
     }
 
@@ -361,35 +381,71 @@ export async function POST(req: Request) {
       });
     }
 
-    // Recent activity by collaborators
+    // Extended time window for "what you missed" context (24 hours)
+    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    // Recent activity by collaborators - get more detail about what's happening
     const collaboratorActivity = await db
       .select({
         actorName: activityLogs.actorDisplayName,
         operation: activityLogs.operation,
+        resourceType: activityLogs.resourceType,
         resourceTitle: activityLogs.resourceTitle,
+        driveId: activityLogs.driveId,
+        timestamp: activityLogs.timestamp,
       })
       .from(activityLogs)
       .where(
         and(
           driveIds.length > 0 ? inArray(activityLogs.driveId, driveIds) : sql`false`,
           ne(activityLogs.userId, userId),
-          gte(activityLogs.timestamp, twoHoursAgo)
+          gte(activityLogs.timestamp, twentyFourHoursAgo)
         )
       )
       .orderBy(desc(activityLogs.timestamp))
-      .limit(10);
+      .limit(20);
 
+    // Build rich activity summaries - group by person and what they're working on
     const collaboratorNames = new Set<string>();
     const recentOperations: string[] = [];
+    const workingOn: { person: string; page: string; driveName?: string; action: string }[] = [];
+
     collaboratorActivity.forEach(a => {
       if (a.actorName) collaboratorNames.add(a.actorName);
-      if (a.resourceTitle && recentOperations.length < 3) {
+      if (a.resourceTitle && a.resourceType === 'page') {
+        const driveName = driveDetails.find(d => d.id === a.driveId)?.name;
+        workingOn.push({
+          person: a.actorName || 'Someone',
+          page: a.resourceTitle,
+          driveName,
+          action: a.operation,
+        });
+      }
+      if (a.resourceTitle && recentOperations.length < 5) {
         recentOperations.push(`${a.actorName || 'Someone'} ${a.operation}d "${a.resourceTitle}"`);
       }
     });
 
-    // Build context data
+    // Dedupe and limit workingOn to most relevant
+    const uniqueWorkingOn = workingOn.reduce((acc, curr) => {
+      const key = `${curr.person}-${curr.page}`;
+      if (!acc.some(x => `${x.person}-${x.page}` === key)) {
+        acc.push(curr);
+      }
+      return acc;
+    }, [] as typeof workingOn).slice(0, 5);
+
+    // Build context data with rich workspace context
     const contextData: PulseSummaryContextData = {
+      // Workspace context - what projects/drives exist
+      workspace: {
+        drives: driveDetails.map(d => ({
+          name: d.name,
+          description: d.description?.substring(0, 200) || undefined,
+        })),
+      },
+      // What people are actively working on (most valuable context)
+      workingOn: uniqueWorkingOn,
       tasks: {
         dueToday: tasksDueToday?.count ?? 0,
         dueThisWeek: tasksDueThisWeek?.count ?? 0,
@@ -420,18 +476,18 @@ export async function POST(req: Request) {
         page: s.pageTitle || 'a page',
         by: s.sharedByName || 'Someone',
       })),
-      contentChanges: recentlyUpdatedPages.slice(0, 3).map(p => ({
+      contentChanges: recentlyUpdatedPages.slice(0, 5).map(p => ({
         page: p.title,
         by: p.updatedBy,
       })),
       pages: {
         updatedToday: pagesUpdatedToday,
         updatedThisWeek: pagesUpdatedThisWeek,
-        recentlyUpdated: recentlyUpdatedPages.slice(0, 3),
+        recentlyUpdated: recentlyUpdatedPages.slice(0, 5),
       },
       activity: {
-        collaboratorNames: Array.from(collaboratorNames).slice(0, 5),
-        recentOperations: recentOperations.slice(0, 3),
+        collaboratorNames: Array.from(collaboratorNames).slice(0, 8),
+        recentOperations: recentOperations.slice(0, 5),
       },
     };
 
@@ -442,15 +498,15 @@ export async function POST(req: Request) {
     else if (hour < 17) timeOfDay = 'afternoon';
     else timeOfDay = 'evening';
 
-    // Build prompt for AI
-    const userPrompt = `Generate a brief pulse summary for ${userName}.
+    // Build prompt for AI - focus on what's interesting, not a data dump
+    const userPrompt = `Generate a friendly workspace update for ${userName}.
 
-Time: ${timeOfDay}
+Time of day: ${timeOfDay}
 
-Context data:
+Here's what's been happening in their workspace:
 ${JSON.stringify(contextData, null, 2)}
 
-Create a 2-4 sentence summary that highlights the most important information. Start with a brief, appropriate greeting.`;
+Write a natural 2-3 sentence update. Focus on what's INTERESTING - who's working on what, any messages that need attention, or things that might be helpful to know. If nothing much is happening, just give a warm greeting. Don't list everything - pick the 1-2 most relevant things.`;
 
     // Get AI provider (use standard model)
     const providerResult = await createAIProvider(userId, {
