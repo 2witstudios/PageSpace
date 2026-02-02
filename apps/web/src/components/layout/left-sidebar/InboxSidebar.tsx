@@ -35,6 +35,7 @@ export default function InboxSidebar({ className }: SidebarProps) {
   const [allItems, setAllItems] = useState<InboxItem[]>([]);
   const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null } | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasLoadedMore, setHasLoadedMore] = useState(false);
   const [isElectronMac, setIsElectronMac] = useState(false);
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
@@ -59,10 +60,41 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
   useEffect(() => {
     if (data) {
-      setAllItems(data.items);
-      setPagination(data.pagination);
+      if (hasLoadedMore) {
+        // We have additional pages loaded - merge updates, preserve extra items
+        setAllItems(prev => {
+          // Build set of IDs in the new first page
+          const firstPageIds = new Set(
+            data.items.map(item => `${item.type}-${item.id}`)
+          );
+          // Keep items that were loaded via "Load more" and aren't in new first page
+          const additionalItems = prev.filter(
+            item => !firstPageIds.has(`${item.type}-${item.id}`)
+          );
+          // Merge: new first page + additional items from previous loads
+          const merged = [...data.items, ...additionalItems];
+          // Re-sort by lastMessageAt (most recent first)
+          merged.sort((a, b) => {
+            if (!a.lastMessageAt && !b.lastMessageAt) return 0;
+            if (!a.lastMessageAt) return 1;
+            if (!b.lastMessageAt) return -1;
+            return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
+          });
+          return merged;
+        });
+        // Note: Don't update pagination - we have more pages loaded
+      } else {
+        // Initial load or after reset - replace everything
+        setAllItems(data.items);
+        setPagination(data.pagination);
+      }
     }
-  }, [data]);
+  }, [data, hasLoadedMore]);
+
+  // Reset hasLoadedMore when driveId changes to avoid mixing data from different contexts
+  useEffect(() => {
+    setHasLoadedMore(false);
+  }, [driveId]);
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
@@ -84,6 +116,7 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
       setAllItems((prev) => [...prev, ...moreData.items]);
       setPagination(moreData.pagination);
+      setHasLoadedMore(true); // Mark that we've loaded additional pages
     } catch (err) {
       console.error('Failed to load more inbox items:', err);
     } finally {

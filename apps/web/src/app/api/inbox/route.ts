@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, canUserViewPage } from '@pagespace/lib/server';
 import type { InboxItem, InboxResponse } from '@pagespace/lib';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -107,6 +107,11 @@ export async function GET(request: Request) {
 
       for (const row of channelResults.rows) {
         const typedRow = row as unknown as ChannelRow;
+
+        // Check page-level permission before including in results
+        const canView = await canUserViewPage(userId, typedRow.id);
+        if (!canView) continue;
+
         items.push({
           id: typedRow.id,
           type: 'channel',
@@ -266,6 +271,11 @@ export async function GET(request: Request) {
 
       for (const row of channelResults.rows) {
         const typedRow = row as unknown as ChannelRow;
+
+        // Check page-level permission before including in results
+        const canView = await canUserViewPage(userId, typedRow.id);
+        if (!canView) continue;
+
         items.push({
           id: typedRow.id,
           type: 'channel',
