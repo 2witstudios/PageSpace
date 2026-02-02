@@ -10,7 +10,7 @@ import { TaskRenderer } from './TaskRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
-import { DriveListRenderer, type DriveInfo } from './DriveListRenderer';
+import { DriveListRenderer } from './DriveListRenderer';
 import { ActionResultRenderer } from './ActionResultRenderer';
 import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
 import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
@@ -48,7 +48,7 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
 
 // Helper to parse list_pages paths format into tree structure
 // Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
-const parsePathsToTree = (paths: string[], driveId?: string): TreeItem[] => {
+const parsePathsToTree = (paths: string[], _driveId?: string): TreeItem[] => {
   const pathRegex = /^\S+\s+\[([^\]]+)\](?:\s+\(Task\))?\s+ID:\s+(\S+)\s+Path:\s+(.+)$/;
 
   interface ParsedPage {
@@ -78,24 +78,27 @@ const parsePathsToTree = (paths: string[], driveId?: string): TreeItem[] => {
   }
 
   // Build tree from parsed pages
+  // Use composite key (pageId + segment) to prevent duplicate titles from collapsing
   const buildTreeFromParsed = (pages: ParsedPage[], depth: number, parentPath: string[]): TreeItem[] => {
     const result: TreeItem[] = [];
-    const seen = new Map<string, { page: ParsedPage; children: ParsedPage[] }>();
+    const seen = new Map<string, { page?: ParsedPage; children: ParsedPage[] }>();
 
     for (const page of pages) {
       if (page.pathSegments.length <= depth) continue;
 
       const currentSegment = page.pathSegments[depth];
       const isDirectChild = page.pathSegments.length === depth + 1;
+      // Use composite key to prevent pages with same title from collapsing
+      const mapKey = isDirectChild ? `${currentSegment}:${page.pageId}` : currentSegment;
 
-      if (!seen.has(currentSegment)) {
-        seen.set(currentSegment, {
-          page: isDirectChild ? page : page,
+      if (!seen.has(mapKey)) {
+        seen.set(mapKey, {
+          page: isDirectChild ? page : undefined,
           children: []
         });
       }
 
-      const entry = seen.get(currentSegment)!;
+      const entry = seen.get(mapKey)!;
       if (isDirectChild) {
         entry.page = page;
       } else {
@@ -103,13 +106,13 @@ const parsePathsToTree = (paths: string[], driveId?: string): TreeItem[] => {
       }
     }
 
-    for (const [segment, { page, children }] of seen) {
-      const currentPath = [...parentPath, segment];
+    for (const [, { page, children }] of seen) {
+      const currentPath = [...parentPath, page?.title || children[0]?.pathSegments[depth] || 'unknown'];
       const item: TreeItem = {
         path: '/' + currentPath.join('/'),
-        title: segment,
-        type: page.type,
-        pageId: page.pageId,
+        title: page?.title || children[0]?.pathSegments[depth] || 'Folder',
+        type: page?.type ?? 'FOLDER',
+        pageId: page?.pageId,
         children: buildTreeFromParsed(children, depth + 1, currentPath),
       };
       result.push(item);
@@ -296,7 +299,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         return (
           <PageTreeRenderer
             tree={tree}
-            driveName={parsedOutput.driveSlug as string | undefined}
+            driveName={(parsedOutput.driveName ?? parsedOutput.driveSlug) as string | undefined}
             driveId={parsedOutput.driveId as string | undefined}
           />
         );
@@ -558,6 +561,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         const driveGroups = parsedOutput.drives as Array<{
           drive: { id: string; name: string; slug: string; context: string | null };
           activities: Array<{
+            id: string;
             ts: string;
             op: string;
             res: string;
@@ -592,7 +596,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
           for (const activity of group.activities) {
             const actor = actors[activity.actor];
             flatActivities.push({
-              id: `${group.drive.id}-${activity.ts}-${activity.pageId || 'no-page'}`,
+              id: activity.id,
               action: opToAction(activity.op),
               pageId: activity.pageId || undefined,
               pageTitle: activity.title || undefined,
