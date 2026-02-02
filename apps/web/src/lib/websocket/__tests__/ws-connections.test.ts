@@ -21,7 +21,7 @@ import {
   clearAllConnectionsForTesting,
 } from '../ws-connections';
 
-// Mock logger to prevent console output during tests
+// Mock logger and sessionService to prevent side effects during tests
 vi.mock('@pagespace/lib', () => ({
   logger: {
     child: vi.fn(() => ({
@@ -30,6 +30,11 @@ vi.mock('@pagespace/lib', () => ({
       error: vi.fn(),
       debug: vi.fn(),
     })),
+  },
+  sessionService: {
+    // Mock validateSession to return null by default (session invalid)
+    // Tests that don't pass wsToken to registerConnection will skip revalidation anyway
+    validateSession: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -386,7 +391,7 @@ describe('WebSocket Connection Manager', () => {
   });
 
   describe('Manual Cleanup', () => {
-    it('should clean up closed connections', () => {
+    it('should clean up closed connections', async () => {
       const closedClient = {
         readyState: 3, // CLOSED
         close: vi.fn(),
@@ -395,23 +400,23 @@ describe('WebSocket Connection Manager', () => {
       registerConnection('user_1', closedClient);
       expect(getConnection('user_1')).toBe(closedClient);
 
-      triggerCleanup();
+      await triggerCleanup();
 
       expect(getConnection('user_1')).toBeUndefined();
     });
 
-    it('should not clean up open connections', () => {
+    it('should not clean up open connections', async () => {
       registerConnection('user_1', mockClient);
       markChallengeVerified(mockClient);
       updateLastPing(mockClient);
 
-      triggerCleanup();
+      await triggerCleanup();
 
       expect(getConnection('user_1')).toBe(mockClient);
     });
 
-    it('should handle cleanup with no connections', () => {
-      expect(() => triggerCleanup()).not.toThrow();
+    it('should handle cleanup with no connections', async () => {
+      await expect(triggerCleanup()).resolves.not.toThrow();
     });
   });
 
@@ -442,6 +447,74 @@ describe('WebSocket Connection Manager', () => {
 
       expect(isChallengeVerified(mockClient)).toBe(true);
       expect(isChallengeVerified(mockClient2)).toBe(false);
+    });
+  });
+
+  describe('Session Revalidation', () => {
+    it('should skip connections without wsToken', async () => {
+      // Register without wsToken (6th parameter)
+      registerConnection('user_1', mockClient, 'fingerprint', 'session_1');
+      markChallengeVerified(mockClient);
+
+      await triggerCleanup();
+
+      // Connection should still exist (revalidation skipped)
+      expect(getConnection('user_1')).toBe(mockClient);
+    });
+
+    it('should close connections with revoked sessions', async () => {
+      // Import the mocked sessionService to configure the mock
+      const { sessionService } = await import('@pagespace/lib');
+
+      // Mock validateSession to return null (session revoked)
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce(null);
+
+      // Register with wsToken to trigger revalidation
+      registerConnection('user_1', mockClient, 'fingerprint', 'session_1', undefined, 'test_token');
+      markChallengeVerified(mockClient);
+
+      await triggerCleanup();
+
+      // Connection should be closed due to revoked session
+      expect(mockClient.close).toHaveBeenCalledWith(1008, 'Session revoked');
+      expect(getConnection('user_1')).toBeUndefined();
+    });
+
+    it('should keep connections with valid sessions', async () => {
+      const { sessionService } = await import('@pagespace/lib');
+
+      // Mock validateSession to return valid claims
+      vi.mocked(sessionService.validateSession).mockResolvedValueOnce({
+        userId: 'user_1',
+        sessionId: 'session_1',
+        scopes: ['*'],
+        expiresAt: new Date(Date.now() + 86400000),
+      });
+
+      registerConnection('user_1', mockClient, 'fingerprint', 'session_1', undefined, 'valid_token');
+      markChallengeVerified(mockClient);
+
+      await triggerCleanup();
+
+      // Connection should still exist
+      expect(getConnection('user_1')).toBe(mockClient);
+      expect(mockClient.close).not.toHaveBeenCalled();
+    });
+
+    it('should handle validation errors gracefully', async () => {
+      const { sessionService } = await import('@pagespace/lib');
+
+      // Mock validateSession to throw an error
+      vi.mocked(sessionService.validateSession).mockRejectedValueOnce(new Error('Network error'));
+
+      registerConnection('user_1', mockClient, 'fingerprint', 'session_1', undefined, 'test_token');
+      markChallengeVerified(mockClient);
+
+      await triggerCleanup();
+
+      // Connection should remain open (don't close on transient errors)
+      expect(getConnection('user_1')).toBe(mockClient);
+      expect(mockClient.close).not.toHaveBeenCalled();
     });
   });
 });

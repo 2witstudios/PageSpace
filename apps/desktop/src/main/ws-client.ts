@@ -212,7 +212,8 @@ export class WSClient {
           this.reconnectAttempts = 0;
           this.reconnectDelay = 1000;
           // Small delay to avoid hammering the server
-          setTimeout(() => this.connect(), 500);
+          // Track this timeout so close() can cancel it
+          this.reconnectTimeout = setTimeout(() => this.connect(), 500);
         } else {
           this.scheduleReconnect();
         }

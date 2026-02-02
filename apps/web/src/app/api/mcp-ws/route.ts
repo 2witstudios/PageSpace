@@ -131,7 +131,8 @@ export async function UPGRADE(
 
   // Register the new connection (handles closing existing connections)
   // Pass sessionExpiresAt to enforce TTL on persistent connections
-  registerConnection(userId, client, fingerprint, claims.sessionId, claims.expiresAt);
+  // Pass token to enable periodic session revalidation (detects revoked sessions)
+  registerConnection(userId, client, fingerprint, claims.sessionId, claims.expiresAt, token);
 
   // Mark as verified immediately - session service already validated the token
   markChallengeVerified(client);
