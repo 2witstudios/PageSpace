@@ -476,7 +476,11 @@ export const pageWriteTools = {
 
         return {
           success: true,
+          pageId: page.id,
           title: page.title,
+          type: page.type,
+          oldContent: page.content,
+          newContent,
           linesReplaced: endLine - startLine + 1,
           newLineCount: newLines.length,
           message: isDeletion

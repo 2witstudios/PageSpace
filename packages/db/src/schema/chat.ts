@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, boolean, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages, drives } from './core';
@@ -16,13 +16,44 @@ export const channelMessages = pgTable('channel_messages', {
     }
 });
 
-export const channelMessagesRelations = relations(channelMessages, ({ one }) => ({
+export const channelMessagesRelations = relations(channelMessages, ({ one, many }) => ({
     page: one(pages, {
         fields: [channelMessages.pageId],
         references: [pages.id],
     }),
     user: one(users, {
         fields: [channelMessages.userId],
+        references: [users.id],
+    }),
+    reactions: many(channelMessageReactions),
+}));
+
+/**
+ * Channel message reactions - emoji reactions on channel messages
+ *
+ * Each user can add one reaction per emoji per message.
+ * Supports any Unicode emoji (stored as text).
+ */
+export const channelMessageReactions = pgTable('channel_message_reactions', {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+    messageId: text('messageId').notNull().references(() => channelMessages.id, { onDelete: 'cascade' }),
+    userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+    createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+    // One reaction per user per emoji per message
+    uniqueReaction: uniqueIndex('unique_reaction_idx').on(table.messageId, table.userId, table.emoji),
+    // Fast lookup by message
+    messageIdx: index('reaction_message_idx').on(table.messageId),
+}));
+
+export const channelMessageReactionsRelations = relations(channelMessageReactions, ({ one }) => ({
+    message: one(channelMessages, {
+        fields: [channelMessageReactions.messageId],
+        references: [channelMessages.id],
+    }),
+    user: one(users, {
+        fields: [channelMessageReactions.userId],
         references: [users.id],
     }),
 }));

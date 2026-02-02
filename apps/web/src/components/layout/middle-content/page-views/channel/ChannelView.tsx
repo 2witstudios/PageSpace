@@ -6,13 +6,13 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
 import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
-import ChatInput, { ChatInputRef } from '@/components/messages/ChatInput';
+import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { ChannelInput, type ChannelInputRef } from './ChannelInput';
+import { MessageReactions, type Reaction } from './MessageReactions';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock } from 'lucide-react';
-import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 
@@ -20,12 +20,17 @@ interface ChannelViewProps {
   page: TreePage;
 }
 
+// Extended message type with reactions
+interface MessageWithReactions extends MessageWithUser {
+  reactions?: Reaction[];
+}
+
 export default function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
-  const [messages, setMessages] = useState<MessageWithUser[]>([]);
+  const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const chatInputRef = useRef<ChatInputRef>(null);
+  const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
   const { socket, connectionStatus, connect } = useSocketStore();
@@ -130,7 +135,8 @@ export default function ChannelView({ page }: ChannelViewProps) {
       return;
     }
     handleSubmit(inputValue);
-    chatInputRef.current?.clear();
+    channelInputRef.current?.clear();
+    setInputValue('');
   };
 
   // Pull-to-refresh handler for mobile - re-fetch messages if real-time missed any
@@ -144,53 +150,184 @@ export default function ChannelView({ page }: ChannelViewProps) {
     }
   }, [page.id]);
 
+  // Reaction handlers
+  const handleAddReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    // Optimistic update
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const optimisticReaction: Reaction = {
+          id: `temp-${Date.now()}`,
+          emoji,
+          userId: user.id,
+          user: { id: user.id, name: user.name || 'You' },
+        };
+        return {
+          ...m,
+          reactions: [...(m.reactions || []), optimisticReaction],
+        };
+      })
+    );
+
+    try {
+      await post(`/api/channels/${page.id}/messages/${messageId}/reactions`, { emoji });
+    } catch {
+      // Revert optimistic update on error
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m;
+          return {
+            ...m,
+            reactions: (m.reactions || []).filter(
+              (r) => !(r.emoji === emoji && r.userId === user.id)
+            ),
+          };
+        })
+      );
+      toast.error('Failed to add reaction');
+    }
+  }, [page.id, user]);
+
+  const handleRemoveReaction = useCallback(async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    // Optimistic update
+    const removedReaction = messages
+      .find((m) => m.id === messageId)
+      ?.reactions?.find((r) => r.emoji === emoji && r.userId === user.id);
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        return {
+          ...m,
+          reactions: (m.reactions || []).filter(
+            (r) => !(r.emoji === emoji && r.userId === user.id)
+          ),
+        };
+      })
+    );
+
+    try {
+      await del(`/api/channels/${page.id}/messages/${messageId}/reactions`, { emoji });
+    } catch {
+      // Revert optimistic update on error
+      if (removedReaction) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== messageId) return m;
+            return {
+              ...m,
+              reactions: [...(m.reactions || []), removedReaction],
+            };
+          })
+        );
+      }
+      toast.error('Failed to remove reaction');
+    }
+  }, [page.id, user, messages]);
+
+  // Handle real-time reaction updates
+  useEffect(() => {
+    if (!socket || connectionStatus !== 'connected') return;
+
+    const handleReactionAdded = (data: { messageId: string; reaction: Reaction }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.messageId) return m;
+          // Avoid duplicates - check if this exact reaction already exists
+          const exists = m.reactions?.some((r) => r.id === data.reaction.id);
+          if (exists) return m;
+          // Only remove the specific temp reaction that matches this confirmed reaction
+          // (same emoji and userId), keep other temp reactions intact
+          const filteredReactions = (m.reactions || []).filter((r) => {
+            if (!r.id.startsWith('temp-')) return true;
+            // Remove temp reaction only if it matches the confirmed reaction
+            return !(r.emoji === data.reaction.emoji && r.userId === data.reaction.userId);
+          });
+          return {
+            ...m,
+            reactions: [...filteredReactions, data.reaction],
+          };
+        })
+      );
+    };
+
+    const handleReactionRemoved = (data: { messageId: string; emoji: string; userId: string }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== data.messageId) return m;
+          return {
+            ...m,
+            reactions: (m.reactions || []).filter(
+              (r) => !(r.emoji === data.emoji && r.userId === data.userId)
+            ),
+          };
+        })
+      );
+    };
+
+    socket.on('reaction_added', handleReactionAdded);
+    socket.on('reaction_removed', handleReactionRemoved);
+
+    return () => {
+      socket.off('reaction_added', handleReactionAdded);
+      socket.off('reaction_removed', handleReactionRemoved);
+    };
+  }, [socket, connectionStatus]);
+
   return (
     <div className="flex flex-col h-full">
         <PullToRefresh direction="top" onRefresh={handleRefresh}>
           <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
               <div className="p-4 space-y-4">
                   {messages.map((m) => (
-                      <div key={m.id} className="flex items-start gap-4">
-                          <Avatar>
+                      <div key={m.id} className="group flex items-start gap-4">
+                          <Avatar className="shrink-0">
                               <AvatarImage src={m.user?.image || ''} />
                               <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
                           </Avatar>
-                          <div className="flex flex-col">
+                          <div className="flex flex-col min-w-0 flex-1">
                               <div className="flex items-center gap-2">
-                                  <span className="font-bold">{m.user?.name}</span>
-                                  <span className="text-xs text-gray-500">
+                                  <span className="font-semibold text-sm">{m.user?.name}</span>
+                                  <span className="text-xs text-muted-foreground">
                                       {new Date(m.createdAt).toLocaleTimeString()}
                                   </span>
                               </div>
-                              {(() => {
-                                // Channel messages are always user messages with rich text support
-                                const parts = convertToMessageParts(m.content);
-                                return renderMessageParts(parts, 'message');
-                              })()}
+                              <div className="prose prose-sm dark:prose-invert max-w-none">
+                                <StreamingMarkdown
+                                  content={m.content}
+                                  isStreaming={false}
+                                />
+                              </div>
+                              {/* Reactions */}
+                              {user && !m.id.startsWith('temp-') && (
+                                <MessageReactions
+                                  reactions={m.reactions || []}
+                                  currentUserId={user.id}
+                                  onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                  onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                                  canReact={permissions?.canView || false}
+                                />
+                              )}
                           </div>
                       </div>
                   ))}
               </div>
           </ScrollArea>
         </PullToRefresh>
-        <div className="p-4 border-t">
+        <div className="p-4">
           {canEdit ? (
-            <div className="flex w-full items-center space-x-2">
-              <ChatInput
-                ref={chatInputRef}
-                value={inputValue}
-                onChange={setInputValue}
-                onSendMessage={handleSendMessage}
-                placeholder="Type your message... (use @ to mention)"
-                driveId={page.driveId}
-              />
-              <Button
-                onClick={handleSendMessage}
-                disabled={!inputValue.trim()}
-              >
-                Send
-              </Button>
-            </div>
+            <ChannelInput
+              ref={channelInputRef}
+              value={inputValue}
+              onChange={setInputValue}
+              onSend={handleSendMessage}
+              placeholder="Type a message... (use @ to mention, supports **markdown**)"
+              driveId={page.driveId}
+            />
           ) : (
             <Alert className="border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
               <Lock className="h-4 w-4" />

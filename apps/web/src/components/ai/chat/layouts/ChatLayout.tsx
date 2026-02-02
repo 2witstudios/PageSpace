@@ -270,7 +270,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
               transition={{ duration: 0.2 }}
               className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
             >
-              <div className="w-full max-w-[600px] px-6 -translate-y-24">
+              <div className="w-full max-w-[600px] px-6 -translate-y-48">
                 <WelcomeContent
                   title={welcomeTitle}
                   subtitle={welcomeSubtitle}

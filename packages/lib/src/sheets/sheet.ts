@@ -105,6 +105,7 @@ export interface SheetEvaluation {
 type TokenType =
   | 'number'
   | 'string'
+  | 'boolean'
   | 'cell'
   | 'page'
   | 'identifier'
@@ -141,6 +142,11 @@ interface NumberLiteralNode {
 interface StringLiteralNode {
   type: 'StringLiteral';
   value: string;
+}
+
+interface BooleanLiteralNode {
+  type: 'BooleanLiteral';
+  value: boolean;
 }
 
 interface CellReferenceNode {
@@ -189,6 +195,7 @@ interface FunctionCallNode {
 type ASTNode =
   | NumberLiteralNode
   | StringLiteralNode
+  | BooleanLiteralNode
   | CellReferenceNode
   | RangeNode
   | ExternalCellReferenceNode
@@ -1122,6 +1129,8 @@ function tokenize(formula: string): Token[] {
       const upper = raw.toUpperCase();
       if (cellRegex.test(upper)) {
         tokens.push({ type: 'cell', value: upper });
+      } else if (upper === 'TRUE' || upper === 'FALSE') {
+        tokens.push({ type: 'boolean', value: upper });
       } else {
         tokens.push({ type: 'identifier', value: upper });
       }
@@ -1326,6 +1335,13 @@ class FormulaParser {
       return {
         type: 'StringLiteral',
         value: this.previous().value,
+      };
+    }
+
+    if (this.match('boolean')) {
+      return {
+        type: 'BooleanLiteral',
+        value: this.previous().value === 'TRUE',
       };
     }
 
@@ -1568,6 +1584,22 @@ function evaluateFunction(
   evaluateNode: (node: ASTNode) => EvalValue
 ): SheetPrimitive {
   const upperName = name.toUpperCase();
+
+  // Handle functions that need lazy evaluation first (before evaluating all args)
+  switch (upperName) {
+    case 'IFERROR': {
+      if (args.length < 2) {
+        throw new Error('IFERROR expects at least two arguments');
+      }
+      try {
+        return flattenValue(evaluateNode(args[0]))[0];
+      } catch {
+        return flattenValue(evaluateNode(args[1]))[0];
+      }
+    }
+  }
+
+  // For all other functions, evaluate args upfront
   const values = args.flatMap((arg) => flattenValue(evaluateNode(arg)));
 
   switch (upperName) {
@@ -1675,6 +1707,246 @@ function evaluateFunction(
     case 'CONCATENATE': {
       return values.map((value) => String(value)).join('');
     }
+    // String functions
+    case 'UPPER': {
+      if (values.length !== 1) {
+        throw new Error('UPPER expects exactly one argument');
+      }
+      return String(values[0]).toUpperCase();
+    }
+    case 'LOWER': {
+      if (values.length !== 1) {
+        throw new Error('LOWER expects exactly one argument');
+      }
+      return String(values[0]).toLowerCase();
+    }
+    case 'TRIM': {
+      if (values.length !== 1) {
+        throw new Error('TRIM expects exactly one argument');
+      }
+      return String(values[0]).trim();
+    }
+    case 'LEN': {
+      if (values.length !== 1) {
+        throw new Error('LEN expects exactly one argument');
+      }
+      return String(values[0]).length;
+    }
+    case 'LEFT': {
+      if (values.length < 1 || values.length > 2) {
+        throw new Error('LEFT expects one or two arguments');
+      }
+      const text = String(values[0]);
+      const numChars = values.length > 1 ? coerceNumber(values[1]) : 1;
+      return text.substring(0, Math.max(0, Math.floor(numChars)));
+    }
+    case 'RIGHT': {
+      if (values.length < 1 || values.length > 2) {
+        throw new Error('RIGHT expects one or two arguments');
+      }
+      const text = String(values[0]);
+      const numChars = values.length > 1 ? coerceNumber(values[1]) : 1;
+      const chars = Math.max(0, Math.floor(numChars));
+      return chars > 0 ? text.slice(-chars) : '';
+    }
+    case 'MID': {
+      if (values.length !== 3) {
+        throw new Error('MID expects exactly three arguments');
+      }
+      const text = String(values[0]);
+      const startNum = Math.max(1, Math.floor(coerceNumber(values[1])));
+      const numChars = Math.max(0, Math.floor(coerceNumber(values[2])));
+      return text.substring(startNum - 1, startNum - 1 + numChars);
+    }
+    case 'SUBSTITUTE': {
+      if (values.length < 3 || values.length > 4) {
+        throw new Error('SUBSTITUTE expects three or four arguments');
+      }
+      const text = String(values[0]);
+      const oldText = String(values[1]);
+      const newText = String(values[2]);
+      if (values.length === 4) {
+        const instanceNum = Math.floor(coerceNumber(values[3]));
+        if (instanceNum < 1) {
+          throw new Error('SUBSTITUTE instance_num must be positive');
+        }
+        let count = 0;
+        return text.replace(new RegExp(oldText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), (match) => {
+          count++;
+          return count === instanceNum ? newText : match;
+        });
+      }
+      return text.split(oldText).join(newText);
+    }
+    case 'REPT': {
+      if (values.length !== 2) {
+        throw new Error('REPT expects exactly two arguments');
+      }
+      const text = String(values[0]);
+      const times = Math.max(0, Math.floor(coerceNumber(values[1])));
+      if (times > 10000) {
+        throw new Error('REPT repeat count too large');
+      }
+      return text.repeat(times);
+    }
+    case 'FIND': {
+      if (values.length < 2 || values.length > 3) {
+        throw new Error('FIND expects two or three arguments');
+      }
+      const findText = String(values[0]);
+      const withinText = String(values[1]);
+      const startNum = values.length > 2 ? Math.max(1, Math.floor(coerceNumber(values[2]))) : 1;
+      const index = withinText.indexOf(findText, startNum - 1);
+      if (index === -1) {
+        throw new Error('FIND: Text not found');
+      }
+      return index + 1;
+    }
+    case 'SEARCH': {
+      if (values.length < 2 || values.length > 3) {
+        throw new Error('SEARCH expects two or three arguments');
+      }
+      const findText = String(values[0]).toLowerCase();
+      const withinText = String(values[1]).toLowerCase();
+      const startNum = values.length > 2 ? Math.max(1, Math.floor(coerceNumber(values[2]))) : 1;
+      const index = withinText.indexOf(findText, startNum - 1);
+      if (index === -1) {
+        throw new Error('SEARCH: Text not found');
+      }
+      return index + 1;
+    }
+    // Date functions
+    case 'TODAY': {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
+    case 'NOW': {
+      return new Date().toISOString();
+    }
+    case 'YEAR': {
+      if (values.length !== 1) {
+        throw new Error('YEAR expects exactly one argument');
+      }
+      const date = new Date(String(values[0]));
+      if (isNaN(date.getTime())) {
+        throw new Error('YEAR: Invalid date');
+      }
+      return date.getFullYear();
+    }
+    case 'MONTH': {
+      if (values.length !== 1) {
+        throw new Error('MONTH expects exactly one argument');
+      }
+      const date = new Date(String(values[0]));
+      if (isNaN(date.getTime())) {
+        throw new Error('MONTH: Invalid date');
+      }
+      return date.getMonth() + 1;
+    }
+    case 'DAY': {
+      if (values.length !== 1) {
+        throw new Error('DAY expects exactly one argument');
+      }
+      const date = new Date(String(values[0]));
+      if (isNaN(date.getTime())) {
+        throw new Error('DAY: Invalid date');
+      }
+      return date.getDate();
+    }
+    // Logical functions
+    case 'AND': {
+      if (values.length === 0) {
+        throw new Error('AND expects at least one argument');
+      }
+      return values.every((v) => toBoolean(v));
+    }
+    case 'OR': {
+      if (values.length === 0) {
+        throw new Error('OR expects at least one argument');
+      }
+      return values.some((v) => toBoolean(v));
+    }
+    case 'NOT': {
+      if (values.length !== 1) {
+        throw new Error('NOT expects exactly one argument');
+      }
+      return !toBoolean(values[0]);
+    }
+    case 'ISBLANK': {
+      if (values.length !== 1) {
+        throw new Error('ISBLANK expects exactly one argument');
+      }
+      return values[0] === '' || values[0] === null || values[0] === undefined;
+    }
+    case 'ISNUMBER': {
+      if (values.length !== 1) {
+        throw new Error('ISNUMBER expects exactly one argument');
+      }
+      return typeof values[0] === 'number' && Number.isFinite(values[0]);
+    }
+    case 'ISTEXT': {
+      if (values.length !== 1) {
+        throw new Error('ISTEXT expects exactly one argument');
+      }
+      return typeof values[0] === 'string' && values[0] !== '';
+    }
+    // Math functions
+    case 'SQRT': {
+      if (values.length !== 1) {
+        throw new Error('SQRT expects exactly one argument');
+      }
+      const num = coerceNumber(values[0]);
+      if (num < 0) {
+        throw new Error('SQRT: Cannot take square root of negative number');
+      }
+      return Math.sqrt(num);
+    }
+    case 'POWER':
+    case 'POW': {
+      if (values.length !== 2) {
+        throw new Error('POWER expects exactly two arguments');
+      }
+      return Math.pow(coerceNumber(values[0]), coerceNumber(values[1]));
+    }
+    case 'MOD': {
+      if (values.length !== 2) {
+        throw new Error('MOD expects exactly two arguments');
+      }
+      const divisor = coerceNumber(values[1]);
+      if (divisor === 0) {
+        throw new Error('MOD: Division by zero');
+      }
+      return coerceNumber(values[0]) % divisor;
+    }
+    case 'INT': {
+      if (values.length !== 1) {
+        throw new Error('INT expects exactly one argument');
+      }
+      return Math.floor(coerceNumber(values[0]));
+    }
+    case 'SIGN': {
+      if (values.length !== 1) {
+        throw new Error('SIGN expects exactly one argument');
+      }
+      return Math.sign(coerceNumber(values[0]));
+    }
+    case 'PI': {
+      return Math.PI;
+    }
+    case 'RAND': {
+      return Math.random();
+    }
+    case 'RANDBETWEEN': {
+      if (values.length !== 2) {
+        throw new Error('RANDBETWEEN expects exactly two arguments');
+      }
+      const bottom = Math.floor(coerceNumber(values[0]));
+      const top = Math.floor(coerceNumber(values[1]));
+      if (bottom > top) {
+        throw new Error('RANDBETWEEN: bottom must be less than or equal to top');
+      }
+      return Math.floor(Math.random() * (top - bottom + 1)) + bottom;
+    }
     default:
       throw new Error(`Unsupported function ${upperName}`);
   }
@@ -1759,6 +2031,8 @@ function evaluateNode(node: ASTNode, context: NodeEvaluationContext, ancestors: 
     case 'NumberLiteral':
       return node.value;
     case 'StringLiteral':
+      return node.value;
+    case 'BooleanLiteral':
       return node.value;
     case 'CellReference': {
       const cell = context.getCell(node.reference, ancestors);

@@ -1019,7 +1019,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
       </div>
 
       {/* Footer stats */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 border-t bg-muted/50 text-sm text-muted-foreground">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
         <div className="flex flex-wrap gap-x-4 gap-y-1">
           <span><strong>{stats.total}</strong> tasks</span>
           <span><strong>{stats.inProgress}</strong> in progress</span>

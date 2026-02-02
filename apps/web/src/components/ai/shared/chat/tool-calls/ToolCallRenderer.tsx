@@ -9,7 +9,8 @@ import {
 } from '@/components/ai/ui/tool';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { FileTreeRenderer } from './FileTreeRenderer';
-import { DocumentRenderer } from './DocumentRenderer';
+import { RichContentRenderer } from './RichContentRenderer';
+import { RichDiffRenderer } from './RichDiffRenderer';
 import { TaskRenderer } from './TaskRenderer';
 
 
@@ -41,25 +42,6 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
     return value as Record<string, unknown>;
   }
   return null;
-};
-
-// Helper to infer language from file path
-const inferLanguage = (path?: string): string => {
-  if (!path) return 'plaintext';
-  const ext = path.split('.').pop()?.toLowerCase();
-  const langMap: Record<string, string> = {
-    'ts': 'typescript', 'tsx': 'typescript',
-    'js': 'javascript', 'jsx': 'javascript',
-    'py': 'python', 'md': 'markdown',
-    'json': 'json', 'css': 'css', 'html': 'html',
-    'yml': 'yaml', 'yaml': 'yaml',
-    'sh': 'shell', 'bash': 'shell',
-    'sql': 'sql', 'xml': 'xml',
-    'go': 'go', 'rs': 'rust',
-    'java': 'java', 'c': 'c', 'cpp': 'cpp',
-    'rb': 'ruby', 'php': 'php'
-  };
-  return langMap[ext || ''] || 'plaintext';
 };
 
 // Tool name mapping (moved outside component)
@@ -172,26 +154,43 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         return <FileTreeRenderer tree={parsedOutput.tree} />;
       }
 
-      if (toolName === 'read_page' && parsedOutput.content) {
+      // Read page - show rich rendered content
+      if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
         return (
-          <DocumentRenderer
-            title={parsedOutput.title || parsedOutput.path || 'Document'}
-            content={parsedOutput.content}
-            language={inferLanguage(parsedOutput.path)}
-            description={parsedOutput.lineCount !== undefined ? `${parsedOutput.lineCount} lines` : undefined}
+          <RichContentRenderer
+            title={parsedOutput.title || 'Document'}
+            content={parsedOutput.rawContent || parsedOutput.content}
+            pageId={parsedOutput.pageId}
+            pageType={parsedOutput.type}
           />
         );
       }
 
-      if (toolName === 'replace_lines' && parsedOutput.content) {
-        return (
-          <DocumentRenderer
-            title={parsedOutput.title || parsedOutput.path || "Modified File"}
-            content={parsedOutput.content}
-            language={inferLanguage(parsedOutput.path)}
-            description={parsedOutput.lineCount !== undefined ? `${parsedOutput.lineCount} lines` : "Updated Content"}
-          />
-        );
+      // Replace lines - show visual diff
+      if (toolName === 'replace_lines' && parsedOutput.success) {
+        // If we have both old and new content, show diff
+        if (parsedOutput.oldContent && parsedOutput.newContent) {
+          return (
+            <RichDiffRenderer
+              title={parsedOutput.title || 'Modified Document'}
+              oldContent={parsedOutput.oldContent}
+              newContent={parsedOutput.newContent}
+              pageId={parsedOutput.pageId}
+              changeSummary={parsedOutput.summary}
+            />
+          );
+        }
+        // Fallback: show the new content if no diff available
+        if (parsedOutput.newContent) {
+          return (
+            <RichContentRenderer
+              title={parsedOutput.title || 'Modified Document'}
+              content={parsedOutput.newContent}
+              pageId={parsedOutput.pageId}
+              pageType={parsedOutput.type}
+            />
+          );
+        }
       }
 
       // Generic JSON output for others

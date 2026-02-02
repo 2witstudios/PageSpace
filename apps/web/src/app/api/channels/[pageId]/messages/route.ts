@@ -33,6 +33,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           image: true,
         },
       },
+      reactions: {
+        with: {
+          user: {
+            columns: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      },
     },
     orderBy: [asc(channelMessages.createdAt)],
   });

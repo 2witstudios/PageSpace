@@ -231,15 +231,19 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         {showPullUpSpinner && (
           <div
             className={cn(
-              'absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none',
+              'absolute inset-x-0 flex justify-center z-50 pointer-events-none',
               'transition-opacity duration-150'
             )}
             style={{
-              bottom: 100,
+              bottom: 140,
               opacity: spinnerOpacity,
-              transform: `translateX(-50%) translateY(${Math.min(0, -(pullDistance - 20))}px) scale(${spinnerScale})`,
             }}
           >
+            <div
+              style={{
+                transform: `translateY(${Math.min(0, -(pullDistance - 20))}px) scale(${spinnerScale})`,
+              }}
+            >
             <div
               className={cn(
                 'flex items-center justify-center w-10 h-10 rounded-full',
@@ -258,12 +262,13 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
                 }}
               />
             </div>
+            </div>
           </div>
         )}
 
         {/* Scroll-to-bottom button - only visible when user scrolls up */}
         {/* Positioned higher (bottom-36) to appear above floating input in middle content area */}
-        <ConversationScrollButton className="z-20 bottom-36" />
+        <ConversationScrollButton className="z-20 bottom-44 sm:bottom-36" />
 
         <UndoAiChangesDialog
           open={!!undoDialogMessageId}
