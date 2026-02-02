@@ -77,6 +77,9 @@ export default function InboxSidebar({ className }: SidebarProps) {
         ? `/api/inbox?driveId=${driveId}&limit=20&cursor=${pagination.nextCursor}`
         : `/api/inbox?limit=20&cursor=${pagination.nextCursor}`;
       const response = await fetchWithAuth(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch: ${response.status}`);
+      }
       const moreData: InboxResponse = await response.json();
 
       setAllItems((prev) => [...prev, ...moreData.items]);
@@ -100,10 +103,8 @@ export default function InboxSidebar({ className }: SidebarProps) {
   };
 
   const isItemActive = (item: InboxItem) => {
-    if (item.type === 'dm') {
-      return pathname?.includes(`/messages/${item.id}`);
-    }
-    return pathname?.includes(`/${item.id}`);
+    const itemHref = getItemHref(item);
+    return pathname === itemHref || pathname?.startsWith(`${itemHref}/`);
   };
 
   return (
