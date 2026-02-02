@@ -333,7 +333,7 @@ describe('applyAuth', () => {
   });
 
   describe('edge cases', () => {
-    it('given missing credential key, should handle gracefully with empty string', () => {
+    it('given missing credential key, should skip setting header to avoid invalid auth', () => {
       const credentials = {};
       const authMethod: AuthMethod = {
         type: 'bearer_token',
@@ -343,7 +343,7 @@ describe('applyAuth', () => {
       const result = applyAuth(credentials, authMethod);
 
       expect(result).toEqual({
-        headers: { Authorization: 'Bearer ' },
+        headers: {},
         queryParams: {},
       });
     });

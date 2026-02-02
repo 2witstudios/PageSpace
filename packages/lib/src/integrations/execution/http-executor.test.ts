@@ -4,36 +4,8 @@
  * Tests for HTTP request execution with retry logic.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// Types for HTTP execution
-interface HttpRequest {
-  url: string;
-  method: string;
-  headers?: Record<string, string>;
-  body?: string;
-}
-
-interface HttpResponse {
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  body: unknown;
-  durationMs: number;
-}
-
-interface ExecuteOptions {
-  timeoutMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-}
-
-interface ExecuteResult {
-  success: boolean;
-  response?: HttpResponse;
-  error?: string;
-  retries?: number;
-}
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { executeHttpRequest, type HttpRequest } from './http-executor';
 
 // Mock fetch for testing
 const mockFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
@@ -44,159 +16,16 @@ const createMockResponse = (
   body: unknown,
   headers: Record<string, string> = {}
 ): Response => {
+  const contentType = typeof body === 'object' ? 'application/json' : 'text/plain';
   const response = {
     ok: status >= 200 && status < 300,
     status,
     statusText: status === 200 ? 'OK' : status === 429 ? 'Too Many Requests' : 'Error',
-    headers: new Headers(headers),
+    headers: new Headers({ 'content-type': contentType, ...headers }),
     json: () => Promise.resolve(body),
     text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
   } as Response;
   return response;
-};
-
-// Inline executor for testing
-const executeHttpRequest = async (
-  request: HttpRequest,
-  options: ExecuteOptions = {},
-  fetchFn = mockFetch as unknown as typeof fetch
-): Promise<ExecuteResult> => {
-  const { timeoutMs = 30000, maxRetries = 3, retryDelayMs = 1000 } = options;
-  let lastError: string | undefined;
-  let retryCount = 0;
-
-  const startTime = Date.now();
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const response = await fetchFn(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-        const durationMs = Date.now() - startTime;
-
-        // 4xx responses don't retry
-        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-          let body: unknown;
-          try {
-            body = await response.json();
-          } catch {
-            body = await response.text();
-          }
-
-          return {
-            success: false,
-            response: {
-              status: response.status,
-              statusText: response.statusText,
-              headers: Object.fromEntries(response.headers.entries()),
-              body,
-              durationMs,
-            },
-            error: `HTTP ${response.status}: ${response.statusText}`,
-            retries: retryCount,
-          };
-        }
-
-        // 429 retry with Retry-After
-        if (response.status === 429) {
-          retryCount++;
-          const retryAfter = response.headers.get('Retry-After');
-          const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : retryDelayMs * Math.pow(2, attempt);
-
-          if (attempt < maxRetries) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-            continue;
-          }
-
-          return {
-            success: false,
-            error: 'Rate limit exceeded',
-            retries: retryCount,
-          };
-        }
-
-        // 5xx retry with backoff
-        if (response.status >= 500) {
-          retryCount++;
-          lastError = `HTTP ${response.status}: ${response.statusText}`;
-
-          if (attempt < maxRetries) {
-            const delayMs = retryDelayMs * Math.pow(2, attempt);
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-            continue;
-          }
-
-          return {
-            success: false,
-            error: lastError,
-            retries: retryCount,
-          };
-        }
-
-        // Success
-        let body: unknown;
-        try {
-          body = await response.json();
-        } catch {
-          body = await response.text();
-        }
-
-        return {
-          success: true,
-          response: {
-            status: response.status,
-            statusText: response.statusText,
-            headers: Object.fromEntries(response.headers.entries()),
-            body,
-            durationMs,
-          },
-          retries: retryCount,
-        };
-      } catch (error) {
-        clearTimeout(timeoutId);
-
-        if (error instanceof Error && error.name === 'AbortError') {
-          return {
-            success: false,
-            error: 'Request timeout',
-            retries: retryCount,
-          };
-        }
-
-        throw error;
-      }
-    } catch (error) {
-      retryCount++;
-      lastError = error instanceof Error ? error.message : 'Network error';
-
-      if (attempt < maxRetries) {
-        const delayMs = retryDelayMs * Math.pow(2, attempt);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
-      }
-
-      return {
-        success: false,
-        error: lastError,
-        retries: retryCount,
-      };
-    }
-  }
-
-  return {
-    success: false,
-    error: lastError || 'Max retries exceeded',
-    retries: retryCount,
-  };
 };
 
 describe('executeHttpRequest', () => {
@@ -218,7 +47,7 @@ describe('executeHttpRequest', () => {
       method: 'GET',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 0 });
+    const resultPromise = executeHttpRequest(request, { maxRetries: 0 }, mockFetch as unknown as typeof fetch);
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
@@ -238,7 +67,7 @@ describe('executeHttpRequest', () => {
       body: '{"title":"Test"}',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 0 });
+    const resultPromise = executeHttpRequest(request, { maxRetries: 0 }, mockFetch as unknown as typeof fetch);
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
@@ -261,7 +90,7 @@ describe('executeHttpRequest', () => {
       method: 'GET',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 3 });
+    const resultPromise = executeHttpRequest(request, { maxRetries: 3 }, mockFetch as unknown as typeof fetch);
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
@@ -288,7 +117,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 3,
       retryDelayMs: 100,
-    });
+    }, mockFetch as unknown as typeof fetch);
 
     // Advance through retries
     await vi.advanceTimersByTimeAsync(100); // First retry delay
@@ -315,7 +144,7 @@ describe('executeHttpRequest', () => {
       method: 'GET',
     };
 
-    const resultPromise = executeHttpRequest(request, { maxRetries: 2 });
+    const resultPromise = executeHttpRequest(request, { maxRetries: 2 }, mockFetch as unknown as typeof fetch);
 
     // Advance through Retry-After delay (2 seconds)
     await vi.advanceTimersByTimeAsync(2000);
@@ -339,7 +168,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 2,
       retryDelayMs: 100,
-    });
+    }, mockFetch as unknown as typeof fetch);
 
     // Advance through all retries
     await vi.advanceTimersByTimeAsync(100);
@@ -350,7 +179,7 @@ describe('executeHttpRequest', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('500');
-    expect(result.retries).toBe(3); // Each failed attempt increments retry count
+    expect(result.retries).toBe(2); // Only actual retries are counted
     expect(mockFetch).toHaveBeenCalledTimes(3); // Initial + 2 retries
   });
 
@@ -367,7 +196,7 @@ describe('executeHttpRequest', () => {
     const resultPromise = executeHttpRequest(request, {
       maxRetries: 2,
       retryDelayMs: 100,
-    });
+    }, mockFetch as unknown as typeof fetch);
 
     await vi.advanceTimersByTimeAsync(100);
     await vi.runAllTimersAsync();

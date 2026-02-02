@@ -22,7 +22,7 @@ export const calculateEffectiveRateLimit = (limits: RateLimitLevels): number => 
   const candidates: number[] = [];
 
   // Provider-level limit (normalize to per-minute)
-  if (limits.provider) {
+  if (limits.provider && limits.provider.windowMs > 0) {
     const perMinute = (limits.provider.requests / limits.provider.windowMs) * 60000;
     candidates.push(Math.floor(perMinute));
   }
@@ -38,7 +38,7 @@ export const calculateEffectiveRateLimit = (limits: RateLimitLevels): number => 
   }
 
   // Tool-specific limit (normalize to per-minute)
-  if (limits.tool) {
+  if (limits.tool && limits.tool.windowMs > 0) {
     const perMinute = (limits.tool.requests / limits.tool.windowMs) * 60000;
     candidates.push(Math.floor(perMinute));
   }

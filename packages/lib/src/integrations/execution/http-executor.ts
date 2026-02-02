@@ -119,10 +119,16 @@ export const executeHttpRequest = async (
           body = null;
         }
 
+        // Convert Headers to plain object (forEach is available in both DOM and Node.js)
+        const responseHeaders: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
+
         const httpResponse: HttpResponse = {
           status: response.status,
           statusText: response.statusText,
-          headers: Object.fromEntries(response.headers.entries()),
+          headers: responseHeaders,
           body,
           durationMs,
         };
@@ -140,11 +146,11 @@ export const executeHttpRequest = async (
 
         // 429 retry with Retry-After
         if (response.status === 429) {
-          retryCount++;
           lastError = 'Rate limit exceeded';
           lastErrorType = 'rate_limit';
 
           if (attempt < maxRetries) {
+            retryCount++;
             const retryAfter = response.headers.get('Retry-After');
             const delayMs = retryAfter
               ? parseInt(retryAfter, 10) * 1000
@@ -165,11 +171,11 @@ export const executeHttpRequest = async (
 
         // 5xx retry with backoff
         if (response.status >= 500) {
-          retryCount++;
           lastError = `HTTP ${response.status}: ${response.statusText}`;
           lastErrorType = 'server_error';
 
           if (attempt < maxRetries) {
+            retryCount++;
             const delayMs = retryDelayMs * Math.pow(2, attempt);
             await sleep(delayMs);
             continue;
@@ -207,11 +213,11 @@ export const executeHttpRequest = async (
       }
     } catch (error) {
       // Network error - retry
-      retryCount++;
       lastError = error instanceof Error ? error.message : 'Network error';
       lastErrorType = 'network';
 
       if (attempt < maxRetries) {
+        retryCount++;
         const delayMs = retryDelayMs * Math.pow(2, attempt);
         await sleep(delayMs);
         continue;

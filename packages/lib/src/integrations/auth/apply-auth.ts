@@ -26,20 +26,24 @@ export const applyAuth = (
   switch (authMethod.type) {
     case 'bearer_token': {
       const { headerName = 'Authorization', prefix = 'Bearer ' } = authMethod.config;
-      const token = credentials.token ?? '';
-      headers[headerName] = `${prefix}${token}`;
+      const token = credentials.token;
+      if (token) {
+        headers[headerName] = `${prefix}${token}`;
+      }
       break;
     }
 
     case 'api_key': {
       const { placement, paramName, prefix = '' } = authMethod.config;
-      const apiKey = credentials.apiKey ?? '';
-      const value = `${prefix}${apiKey}`;
+      const apiKey = credentials.apiKey;
+      if (apiKey) {
+        const value = `${prefix}${apiKey}`;
 
-      if (placement === 'header') {
-        headers[paramName] = value;
-      } else if (placement === 'query') {
-        queryParams[paramName] = value;
+        if (placement === 'header') {
+          headers[paramName] = value;
+        } else if (placement === 'query') {
+          queryParams[paramName] = value;
+        }
       }
       // 'body' placement is handled during body construction, not here
       break;
@@ -47,21 +51,24 @@ export const applyAuth = (
 
     case 'basic_auth': {
       const { usernameField, passwordField } = authMethod.config;
-      const username = credentials[usernameField] ?? '';
-      const password = credentials[passwordField] ?? '';
-      const encoded = btoa(`${username}:${password}`);
-      headers['Authorization'] = `Basic ${encoded}`;
+      const username = credentials[usernameField];
+      const password = credentials[passwordField];
+      if (username !== undefined && password !== undefined) {
+        const encoded = btoa(`${username}:${password}`);
+        headers['Authorization'] = `Basic ${encoded}`;
+      }
       break;
     }
 
     case 'oauth2': {
       const { tokenPlacement = 'header', tokenPrefix = 'Bearer ' } = authMethod.config;
-      const accessToken = credentials.accessToken ?? '';
-
-      if (tokenPlacement === 'header') {
-        headers['Authorization'] = `${tokenPrefix}${accessToken}`;
-      } else if (tokenPlacement === 'query') {
-        queryParams['access_token'] = accessToken;
+      const accessToken = credentials.accessToken;
+      if (accessToken) {
+        if (tokenPlacement === 'header') {
+          headers['Authorization'] = `${tokenPrefix}${accessToken}`;
+        } else if (tokenPlacement === 'query') {
+          queryParams['access_token'] = accessToken;
+        }
       }
       break;
     }
@@ -71,7 +78,10 @@ export const applyAuth = (
         const { name, valueFrom, credentialKey, staticValue } = headerConfig;
 
         if (valueFrom === 'credential' && credentialKey) {
-          headers[name] = credentials[credentialKey] ?? '';
+          const value = credentials[credentialKey];
+          if (value) {
+            headers[name] = value;
+          }
         } else if (valueFrom === 'static' && staticValue !== undefined) {
           headers[name] = staticValue;
         }

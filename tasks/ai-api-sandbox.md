@@ -1129,32 +1129,37 @@ packages/
       schema/
         integrations.ts             # Drizzle schema
 
+packages/
+  lib/
+    src/
+      integrations/
+        repositories/
+          connection-repository.ts
+          grant-repository.ts
+          audit-repository.ts
+        credentials/
+          encrypt-credentials.ts
+        execution/
+          http-executor.ts
+          build-request.ts
+          transform-output.ts
+        saga/
+          execute-tool.ts           # Main execution saga
+        validation/
+          is-tool-allowed.ts        # Tool permission validation
+        converter/
+          ai-sdk.ts                 # AI SDK tool converter
+          openapi.ts                # OpenAPI importer
+        providers/
+          github.ts
+          slack.ts
+          notion.ts
+          webhook.ts
+          index.ts                  # Provider registry
+
 apps/
   web/
     src/
-      lib/
-        integrations/
-          repositories/
-            connection-repository.ts
-            grant-repository.ts
-            audit-repository.ts
-          encryption/
-            credentials.ts
-          executor/
-            http-executor.ts
-            graphql-executor.ts
-            saga.ts                 # Main execution saga
-          validator/
-            zero-trust.ts           # Validation saga
-          converter/
-            ai-sdk.ts               # AI SDK tool converter
-            openapi.ts              # OpenAPI importer
-          providers/
-            github.ts
-            slack.ts
-            notion.ts
-            webhook.ts
-            index.ts                # Provider registry
       app/
         api/
           integrations/

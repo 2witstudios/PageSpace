@@ -48,7 +48,14 @@ export const resolveValue = (
         case 'boolean':
           return rawValue === 'true' || rawValue === true;
         case 'json':
-          return typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+          if (typeof rawValue === 'string') {
+            try {
+              return JSON.parse(rawValue);
+            } catch {
+              return rawValue;
+            }
+          }
+          return rawValue;
       }
     }
 

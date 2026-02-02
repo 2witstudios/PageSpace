@@ -73,7 +73,7 @@ export const checkConnectionRateLimit = async (
   agentId: string,
   requestsPerMinute: number
 ): Promise<RateLimitResult> => {
-  const key = `integration:${connectionId}:${agentId}:*`;
+  const key = `integration:${connectionId}:${agentId}:provider`;
 
   return checkDistributedRateLimit(key, {
     maxAttempts: requestsPerMinute,
