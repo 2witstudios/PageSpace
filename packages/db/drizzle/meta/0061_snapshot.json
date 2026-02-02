@@ -1,6 +1,6 @@
 {
-  "id": "131f54ae-dfa3-4dba-b12a-bde039f8e391",
-  "prevId": "83cf7637-010f-450c-b887-8b0edcfdcaac",
+  "id": "5087066b-6cc9-457e-ae68-4085c06d9158",
+  "prevId": "131f54ae-dfa3-4dba-b12a-bde039f8e391",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3433,6 +3433,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "fileId": {
+          "name": "fileId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attachmentMeta": {
+          "name": "attachmentMeta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3441,6 +3453,21 @@
           "columns": [
             {
               "expression": "pageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "channel_messages_file_id_idx": {
+          "name": "channel_messages_file_id_idx",
+          "columns": [
+            {
+              "expression": "fileId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3477,6 +3504,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "channel_messages_fileId_files_id_fk": {
+          "name": "channel_messages_fileId_files_id_fk",
+          "tableFrom": "channel_messages",
+          "tableTo": "files",
+          "columnsFrom": [
+            "fileId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -3559,6 +3599,172 @@
           ]
         }
       }
+    },
+    "public.pulse_summaries": {
+      "name": "pulse_summaries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "greeting": {
+          "name": "greeting",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "type": {
+          "name": "type",
+          "type": "pulse_summary_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'scheduled'"
+        },
+        "contextData": {
+          "name": "contextData",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "aiProvider": {
+          "name": "aiProvider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "aiModel": {
+          "name": "aiModel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "periodStart": {
+          "name": "periodStart",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "periodEnd": {
+          "name": "periodEnd",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "generatedAt": {
+          "name": "generatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "idx_pulse_summaries_user_id": {
+          "name": "idx_pulse_summaries_user_id",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_pulse_summaries_generated_at": {
+          "name": "idx_pulse_summaries_generated_at",
+          "columns": [
+            {
+              "expression": "generatedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_pulse_summaries_expires_at": {
+          "name": "idx_pulse_summaries_expires_at",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_pulse_summaries_user_generated": {
+          "name": "idx_pulse_summaries_user_generated",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "generatedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "pulse_summaries_userId_users_id_fk": {
+          "name": "pulse_summaries_userId_users_id_fk",
+          "tableFrom": "pulse_summaries",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     },
     "public.user_dashboards": {
       "name": "user_dashboards",
@@ -10680,6 +10886,15 @@
         "OWNER",
         "ADMIN",
         "MEMBER"
+      ]
+    },
+    "public.pulse_summary_type": {
+      "name": "pulse_summary_type",
+      "schema": "public",
+      "values": [
+        "scheduled",
+        "on_demand",
+        "welcome"
       ]
     },
     "public.NotificationType": {
