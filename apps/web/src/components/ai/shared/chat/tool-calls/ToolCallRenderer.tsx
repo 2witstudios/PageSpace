@@ -4,16 +4,18 @@ import {
   Tool,
   ToolContent,
   ToolHeader,
-  ToolOutput,
-  ToolInput
 } from '@/components/ai/ui/tool';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
-import { FileTreeRenderer } from './FileTreeRenderer';
+import { TaskRenderer } from './TaskRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
-import { TaskRenderer } from './TaskRenderer';
-
-
+import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
+import { DriveListRenderer, type DriveInfo } from './DriveListRenderer';
+import { ActionResultRenderer } from './ActionResultRenderer';
+import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
+import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
+import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
+import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 
 interface ToolPart {
   type: string;
@@ -44,22 +46,44 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
-// Tool name mapping (moved outside component)
+// Tool name mapping
 const TOOL_NAME_MAP: Record<string, string> = {
-  'ask_agent': 'Ask Agent',
-  'list_drives': 'List Drives',
-  'list_pages': 'List Pages',
+  // Drive tools
+  'list_drives': 'Workspaces',
+  'create_drive': 'Create Workspace',
+  'rename_drive': 'Rename Workspace',
+  'update_drive_context': 'Update Context',
+  // Page read tools
+  'list_pages': 'Pages',
   'read_page': 'Read Page',
-  'replace_lines': 'Replace Lines',
+  'list_trash': 'Trash',
+  'list_conversations': 'Conversations',
+  'read_conversation': 'Conversation',
+  // Page write tools
+  'replace_lines': 'Edit Document',
   'create_page': 'Create Page',
   'rename_page': 'Rename Page',
-  'trash': 'Trash',
+  'trash': 'Move to Trash',
   'restore': 'Restore',
   'move_page': 'Move Page',
-  'list_trash': 'List Trash'
+  'edit_sheet_cells': 'Edit Sheet',
+  // Search tools
+  'regex_search': 'Search',
+  'glob_search': 'Find Pages',
+  'multi_drive_search': 'Search All',
+  // Task tools
+  'update_task': 'Update Task',
+  'get_assigned_tasks': 'Assigned Tasks',
+  // Agent tools
+  'update_agent_config': 'Configure Agent',
+  'list_agents': 'Agents',
+  'multi_drive_list_agents': 'All Agents',
+  'ask_agent': 'Ask Agent',
+  // Web search
+  'web_search': 'Web Search',
+  // Activity
+  'get_activity': 'Activity',
 };
-
-type ToolOutputType = React.ReactNode | string | Record<string, unknown>;
 
 // Internal renderer component with hooks
 const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function ToolCallRendererInternal({ part, toolName }) {
@@ -81,125 +105,398 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     }
   }, [state]);
 
-  // Memoize parsed input to avoid re-parsing on each render
+  // Memoize parsed input/output using consistent parsing
   const parsedInput = useMemo(() => safeJsonParse(input), [input]);
+  const parsedOutput = useMemo(() => {
+    // Use strict null/undefined check to preserve valid falsy values (0, false, "")
+    if (output == null) return null;
+    return safeJsonParse(output);
+  }, [output]);
 
   // Memoize formatted tool name
   const formattedToolName = useMemo(() => {
     return TOOL_NAME_MAP[toolName] || toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }, [toolName]);
 
-  // Memoize descriptive title to avoid re-parsing input
+  // Memoize descriptive title
   const descriptiveTitle = useMemo(() => {
     if (!parsedInput) return formattedToolName;
-
     const params = parsedInput as Record<string, unknown>;
 
-    // File-based tools
-    if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
-      if (params.title) return `${formattedToolName}: "${params.title}"`;
-      if (params.dir) return `${formattedToolName}: ${params.dir}`;
+    // Add context to title based on tool type
+    if (params.title && typeof params.title === 'string') {
+      return `${formattedToolName}: ${params.title}`;
     }
-
-    // Title-based tools
-    if (['create_page', 'move_page'].includes(toolName)) {
-      if (params.title) return `${formattedToolName}: "${params.title}"`;
-      if (params.name) return `${formattedToolName}: "${params.name}"`;
+    if (params.name && typeof params.name === 'string') {
+      return `${formattedToolName}: ${params.name}`;
     }
-
-    // Rename uses currentTitle for display (title is the new name)
-    if (toolName === 'rename_page') {
-      if (params.currentTitle) return `${formattedToolName}: "${params.currentTitle}"`;
+    if (params.query && typeof params.query === 'string') {
+      const truncated = params.query.length > 30 ? params.query.slice(0, 30) + '...' : params.query;
+      return `${formattedToolName}: ${truncated}`;
     }
-
-    // Trash/Restore
-    if (['trash', 'restore'].includes(toolName)) {
-      if (params.title || params.name) return `${formattedToolName}: "${params.title || params.name}"`;
+    if (params.pattern && typeof params.pattern === 'string') {
+      return `${formattedToolName}: ${params.pattern}`;
     }
-
-    // Drive-based tools - show which drive
-    if (['list_pages', 'list_trash'].includes(toolName)) {
-      if (params.driveSlug) return `${formattedToolName}: "${params.driveSlug}"`;
-    }
-
-    // Drive creation
-    if (toolName === 'create_drive') {
-      if (params.name) return `${formattedToolName}: "${params.name}"`;
-    }
-
-    // Drive rename - show current name
-    if (toolName === 'rename_drive') {
-      if (params.currentName) return `${formattedToolName}: "${params.currentName}"`;
+    if (params.driveSlug && typeof params.driveSlug === 'string') {
+      return `${formattedToolName}: ${params.driveSlug}`;
     }
 
     return formattedToolName;
-  }, [parsedInput, formattedToolName, toolName]);
+  }, [parsedInput, formattedToolName]);
 
-  // Memoize parsed output to avoid re-parsing on each render
-  const parsedOutput = useMemo(() => {
-    if (!output) return null;
-    try {
-      return typeof output === 'string' ? JSON.parse(output) : output;
-    } catch {
-      return null;
+  // Build rich content for all supported tools
+  const richContent = useMemo((): React.ReactNode | null => {
+    // Handle errors
+    if (error) {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={false}
+          errorMessage={error}
+          title={parsedInput?.title as string}
+        />
+      );
     }
-  }, [output]);
 
-  // Memoize output content to avoid recreating JSX on each render
-  const outputContent = useMemo((): ToolOutputType | null => {
-    if (!output) return null;
+    if (!parsedOutput) return null;
 
-    if (parsedOutput) {
-      if (toolName === 'list_pages' && parsedOutput.tree) {
-        return <FileTreeRenderer tree={parsedOutput.tree} />;
-      }
+    // === DRIVE TOOLS ===
+    if (toolName === 'list_drives' && parsedOutput.drives) {
+      return <DriveListRenderer drives={parsedOutput.drives as DriveInfo[]} />;
+    }
 
-      // Read page - show rich rendered content
-      if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
+    if (toolName === 'create_drive' || toolName === 'rename_drive') {
+      return (
+        <ActionResultRenderer
+          actionType={toolName === 'create_drive' ? 'create' : 'rename'}
+          success={parsedOutput.success !== false}
+          title={(parsedOutput.name || parsedOutput.title) as string | undefined}
+          oldTitle={parsedOutput.oldName as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'update_drive_context') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={parsedOutput.success !== false}
+          title="Workspace Context"
+          message={(parsedOutput.message as string | undefined) || 'Context updated successfully'}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    // === PAGE READ TOOLS ===
+    if (toolName === 'list_pages' && parsedOutput.tree) {
+      return (
+        <PageTreeRenderer
+          tree={parsedOutput.tree as TreeItem[]}
+          driveName={parsedOutput.driveName as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'list_trash' && parsedOutput.tree) {
+      return (
+        <PageTreeRenderer
+          tree={parsedOutput.tree as TreeItem[]}
+          driveName={parsedOutput.driveName as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          title="Trash"
+        />
+      );
+    }
+
+    if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
+      return (
+        <RichContentRenderer
+          title={(parsedOutput.title as string | undefined) || 'Document'}
+          content={(parsedOutput.rawContent || parsedOutput.content) as string}
+          pageId={parsedOutput.pageId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'list_conversations' && parsedOutput.conversations) {
+      // Display conversations as a simple list
+      const conversations = parsedOutput.conversations as Array<{ id: string; title?: string; messageCount?: number }>;
+      return (
+        <PageTreeRenderer
+          tree={conversations.map(c => ({
+            path: c.id,
+            title: c.title || `Conversation ${c.id.slice(0, 8)}`,
+            type: 'AI_CHAT',
+            pageId: c.id,
+            children: []
+          }))}
+          title="Conversations"
+        />
+      );
+    }
+
+    if (toolName === 'read_conversation' && parsedOutput.content) {
+      return (
+        <RichContentRenderer
+          title={(parsedOutput.title as string | undefined) || 'Conversation'}
+          content={parsedOutput.content as string}
+          pageId={parsedOutput.pageId as string | undefined}
+          pageType="AI_CHAT"
+        />
+      );
+    }
+
+    // === PAGE WRITE TOOLS ===
+    if (toolName === 'replace_lines') {
+      if (parsedOutput.success && parsedOutput.oldContent && parsedOutput.newContent) {
         return (
-          <RichContentRenderer
-            title={parsedOutput.title || 'Document'}
-            content={parsedOutput.rawContent || parsedOutput.content}
-            pageId={parsedOutput.pageId}
-            pageType={parsedOutput.type}
+          <RichDiffRenderer
+            title={(parsedOutput.title as string | undefined) || 'Document'}
+            oldContent={parsedOutput.oldContent as string}
+            newContent={parsedOutput.newContent as string}
+            pageId={parsedOutput.pageId as string | undefined}
+            changeSummary={parsedOutput.summary as string | undefined}
           />
         );
       }
-
-      // Replace lines - show visual diff
-      if (toolName === 'replace_lines' && parsedOutput.success) {
-        // If we have both old and new content, show diff
-        if (parsedOutput.oldContent && parsedOutput.newContent) {
-          return (
-            <RichDiffRenderer
-              title={parsedOutput.title || 'Modified Document'}
-              oldContent={parsedOutput.oldContent}
-              newContent={parsedOutput.newContent}
-              pageId={parsedOutput.pageId}
-              changeSummary={parsedOutput.summary}
-            />
-          );
-        }
-        // Fallback: show the new content if no diff available
-        if (parsedOutput.newContent) {
-          return (
-            <RichContentRenderer
-              title={parsedOutput.title || 'Modified Document'}
-              content={parsedOutput.newContent}
-              pageId={parsedOutput.pageId}
-              pageType={parsedOutput.type}
-            />
-          );
-        }
+      if (parsedOutput.success && parsedOutput.newContent) {
+        return (
+          <RichContentRenderer
+            title={(parsedOutput.title as string | undefined) || 'Document'}
+            content={parsedOutput.newContent as string}
+            pageId={parsedOutput.pageId as string | undefined}
+          />
+        );
       }
-
-      // Generic JSON output for others
-      return typeof output === 'string' ? output : JSON.stringify(parsedOutput, null, 2);
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={parsedOutput.success !== false}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
     }
 
-    return String(output);
-  }, [output, parsedOutput, toolName]);
+    if (toolName === 'create_page') {
+      return (
+        <ActionResultRenderer
+          actionType="create"
+          success={parsedOutput.success !== false}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
 
+    if (toolName === 'rename_page') {
+      return (
+        <ActionResultRenderer
+          actionType="rename"
+          success={parsedOutput.success !== false}
+          title={(parsedOutput.newTitle || parsedOutput.title) as string | undefined}
+          oldTitle={parsedOutput.oldTitle as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'trash') {
+      return (
+        <ActionResultRenderer
+          actionType="trash"
+          success={parsedOutput.success !== false}
+          title={parsedOutput.title as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'restore') {
+      return (
+        <ActionResultRenderer
+          actionType="restore"
+          success={parsedOutput.success !== false}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'move_page') {
+      return (
+        <ActionResultRenderer
+          actionType="move"
+          success={parsedOutput.success !== false}
+          title={parsedOutput.title as string | undefined}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType={parsedOutput.type as string | undefined}
+          oldParent={parsedOutput.oldParentTitle as string | undefined}
+          newParent={parsedOutput.newParentTitle as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'edit_sheet_cells') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={parsedOutput.success !== false}
+          title={(parsedOutput.title as string | undefined) || 'Sheet'}
+          pageId={parsedOutput.pageId as string | undefined}
+          driveId={parsedOutput.driveId as string | undefined}
+          pageType="SHEET"
+          message={(parsedOutput.summary as string | undefined) || `${(parsedOutput.updatedCount as number | undefined) || 0} cells updated`}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    // === SEARCH TOOLS ===
+    if (toolName === 'regex_search' && parsedOutput.results) {
+      return (
+        <SearchResultsRenderer
+          results={parsedOutput.results as SearchResult[]}
+          query={parsedInput?.pattern as string}
+          searchType="regex"
+          totalMatches={parsedOutput.totalMatches as number | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'glob_search' && parsedOutput.results) {
+      return (
+        <SearchResultsRenderer
+          results={parsedOutput.results as SearchResult[]}
+          query={parsedInput?.pattern as string}
+          searchType="glob"
+        />
+      );
+    }
+
+    if (toolName === 'multi_drive_search' && parsedOutput.results) {
+      return (
+        <SearchResultsRenderer
+          results={parsedOutput.results as SearchResult[]}
+          query={(parsedInput?.pattern || parsedInput?.query) as string}
+          searchType="multi-drive"
+          totalMatches={parsedOutput.totalMatches as number | undefined}
+        />
+      );
+    }
+
+    // === AGENT TOOLS ===
+    if (toolName === 'list_agents' && parsedOutput.agents) {
+      return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} />;
+    }
+
+    if (toolName === 'multi_drive_list_agents' && parsedOutput.agents) {
+      return <AgentListRenderer agents={parsedOutput.agents as AgentInfo[]} isMultiDrive />;
+    }
+
+    if (toolName === 'update_agent_config') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={parsedOutput.success !== false}
+          title={(parsedOutput.agentTitle as string | undefined) || 'Agent Configuration'}
+          message={(parsedOutput.message as string | undefined) || 'Configuration updated'}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    // === WEB SEARCH ===
+    if (toolName === 'web_search' && parsedOutput.results) {
+      return (
+        <WebSearchRenderer
+          results={parsedOutput.results as WebSearchResult[]}
+          query={parsedInput?.query as string}
+        />
+      );
+    }
+
+    // === ACTIVITY ===
+    if (toolName === 'get_activity' && parsedOutput.activities) {
+      return (
+        <ActivityRenderer
+          activities={parsedOutput.activities as ActivityItem[]}
+          period={parsedOutput.period as string | undefined}
+        />
+      );
+    }
+
+    // === TASK TOOLS ===
+    if (toolName === 'get_assigned_tasks' && parsedOutput.tasks) {
+      const tasks = parsedOutput.tasks as Array<{ id: string; title: string; status?: string; pageId?: string }>;
+      return (
+        <PageTreeRenderer
+          tree={tasks.map(t => ({
+            path: t.id,
+            title: `${t.status === 'completed' ? '[Done] ' : ''}${t.title}`,
+            type: 'TASK_LIST',
+            pageId: t.pageId,
+            children: []
+          }))}
+          title="Assigned Tasks"
+        />
+      );
+    }
+
+    // Default: show success/failure for any tool with success field
+    if (typeof parsedOutput.success === 'boolean') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={parsedOutput.success}
+          title={(parsedOutput.title || parsedOutput.name) as string | undefined}
+          message={parsedOutput.message as string | undefined}
+          errorMessage={parsedOutput.error as string | undefined}
+        />
+      );
+    }
+
+    // Fallback: display raw output for unhandled tools (preserves debugging visibility)
+    if (output != null) {
+      const rawContent = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+      return (
+        <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
+          <div className="px-3 py-2 bg-muted/30 border-b">
+            <span className="text-sm font-medium text-muted-foreground">Result</span>
+          </div>
+          <pre className="p-3 text-xs overflow-auto max-h-[300px] bg-muted/20">
+            <code>{rawContent}</code>
+          </pre>
+        </div>
+      );
+    }
+
+    return null;
+  }, [toolName, parsedInput, parsedOutput, error, output]);
+
+  // Render with rich content (no Parameters/Result wrappers)
   return (
     <Tool className="my-2">
       <ToolHeader
@@ -208,11 +505,17 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
         state={toolState}
       />
       <ToolContent>
-        {!!input && parsedInput && (
-          <ToolInput input={parsedInput} />
-        )}
-        {(outputContent || error) && (
-          <ToolOutput output={outputContent as ToolOutputType} errorText={error} />
+        {richContent || (
+          // Fallback: minimal loading/pending state
+          <div className="px-3 py-2 text-sm text-muted-foreground">
+            {state === 'input-streaming' || state === 'streaming' ? (
+              'Processing...'
+            ) : state === 'input-available' ? (
+              'Waiting for result...'
+            ) : (
+              'Completed'
+            )}
+          </div>
         )}
       </ToolContent>
     </Tool>
@@ -222,12 +525,12 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
 export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part }) {
   const toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
 
-  // Task management tools - render with expandable summary
+  // Task management - has its own dedicated renderer
   if (toolName === 'update_task') {
     return <TaskRenderer part={part} />;
   }
 
-  // Ask Agent tool - render with dedicated conversation UI
+  // Ask Agent - has its own conversation UI
   if (toolName === 'ask_agent') {
     return <PageAgentConversationRenderer part={part} />;
   }
