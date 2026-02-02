@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useMemo, type CSSProperties } from 'react';
-import { X, Pin, File, LayoutDashboard, CheckSquare, Activity, Users, Settings, Trash2, MessageSquare } from 'lucide-react';
+import { X, Pin, File, FileText, LayoutDashboard, CheckSquare, Activity, Users, Settings, Trash2, MessageSquare, Layout, Folder, Table } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
@@ -15,7 +15,8 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import type { Tab } from '@/stores/useTabsStore';
-import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
+import { parseTabPath } from '@/lib/tabs/tab-title';
+import { useTabMeta } from '@/hooks/useTabMeta';
 import { PageType } from '@pagespace/lib/client-safe';
 
 interface TabItemProps {
@@ -40,6 +41,10 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Trash2,
   MessageSquare,
   File,
+  FileText,
+  Layout,
+  Folder,
+  Table,
 };
 
 export const TabItem = memo(function TabItem({
@@ -53,22 +58,8 @@ export const TabItem = memo(function TabItem({
   onPin,
   onUnpin,
 }: TabItemProps) {
-  // Derive title and icon from path
-  const tabMeta = useMemo(() => {
-    const parsed = parseTabPath(tab.path);
-    const meta = getStaticTabMeta(parsed);
-    if (meta) {
-      return meta;
-    }
-    // For page/drive types, use path as fallback title
-    if (parsed.type === 'page') {
-      return { title: 'Page', iconName: 'File' };
-    }
-    if (parsed.type === 'drive') {
-      return { title: 'Drive', iconName: 'LayoutDashboard' };
-    }
-    return { title: tab.path, iconName: 'File' };
-  }, [tab.path]);
+  // Get title and icon from tab (cached metadata or fetch if needed)
+  const tabMeta = useTabMeta(tab);
 
   // Extract pageId from path for dirty state check (if it's a page)
   const pageId = useMemo(() => {
@@ -154,10 +145,10 @@ export const TabItem = memo(function TabItem({
             if (IconComponent) {
               return <IconComponent className="h-3.5 w-3.5 flex-shrink-0 text-white" />;
             }
-            // Fallback to PageTypeIcon for page types
+            // Fallback to PageTypeIcon for page types (shouldn't happen with current icon map)
             return (
               <PageTypeIcon
-                type={'DOCUMENT' as PageType}
+                type={tabMeta.pageType ?? PageType.DOCUMENT}
                 className="h-3.5 w-3.5 flex-shrink-0 text-white"
               />
             );

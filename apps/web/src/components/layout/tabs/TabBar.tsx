@@ -17,6 +17,7 @@ import {
   sortableKeyboardCoordinates,
   horizontalListSortingStrategy,
 } from '@dnd-kit/sortable';
+import { Plus } from 'lucide-react';
 import { useTabsStore, selectHasMultipleTabs } from '@/stores/useTabsStore';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { TabItem } from './TabItem';
@@ -37,6 +38,7 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const activeTabId = useTabsStore((state) => state.activeTabId);
   const hasMultipleTabs = useTabsStore(selectHasMultipleTabs);
   const setActiveTab = useTabsStore((state) => state.setActiveTab);
+  const createTab = useTabsStore((state) => state.createTab);
   const closeTab = useTabsStore((state) => state.closeTab);
   const closeOtherTabs = useTabsStore((state) => state.closeOtherTabs);
   const closeTabsToRight = useTabsStore((state) => state.closeTabsToRight);
@@ -79,6 +81,12 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
       router.push(tab.path);
     }
   }, [tabs, setActiveTab, router]);
+
+  // Handle creating a new tab
+  const handleNewTab = useCallback(() => {
+    createTab({ path: '/dashboard' });
+    router.push('/dashboard');
+  }, [createTab, router]);
 
   // Handle close with navigation fallback
   const handleClose = useCallback((tabId: string) => {
@@ -192,38 +200,48 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
           className
         )}
       >
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={tabs.map((tab) => tab.id)}
-            strategy={horizontalListSortingStrategy}
+        <div className="flex items-stretch">
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
           >
-            <div
-              ref={scrollContainerRef}
-              role="tablist"
-              aria-label="Open pages"
-              className="flex items-stretch overflow-x-auto scrollbar-none"
+            <SortableContext
+              items={tabs.map((tab) => tab.id)}
+              strategy={horizontalListSortingStrategy}
             >
-              {tabs.map((tab, index) => (
-                <TabItem
-                  key={tab.id}
-                  tab={tab}
-                  index={index}
-                  isActive={tab.id === activeTabId}
-                  onActivate={handleActivate}
-                  onClose={handleClose}
-                  onCloseOthers={closeOtherTabs}
-                  onCloseToRight={closeTabsToRight}
-                  onPin={pinTab}
-                  onUnpin={unpinTab}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+              <div
+                ref={scrollContainerRef}
+                role="tablist"
+                aria-label="Open pages"
+                className="flex items-stretch overflow-x-auto scrollbar-none"
+              >
+                {tabs.map((tab, index) => (
+                  <TabItem
+                    key={tab.id}
+                    tab={tab}
+                    index={index}
+                    isActive={tab.id === activeTabId}
+                    onActivate={handleActivate}
+                    onClose={handleClose}
+                    onCloseOthers={closeOtherTabs}
+                    onCloseToRight={closeTabsToRight}
+                    onPin={pinTab}
+                    onUnpin={unpinTab}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+          <button
+            type="button"
+            onClick={handleNewTab}
+            className="flex items-center justify-center px-2 py-1.5 text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+            aria-label="New tab"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
       </motion.div>
     </AnimatePresence>
   );
