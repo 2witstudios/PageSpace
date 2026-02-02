@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, mcpTokens, pages, eq, and, isNull } from '@pagespace/db';
+import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
 import { hashToken, sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/server';
 import { getSessionFromCookies } from './cookie-config';
