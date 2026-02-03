@@ -41,9 +41,7 @@ import {
   type StackedDiff,
 } from '@pagespace/lib/content';
 import { readPageContent, loggers } from '@pagespace/lib/server';
-
-// This endpoint should be protected by a cron secret in production
-const CRON_SECRET = process.env.CRON_SECRET;
+import { validateCronRequest } from '@/lib/auth/cron-auth';
 
 // System prompt for generating pulse summaries
 const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion who deeply understands the user's workspace and can give them genuinely useful, contextual updates.
@@ -81,16 +79,10 @@ WHAT TO AVOID:
 Keep it to 2-4 natural sentences. Be genuinely helpful.`;
 
 export async function POST(req: Request) {
-  // Require cron secret - fail-closed for security
-  if (!CRON_SECRET) {
-    return NextResponse.json(
-      { error: 'Cron endpoint not configured' },
-      { status: 503 }
-    );
-  }
-  const authHeader = req.headers.get('authorization');
-  if (authHeader !== `Bearer ${CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  // Zero trust: only allow requests from localhost (no secret comparison)
+  const authError = validateCronRequest(req);
+  if (authError) {
+    return authError;
   }
 
   try {

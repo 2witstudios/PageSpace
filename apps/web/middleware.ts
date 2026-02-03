@@ -65,16 +65,13 @@ export async function middleware(req: NextRequest) {
     }
 
     // Public routes that don't require authentication
-    // Note: These routes handle their own authorization (e.g., cron uses CRON_SECRET)
     if (
       pathname.startsWith('/api/auth/login') ||
       pathname.startsWith('/api/auth/signup') ||
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/google') ||
       pathname.startsWith('/api/mcp/') ||
-      pathname.startsWith('/api/drives') ||
-      pathname === '/api/cron' ||
-      pathname.startsWith('/api/cron/')
+      pathname.startsWith('/api/drives')
     ) {
       const { response } = createSecureResponse(isProduction, req, isAPIRoute);
       return response;
