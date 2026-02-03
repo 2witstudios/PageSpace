@@ -316,6 +316,7 @@ describe('calendar-write-tools', () => {
         title: 'Test Event',
         startAt: '2024-01-15T10:00:00Z',
         endAt: '2024-01-15T11:00:00Z',
+        driveId: 'drive-1', // Must be a drive event to test PRIVATE visibility (personal events have separate check)
         visibility: 'PRIVATE' as const,
         attendeeIds: ['other-user'],
       };
