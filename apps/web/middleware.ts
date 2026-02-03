@@ -65,13 +65,17 @@ export async function middleware(req: NextRequest) {
     }
 
     // Public routes that don't require authentication
+    // Note: Cron routes handle their own auth via validateCronRequest (internal network only)
     if (
       pathname.startsWith('/api/auth/login') ||
       pathname.startsWith('/api/auth/signup') ||
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/google') ||
       pathname.startsWith('/api/mcp/') ||
-      pathname.startsWith('/api/drives')
+      pathname.startsWith('/api/drives') ||
+      pathname.startsWith('/api/cron/') ||
+      pathname === '/api/memory/cron' ||
+      pathname === '/api/pulse/cron'
     ) {
       const { response } = createSecureResponse(isProduction, req, isAPIRoute);
       return response;
