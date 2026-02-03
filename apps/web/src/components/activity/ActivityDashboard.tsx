@@ -233,8 +233,8 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
   // Loading skeleton
   if (loading && activities.length === 0) {
     return (
-      <div className="h-full overflow-y-auto">
-        <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
+      <div className="h-full overflow-y-auto overflow-x-hidden">
+        <div className="container mx-auto px-4 py-6 sm:py-10 sm:px-6 lg:px-10 max-w-5xl">
           <div className="space-y-6">
             <Skeleton className="h-8 w-48" />
             <Skeleton className="h-10 w-full" />
@@ -256,13 +256,13 @@ export function ActivityDashboard({ context, driveId: initialDriveId, driveName 
       : 'Your recent activity across all drives';
 
   return (
-    <div className="h-full">
+    <div className="h-full overflow-x-hidden">
       <PullToRefresh
         direction="top"
         onRefresh={handleRefresh}
       >
         <CustomScrollArea className="h-full">
-          <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
+          <div className="container mx-auto px-4 py-6 sm:py-10 sm:px-6 lg:px-10 max-w-5xl">
             {/* Header */}
             <div className="mb-6">
               <Button

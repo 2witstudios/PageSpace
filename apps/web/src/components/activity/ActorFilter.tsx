@@ -83,7 +83,7 @@ export function ActorFilter({ driveId, context, value, onChange }: ActorFilterPr
           role="combobox"
           aria-expanded={open}
           className={cn(
-            'w-[180px] justify-between',
+            'w-[calc(50%-4px)] sm:w-[180px] justify-between',
             !value && 'text-muted-foreground'
           )}
           disabled={loading || actors.length === 0}
@@ -119,7 +119,7 @@ export function ActorFilter({ driveId, context, value, onChange }: ActorFilterPr
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[200px] p-0" align="start">
+      <PopoverContent className="w-[min(200px,calc(100vw-32px))] p-0" align="start">
         <Command>
           <CommandInput placeholder="Search users..." />
           <CommandList>
