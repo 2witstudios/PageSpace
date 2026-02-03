@@ -85,37 +85,35 @@ export default function Pulse() {
       onOpenChange={(open) => setPulseCollapsed(!open)}
       className="rounded-lg border border-[var(--separator)] bg-card/50"
     >
-      <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          className="w-full justify-between px-3 py-2 h-auto font-normal hover:bg-transparent"
-        >
-          <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium">
-            Pulse
-          </h4>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRefresh();
-              }}
-              disabled={isGenerating}
-              title="Refresh summary"
-            >
-              <RefreshCw className={cn("h-3 w-3", isGenerating && "animate-spin")} />
-            </Button>
+      <div className="flex items-center justify-between px-3 py-2">
+        <CollapsibleTrigger asChild>
+          <Button
+            variant="ghost"
+            className="flex-1 justify-start gap-2 px-0 h-auto font-normal hover:bg-transparent"
+          >
+            <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium">
+              Pulse
+            </h4>
             <ChevronDown
               className={cn(
                 "h-4 w-4 text-muted-foreground/60 transition-transform duration-200",
                 !pulseCollapsed && "rotate-180"
               )}
             />
-          </div>
+          </Button>
+        </CollapsibleTrigger>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-5 w-5 shrink-0"
+          onClick={handleRefresh}
+          disabled={isGenerating}
+          title="Refresh summary"
+          aria-label="Refresh summary"
+        >
+          <RefreshCw className={cn("h-3 w-3", isGenerating && "animate-spin")} />
         </Button>
-      </CollapsibleTrigger>
+      </div>
       <CollapsibleContent className="px-3 pb-3">
         <div className="space-y-2">
           {isGenerating ? (
