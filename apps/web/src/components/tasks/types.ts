@@ -2,8 +2,11 @@
  * Types for the Tasks Dashboard components
  */
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
-export type TaskPriority = 'low' | 'medium' | 'high';
+// Re-export shared types from task-list-types
+import type { TaskStatus as SharedTaskStatus, TaskPriority as SharedTaskPriority } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+
+export type TaskStatus = SharedTaskStatus;
+export type TaskPriority = SharedTaskPriority;
 
 export interface TaskUser {
   id: string;

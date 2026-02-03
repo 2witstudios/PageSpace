@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, inArray, or, isNull, not } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, ilike } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -16,6 +16,12 @@ const querySchema = z.object({
   priority: z.enum(['low', 'medium', 'high']).optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
+  // New filter parameters
+  search: z.string().optional(),
+  assigneeId: z.string().optional(),
+  assigneeAgentId: z.string().optional(),
+  showAllAssignees: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  dueDateFilter: z.enum(['overdue', 'today', 'this_week', 'upcoming']).optional(),
   // Pagination
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
@@ -46,6 +52,11 @@ export async function GET(request: Request) {
       priority: searchParams.get('priority') ?? undefined,
       startDate: searchParams.get('startDate') ?? undefined,
       endDate: searchParams.get('endDate') ?? undefined,
+      search: searchParams.get('search') ?? undefined,
+      assigneeId: searchParams.get('assigneeId') ?? undefined,
+      assigneeAgentId: searchParams.get('assigneeAgentId') ?? undefined,
+      showAllAssignees: searchParams.get('showAllAssignees') ?? undefined,
+      dueDateFilter: searchParams.get('dueDateFilter') ?? undefined,
       limit: searchParams.get('limit') ?? undefined,
       offset: searchParams.get('offset') ?? undefined,
     });
@@ -172,10 +183,26 @@ export async function GET(request: Request) {
       .where(eq(pages.isTrashed, true));
     const trashedPageIds = trashedPages.map(p => p.id);
 
+    // Build assignee filter condition
+    // Default: tasks assigned to current user
+    // If assigneeId or assigneeAgentId is provided, filter by that instead
+    // If showAllAssignees is true, don't filter by assignee at all
+    let assigneeCondition;
+    if (params.showAllAssignees) {
+      // No assignee filter - show all tasks in accessible drives
+      assigneeCondition = undefined;
+    } else if (params.assigneeAgentId) {
+      assigneeCondition = eq(taskItems.assigneeAgentId, params.assigneeAgentId);
+    } else if (params.assigneeId) {
+      assigneeCondition = eq(taskItems.assigneeId, params.assigneeId);
+    } else {
+      assigneeCondition = eq(taskItems.assigneeId, userId);
+    }
+
     // Build filter conditions for tasks
     const filterConditions = [
       inArray(taskItems.taskListId, taskListIds),
-      eq(taskItems.assigneeId, userId), // Only tasks assigned to the current user
+      assigneeCondition,
       // Exclude tasks whose linked page is trashed (pageId is null OR not in trashed list)
       trashedPageIds.length > 0
         ? or(isNull(taskItems.pageId), not(inArray(taskItems.pageId, trashedPageIds)))
@@ -195,6 +222,61 @@ export async function GET(request: Request) {
       const endOfDay = new Date(params.endDate);
       endOfDay.setDate(endOfDay.getDate() + 1);
       filterConditions.push(lt(taskItems.createdAt, endOfDay));
+    }
+    // Search filter (case-insensitive title/description)
+    if (params.search) {
+      const searchPattern = `%${params.search}%`;
+      filterConditions.push(
+        or(
+          ilike(taskItems.title, searchPattern),
+          ilike(taskItems.description, searchPattern)
+        )
+      );
+    }
+    // Due date filter
+    if (params.dueDateFilter) {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const endOfWeek = new Date(today);
+      endOfWeek.setDate(endOfWeek.getDate() + (7 - today.getDay())); // End of current week (Sunday)
+
+      switch (params.dueDateFilter) {
+        case 'overdue':
+          filterConditions.push(
+            and(
+              not(isNull(taskItems.dueDate)),
+              lt(taskItems.dueDate, today),
+              not(eq(taskItems.status, 'completed'))
+            )
+          );
+          break;
+        case 'today':
+          filterConditions.push(
+            and(
+              gte(taskItems.dueDate, today),
+              lt(taskItems.dueDate, tomorrow)
+            )
+          );
+          break;
+        case 'this_week':
+          filterConditions.push(
+            and(
+              gte(taskItems.dueDate, today),
+              lte(taskItems.dueDate, endOfWeek)
+            )
+          );
+          break;
+        case 'upcoming':
+          filterConditions.push(
+            and(
+              not(isNull(taskItems.dueDate)),
+              gte(taskItems.dueDate, today)
+            )
+          );
+          break;
+      }
     }
 
     const whereCondition = and(...filterConditions);
