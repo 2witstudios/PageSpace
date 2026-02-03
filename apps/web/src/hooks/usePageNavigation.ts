@@ -33,17 +33,15 @@ export function usePageNavigation() {
       return;
     }
 
-    // Electron: fetch the driveId from API first
+    // Electron: fetch the driveId from API using fetchWithAuth (includes bearer token)
     try {
-      const response = await fetch(`/api/pages/${pageId}`, {
-        credentials: 'include',
-      });
+      const { fetchWithAuth } = await import('@/lib/auth/auth-fetch');
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
 
       if (!response.ok) {
-        // If we can't fetch the page, fall back to /p/ route
-        // (this will likely redirect to signin, but at least shows an error)
-        console.warn('[usePageNavigation] Failed to fetch page info, falling back to /p/ route');
-        router.push(`/p/${pageId}`);
+        // If we can't fetch the page, log warning but don't navigate to /p/
+        // which would trigger logout. Instead, show an error or do nothing.
+        console.warn('[usePageNavigation] Failed to fetch page info:', response.status);
         return;
       }
 
@@ -52,13 +50,11 @@ export function usePageNavigation() {
       if (page.driveId) {
         router.push(`/dashboard/${page.driveId}/${pageId}`);
       } else {
-        // Shouldn't happen, but fallback just in case
-        router.push(`/p/${pageId}`);
+        console.warn('[usePageNavigation] Page has no driveId');
       }
     } catch (error) {
       console.error('[usePageNavigation] Error fetching page info:', error);
-      // Fallback to /p/ route on error
-      router.push(`/p/${pageId}`);
+      // Don't navigate to /p/ on error - it would trigger logout in Electron
     }
   }, [router]);
 
