@@ -7,6 +7,7 @@ import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
   '/dashboard/activity',
+  '/dashboard/calendar',
   '/dashboard/connections',
   '/dashboard/inbox',
   '/dashboard/storage',
@@ -24,7 +25,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
     pathname?.startsWith(route)
-  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|inbox|tasks|trash|settings|members)/);
+  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|inbox|tasks|trash|settings|members)/);
 
   if (isFullPageRoute) {
     return <Layout>{children}</Layout>;
