@@ -43,7 +43,7 @@ const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 /**
  * Build personalization prompt section from user preferences
  */
-function buildPersonalizationPrompt(personalization?: PersonalizationInfo): string | null {
+export function buildPersonalizationPrompt(personalization?: PersonalizationInfo): string | null {
   if (!personalization?.enabled) {
     return null;
   }

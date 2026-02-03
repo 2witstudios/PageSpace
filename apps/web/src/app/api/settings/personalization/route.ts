@@ -6,6 +6,9 @@ import { loggers } from '@pagespace/lib/server';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+// Maximum length for text fields (~10k tokens to support detailed memory/instructions)
+const MAX_FIELD_LENGTH = 40000;
+
 // GET /api/settings/personalization - Get user's personalization settings
 export async function GET(request: Request) {
   try {
@@ -60,6 +63,40 @@ export async function PATCH(request: Request) {
     if (bio === undefined && writingStyle === undefined && rules === undefined && enabled === undefined) {
       return NextResponse.json(
         { error: 'At least one field (bio, writingStyle, rules, enabled) is required' },
+        { status: 400 }
+      );
+    }
+
+    // Type validation
+    if (bio !== undefined && typeof bio !== 'string') {
+      return NextResponse.json({ error: 'bio must be a string' }, { status: 400 });
+    }
+    if (writingStyle !== undefined && typeof writingStyle !== 'string') {
+      return NextResponse.json({ error: 'writingStyle must be a string' }, { status: 400 });
+    }
+    if (rules !== undefined && typeof rules !== 'string') {
+      return NextResponse.json({ error: 'rules must be a string' }, { status: 400 });
+    }
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      return NextResponse.json({ error: 'enabled must be a boolean' }, { status: 400 });
+    }
+
+    // Length validation to prevent excessively long system prompts
+    if (bio && bio.length > MAX_FIELD_LENGTH) {
+      return NextResponse.json(
+        { error: `bio must be ${MAX_FIELD_LENGTH} characters or less` },
+        { status: 400 }
+      );
+    }
+    if (writingStyle && writingStyle.length > MAX_FIELD_LENGTH) {
+      return NextResponse.json(
+        { error: `writingStyle must be ${MAX_FIELD_LENGTH} characters or less` },
+        { status: 400 }
+      );
+    }
+    if (rules && rules.length > MAX_FIELD_LENGTH) {
+      return NextResponse.json(
+        { error: `rules must be ${MAX_FIELD_LENGTH} characters or less` },
         { status: 400 }
       );
     }

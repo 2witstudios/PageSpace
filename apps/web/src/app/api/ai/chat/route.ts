@@ -41,6 +41,7 @@ import {
   processMentionsInMessage,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
+  buildPersonalizationPrompt,
   filterToolsForReadOnly,
   filterToolsForWebSearch,
   getPageTreeContext,
@@ -678,20 +679,9 @@ export async function POST(request: Request) {
         systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
       }
       // Add user personalization if enabled
-      if (personalization) {
-        const personalizationSections: string[] = [];
-        if (personalization.bio?.trim()) {
-          personalizationSections.push(`ABOUT THE USER:\n${personalization.bio.trim()}`);
-        }
-        if (personalization.writingStyle?.trim()) {
-          personalizationSections.push(`COMMUNICATION PREFERENCES:\n${personalization.writingStyle.trim()}`);
-        }
-        if (personalization.rules?.trim()) {
-          personalizationSections.push(`USER RULES:\n${personalization.rules.trim()}`);
-        }
-        if (personalizationSections.length > 0) {
-          systemPrompt += `\n\n# USER PERSONALIZATION\n\n${personalizationSections.join('\n\n')}`;
-        }
+      const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
+      if (personalizationPrompt) {
+        systemPrompt += `\n\n${personalizationPrompt}`;
       }
       // Add read-only constraint if applicable
       if (readOnlyMode) {
