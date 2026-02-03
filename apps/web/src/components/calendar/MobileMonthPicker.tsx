@@ -16,6 +16,8 @@ import {
   subYears,
   setMonth,
   setYear,
+  setDate,
+  getDaysInMonth,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -110,13 +112,20 @@ export function MobileMonthPicker({
   };
 
   const handleMonthSelect = (monthIndex: number) => {
-    const newDate = setMonth(viewDate, monthIndex);
-    setViewDate(newDate);
+    // Clamp day to avoid overflow (e.g., Jan 31 -> Feb should stay in Feb)
+    const targetDate = setMonth(setDate(viewDate, 1), monthIndex);
+    const maxDay = getDaysInMonth(targetDate);
+    const clampedDay = Math.min(viewDate.getDate(), maxDay);
+    setViewDate(setDate(targetDate, clampedDay));
     setPickerView('calendar');
   };
 
   const handleYearSelect = (year: number) => {
-    setViewDate(setYear(viewDate, year));
+    // Clamp day to avoid overflow (e.g., Feb 29 in leap year -> non-leap year)
+    const targetDate = setYear(setDate(viewDate, 1), year);
+    const maxDay = getDaysInMonth(targetDate);
+    const clampedDay = Math.min(viewDate.getDate(), maxDay);
+    setViewDate(setDate(targetDate, clampedDay));
     setPickerView('months');
   };
 
