@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, files, eq } from '@pagespace/db';
-import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken, isUserDriveMember } from '@pagespace/lib';
+import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken } from '@pagespace/lib';
+import { isUserDriveMember } from '@pagespace/lib/permissions';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 
 interface RouteParams {
