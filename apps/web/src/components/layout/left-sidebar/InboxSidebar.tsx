@@ -130,9 +130,9 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
   const getItemHref = (item: InboxItem) => {
     if (item.type === 'dm') {
-      return `/dashboard/messages/${item.id}`;
+      return `/dashboard/inbox/dm/${item.id}`;
     }
-    return `/dashboard/${item.driveId}/${item.id}`;
+    return `/dashboard/inbox/channel/${item.id}`;
   };
 
   const isItemActive = (item: InboxItem) => {

@@ -12,8 +12,10 @@ export type PathType =
   | 'drive-members'
   | 'drive-settings'
   | 'drive-trash'
-  | 'messages'
-  | 'messages-conversation'
+  | 'inbox'
+  | 'inbox-dm'
+  | 'inbox-channel'
+  | 'inbox-new'
   | 'settings'
   | 'unknown';
 
@@ -54,15 +56,28 @@ export const parseTabPath = (path: string): ParsedPath => {
     return { type: 'dashboard' };
   }
 
-  // /dashboard/messages or /dashboard/messages/[conversationId]
-  if (segments[1] === 'messages') {
-    if (segments[2]) {
+  // /dashboard/inbox routes
+  if (segments[1] === 'inbox') {
+    // /dashboard/inbox/dm/[conversationId]
+    if (segments[2] === 'dm' && segments[3]) {
       return {
-        type: 'messages-conversation',
-        conversationId: segments[2],
+        type: 'inbox-dm',
+        conversationId: segments[3],
       };
     }
-    return { type: 'messages' };
+    // /dashboard/inbox/channel/[pageId]
+    if (segments[2] === 'channel' && segments[3]) {
+      return {
+        type: 'inbox-channel',
+        pageId: segments[3],
+      };
+    }
+    // /dashboard/inbox/new
+    if (segments[2] === 'new') {
+      return { type: 'inbox-new' };
+    }
+    // /dashboard/inbox
+    return { type: 'inbox' };
   }
 
   const driveId = segments[1];
@@ -126,12 +141,19 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     case 'drive-trash':
       return { title: 'Trash', iconName: 'Trash2' };
 
-    case 'messages':
-      return { title: 'Messages', iconName: 'MessageSquare' };
+    case 'inbox':
+      return { title: 'Inbox', iconName: 'Inbox' };
 
-    case 'messages-conversation':
+    case 'inbox-dm':
       // Requires async lookup for conversation name
       return null;
+
+    case 'inbox-channel':
+      // Requires async lookup for channel name
+      return null;
+
+    case 'inbox-new':
+      return { title: 'New Message', iconName: 'PenSquare' };
 
     case 'settings':
       if (parsed.settingsPage) {
