@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
@@ -52,6 +52,10 @@ export async function PUT(
         { status: 400 }
       );
     }
+
+    // Enforce MCP token scope
+    const scopeError = checkMCPDriveScope(auth, agent.driveId);
+    if (scopeError) return scopeError;
 
     // Check permissions
     const canEdit = await canUserEditPage(userId, agentId);
