@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -43,6 +43,12 @@ export async function POST(request: Request) {
 
     if (!targetDrive) {
       return NextResponse.json({ error: 'Target drive not found' }, { status: 404 });
+    }
+
+    // Check MCP token scope for target drive
+    const targetScopeError = checkMCPDriveScope(auth, targetDriveId);
+    if (targetScopeError) {
+      return targetScopeError;
     }
 
     // Check user has edit access to target drive
@@ -87,6 +93,20 @@ export async function POST(request: Request) {
 
     if (sourcePages.length !== pageIds.length) {
       return NextResponse.json({ error: 'Some pages not found' }, { status: 404 });
+    }
+
+    // Check MCP token scope for all source pages
+    const allowedDriveIds = getAllowedDriveIds(auth);
+    if (allowedDriveIds.length > 0) {
+      const allowedSet = new Set(allowedDriveIds);
+      for (const page of sourcePages) {
+        if (!allowedSet.has(page.driveId)) {
+          return NextResponse.json(
+            { error: 'This token does not have access to one or more source pages' },
+            { status: 403 }
+          );
+        }
+      }
     }
 
     // Verify view permissions for all pages
