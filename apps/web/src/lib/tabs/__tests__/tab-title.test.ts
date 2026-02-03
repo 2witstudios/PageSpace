@@ -70,17 +70,30 @@ describe('tab-title', () => {
       expect(result.driveId).toBe('drive-123');
     });
 
-    it('given messages root, should return messages type', () => {
-      const result = parseTabPath('/dashboard/messages');
+    it('given inbox root, should return inbox type', () => {
+      const result = parseTabPath('/dashboard/inbox');
 
-      expect(result.type).toBe('messages');
+      expect(result.type).toBe('inbox');
     });
 
-    it('given messages conversation, should return messages-conversation type', () => {
-      const result = parseTabPath('/dashboard/messages/conv-123');
+    it('given inbox dm conversation, should return inbox-dm type', () => {
+      const result = parseTabPath('/dashboard/inbox/dm/conv-123');
 
-      expect(result.type).toBe('messages-conversation');
+      expect(result.type).toBe('inbox-dm');
       expect(result.conversationId).toBe('conv-123');
+    });
+
+    it('given inbox channel, should return inbox-channel type', () => {
+      const result = parseTabPath('/dashboard/inbox/channel/page-123');
+
+      expect(result.type).toBe('inbox-channel');
+      expect(result.pageId).toBe('page-123');
+    });
+
+    it('given inbox new, should return inbox-new type', () => {
+      const result = parseTabPath('/dashboard/inbox/new');
+
+      expect(result.type).toBe('inbox-new');
     });
 
     it('given settings root, should return settings type', () => {
@@ -147,11 +160,30 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Trash2');
     });
 
-    it('given messages type, should return Messages title', () => {
-      const meta = getStaticTabMeta({ type: 'messages' });
+    it('given inbox type, should return Inbox title', () => {
+      const meta = getStaticTabMeta({ type: 'inbox' });
 
-      expect(meta!.title).toBe('Messages');
-      expect(meta!.iconName).toBe('MessageSquare');
+      expect(meta!.title).toBe('Inbox');
+      expect(meta!.iconName).toBe('Inbox');
+    });
+
+    it('given inbox-dm type, should return null (requires async lookup)', () => {
+      const meta = getStaticTabMeta({ type: 'inbox-dm', conversationId: 'conv-123' });
+
+      expect(meta).toBeNull();
+    });
+
+    it('given inbox-channel type, should return null (requires async lookup)', () => {
+      const meta = getStaticTabMeta({ type: 'inbox-channel', pageId: 'page-123' });
+
+      expect(meta).toBeNull();
+    });
+
+    it('given inbox-new type, should return New Message title', () => {
+      const meta = getStaticTabMeta({ type: 'inbox-new' });
+
+      expect(meta!.title).toBe('New Message');
+      expect(meta!.iconName).toBe('PenSquare');
     });
 
     it('given settings type, should return Settings title', () => {

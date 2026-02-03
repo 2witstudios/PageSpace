@@ -18,10 +18,7 @@ const MemoizedSidebar = memo((props: SidebarProps) => {
                        pathname?.startsWith('/dashboard/inbox/') ||
                        pathname?.match(/^\/dashboard\/[^/]+\/inbox$/);
 
-  // Legacy messages route - redirect to inbox
-  const isMessagesRoute = pathname?.startsWith('/dashboard/messages');
-
-  if (isInboxRoute || isMessagesRoute) {
+  if (isInboxRoute) {
     return <InboxSidebar {...props} />;
   }
 
