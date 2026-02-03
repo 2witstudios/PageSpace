@@ -36,6 +36,7 @@ vi.mock('@pagespace/db', () => ({
   },
   eq: vi.fn(),
   and: vi.fn(),
+  ne: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -541,6 +542,83 @@ describe('calendar-write-tools', () => {
         should: 'include updated operation',
         actual: mockBroadcastCalendarEvent.mock.calls[0][0].operation,
         expected: 'updated',
+      });
+    });
+
+    it('removes attendees when visibility changes to PRIVATE', async () => {
+      // Existing event with DRIVE visibility
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue({
+        id: 'event-1',
+        title: 'Team Meeting',
+        createdById: 'user-123',
+        driveId: 'drive-1',
+        visibility: 'DRIVE',
+        startAt: new Date('2024-01-15T10:00:00Z'),
+        endAt: new Date('2024-01-15T11:00:00Z'),
+        isTrashed: false,
+      });
+
+      // Mock update returning updated event
+      (mockDb.update as ReturnType<typeof vi.fn>).mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([
+              {
+                id: 'event-1',
+                title: 'Team Meeting',
+                driveId: 'drive-1',
+                visibility: 'PRIVATE',
+                startAt: new Date('2024-01-15T10:00:00Z'),
+                endAt: new Date('2024-01-15T11:00:00Z'),
+              },
+            ]),
+          }),
+        }),
+      });
+
+      // Mock delete returning removed attendees
+      (mockDb.delete as ReturnType<typeof vi.fn>).mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([
+            { userId: 'attendee-1' },
+            { userId: 'attendee-2' },
+          ]),
+        }),
+      });
+
+      // Mock select for getting attendee IDs
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ userId: 'user-123' }]),
+        }),
+      });
+
+      const input = { eventId: 'event-1', visibility: 'PRIVATE' as const };
+
+      const result = await calendarWriteTools.update_calendar_event.execute!(
+        input,
+        createAuthContext()
+      );
+
+      assert({
+        given: 'visibility change to PRIVATE',
+        should: 'return success with attendee removal info',
+        actual: result.success,
+        expected: true,
+      });
+
+      assert({
+        given: 'visibility change to PRIVATE with attendees',
+        should: 'include attendeesRemoved in stats',
+        actual: (result.stats as { attendeesRemoved?: number }).attendeesRemoved,
+        expected: 2,
+      });
+
+      assert({
+        given: 'visibility change to PRIVATE',
+        should: 'mention removed attendees in summary',
+        actual: result.summary?.includes('removed'),
+        expected: true,
       });
     });
   });
