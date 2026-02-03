@@ -96,7 +96,14 @@ export default function InboxCenterList({ driveId }: InboxCenterListProps) {
       }
       const moreData: InboxResponse = await response.json();
 
-      setAllItems((prev) => [...prev, ...moreData.items]);
+      // Deduplicate to prevent duplicates from socket updates racing with pagination
+      setAllItems((prev) => {
+        const existingIds = new Set(prev.map(item => `${item.type}-${item.id}`));
+        const newItems = moreData.items.filter(
+          item => !existingIds.has(`${item.type}-${item.id}`)
+        );
+        return [...prev, ...newItems];
+      });
       setPagination(moreData.pagination);
       setHasLoadedMore(true);
     } catch (err) {
