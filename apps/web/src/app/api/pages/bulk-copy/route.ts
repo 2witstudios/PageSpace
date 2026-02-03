@@ -157,6 +157,25 @@ export async function POST(request: Request) {
           systemPrompt: page.systemPrompt,
           enabledTools: page.enabledTools,
           isPaginated: page.isPaginated,
+          // AI chat settings
+          includeDrivePrompt: page.includeDrivePrompt,
+          agentDefinition: page.agentDefinition,
+          visibleToGlobalAssistant: page.visibleToGlobalAssistant,
+          includePageTree: page.includePageTree,
+          pageTreeScope: page.pageTreeScope,
+          // File-specific fields
+          fileSize: page.fileSize,
+          mimeType: page.mimeType,
+          originalFileName: page.originalFileName,
+          filePath: page.filePath,
+          fileMetadata: page.fileMetadata,
+          // Processing status fields - reset so copies are reprocessed independently
+          processingStatus: page.type === 'FILE' ? 'pending' : null,
+          processingError: null,
+          processedAt: null,
+          extractionMethod: page.extractionMethod,
+          extractionMetadata: page.extractionMetadata,
+          contentHash: page.contentHash,
         });
 
         copiedCount += 1;
@@ -231,6 +250,25 @@ async function copyChildrenRecursively(
       systemPrompt: child.systemPrompt,
       enabledTools: child.enabledTools,
       isPaginated: child.isPaginated,
+      // AI chat settings
+      includeDrivePrompt: child.includeDrivePrompt,
+      agentDefinition: child.agentDefinition,
+      visibleToGlobalAssistant: child.visibleToGlobalAssistant,
+      includePageTree: child.includePageTree,
+      pageTreeScope: child.pageTreeScope,
+      // File-specific fields
+      fileSize: child.fileSize,
+      mimeType: child.mimeType,
+      originalFileName: child.originalFileName,
+      filePath: child.filePath,
+      fileMetadata: child.fileMetadata,
+      // Processing status fields - reset so copies are reprocessed independently
+      processingStatus: child.type === 'FILE' ? 'pending' : null,
+      processingError: null,
+      processedAt: null,
+      extractionMethod: child.extractionMethod,
+      extractionMetadata: child.extractionMetadata,
+      contentHash: child.contentHash,
     });
 
     copiedCount += 1;
