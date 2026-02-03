@@ -161,9 +161,10 @@ export async function GET(
         const updatedAtTime = page.updatedAt instanceof Date ? page.updatedAt.getTime() : new Date(page.updatedAt).getTime();
         const viewedAtTime = viewedAt instanceof Date ? viewedAt.getTime() : new Date(viewedAt).getTime();
         hasChanges = updatedAtTime > viewedAtTime;
-      } else if (page.createdAt > UNREAD_INDICATOR_CUTOFF_DATE) {
+      } else {
         // User has never viewed this page - show as unread only if created after cutoff
-        hasChanges = true;
+        const createdAtTime = page.createdAt instanceof Date ? page.createdAt.getTime() : new Date(page.createdAt).getTime();
+        hasChanges = createdAtTime > UNREAD_INDICATOR_CUTOFF_DATE.getTime();
       }
 
       return {
