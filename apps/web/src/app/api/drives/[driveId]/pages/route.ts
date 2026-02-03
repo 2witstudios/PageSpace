@@ -7,6 +7,11 @@ import { jsonResponse } from '@pagespace/lib/api-utils';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
+// Cutoff date for unread indicators on never-viewed pages
+// Pages created after this date will show as unread if never viewed
+// Pages created before this date won't show as unread (to avoid overwhelming users with old content)
+const UNREAD_INDICATOR_CUTOFF_DATE = new Date('2026-02-03T00:00:00.000Z');
+
 async function getPermittedPages(driveId: string, userId: string) {
   // Check if user is a drive member - currently unused but will be needed for member-level permissions
   // const membership = await db.query.driveMembers.findFirst({
@@ -144,9 +149,19 @@ export async function GET(
     // Add isTaskLinked and hasChanges flags to each page
     const pagesWithFlags = pageResults.map(page => {
       const viewedAt = pageViewsMap.get(page.id);
-      // hasChanges is true only if user has viewed the page before AND page was updated after
-      // Pages never viewed don't show a dot - users shouldn't be notified about changes to pages they've never visited
-      const hasChanges = viewedAt && page.updatedAt ? page.updatedAt > viewedAt : false;
+
+      // Determine if page has unread changes:
+      // 1. If user has viewed the page before: show dot if page was updated after last view
+      // 2. If user has never viewed the page: show dot if page was created after cutoff date
+      //    (to avoid overwhelming users with old content they've never seen)
+      let hasChanges = false;
+      if (viewedAt) {
+        // User has viewed this page before - check if it's been updated since
+        hasChanges = page.updatedAt > viewedAt;
+      } else if (page.createdAt > UNREAD_INDICATOR_CUTOFF_DATE) {
+        // User has never viewed this page - show as unread only if created after cutoff
+        hasChanges = true;
+      }
 
       return {
         ...page,
