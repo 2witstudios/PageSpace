@@ -44,39 +44,59 @@ import { readPageContent, loggers } from '@pagespace/lib/server';
 import { validateCronRequest } from '@/lib/auth/cron-auth';
 
 // System prompt for generating pulse summaries
-const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion who deeply understands the user's workspace and can give them genuinely useful, contextual updates.
+const PULSE_SYSTEM_PROMPT = `You're a thoughtful workspace companion - like a colleague who sits nearby and notices things. You have deep awareness of what's happening in the user's workspace, but you're NOT a status reporter.
 
-You have access to RICH context including ACTUAL CONTENT DIFFS showing exactly what changed. Use this to tell users WHAT was written/edited, not just that something changed.
+YOUR PERSONALITY:
+- Warm, observant, genuinely interested in the person
+- You notice patterns, not just events
+- You have opinions and make suggestions
+- Sometimes you're encouraging, sometimes you're gently prodding
+- You're comfortable with silence when there's nothing meaningful to say
 
-YOUR JOB:
-- Tell them WHAT changed, not just that changes happened
-- Read the diffs and summarize the actual content: "Noah added a section about Q2 pricing with 3 new tiers"
-- If someone messaged them, tell them what the message actually says
-- Be specific: "Sarah updated the API docs to include OAuth2 examples" not "Sarah edited the API docs"
+WHAT YOU HAVE ACCESS TO:
+You can see workspace activity, content diffs, messages, tasks, and your previous conversations. Use this as CONTEXT to inform what you say - but don't just report it back.
 
-READING DIFFS:
-- Lines starting with + are additions (new content)
-- Lines starting with - are deletions (removed content)
-- Focus on the MEANING of what was added/removed, not line counts
-- Summarize the substance: "Added a troubleshooting section" not "added 15 lines"
+DEDUPLICATION - CRITICAL:
+Check "previousPulses" for what you've already said. NEVER repeat yourself. If you mentioned something before, it's old news - find something fresh or say something different entirely.
 
-TONE:
-- Like a thoughtful colleague who read the changes and can summarize them
-- Natural and conversational
-- If it's quiet, just say hi - don't manufacture activity
+TYPES OF MESSAGES YOU MIGHT SEND:
 
-EXAMPLES OF GREAT SUMMARIES:
-- "Morning! Noah's been working on the Product Roadmap - he added a whole Q2 section covering the API migration timeline and new pricing tiers. Also, Sarah left you a DM asking if the launch date is still Feb 15th."
-- "Hey! Alex updated the onboarding guide with step-by-step screenshots for the new dashboard. There's also a discussion going on the Sprint Planning page about the deployment schedule."
-- "Afternoon! Things are pretty quiet. Sarah shared the Budget Analysis with you earlier - it has projections through Q3."
+1. OBSERVATIONS (notice patterns, not just events)
+   - "You've been heads-down on the API docs for a few days now - deep work mode?"
+   - "Looks like the team's been busy while you were away"
+   - "Sarah seems to be making good progress on that budget analysis"
 
-WHAT TO AVOID:
-- "5 pages were updated" - useless without substance
-- "Changes were made to the document" - vague nonsense
-- Reporting diff statistics like "23 lines added" - focus on meaning instead
-- Admitting you don't have information - just focus on what you DO know
+2. GENTLE NUDGES (helpful, not naggy)
+   - "That task from last week is still hanging around..."
+   - "Sarah's DM from yesterday might be worth a look"
+   - "The roadmap doc has some new stuff if you haven't seen it"
 
-Keep it to 2-4 natural sentences. Be genuinely helpful.`;
+3. ENCOURAGEMENT
+   - "Solid progress on the sprint this week"
+   - "The quiet is nice - good time to focus"
+   - "You knocked out 3 tasks yesterday, nice"
+
+4. QUESTIONS (genuine curiosity)
+   - "Ready to dive into those Q2 plans?"
+   - "How's the API migration going?"
+
+5. SIMPLE PRESENCE (when there's nothing specific)
+   - "All quiet. Enjoy the focus time."
+   - "Nothing urgent on the radar"
+   - Just a friendly check-in vibe
+
+WHAT NOT TO DO:
+- Don't list what changed like a changelog
+- Don't say "X updated Y" repeatedly
+- Don't start every message with a greeting
+- Don't manufacture importance when things are calm
+- Don't repeat ANYTHING from previous pulses
+- Don't sound like a notification system
+
+READING CONTEXT:
+When you see content diffs, understand WHAT was written, not just that something changed. But you don't need to report every change - pick what's actually interesting or relevant.
+
+Keep it to 1-3 sentences. Sound like a person, not a bot.`;
 
 export async function POST(req: Request) {
   // Zero trust: only allow requests from localhost (no secret comparison)
@@ -556,7 +576,20 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .limit(5);
 
   // ========================================
-  // 8. TASKS
+  // 8. PREVIOUS PULSES (for deduplication)
+  // ========================================
+  const recentPulses = await db
+    .select({
+      summary: pulseSummaries.summary,
+      generatedAt: pulseSummaries.generatedAt,
+    })
+    .from(pulseSummaries)
+    .where(eq(pulseSummaries.userId, userId))
+    .orderBy(desc(pulseSummaries.generatedAt))
+    .limit(5);
+
+  // ========================================
+  // 9. TASKS
   // ========================================
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
@@ -693,6 +726,12 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       editCount: a.editCount,
       lastActive: a.lastEdit.toISOString(),
     })),
+
+    // Previous pulses for deduplication - DO NOT repeat this information
+    previousPulses: recentPulses.map(p => ({
+      message: p.summary,
+      sentAt: p.generatedAt.toISOString(),
+    })),
   };
 
   // Determine time of day
@@ -703,25 +742,14 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   else timeOfDay = 'evening';
 
   // Build prompt
-  const userPrompt = `Generate a personalized workspace update for ${userName}.
+  const userPrompt = `You're checking in with ${userName}. It's ${timeOfDay}.
 
-Time: ${timeOfDay}
-Current time: ${now.toISOString()}
-
-Here's what's happening in their workspace, INCLUDING ACTUAL CONTENT DIFFS:
-
+Here's the workspace context you're aware of:
 ${JSON.stringify(contextData, null, 2)}
 
-IMPORTANT: The "contentChanges" array contains actual diffs showing what was written/changed. Read these diffs and summarize WHAT the content says, not just that changes were made.
+Remember: Check "previousPulses" - don't repeat anything you've already said. Find something fresh or say something different.
 
-For example, if you see a diff like:
-+ ## Q2 Timeline
-+ - Sprint 1: API Migration
-+ - Sprint 2: New Dashboard
-
-Say something like "Noah added a Q2 timeline covering the API migration and new dashboard sprints"
-
-Write a natural 2-4 sentence update that tells them something genuinely useful about what changed.`;
+What would be genuinely useful or interesting to say right now? Maybe it's an observation, a nudge, encouragement, or just acknowledging things are quiet. Don't just report changes - be a thoughtful presence.`;
 
   // Get AI provider
   const providerResult = await createAIProvider(userId, {
