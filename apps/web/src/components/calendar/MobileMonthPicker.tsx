@@ -140,6 +140,7 @@ export function MobileMonthPicker({
               variant="ghost"
               size="icon"
               onClick={pickerView === 'years' ? handlePrevYear : handlePrevMonth}
+              aria-label={pickerView === 'years' ? 'Previous year' : 'Previous month'}
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -183,6 +184,7 @@ export function MobileMonthPicker({
               variant="ghost"
               size="icon"
               onClick={pickerView === 'years' ? handleNextYear : handleNextMonth}
+              aria-label={pickerView === 'years' ? 'Next year' : 'Next month'}
             >
               <ChevronRight className="h-5 w-5" />
             </Button>
@@ -241,7 +243,9 @@ export function MobileMonthPicker({
                   const isCurrentMonth =
                     index === viewDate.getMonth() &&
                     viewDate.getFullYear() === new Date().getFullYear();
-                  const isSelected = index === selectedDate.getMonth();
+                  const isSelected =
+                    index === selectedDate.getMonth() &&
+                    viewDate.getFullYear() === selectedDate.getFullYear();
 
                   return (
                     <button

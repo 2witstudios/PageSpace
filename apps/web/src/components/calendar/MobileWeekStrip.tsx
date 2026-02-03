@@ -78,6 +78,7 @@ export function MobileWeekStrip({
           size="icon"
           className="h-8 w-8"
           onClick={handlePrevWeek}
+          aria-label="Previous week"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -89,6 +90,7 @@ export function MobileWeekStrip({
           size="icon"
           className="h-8 w-8"
           onClick={handleNextWeek}
+          aria-label="Next week"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
