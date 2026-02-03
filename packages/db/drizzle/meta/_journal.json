@@ -442,13 +442,6 @@
       "when": 1770044733258,
       "tag": "0062_glossy_bushwacker",
       "breakpoints": true
-    },
-    {
-      "idx": 63,
-      "version": "7",
-      "when": 1770059912178,
-      "tag": "0063_closed_lorna_dane",
-      "breakpoints": true
     }
   ]
 }
