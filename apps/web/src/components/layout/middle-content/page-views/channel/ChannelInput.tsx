@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // File attachment info returned from upload
 export interface FileAttachment {
@@ -113,10 +114,9 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch(`/api/channels/${channelId}/upload`, {
+        const response = await fetchWithAuth(`/api/channels/${channelId}/upload`, {
           method: 'POST',
           body: formData,
-          credentials: 'include',
         });
 
         if (!response.ok) {
