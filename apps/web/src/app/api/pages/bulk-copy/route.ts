@@ -149,10 +149,10 @@ export async function POST(request: Request) {
           originalFileName: page.originalFileName,
           filePath: page.filePath,
           fileMetadata: page.fileMetadata,
-          // Processing status fields
-          processingStatus: page.processingStatus,
-          processingError: page.processingError,
-          processedAt: page.processedAt,
+          // Processing status fields - reset so copies are reprocessed independently
+          processingStatus: page.type === 'FILE' ? 'pending' : null,
+          processingError: null,
+          processedAt: null,
           extractionMethod: page.extractionMethod,
           extractionMetadata: page.extractionMetadata,
           contentHash: page.contentHash,
@@ -242,10 +242,10 @@ async function copyChildrenRecursively(
       originalFileName: child.originalFileName,
       filePath: child.filePath,
       fileMetadata: child.fileMetadata,
-      // Processing status fields
-      processingStatus: child.processingStatus,
-      processingError: child.processingError,
-      processedAt: child.processedAt,
+      // Processing status fields - reset so copies are reprocessed independently
+      processingStatus: child.type === 'FILE' ? 'pending' : null,
+      processingError: null,
+      processedAt: null,
       extractionMethod: child.extractionMethod,
       extractionMetadata: child.extractionMetadata,
       contentHash: child.contentHash,
