@@ -12,7 +12,6 @@ import {
   inArray,
   isNull,
   desc,
-  not,
 } from '@pagespace/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { type ToolExecutionContext } from '../core';
@@ -561,17 +560,25 @@ export const calendarReadTools = {
         const driveIds = driveId ? [driveId] : await getDriveIdsForUser(userId);
         const conditions = [];
 
-        // Personal events
+        // Personal events (user is creator, no drive)
         conditions.push(
           and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId))
         );
 
-        // Drive events
+        // Events where user is the creator (any visibility, any drive)
+        conditions.push(eq(calendarEvents.createdById, userId));
+
+        // Drive events with DRIVE visibility (visible to all drive members)
         if (driveIds.length > 0) {
-          conditions.push(inArray(calendarEvents.driveId, driveIds));
+          conditions.push(
+            and(
+              inArray(calendarEvents.driveId, driveIds),
+              eq(calendarEvents.visibility, 'DRIVE')
+            )
+          );
         }
 
-        // Events where user is an attendee
+        // Events where user is an attendee (visible regardless of visibility setting)
         const attendeeEvents = await db
           .select({ eventId: eventAttendees.eventId })
           .from(eventAttendees)

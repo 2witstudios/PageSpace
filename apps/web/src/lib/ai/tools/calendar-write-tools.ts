@@ -7,6 +7,7 @@ import {
   eventAttendees,
   eq,
   and,
+  ne,
 } from '@pagespace/db';
 import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
@@ -367,6 +368,29 @@ export const calendarWriteTools = {
         if (color !== undefined) updates.color = color;
         if (pageId !== undefined) updates.pageId = pageId;
 
+        // If changing to PRIVATE visibility, remove all attendees except the creator
+        // This ensures the privacy guarantee is maintained when transitioning from shared to private
+        let removedAttendeesCount = 0;
+        if (visibility === 'PRIVATE' && event.visibility !== 'PRIVATE') {
+          const deletedAttendees = await db
+            .delete(eventAttendees)
+            .where(
+              and(
+                eq(eventAttendees.eventId, eventId),
+                ne(eventAttendees.userId, event.createdById)
+              )
+            )
+            .returning({ userId: eventAttendees.userId });
+          removedAttendeesCount = deletedAttendees.length;
+
+          if (removedAttendeesCount > 0) {
+            calendarWriteLogger.info('Removed attendees due to PRIVATE visibility change', {
+              eventId: maskIdentifier(eventId),
+              removedCount: removedAttendeesCount,
+            });
+          }
+        }
+
         // Update the event
         const [updatedEvent] = await db
           .update(calendarEvents)
@@ -392,6 +416,11 @@ export const calendarWriteTools = {
           updatedFields: Object.keys(updates).filter((k) => k !== 'updatedAt'),
         });
 
+        const summaryParts = [`Updated "${updatedEvent.title}"`];
+        if (removedAttendeesCount > 0) {
+          summaryParts.push(`removed ${removedAttendeesCount} attendee${removedAttendeesCount > 1 ? 's' : ''} due to PRIVATE visibility`);
+        }
+
         return {
           success: true,
           data: {
@@ -400,9 +429,10 @@ export const calendarWriteTools = {
             startAt: updatedEvent.startAt.toISOString(),
             endAt: updatedEvent.endAt.toISOString(),
           },
-          summary: `Updated "${updatedEvent.title}"`,
+          summary: summaryParts.join(', '),
           stats: {
             fieldsUpdated: Object.keys(updates).filter((k) => k !== 'updatedAt').length,
+            ...(removedAttendeesCount > 0 && { attendeesRemoved: removedAttendeesCount }),
           },
           nextSteps: [
             'Use get_calendar_event to see the updated event details',
