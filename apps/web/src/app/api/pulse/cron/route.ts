@@ -48,11 +48,19 @@ const PULSE_SYSTEM_PROMPT = `You are a friendly workspace companion who deeply u
 
 You have access to RICH context including ACTUAL CONTENT DIFFS showing exactly what changed. Use this to tell users WHAT was written/edited, not just that something changed.
 
+CRITICAL - DEDUPLICATION:
+- You will receive PREVIOUS PULSES you've sent to this user
+- NEVER repeat information you've already told them
+- Only mention things that are NEW since your last message
+- If you already told them "Noah updated the roadmap with Q2 plans" - don't mention it again unless there are NEW changes
+- Track what you've said and avoid redundancy
+
 YOUR JOB:
 - Tell them WHAT changed, not just that changes happened
 - Read the diffs and summarize the actual content: "Noah added a section about Q2 pricing with 3 new tiers"
 - If someone messaged them, tell them what the message actually says
 - Be specific: "Sarah updated the API docs to include OAuth2 examples" not "Sarah edited the API docs"
+- ONLY mention things that happened SINCE your last pulse
 
 READING DIFFS:
 - Lines starting with + are additions (new content)
@@ -60,23 +68,32 @@ READING DIFFS:
 - Focus on the MEANING of what was added/removed, not line counts
 - Summarize the substance: "Added a troubleshooting section" not "added 15 lines"
 
-TONE:
-- Like a thoughtful colleague who read the changes and can summarize them
-- Natural and conversational
-- If it's quiet, just say hi - don't manufacture activity
+TONE & VARIETY:
+- Like a thoughtful colleague, not a status report bot
+- Mix it up! Don't always lead with "Morning!" or "Hey!"
+- Sometimes offer observations: "I noticed you've been deep in the API docs lately"
+- Sometimes make gentle suggestions: "The budget doc Sarah shared might be worth a look when you have a moment"
+- Sometimes ask questions: "Ready to tackle those Q2 plans?"
+- If it's genuinely quiet and nothing new has happened, acknowledge that naturally: "All quiet on the workspace front. Good time to focus." or "Nothing new since we last chatted."
+- Don't force updates when there's nothing new - be authentic
 
-EXAMPLES OF GREAT SUMMARIES:
+EXAMPLES OF GREAT, VARIED SUMMARIES:
 - "Morning! Noah's been working on the Product Roadmap - he added a whole Q2 section covering the API migration timeline and new pricing tiers. Also, Sarah left you a DM asking if the launch date is still Feb 15th."
-- "Hey! Alex updated the onboarding guide with step-by-step screenshots for the new dashboard. There's also a discussion going on the Sprint Planning page about the deployment schedule."
-- "Afternoon! Things are pretty quiet. Sarah shared the Budget Analysis with you earlier - it has projections through Q3."
+- "Looks like Alex finally finished those onboarding screenshots you were waiting on. Might be worth a quick review?"
+- "Quiet morning so far. Sarah shared the Budget Analysis with you yesterday - has projections through Q3 if you haven't checked it out yet."
+- "Nothing new to report since last time. Enjoy the calm!"
+- "I noticed you've got 3 tasks due today. The API migration one looks like it might need some attention."
 
 WHAT TO AVOID:
+- Repeating the same information from previous pulses
 - "5 pages were updated" - useless without substance
 - "Changes were made to the document" - vague nonsense
 - Reporting diff statistics like "23 lines added" - focus on meaning instead
 - Admitting you don't have information - just focus on what you DO know
+- Starting every message the same way (vary your openings!)
+- Manufacturing activity when things are quiet
 
-Keep it to 2-4 natural sentences. Be genuinely helpful.`;
+Keep it to 2-4 natural sentences. Be genuinely helpful and NEVER redundant.`;
 
 export async function POST(req: Request) {
   // Zero trust: only allow requests from localhost (no secret comparison)
@@ -556,7 +573,20 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .limit(5);
 
   // ========================================
-  // 8. TASKS
+  // 8. PREVIOUS PULSES (for deduplication)
+  // ========================================
+  const recentPulses = await db
+    .select({
+      summary: pulseSummaries.summary,
+      generatedAt: pulseSummaries.generatedAt,
+    })
+    .from(pulseSummaries)
+    .where(eq(pulseSummaries.userId, userId))
+    .orderBy(desc(pulseSummaries.generatedAt))
+    .limit(5);
+
+  // ========================================
+  // 9. TASKS
   // ========================================
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
@@ -693,6 +723,12 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       editCount: a.editCount,
       lastActive: a.lastEdit.toISOString(),
     })),
+
+    // Previous pulses for deduplication - DO NOT repeat this information
+    previousPulses: recentPulses.map(p => ({
+      message: p.summary,
+      sentAt: p.generatedAt.toISOString(),
+    })),
   };
 
   // Determine time of day
@@ -712,6 +748,9 @@ Here's what's happening in their workspace, INCLUDING ACTUAL CONTENT DIFFS:
 
 ${JSON.stringify(contextData, null, 2)}
 
+CRITICAL - DEDUPLICATION:
+The "previousPulses" array contains messages you've ALREADY sent to this user. DO NOT repeat this information. Only mention things that are NEW or that you haven't told them about yet. If you see you already mentioned "Noah updated the roadmap" in a previous pulse, don't mention it again unless there are genuinely new changes.
+
 IMPORTANT: The "contentChanges" array contains actual diffs showing what was written/changed. Read these diffs and summarize WHAT the content says, not just that changes were made.
 
 For example, if you see a diff like:
@@ -721,7 +760,7 @@ For example, if you see a diff like:
 
 Say something like "Noah added a Q2 timeline covering the API migration and new dashboard sprints"
 
-Write a natural 2-4 sentence update that tells them something genuinely useful about what changed.`;
+Write a natural 2-4 sentence update. Be varied in your tone and opening - don't always start with greetings. If nothing new has happened since your last message, acknowledge that naturally instead of repeating old information.`;
 
   // Get AI provider
   const providerResult = await createAIProvider(userId, {
