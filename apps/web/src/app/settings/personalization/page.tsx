@@ -73,12 +73,8 @@ export default function PersonalizationSettingsPage() {
     try {
       await patch('/api/settings/personalization', { enabled });
       toast.success(enabled ? 'AI personalization enabled' : 'AI personalization disabled');
-      // Update SWR cache optimistically without revalidating to preserve unsaved form edits
-      mutate(
-        (current) =>
-          current ? { personalization: { ...current.personalization, enabled } } : current,
-        { revalidate: false }
-      );
+      // Update SWR cache with current formState (including unsaved edits) to prevent useEffect reset
+      mutate({ personalization: { ...formState, enabled } }, { revalidate: false });
     } catch (error) {
       // Revert on error
       setFormState((prev) => ({ ...prev, enabled: !enabled }));
@@ -241,7 +237,7 @@ export default function PersonalizationSettingsPage() {
       <Alert>
         <Info className="h-4 w-4" />
         <AlertDescription>
-          <strong>Privacy Note:</strong> Your personalization data is only used to customize AI responses within PageSpace. It is not shared with third parties or used for any other purpose.
+          <strong>Privacy Note:</strong> Your personalization data is included in AI prompts to customize responses. When using cloud AI providers, this data is sent to those services according to their privacy policies.
         </AlertDescription>
       </Alert>
     </div>
