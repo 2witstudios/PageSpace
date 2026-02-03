@@ -240,7 +240,7 @@ Remember: Only approve genuinely new, significant insights. Return JSON with dec
       });
 
       return decision;
-    } catch (parseError) {
+    } catch {
       loggers.api.warn('Memory integration: failed to parse decision', {
         userId,
         response: text.substring(0, 500),

@@ -225,7 +225,7 @@ describe('discovery-service', () => {
       ]);
 
       const { runDiscoveryPasses } = await import('../discovery-service');
-      const result = await runDiscoveryPasses('user-with-data');
+      await runDiscoveryPasses('user-with-data');
 
       // Should have called generateText 4 times (one per pass)
       assert({
