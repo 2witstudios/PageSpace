@@ -57,6 +57,15 @@ export async function PATCH(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
+
+    // Guard against non-object JSON bodies
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json(
+        { error: 'Invalid request body' },
+        { status: 400 }
+      );
+    }
+
     const { bio, writingStyle, rules, enabled } = body;
 
     // Validate that at least one field is provided
@@ -115,49 +124,30 @@ export async function PATCH(request: Request) {
     if (rules !== undefined) updateData.rules = rules;
     if (enabled !== undefined) updateData.enabled = enabled;
 
-    // Check if personalization exists
-    const existing = await db.query.userPersonalization.findFirst({
-      where: eq(userPersonalization.userId, userId),
+    // Atomic upsert to eliminate race condition with concurrent requests
+    const [record] = await db
+      .insert(userPersonalization)
+      .values({
+        userId,
+        bio: bio ?? '',
+        writingStyle: writingStyle ?? '',
+        rules: rules ?? '',
+        enabled: enabled ?? true,
+      })
+      .onConflictDoUpdate({
+        target: userPersonalization.userId,
+        set: updateData,
+      })
+      .returning();
+
+    return NextResponse.json({
+      personalization: {
+        bio: record.bio ?? '',
+        writingStyle: record.writingStyle ?? '',
+        rules: record.rules ?? '',
+        enabled: record.enabled,
+      },
     });
-
-    if (existing) {
-      // Update existing record
-      const [updated] = await db
-        .update(userPersonalization)
-        .set(updateData)
-        .where(eq(userPersonalization.userId, userId))
-        .returning();
-
-      return NextResponse.json({
-        personalization: {
-          bio: updated.bio ?? '',
-          writingStyle: updated.writingStyle ?? '',
-          rules: updated.rules ?? '',
-          enabled: updated.enabled,
-        },
-      });
-    } else {
-      // Create new record
-      const [created] = await db
-        .insert(userPersonalization)
-        .values({
-          userId,
-          bio: bio ?? '',
-          writingStyle: writingStyle ?? '',
-          rules: rules ?? '',
-          enabled: enabled ?? true,
-        })
-        .returning();
-
-      return NextResponse.json({
-        personalization: {
-          bio: created.bio ?? '',
-          writingStyle: created.writingStyle ?? '',
-          rules: created.rules ?? '',
-          enabled: created.enabled,
-        },
-      });
-    }
   } catch (error) {
     loggers.api.error('Error updating personalization settings:', error as Error);
     return NextResponse.json(
