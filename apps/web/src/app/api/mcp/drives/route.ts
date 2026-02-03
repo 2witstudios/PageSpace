@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
 
   // Check if this MCP token has drive scope restrictions
   // Scoped tokens cannot create new drives (they only have access to specific drives)
-  if (isMCPAuthResult(auth) && auth.allowedDriveIds.length > 0) {
+  if (isMCPAuthResult(auth) && (auth.allowedDriveIds?.length ?? 0) > 0) {
     return NextResponse.json(
       { error: 'This token is scoped to specific drives and cannot create new drives' },
       { status: 403 }
@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
     // Check if this MCP token has drive scope restrictions
     let allowedDriveIds: string[] = [];
     if (isMCPAuthResult(auth)) {
-      allowedDriveIds = auth.allowedDriveIds;
+      allowedDriveIds = auth.allowedDriveIds ?? [];
     }
 
     // Get all drives user has access to (owned + shared via membership)

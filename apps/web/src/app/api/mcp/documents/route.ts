@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
   // Get allowed drive IDs from token scope (empty means no restrictions)
   let allowedDriveIds: string[] = [];
   if (isMCPAuthResult(auth)) {
-    allowedDriveIds = auth.allowedDriveIds;
+    allowedDriveIds = auth.allowedDriveIds ?? [];
   }
 
   try {
