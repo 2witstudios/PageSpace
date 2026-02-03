@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache, agentAwarenessCache } from '@pagespace/lib/server';
 import { pages, db, eq, inArray } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -40,6 +40,20 @@ export async function DELETE(request: Request) {
 
     if (sourcePages.length !== pageIds.length) {
       return NextResponse.json({ error: 'Some pages not found' }, { status: 404 });
+    }
+
+    // Check MCP token scope for all source pages
+    const allowedDriveIds = getAllowedDriveIds(auth);
+    if (allowedDriveIds.length > 0) {
+      const allowedSet = new Set(allowedDriveIds);
+      for (const page of sourcePages) {
+        if (!allowedSet.has(page.driveId)) {
+          return NextResponse.json(
+            { error: 'This token does not have access to one or more pages' },
+            { status: 403 }
+          );
+        }
+      }
     }
 
     // Verify delete permissions for all pages
