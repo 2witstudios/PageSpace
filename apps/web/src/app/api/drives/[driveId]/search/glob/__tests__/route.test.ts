@@ -28,10 +28,11 @@ vi.mock('@pagespace/lib/server', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
 }));
 
 import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
