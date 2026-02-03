@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { FileText, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { stripLineNumbers, markdownToHtml, sanitizeHtmlAllowlist } from './content-utils';
@@ -61,28 +61,35 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
   maxHeight = 300,
   className
 }) {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
 
   // Process content: strip line numbers and convert markdown if needed
   const { processedHtml, hasHtmlContent } = useMemo(() => {
     // Strip line numbers if present
     const rawContent = stripLineNumbers(content);
 
-    // Convert markdown to HTML if needed
-    const html = isMarkdown ? markdownToHtml(rawContent) : rawContent;
+    // Check if content already looks like HTML (has actual HTML tags)
+    // This detects content from TipTap editor which outputs HTML
+    const contentIsHtml = /<[a-z][\s\S]*>/i.test(rawContent);
 
-    // Check if content looks like HTML
-    const isHtml = /<[a-z][\s\S]*>/i.test(html);
+    // Convert to HTML:
+    // - If content is already HTML, preserve it (markdownToHtml would escape the tags)
+    // - If content is not HTML (markdown or plain text), convert markdown to HTML
+    // - isMarkdown prop can force markdown conversion for edge cases
+    const html = (contentIsHtml && !isMarkdown) ? rawContent : markdownToHtml(rawContent);
+
+    // After conversion, check if we have HTML to render
+    const hasHtml = /<[a-z][\s\S]*>/i.test(html);
 
     // Sanitize HTML content using allowlist approach
-    const sanitized = isHtml ? sanitizeHtmlAllowlist(html) : html;
+    const sanitized = hasHtml ? sanitizeHtmlAllowlist(html) : html;
 
-    return { processedHtml: sanitized, hasHtmlContent: isHtml };
+    return { processedHtml: sanitized, hasHtmlContent: hasHtml };
   }, [content, isMarkdown]);
 
   const handleNavigate = () => {
     if (pageId) {
-      router.push(`/p/${pageId}`);
+      navigateToPage(pageId);
     }
   };
 

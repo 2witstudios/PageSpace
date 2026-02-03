@@ -91,25 +91,25 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
 
   return (
     <>
-    <div className="flex items-start gap-4 py-4 border-b last:border-b-0 group">
+    <div className="flex items-start gap-2 sm:gap-4 py-4 border-b last:border-b-0 group">
       {/* Avatar */}
-      <Avatar className="h-10 w-10 shrink-0">
+      <Avatar className="h-8 w-8 sm:h-10 sm:w-10 shrink-0">
         <AvatarImage src={actorImage || undefined} alt={actorName} />
         <AvatarFallback>{getInitials(activity.actorDisplayName, activity.actorEmail)}</AvatarFallback>
       </Avatar>
 
       {/* Content */}
-      <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium text-sm">{actorName}</span>
-          <Badge variant={opConfig.variant} className="text-xs">
+      <div className="flex-1 min-w-0 space-y-1 overflow-hidden">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+          <span className="font-medium text-sm truncate max-w-[120px] sm:max-w-none">{actorName}</span>
+          <Badge variant={opConfig.variant} className="text-xs shrink-0">
             <OpIcon className="h-3 w-3 mr-1" />
             {opConfig.label}
           </Badge>
           {activity.isAiGenerated && (
-            <Badge variant="outline" className="text-xs gap-1">
-              <Bot className="h-3 w-3" />
-              {getUserFacingModelName(activity.aiProvider, activity.aiModel)}
+            <Badge variant="outline" className="text-xs gap-1 max-w-[100px] sm:max-w-[150px]">
+              <Bot className="h-3 w-3 shrink-0" />
+              <span className="truncate">{getUserFacingModelName(activity.aiProvider, activity.aiModel)}</span>
             </Badge>
           )}
         </div>
@@ -130,9 +130,9 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
       </div>
 
       {/* Timestamp and Actions */}
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-1 sm:gap-2 shrink-0">
         <div className="text-xs text-muted-foreground shrink-0 text-right">
-          <div>{format(new Date(activity.timestamp), 'h:mm a')}</div>
+          <div className="hidden sm:block">{format(new Date(activity.timestamp), 'h:mm a')}</div>
           <div className="text-muted-foreground/60">
             {formatDistanceToNow(new Date(activity.timestamp), { addSuffix: true })}
           </div>

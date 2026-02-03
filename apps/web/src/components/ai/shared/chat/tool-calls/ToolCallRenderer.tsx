@@ -10,7 +10,7 @@ import { TaskRenderer } from './TaskRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
-import { DriveListRenderer, type DriveInfo } from './DriveListRenderer';
+import { DriveListRenderer } from './DriveListRenderer';
 import { ActionResultRenderer } from './ActionResultRenderer';
 import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
 import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
@@ -44,6 +44,85 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
     return value as Record<string, unknown>;
   }
   return null;
+};
+
+// Helper to parse list_pages paths format into tree structure
+// Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
+const parsePathsToTree = (paths: string[], _driveId?: string): TreeItem[] => {
+  const pathRegex = /^\S+\s+\[([^\]]+)\](?:\s+\(Task\))?\s+ID:\s+(\S+)\s+Path:\s+(.+)$/;
+
+  interface ParsedPage {
+    type: string;
+    pageId: string;
+    fullPath: string;
+    title: string;
+    pathSegments: string[];
+  }
+
+  const parsedPages: ParsedPage[] = [];
+
+  for (const path of paths) {
+    const match = path.match(pathRegex);
+    if (match) {
+      const [, type, pageId, fullPath] = match;
+      const segments = fullPath.split('/').filter(Boolean);
+      const title = segments[segments.length - 1] || 'Untitled';
+      parsedPages.push({
+        type,
+        pageId,
+        fullPath,
+        title,
+        pathSegments: segments,
+      });
+    }
+  }
+
+  // Build tree from parsed pages
+  // Use composite key (pageId + segment) to prevent duplicate titles from collapsing
+  const buildTreeFromParsed = (pages: ParsedPage[], depth: number, parentPath: string[]): TreeItem[] => {
+    const result: TreeItem[] = [];
+    const seen = new Map<string, { page?: ParsedPage; children: ParsedPage[] }>();
+
+    for (const page of pages) {
+      if (page.pathSegments.length <= depth) continue;
+
+      const currentSegment = page.pathSegments[depth];
+      const isDirectChild = page.pathSegments.length === depth + 1;
+      // Use composite key to prevent pages with same title from collapsing
+      const mapKey = isDirectChild ? `${currentSegment}:${page.pageId}` : currentSegment;
+
+      if (!seen.has(mapKey)) {
+        seen.set(mapKey, {
+          page: isDirectChild ? page : undefined,
+          children: []
+        });
+      }
+
+      const entry = seen.get(mapKey)!;
+      if (isDirectChild) {
+        entry.page = page;
+      } else {
+        entry.children.push(page);
+      }
+    }
+
+    for (const [, { page, children }] of seen) {
+      const currentPath = [...parentPath, page?.title || children[0]?.pathSegments[depth] || 'unknown'];
+      const item: TreeItem = {
+        path: '/' + currentPath.join('/'),
+        title: page?.title || children[0]?.pathSegments[depth] || 'Folder',
+        type: page?.type ?? 'FOLDER',
+        pageId: page?.pageId,
+        children: buildTreeFromParsed(children, depth + 1, currentPath),
+      };
+      result.push(item);
+    }
+
+    return result;
+  };
+
+  // Start building from depth 1 (skip drive slug at depth 0)
+  return buildTreeFromParsed(parsedPages, 1, []);
 };
 
 // Tool name mapping
@@ -162,7 +241,16 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
 
     // === DRIVE TOOLS ===
     if (toolName === 'list_drives' && parsedOutput.drives) {
-      return <DriveListRenderer drives={parsedOutput.drives as DriveInfo[]} />;
+      // Transform drive data: tool returns 'title' but renderer expects 'name'
+      const drives = (parsedOutput.drives as Array<{ id: string; slug: string; title?: string; name?: string; description?: string; isPersonal?: boolean; memberCount?: number }>).map(d => ({
+        id: d.id,
+        name: d.name || d.title || 'Untitled', // Prefer name, fall back to title
+        slug: d.slug,
+        description: d.description,
+        isPersonal: d.isPersonal,
+        memberCount: d.memberCount,
+      }));
+      return <DriveListRenderer drives={drives} />;
     }
 
     if (toolName === 'create_drive' || toolName === 'rename_drive') {
@@ -191,14 +279,31 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     }
 
     // === PAGE READ TOOLS ===
-    if (toolName === 'list_pages' && parsedOutput.tree) {
-      return (
-        <PageTreeRenderer
-          tree={parsedOutput.tree as TreeItem[]}
-          driveName={parsedOutput.driveName as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-        />
-      );
+    // Handle both tree format (newer) and paths format (current)
+    if (toolName === 'list_pages') {
+      if (parsedOutput.tree) {
+        return (
+          <PageTreeRenderer
+            tree={parsedOutput.tree as TreeItem[]}
+            driveName={parsedOutput.driveName as string | undefined}
+            driveId={parsedOutput.driveId as string | undefined}
+          />
+        );
+      }
+      // Convert paths array format to tree
+      if (parsedOutput.paths && Array.isArray(parsedOutput.paths)) {
+        const tree = parsePathsToTree(
+          parsedOutput.paths as string[],
+          parsedOutput.driveId as string | undefined
+        );
+        return (
+          <PageTreeRenderer
+            tree={tree}
+            driveName={(parsedOutput.driveName ?? parsedOutput.driveSlug) as string | undefined}
+            driveId={parsedOutput.driveId as string | undefined}
+          />
+        );
+      }
     }
 
     if (toolName === 'list_trash' && parsedOutput.tree) {
@@ -439,13 +544,89 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
     }
 
     // === ACTIVITY ===
-    if (toolName === 'get_activity' && parsedOutput.activities) {
-      return (
-        <ActivityRenderer
-          activities={parsedOutput.activities as ActivityItem[]}
-          period={parsedOutput.period as string | undefined}
-        />
-      );
+    // Handle both flat 'activities' format and grouped 'drives' format
+    if (toolName === 'get_activity') {
+      // Direct activities array format
+      if (parsedOutput.activities) {
+        return (
+          <ActivityRenderer
+            activities={parsedOutput.activities as ActivityItem[]}
+            period={parsedOutput.period as string | undefined}
+          />
+        );
+      }
+      // Grouped drives format from activity-tools.ts
+      if (parsedOutput.drives && Array.isArray(parsedOutput.drives)) {
+        const actors = (parsedOutput.actors || []) as Array<{ email: string; name: string | null; isYou: boolean; count: number }>;
+        const driveGroups = parsedOutput.drives as Array<{
+          drive: { id: string; name: string; slug: string; context: string | null };
+          activities: Array<{
+            id: string;
+            ts: string;
+            op: string;
+            res: string;
+            title: string | null;
+            pageId: string | null;
+            actor: number;
+            ai?: string;
+            fields?: string[];
+            delta?: Record<string, unknown>;
+          }>;
+          stats: { total: number; byOp: Record<string, number>; aiCount: number };
+        }>;
+
+        // Map operation names to action types
+        const opToAction = (op: string): 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'commented' | 'renamed' => {
+          switch (op) {
+            case 'create': return 'created';
+            case 'update': return 'updated';
+            case 'delete':
+            case 'trash': return 'deleted';
+            case 'restore': return 'restored';
+            case 'move':
+            case 'reorder': return 'moved';
+            case 'rename': return 'renamed';
+            default: return 'updated';
+          }
+        };
+
+        // Flatten grouped activities
+        const flatActivities: ActivityItem[] = [];
+        for (const group of driveGroups) {
+          for (const activity of group.activities) {
+            const actor = actors[activity.actor];
+            flatActivities.push({
+              id: activity.id,
+              action: opToAction(activity.op),
+              pageId: activity.pageId || undefined,
+              pageTitle: activity.title || undefined,
+              pageType: activity.res === 'page' ? undefined : activity.res,
+              driveId: group.drive.id,
+              driveName: group.drive.name,
+              actorName: actor?.name || actor?.email || undefined,
+              timestamp: activity.ts,
+              summary: activity.ai ? `AI-generated (${activity.ai})` : undefined,
+            });
+          }
+        }
+
+        // Sort by timestamp descending
+        flatActivities.sort((a, b) => {
+          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return timeB - timeA;
+        });
+
+        const meta = parsedOutput.meta as { window?: string } | undefined;
+        const period = meta?.window ? `Last ${meta.window}` : undefined;
+
+        return (
+          <ActivityRenderer
+            activities={flatActivities}
+            period={period}
+          />
+        );
+      }
     }
 
     // === TASK TOOLS ===

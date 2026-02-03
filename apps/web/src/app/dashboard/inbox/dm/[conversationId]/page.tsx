@@ -47,7 +47,7 @@ interface Conversation {
   };
 }
 
-export default function ConversationPage() {
+export default function InboxDMPage() {
   const params = useParams();
   const conversationId = params.conversationId as string;
   const { user } = useAuth();
@@ -72,7 +72,7 @@ export default function ConversationPage() {
     conversationId ? `/api/messages/${conversationId}` : null,
     fetcher,
     {
-      refreshInterval: 0, // We'll use socket.io for real-time updates
+      refreshInterval: 0,
     }
   );
 
@@ -82,11 +82,10 @@ export default function ConversationPage() {
     }
   }, [messagesData]);
 
-  // Socket room join and updates via global socket
+  // Socket room join and updates
   useEffect(() => {
     if (!user || !conversationId || !socket) return;
 
-    // Join conversation room
     socket.emit('join_dm_conversation', conversationId);
 
     const handleNewMessage = (message: Message) => {
@@ -110,7 +109,7 @@ export default function ConversationPage() {
     };
   }, [conversationId, user, socket]);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom
   useEffect(() => {
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
@@ -121,17 +120,14 @@ export default function ConversationPage() {
     if (!user || !conversationId || !inputValue.trim()) return;
 
     const content = inputValue;
-    setInputValue(''); // Clear input immediately
+    setInputValue('');
 
     try {
       await post(`/api/messages/${conversationId}`, { content });
-
-      // Message will be added via socket broadcast from server
-      // No need for optimistic update as it causes duplicates
     } catch (error) {
       toast.error('Failed to send message');
       console.error('Error sending message:', error);
-      setInputValue(content); // Restore input on error
+      setInputValue(content);
     }
   };
 
@@ -139,6 +135,7 @@ export default function ConversationPage() {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
+          <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-muted-foreground">Loading conversation...</p>
         </div>
       </div>
@@ -151,8 +148,8 @@ export default function ConversationPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="border-b border-border p-4">
-        <div className="flex items-center gap-3">
+      <div className="flex-shrink-0 border-b border-border p-4">
+        <div className="flex items-center gap-3 max-w-4xl mx-auto">
           <Avatar className="h-10 w-10">
             <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
@@ -170,62 +167,62 @@ export default function ConversationPage() {
       <div className="flex-grow overflow-hidden">
         <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <div className="space-y-4 max-w-4xl mx-auto">
-          {messages.map((message) => {
-            const isOwnMessage = message.senderId === user?.id;
-            const senderName = isOwnMessage ? 'You' : displayName;
-            const senderAvatar = isOwnMessage ? user?.name : displayName;
+            {messages.map((message) => {
+              const isOwnMessage = message.senderId === user?.id;
+              const senderName = isOwnMessage ? 'You' : displayName;
+              const senderAvatar = isOwnMessage ? user?.name : displayName;
 
-            return (
-              <div key={message.id} className="flex items-start gap-4">
-                <Avatar className="h-10 w-10 flex-shrink-0">
-                  {isOwnMessage ? (
-                    <AvatarFallback className="bg-primary text-primary-foreground">
-                      {senderAvatar?.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  ) : (
-                    <>
-                      <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
-                      <AvatarFallback>{senderAvatar?.charAt(0).toUpperCase()}</AvatarFallback>
-                    </>
-                  )}
-                </Avatar>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-semibold text-sm">{senderName}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(message.createdAt).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </span>
-                    {message.isEdited && (
-                      <span className="text-xs text-muted-foreground italic">(edited)</span>
+              return (
+                <div key={message.id} className="flex items-start gap-4">
+                  <Avatar className="h-10 w-10 flex-shrink-0">
+                    {isOwnMessage ? (
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        {senderAvatar?.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    ) : (
+                      <>
+                        <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
+                        <AvatarFallback>{senderAvatar?.charAt(0).toUpperCase()}</AvatarFallback>
+                      </>
                     )}
-                    {message.isRead && isOwnMessage && (
-                      <span className="text-xs text-muted-foreground">• Read</span>
-                    )}
-                  </div>
+                  </Avatar>
 
-                  <div className={`p-3 rounded-lg max-w-full ${
-                    isOwnMessage
-                      ? 'bg-primary/5 dark:bg-primary/10 ml-8'
-                      : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
-                  }`}>
-                    <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
-                      {renderMessageParts(convertToMessageParts(message.content))}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-sm">{senderName}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(message.createdAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                      {message.isEdited && (
+                        <span className="text-xs text-muted-foreground italic">(edited)</span>
+                      )}
+                      {message.isRead && isOwnMessage && (
+                        <span className="text-xs text-muted-foreground">Read</span>
+                      )}
+                    </div>
+
+                    <div className={`p-3 rounded-lg max-w-full ${
+                      isOwnMessage
+                        ? 'bg-primary/5 dark:bg-primary/10 ml-8'
+                        : 'bg-gray-50 dark:bg-gray-800/50 mr-8'
+                    }`}>
+                      <div className="text-gray-900 dark:text-gray-100 break-words [overflow-wrap:anywhere] min-w-0">
+                        {renderMessageParts(convertToMessageParts(message.content))}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
           </div>
         </ScrollArea>
       </div>
 
       {/* Input */}
-      <div className="border-t border-border p-4">
+      <div className="flex-shrink-0 border-t border-border p-4">
         <div className="max-w-4xl mx-auto">
           <ChannelInput
             ref={chatInputRef}

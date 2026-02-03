@@ -9,16 +9,22 @@ import type { InboxResponse } from '@pagespace/lib';
 
 interface UseInboxSocketOptions {
   driveId?: string;
+  hasLoadedRef?: React.MutableRefObject<boolean>;
 }
 
 /**
  * Hook that listens for inbox events (DM/channel updates) and updates the SWR cache.
  * Integrates with editing store to prevent updates during active editing sessions.
+ *
+ * @param hasLoadedRef - Optional ref to track if initial data has loaded. When provided,
+ *                       socket updates will only be processed after hasLoadedRef.current is true.
+ *                       This prevents socket events from racing with initial data fetches.
  */
-export function useInboxSocket({ driveId }: UseInboxSocketOptions = {}) {
+export function useInboxSocket({ driveId, hasLoadedRef: externalRef }: UseInboxSocketOptions = {}) {
   const socket = useSocket();
   const { mutate } = useSWRConfig();
-  const hasLoadedRef = useRef(false);
+  const internalRef = useRef(false);
+  const hasLoadedRef = externalRef ?? internalRef;
 
   // Build the SWR cache key
   const getCacheKey = useCallback(() => {
@@ -94,7 +100,7 @@ export function useInboxSocket({ driveId }: UseInboxSocketOptions = {}) {
       socket.off('inbox:channel_updated', handleInboxUpdate);
       socket.off('inbox:read_status_changed', handleInboxUpdate);
     };
-  }, [socket, getCacheKey, mutate]);
+  }, [socket, getCacheKey, mutate, hasLoadedRef]);
 
   return {
     hasLoadedRef,

@@ -1,5 +1,6 @@
-import { cleanupExpiredDeviceTokens, secureCompare } from '@pagespace/lib';
+import { cleanupExpiredDeviceTokens } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
+import { validateCronRequest } from '@/lib/auth/cron-auth';
 
 /**
  * Cron endpoint to cleanup expired device tokens
@@ -10,45 +11,20 @@ import { NextResponse } from 'next/server';
  * the database tidy and prevents unbounded growth.
  *
  * Authentication:
- * - Requires CRON_SECRET environment variable to be set
- * - Request must include: Authorization: Bearer <CRON_SECRET>
+ * - Zero-trust: only accessible from localhost (no secret comparison)
+ * - Must be called from within the same machine (docker network)
  *
- * Setup with Vercel Cron (vercel.json):
- * {
- *   "crons": [{
- *     "path": "/api/cron/cleanup-tokens",
- *     "schedule": "0 * * * *"
- *   }]
- * }
- *
- * Or use external cron service (cron-job.org, etc.) with:
- * curl -X GET https://your-domain.com/api/cron/cleanup-tokens \
- *   -H "Authorization: Bearer YOUR_CRON_SECRET"
+ * Trigger via:
+ * curl http://localhost:3000/api/cron/cleanup-tokens
  */
 export async function GET(request: Request) {
+  // Zero trust: only allow requests from localhost (no secret comparison)
+  const authError = validateCronRequest(request);
+  if (authError) {
+    return authError;
+  }
+
   try {
-    // Verify cron secret for security
-    const authHeader = request.headers.get('authorization');
-    const expectedAuth = process.env.CRON_SECRET;
-
-    if (!expectedAuth) {
-      console.error('CRON_SECRET environment variable not set');
-      return NextResponse.json(
-        { error: 'Cron secret not configured' },
-        { status: 500 }
-      );
-    }
-
-    // Use timing-safe comparison to prevent timing attacks
-    const expectedHeader = `Bearer ${expectedAuth}`;
-    if (!authHeader || !secureCompare(authHeader, expectedHeader)) {
-      console.warn('Unauthorized cron request attempt');
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
     // Execute cleanup
     const count = await cleanupExpiredDeviceTokens();
 
@@ -69,4 +45,9 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+// Also support POST for consistency with other cron endpoints
+export async function POST(request: Request) {
+  return GET(request);
 }

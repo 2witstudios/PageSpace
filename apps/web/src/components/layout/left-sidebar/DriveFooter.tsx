@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,7 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const createTab = useTabsStore((state) => state.createTab);
+  const { isNative } = useCapacitor();
 
   const { driveId: driveIdParams } = params;
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
@@ -118,36 +120,47 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
       </CollapsibleTrigger>
       <CollapsibleContent className="px-1 pb-2">
         <div className="space-y-0.5">
-          {actions.map((action) => (
-            <ContextMenu key={action.label}>
-              <ContextMenuTrigger asChild>
-                <Link
-                  href={action.href}
-                  onClick={(e) => handleLinkClick(e, action.href)}
-                  onAuxClick={(e) => {
-                    if (e.button === 1) {
-                      e.preventDefault();
-                      handleOpenInNewTab(action.href);
-                    }
-                  }}
-                  className={cn(
-                    "flex items-center gap-2.5 py-1.5 px-2 rounded-md text-sm transition-colors",
-                    "hover:bg-accent hover:text-accent-foreground",
-                    "text-muted-foreground"
-                  )}
-                >
-                  <action.icon className="h-4 w-4" />
-                  {action.label}
-                </Link>
-              </ContextMenuTrigger>
-              <ContextMenuContent>
-                <ContextMenuItem onSelect={() => handleOpenInNewTab(action.href)}>
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  Open in new tab
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          ))}
+          {actions.map((action) => {
+            const linkElement = (
+              <Link
+                href={action.href}
+                onClick={(e) => handleLinkClick(e, action.href)}
+                onAuxClick={isNative ? undefined : (e) => {
+                  if (e.button === 1) {
+                    e.preventDefault();
+                    handleOpenInNewTab(action.href);
+                  }
+                }}
+                className={cn(
+                  "flex items-center gap-2.5 py-1.5 px-2 rounded-md text-sm transition-colors",
+                  "hover:bg-accent hover:text-accent-foreground",
+                  "text-muted-foreground"
+                )}
+              >
+                <action.icon className="h-4 w-4" />
+                {action.label}
+              </Link>
+            );
+
+            // On native apps, don't show the context menu with "Open in new tab"
+            if (isNative) {
+              return <div key={action.label}>{linkElement}</div>;
+            }
+
+            return (
+              <ContextMenu key={action.label}>
+                <ContextMenuTrigger asChild>
+                  {linkElement}
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem onSelect={() => handleOpenInNewTab(action.href)}>
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    Open in new tab
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            );
+          })}
         </div>
       </CollapsibleContent>
     </Collapsible>

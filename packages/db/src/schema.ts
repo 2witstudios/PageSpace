@@ -22,6 +22,8 @@ export * from './schema/page-views';
 export * from './schema/hotkeys';
 export * from './schema/push-notifications';
 export * from './schema/integrations';
+export * from './schema/personalization';
+export * from './schema/calendar';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -47,6 +49,8 @@ import * as pageViews from './schema/page-views';
 import * as hotkeys from './schema/hotkeys';
 import * as pushNotifications from './schema/push-notifications';
 import * as integrations from './schema/integrations';
+import * as personalization from './schema/personalization';
+import * as calendar from './schema/calendar';
 
 export const schema = {
   ...auth,
@@ -73,4 +77,6 @@ export const schema = {
   ...hotkeys,
   ...pushNotifications,
   ...integrations,
+  ...personalization,
+  ...calendar,
 };

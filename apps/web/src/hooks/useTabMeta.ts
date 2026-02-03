@@ -144,15 +144,6 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
     };
   }
 
-  // Messages conversation
-  if (parsed.type === 'messages-conversation') {
-    return {
-      title: 'Conversation',
-      iconName: 'MessageSquare',
-      isLoading: false,
-    };
-  }
-
   // Fallback
   return {
     title: tab.path,

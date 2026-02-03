@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import {
   Activity,
   ExternalLink,
@@ -94,15 +94,11 @@ export const ActivityRenderer: React.FC<ActivityRendererProps> = memo(function A
   maxHeight = 400,
   className
 }) {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
 
   const handleNavigate = (pageId?: string, driveId?: string) => {
     if (!pageId) return;
-    if (driveId) {
-      router.push(`/dashboard/${driveId}/${pageId}`);
-    } else {
-      router.push(`/p/${pageId}`);
-    }
+    navigateToPage(pageId, driveId);
   };
 
   return (

@@ -80,9 +80,9 @@ export default function DriveSwitcher() {
   return (
     <>
       <DropdownMenu>
-        <div className="flex items-center gap-2 p-2">
+        <div className="flex items-center gap-2 px-2 py-1.5">
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground">
+            <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground -ml-2.5">
               <ChevronsUpDown className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
