@@ -22,6 +22,7 @@ vi.mock('@/lib/repositories/page-agent-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
 // Mock permissions (boundary)
@@ -84,7 +85,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
@@ -152,6 +153,9 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+    // Default: MCP scope check passes (returns null = allowed)
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
 
     // Default: agent exists
     vi.mocked(pageAgentRepository.getAgentById).mockResolvedValue(mockAgent());
