@@ -66,9 +66,6 @@ const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'conne
 // Drive-specific special routes
 const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'inbox'] as const;
 
-// Admin sub-pages
-const ADMIN_ROUTES = ['users', 'support', 'monitoring', 'audit-logs', 'global-prompt', 'tables'] as const;
-
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
 
