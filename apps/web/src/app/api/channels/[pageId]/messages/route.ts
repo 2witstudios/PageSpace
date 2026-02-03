@@ -153,10 +153,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Broadcast inbox update to channel members who have view permission
   try {
-    // Get channel's driveId
+    // Get channel's driveId and drive owner
     const channel = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
       columns: { driveId: true, title: true },
+      with: {
+        drive: {
+          columns: { ownerId: true },
+        },
+      },
     });
 
     if (channel?.driveId) {
@@ -165,6 +170,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         where: eq(driveMembers.driveId, channel.driveId),
         columns: { userId: true },
       });
+
+      // Include drive owner in recipient list (if not already a member)
+      const driveOwnerId = channel.drive?.ownerId;
+      const memberUserIds = new Set(members.map(m => m.userId));
+      if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
+        members.push({ userId: driveOwnerId });
+      }
 
       // Create message preview
       const messagePreview = content.length > 100

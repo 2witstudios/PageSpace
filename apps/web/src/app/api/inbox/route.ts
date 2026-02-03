@@ -48,10 +48,11 @@ export async function GET(request: Request) {
             d.name as drive_name
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
-          INNER JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
+            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
@@ -208,7 +209,7 @@ export async function GET(request: Request) {
         });
       }
 
-      // Fetch channels from all drives user is member of
+      // Fetch channels from all drives user is member of or owns
       const channelResults = await db.execute(sql`
         WITH user_channels AS (
           SELECT
@@ -218,9 +219,10 @@ export async function GET(request: Request) {
             d.name as drive_name
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
-          INNER JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
+            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
