@@ -3,7 +3,6 @@
 import { memo } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar, { type SidebarProps } from './index';
-import MessagesLeftSidebar from './MessagesLeftSidebar';
 import InboxSidebar from './InboxSidebar';
 
 /**
@@ -13,15 +12,16 @@ import InboxSidebar from './InboxSidebar';
  */
 const MemoizedSidebar = memo((props: SidebarProps) => {
   const pathname = usePathname();
-  const isMessagesRoute = pathname?.startsWith('/dashboard/messages');
+
+  // Check if on inbox routes (including dm and channel sub-routes)
   const isInboxRoute = pathname === '/dashboard/inbox' ||
+                       pathname?.startsWith('/dashboard/inbox/') ||
                        pathname?.match(/^\/dashboard\/[^/]+\/inbox$/);
 
-  if (isMessagesRoute) {
-    return <MessagesLeftSidebar {...props} />;
-  }
+  // Legacy messages route - redirect to inbox
+  const isMessagesRoute = pathname?.startsWith('/dashboard/messages');
 
-  if (isInboxRoute) {
+  if (isInboxRoute || isMessagesRoute) {
     return <InboxSidebar {...props} />;
   }
 

@@ -1,16 +1,20 @@
 'use client';
 
-import { MessageSquare } from 'lucide-react';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function MessagesPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace('/dashboard/inbox');
+  }, [router]);
+
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="text-center -mt-20">
-        <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-        <h2 className="text-xl font-semibold mb-2">Your Messages</h2>
-        <p className="text-muted-foreground">
-          Select a conversation from the sidebar or start a new one
-        </p>
+      <div className="text-center">
+        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-muted-foreground">Redirecting to inbox...</p>
       </div>
     </div>
   );
