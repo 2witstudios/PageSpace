@@ -19,9 +19,9 @@ import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
+import { useTabSync } from "@/hooks/useTabSync";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
-import { useTabSync } from "@/hooks/useTabSync";
 import {
   Sheet,
   SheetContent,
@@ -71,8 +71,7 @@ function Layout({ children }: LayoutProps) {
   // Initialize iOS keyboard listeners (sets --keyboard-height CSS var)
   useIOSKeyboardInit();
 
-  // Sync URL navigation with tabs store (must be in Layout, not CenterPanel,
-  // so it runs for both full-page routes and CenterPanel content)
+  // Keep tab store in sync for both CenterPanel routes and full-page dashboard routes.
   useTabSync();
 
   useEffect(() => {

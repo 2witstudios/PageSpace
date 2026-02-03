@@ -83,9 +83,9 @@ export function MonthView({ currentDate, events, tasks, handlers }: MonthViewPro
       </div>
 
       {/* Calendar grid */}
-      <div className="flex-1 grid grid-rows-[repeat(auto-fill,minmax(0,1fr))] overflow-auto">
+      <div className="flex-1 flex flex-col overflow-auto">
         {weeks.map((week, weekIndex) => (
-          <div key={weekIndex} className="grid grid-cols-7 border-b last:border-b-0">
+          <div key={weekIndex} className="flex-1 min-h-24 grid grid-cols-7 border-b last:border-b-0">
             {week.map((day) => {
               const dayEvents = getEventsForDay(events, day);
               const dayTasks = getTasksForDay(tasks, day);
