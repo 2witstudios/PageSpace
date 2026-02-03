@@ -32,7 +32,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
