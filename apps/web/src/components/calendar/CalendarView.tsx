@@ -182,6 +182,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           showTasks={showTasks}
           onShowTasksChange={setShowTasks}
           isLoading={isLoading}
+          currentDate={currentDate}
         />
         {/* Event modal - shared between mobile and desktop */}
         <EventModal
@@ -389,4 +390,3 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     </div>
   );
 }
-// CI trigger

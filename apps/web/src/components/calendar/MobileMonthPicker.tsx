@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   startOfMonth,
   endOfMonth,
@@ -15,6 +15,7 @@ import {
   addYears,
   subYears,
   setMonth,
+  setYear,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -51,6 +52,14 @@ export function MobileMonthPicker({
 }: MobileMonthPickerProps) {
   const [viewDate, setViewDate] = useState(selectedDate);
   const [pickerView, setPickerView] = useState<PickerView>('calendar');
+
+  // Reset viewDate to selectedDate when picker opens
+  useEffect(() => {
+    if (isOpen) {
+      setViewDate(selectedDate);
+      setPickerView('calendar');
+    }
+  }, [isOpen, selectedDate]);
 
   // Calculate calendar days for the current view
   const calendarDays = useMemo(() => {
@@ -107,9 +116,7 @@ export function MobileMonthPicker({
   };
 
   const handleYearSelect = (year: number) => {
-    const newDate = new Date(viewDate);
-    newDate.setFullYear(year);
-    setViewDate(newDate);
+    setViewDate(setYear(viewDate, year));
     setPickerView('months');
   };
 

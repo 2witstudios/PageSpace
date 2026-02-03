@@ -10,7 +10,6 @@ import {
   endOfMonth,
   eachDayOfInterval,
   isSameDay,
-  isToday as checkIsToday,
   isTomorrow,
   isYesterday,
 } from 'date-fns';
@@ -35,6 +34,7 @@ import {
   getTasksForDay,
   getEventColors,
   TASK_OVERLAY_STYLE,
+  isToday,
 } from './calendar-types';
 
 interface MobileCalendarViewProps {
@@ -44,6 +44,7 @@ interface MobileCalendarViewProps {
   showTasks: boolean;
   onShowTasksChange: (show: boolean) => void;
   isLoading?: boolean;
+  currentDate?: Date;
 }
 
 type MobileViewMode = 'day' | 'month';
@@ -55,9 +56,20 @@ export function MobileCalendarView({
   showTasks,
   onShowTasksChange,
   isLoading,
+  currentDate: parentDate,
 }: MobileCalendarViewProps) {
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date()));
+  const [selectedDate, setSelectedDate] = useState(() => parentDate ?? new Date());
+  const [currentWeekStart, setCurrentWeekStart] = useState(() =>
+    startOfWeek(parentDate ?? new Date())
+  );
+
+  // Sync with parent date when it changes externally
+  useEffect(() => {
+    if (parentDate && !isSameDay(parentDate, selectedDate)) {
+      setSelectedDate(parentDate);
+      setCurrentWeekStart(startOfWeek(parentDate));
+    }
+  }, [parentDate]);
   const [mobileView, setMobileView] = useState<MobileViewMode>('day');
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
 
@@ -74,11 +86,9 @@ export function MobileCalendarView({
 
   // Handle week change from week strip navigation
   const handleWeekChange = useCallback((date: Date) => {
-    setCurrentWeekStart(startOfWeek(date));
-    // Also select the same weekday in the new week
-    const dayOfWeek = selectedDate.getDay();
-    const newDate = startOfWeek(date);
-    newDate.setDate(newDate.getDate() + dayOfWeek);
+    const weekStart = startOfWeek(date);
+    setCurrentWeekStart(weekStart);
+    const newDate = addDays(weekStart, selectedDate.getDay());
     setSelectedDate(newDate);
     handlers.onDateChange(newDate);
   }, [selectedDate, handlers]);
@@ -191,6 +201,7 @@ export function MobileCalendarView({
                   : 'text-muted-foreground'
               )}
               title="Day view"
+              aria-label="Day view"
             >
               <CalendarDays className="h-4 w-4" />
             </button>
@@ -203,6 +214,7 @@ export function MobileCalendarView({
                   : 'text-muted-foreground'
               )}
               title="Month view"
+              aria-label="Month view"
             >
               <ListTodo className="h-4 w-4" />
             </button>
@@ -305,7 +317,7 @@ function MobileMonthAgenda({
   }, [selectedDate, events, tasks, showTasks]);
 
   const formatRelativeDate = (date: Date) => {
-    if (checkIsToday(date)) return 'Today';
+    if (isToday(date)) return 'Today';
     if (isTomorrow(date)) return 'Tomorrow';
     if (isYesterday(date)) return 'Yesterday';
     return format(date, 'EEEE, MMM d');
@@ -326,7 +338,7 @@ function MobileMonthAgenda({
     <div className="h-full overflow-auto">
       <div className="p-4 space-y-4">
         {dayGroups.map((group: { date: Date; events: CalendarEvent[]; tasks: TaskWithDueDate[] }) => {
-          const isTodayDate = checkIsToday(group.date);
+          const isTodayDate = isToday(group.date);
           const isSelected = isSameDay(group.date, selectedDate);
 
           return (
