@@ -157,7 +157,10 @@ export async function GET(
       let hasChanges = false;
       if (viewedAt) {
         // User has viewed this page before - check if it's been updated since
-        hasChanges = page.updatedAt > viewedAt;
+        // Use getTime() for robust timestamp comparison (handles Date objects and date strings)
+        const updatedAtTime = page.updatedAt instanceof Date ? page.updatedAt.getTime() : new Date(page.updatedAt).getTime();
+        const viewedAtTime = viewedAt instanceof Date ? viewedAt.getTime() : new Date(viewedAt).getTime();
+        hasChanges = updatedAtTime > viewedAtTime;
       } else if (page.createdAt > UNREAD_INDICATOR_CUTOFF_DATE) {
         // User has never viewed this page - show as unread only if created after cutoff
         hasChanges = true;
