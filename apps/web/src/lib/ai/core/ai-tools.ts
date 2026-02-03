@@ -7,6 +7,8 @@ import { agentTools } from '../tools/agent-tools';
 import { agentCommunicationTools } from '../tools/agent-communication-tools';
 import { webSearchTools } from '../tools/web-search-tools';
 import { activityTools } from '../tools/activity-tools';
+import { calendarReadTools } from '../tools/calendar-read-tools';
+import { calendarWriteTools } from '../tools/calendar-write-tools';
 
 /**
  * PageSpace AI Tools - Internal AI SDK tool implementations
@@ -23,6 +25,8 @@ export const pageSpaceTools = {
   ...agentCommunicationTools,
   ...webSearchTools,
   ...activityTools,
+  ...calendarReadTools,
+  ...calendarWriteTools,
 };
 
 export type PageSpaceTools = typeof pageSpaceTools;
