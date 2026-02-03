@@ -603,21 +603,21 @@ describe('calendar-write-tools', () => {
       assert({
         given: 'visibility change to PRIVATE',
         should: 'return success with attendee removal info',
-        actual: result.success,
+        actual: (result as { success: boolean }).success,
         expected: true,
       });
 
       assert({
         given: 'visibility change to PRIVATE with attendees',
         should: 'include attendeesRemoved in stats',
-        actual: (result.stats as { attendeesRemoved?: number }).attendeesRemoved,
+        actual: (result as { stats: { attendeesRemoved?: number } }).stats.attendeesRemoved,
         expected: 2,
       });
 
       assert({
         given: 'visibility change to PRIVATE',
         should: 'mention removed attendees in summary',
-        actual: result.summary?.includes('removed'),
+        actual: (result as { summary?: string }).summary?.includes('removed'),
         expected: true,
       });
     });
