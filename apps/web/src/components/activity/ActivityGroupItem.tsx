@@ -83,7 +83,7 @@ export function ActivityGroupItem({
     <>
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         {/* Group Header */}
-        <div className="flex items-center gap-4 py-4 border-b group">
+        <div className="flex items-center gap-2 sm:gap-4 py-4 border-b group">
           {/* Expand/Collapse button */}
           <CollapsibleTrigger asChild>
             <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
@@ -97,7 +97,7 @@ export function ActivityGroupItem({
           </CollapsibleTrigger>
 
           {/* Avatar */}
-          <Avatar className="h-10 w-10 shrink-0">
+          <Avatar className="h-8 w-8 sm:h-10 sm:w-10 shrink-0">
             <AvatarImage src={summary.actorImage || undefined} alt={summary.actorName} />
             <AvatarFallback>
               {getInitials(summary.actorName, summary.actorName)}
@@ -105,10 +105,10 @@ export function ActivityGroupItem({
           </Avatar>
 
           {/* Content */}
-          <div className="flex-1 min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium text-sm">{summary.actorName}</span>
-              <Badge variant={badgeVariant} className="text-xs">
+          <div className="flex-1 min-w-0 space-y-1 overflow-hidden">
+            <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+              <span className="font-medium text-sm truncate max-w-[100px] sm:max-w-none">{summary.actorName}</span>
+              <Badge variant={badgeVariant} className="text-xs shrink-0">
                 <GroupIcon className="h-3 w-3 mr-1" />
                 {summary.label}
               </Badge>
@@ -120,9 +120,9 @@ export function ActivityGroupItem({
           </div>
 
           {/* Timestamp and Actions */}
-          <div className="flex items-start gap-2">
+          <div className="flex items-start gap-1 sm:gap-2 shrink-0">
             <div className="text-xs text-muted-foreground shrink-0 text-right">
-              <div>{format(new Date(summary.timestamp), 'h:mm a')}</div>
+              <div className="hidden sm:block">{format(new Date(summary.timestamp), 'h:mm a')}</div>
               <div className="text-muted-foreground/60">
                 {formatDistanceToNow(new Date(summary.timestamp), { addSuffix: true })}
               </div>
@@ -153,7 +153,7 @@ export function ActivityGroupItem({
 
         {/* Expanded Content - Individual Activities */}
         <CollapsibleContent>
-          <div className="pl-10 border-l-2 border-muted ml-5">
+          <div className="pl-4 sm:pl-10 border-l-2 border-muted ml-3 sm:ml-5">
             {activities.map((activity) => (
               <ActivityItem
                 key={activity.id}

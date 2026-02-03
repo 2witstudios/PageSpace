@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, drives, eq } from '@pagespace/db';
+import { db, drives } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 
 // Schema for drive creation
 const createDriveSchema = z.object({
@@ -16,6 +17,15 @@ export async function POST(req: NextRequest) {
   const auth = await authenticateMCPRequest(req);
   if (isAuthError(auth)) {
     return auth.error;
+  }
+
+  // Check if this MCP token has drive scope restrictions
+  // Scoped tokens cannot create new drives (they only have access to specific drives)
+  if (isMCPAuthResult(auth) && (auth.allowedDriveIds?.length ?? 0) > 0) {
+    return NextResponse.json(
+      { error: 'This token is scoped to specific drives and cannot create new drives' },
+      { status: 403 }
+    );
   }
 
   try {
@@ -66,7 +76,8 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET endpoint to list drives (for completeness)
+// GET endpoint to list drives
+// Zero Trust: Returns all drives user has access to (owned + shared), filtered by token scope
 export async function GET(req: NextRequest) {
   const auth = await authenticateMCPRequest(req);
   if (isAuthError(auth)) {
@@ -75,12 +86,28 @@ export async function GET(req: NextRequest) {
 
   try {
     const userId = auth.userId;
-    // Get user's drives
-    const userDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
-    });
 
-    return NextResponse.json(userDrives);
+    // Check if this MCP token has drive scope restrictions
+    let allowedDriveIds: string[] = [];
+    if (isMCPAuthResult(auth)) {
+      allowedDriveIds = auth.allowedDriveIds ?? [];
+    }
+
+    // Get all drives user has access to (owned + shared via membership)
+    const allAccessibleDrives = await listAccessibleDrives(userId);
+
+    // Filter by token scope if applicable
+    let filteredDrives;
+    if (allowedDriveIds.length > 0) {
+      // Token is scoped to specific drives - only return those the user can access
+      const scopeSet = new Set(allowedDriveIds);
+      filteredDrives = allAccessibleDrives.filter(drive => scopeSet.has(drive.id));
+    } else {
+      // Token has no scope restrictions - return all accessible drives
+      filteredDrives = allAccessibleDrives;
+    }
+
+    return NextResponse.json(filteredDrives);
   } catch (error) {
     loggers.api.error('Error fetching drives:', error as Error);
     return NextResponse.json(

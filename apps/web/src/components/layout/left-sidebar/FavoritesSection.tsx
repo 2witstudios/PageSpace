@@ -17,6 +17,7 @@ import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import { useFavorites } from "@/hooks/useFavorites";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { cn } from "@/lib/utils";
 import type { PageType } from "@pagespace/lib/client-safe";
 import { toast } from "sonner";
@@ -27,6 +28,7 @@ export default function FavoritesSection() {
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const createTab = useTabsStore((state) => state.createTab);
+  const { isNative } = useCapacitor();
 
   useEffect(() => {
     if (!isSynced) {
@@ -90,6 +92,7 @@ export default function FavoritesSection() {
               onNavigate={(e) => handleNavigate(href, e)}
               onOpenInNewTab={() => handleOpenInNewTab(href)}
               onRemove={() => handleRemoveFavorite(favorite.id)}
+              isNative={isNative}
             />
           );
         })}
@@ -117,9 +120,10 @@ interface FavoriteItemProps {
   onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
   onOpenInNewTab: () => void;
   onRemove: () => void;
+  isNative: boolean;
 }
 
-function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove }: FavoriteItemProps) {
+function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative }: FavoriteItemProps) {
   const [isHovered, setIsHovered] = useState(false);
 
   const title =
@@ -138,7 +142,7 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove }: Favori
     >
       <button
         onClick={onNavigate}
-        onAuxClick={(e) => {
+        onAuxClick={isNative ? undefined : (e) => {
           if (e.button === 1) {
             e.preventDefault();
             onOpenInNewTab();
@@ -183,10 +187,12 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove }: Favori
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem onSelect={onOpenInNewTab}>
-            <ExternalLink className="mr-2 h-4 w-4" />
-            Open in new tab
-          </DropdownMenuItem>
+          {!isNative && (
+            <DropdownMenuItem onSelect={onOpenInNewTab}>
+              <ExternalLink className="mr-2 h-4 w-4" />
+              Open in new tab
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             onSelect={onRemove}
             className="text-muted-foreground"

@@ -5,7 +5,7 @@ import { z } from 'zod/v4';
 import prettier from 'prettier';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
@@ -98,17 +98,49 @@ export async function POST(req: NextRequest) {
   }
   const userId = auth.userId;
 
+  // Get allowed drive IDs from token scope (empty means no restrictions)
+  let allowedDriveIds: string[] = [];
+  if (isMCPAuthResult(auth)) {
+    allowedDriveIds = auth.allowedDriveIds ?? [];
+  }
+
   try {
     const body = await req.json();
     const { operation, pageId: providedPageId, startLine, endLine, content, cells } = lineOperationSchema.parse(body);
-    
+
     // Get the page ID (use provided or get current)
     const pageId = providedPageId || await getCurrentPageId(userId);
-    
+
     if (!pageId) {
       return NextResponse.json({ error: 'No active document found' }, { status: 404 });
     }
-    
+
+    // Check drive scope restrictions before permission check
+    if (allowedDriveIds.length > 0) {
+      // Get the page's drive ID to check scope
+      const pageInfo = await db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { driveId: true },
+      });
+
+      if (!pageInfo) {
+        return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+      }
+
+      if (!allowedDriveIds.includes(pageInfo.driveId)) {
+        loggers.api.warn('MCP document access denied - drive not in token scope', {
+          userId,
+          pageId,
+          pageDriveId: pageInfo.driveId,
+          allowedDriveIds,
+        });
+        return NextResponse.json(
+          { error: 'This token does not have access to this drive' },
+          { status: 403 }
+        );
+      }
+    }
+
     // Check user permissions - Zero Trust: explicitly verify view permission
     const accessLevel = await getUserAccessLevel(userId, pageId);
     if (!accessLevel || !accessLevel.canView) {

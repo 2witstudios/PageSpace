@@ -2,11 +2,17 @@
 
 import { useRef, useEffect, useState, useCallback } from "react";
 import useSWR from "swr";
-import { RefreshCw } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import type { PulseResponse } from "@/app/api/pulse/route";
+import { useLayoutStore } from "@/stores/useLayoutStore";
 import { cn } from "@/lib/utils";
 
 const fetcher = async (url: string) => {
@@ -18,6 +24,8 @@ const fetcher = async (url: string) => {
 export default function Pulse() {
   const [isGenerating, setIsGenerating] = useState(false);
   const hasAutoRefreshed = useRef(false);
+  const pulseCollapsed = useLayoutStore((state) => state.pulseCollapsed);
+  const setPulseCollapsed = useLayoutStore((state) => state.setPulseCollapsed);
 
   const { data, error, isLoading, mutate } = useSWR<PulseResponse>(
     "/api/pulse",
@@ -72,60 +80,79 @@ export default function Pulse() {
   }
 
   return (
-    <div className="rounded-lg border border-[var(--separator)] bg-card/50 p-3">
-      {/* AI Summary Section */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium">
-            Pulse
-          </h4>
+    <Collapsible
+      open={!pulseCollapsed}
+      onOpenChange={(open) => setPulseCollapsed(!open)}
+      className="rounded-lg border border-[var(--separator)] bg-card/50"
+    >
+      <div className="flex items-center justify-between px-3 py-2">
+        <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            size="icon"
-            className="h-5 w-5"
-            onClick={handleRefresh}
-            disabled={isGenerating}
-            title="Refresh summary"
+            className="flex-1 justify-start gap-2 px-0 h-auto font-normal hover:bg-transparent"
           >
-            <RefreshCw className={cn("h-3 w-3", isGenerating && "animate-spin")} />
+            <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium">
+              Pulse
+            </h4>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 text-muted-foreground/60 transition-transform duration-200",
+                !pulseCollapsed && "rotate-180"
+              )}
+            />
           </Button>
-        </div>
-
-        {isGenerating ? (
-          <div className="space-y-1.5">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-4/5" />
-            <Skeleton className="h-4 w-3/5" />
-          </div>
-        ) : summary ? (
-          <p className="text-sm text-foreground/90 leading-relaxed">
-            {summary.text}
-          </p>
-        ) : null}
-
-        {summary && !isGenerating && summary.isStale && (
-          <p className="text-[10px] text-muted-foreground/50 italic">
-            Updated {formatRelativeTime(summary.generatedAt)}
-          </p>
-        )}
+        </CollapsibleTrigger>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-5 w-5 shrink-0"
+          onClick={handleRefresh}
+          disabled={isGenerating}
+          title="Refresh summary"
+          aria-label="Refresh summary"
+        >
+          <RefreshCw className={cn("h-3 w-3", isGenerating && "animate-spin")} />
+        </Button>
       </div>
-    </div>
+      <CollapsibleContent className="px-3 pb-3">
+        <div className="space-y-2">
+          {isGenerating ? (
+            <div className="space-y-1.5">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-4/5" />
+              <Skeleton className="h-4 w-3/5" />
+            </div>
+          ) : summary ? (
+            <p className="text-sm text-foreground/90 leading-relaxed">
+              {summary.text}
+            </p>
+          ) : null}
+
+          {summary && !isGenerating && summary.isStale && (
+            <p className="text-[10px] text-muted-foreground/50 italic">
+              Updated {formatRelativeTime(summary.generatedAt)}
+            </p>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
 function PulseSkeleton() {
   return (
-    <div className="rounded-lg border border-[var(--separator)] bg-card/50 p-3">
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-3 w-12" />
+    <div className="rounded-lg border border-[var(--separator)] bg-card/50">
+      <div className="flex items-center justify-between px-3 py-2">
+        <Skeleton className="h-3 w-12" />
+        <div className="flex items-center gap-1">
           <Skeleton className="h-5 w-5 rounded" />
+          <Skeleton className="h-4 w-4 rounded" />
         </div>
-        <div className="space-y-1.5">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-4/5" />
-          <Skeleton className="h-4 w-3/5" />
-        </div>
+      </div>
+      <div className="px-3 pb-3 space-y-1.5">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-4/5" />
+        <Skeleton className="h-4 w-3/5" />
       </div>
     </div>
   );

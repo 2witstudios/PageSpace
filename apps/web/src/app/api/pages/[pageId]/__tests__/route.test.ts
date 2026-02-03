@@ -26,6 +26,8 @@ vi.mock('@/services/api', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  // MCP scope check - returns null (allowed) by default for session auth tests
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/websocket', () => ({

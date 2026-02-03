@@ -78,6 +78,25 @@ vi.mock('../../tools/activity-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/calendar-read-tools', () => ({
+  calendarReadTools: {
+    list_calendar_events: { name: 'list_calendar_events', description: 'List calendar events' },
+    get_calendar_event: { name: 'get_calendar_event', description: 'Get calendar event' },
+    check_calendar_availability: { name: 'check_calendar_availability', description: 'Check calendar availability' },
+  },
+}));
+
+vi.mock('../../tools/calendar-write-tools', () => ({
+  calendarWriteTools: {
+    create_calendar_event: { name: 'create_calendar_event', description: 'Create calendar event' },
+    update_calendar_event: { name: 'update_calendar_event', description: 'Update calendar event' },
+    delete_calendar_event: { name: 'delete_calendar_event', description: 'Delete calendar event' },
+    rsvp_calendar_event: { name: 'rsvp_calendar_event', description: 'RSVP to calendar event' },
+    invite_calendar_attendees: { name: 'invite_calendar_attendees', description: 'Invite attendees' },
+    remove_calendar_attendee: { name: 'remove_calendar_attendee', description: 'Remove attendee' },
+  },
+}));
+
 import { pageSpaceTools } from '../ai-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
@@ -88,6 +107,8 @@ import { agentTools } from '../../tools/agent-tools';
 import { agentCommunicationTools } from '../../tools/agent-communication-tools';
 import { webSearchTools } from '../../tools/web-search-tools';
 import { activityTools } from '../../tools/activity-tools';
+import { calendarReadTools } from '../../tools/calendar-read-tools';
+import { calendarWriteTools } from '../../tools/calendar-write-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -102,6 +123,8 @@ describe('ai-tools', () => {
         ...agentCommunicationTools,
         ...webSearchTools,
         ...activityTools,
+        ...calendarReadTools,
+        ...calendarWriteTools,
       });
     });
 
@@ -116,6 +139,8 @@ describe('ai-tools', () => {
         Object.keys(agentCommunicationTools),
         Object.keys(webSearchTools),
         Object.keys(activityTools),
+        Object.keys(calendarReadTools),
+        Object.keys(calendarWriteTools),
       ];
 
       const allKeys = moduleKeysets.flat();

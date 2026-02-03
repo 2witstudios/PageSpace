@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { FileText, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { stripLineNumbers, markdownToHtml, sanitizeHtmlAllowlist } from './content-utils';
@@ -61,7 +61,7 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
   maxHeight = 300,
   className
 }) {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
 
   // Process content: strip line numbers and convert markdown if needed
   const { processedHtml, hasHtmlContent } = useMemo(() => {
@@ -89,7 +89,7 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
 
   const handleNavigate = () => {
     if (pageId) {
-      router.push(`/p/${pageId}`);
+      navigateToPage(pageId);
     }
   };
 

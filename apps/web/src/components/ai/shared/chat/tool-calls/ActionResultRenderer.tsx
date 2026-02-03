@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import {
   CheckCircle,
   XCircle,
@@ -79,15 +79,13 @@ export const ActionResultRenderer: React.FC<ActionResultRendererProps> = memo(fu
   message,
   className
 }) {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
   const config = ACTION_CONFIG[actionType] || ACTION_CONFIG.update;
   const ActionIcon = config.icon;
 
   const handleNavigate = () => {
-    if (pageId && driveId) {
-      router.push(`/dashboard/${driveId}/${pageId}`);
-    } else if (pageId) {
-      router.push(`/p/${pageId}`);
+    if (pageId) {
+      navigateToPage(pageId, driveId);
     }
   };
 

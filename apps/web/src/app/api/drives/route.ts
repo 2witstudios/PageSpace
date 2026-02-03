@@ -3,7 +3,7 @@ import { listAccessibleDrives, createDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPCreateScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -21,9 +21,15 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const includeTrash = url.searchParams.get('includeTrash') === 'true';
+  const tokenScopable = url.searchParams.get('tokenScopable') === 'true';
 
   try {
-    const drives = await listAccessibleDrives(userId, { includeTrash });
+    const allDrives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+
+    // Filter drives by MCP token scope (no-op for session auth or unscoped tokens)
+    const allowedDriveIds = filterDrivesByMCPScope(auth, allDrives.map(d => d.id));
+    const allowedSet = new Set(allowedDriveIds);
+    const drives = allDrives.filter(d => allowedSet.has(d.id));
 
     loggers.api.debug('[DEBUG] Drives API - Found drives:', {
       count: drives.length,
@@ -41,6 +47,12 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
+  }
+
+  // Scoped MCP tokens cannot create new drives
+  const scopeError = checkMCPCreateScope(auth, null);
+  if (scopeError) {
+    return scopeError;
   }
 
   const userId = auth.userId;

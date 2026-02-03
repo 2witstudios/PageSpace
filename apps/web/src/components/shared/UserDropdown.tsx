@@ -19,7 +19,7 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, CreditCard } from 'lucide-react';
+import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, CreditCard, Sparkles } from 'lucide-react';
 import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import useSWR from 'swr';
@@ -106,6 +106,10 @@ export default function UserDropdown() {
           <DropdownMenuItem onClick={() => router.push('/settings/account')}>
             <LayoutDashboard className="mr-2 h-4 w-4" />
             <span>Account</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => router.push('/settings/personalization')}>
+            <Sparkles className="mr-2 h-4 w-4" />
+            <span>Personalization</span>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => router.push('/dashboard/storage')}>
             <HardDrive className="mr-2 h-4 w-4" />

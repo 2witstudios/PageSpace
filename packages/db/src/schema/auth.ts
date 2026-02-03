@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
@@ -94,6 +94,9 @@ export const mcpTokens = pgTable('mcp_tokens', {
   tokenPrefix: text('tokenPrefix').notNull(),
 
   name: text('name').notNull(),
+  // Fail-closed security: if true and driveScopes is empty (all drives deleted), deny all access
+  // Default false for backward compatibility with existing tokens
+  isScoped: boolean('isScoped').notNull().default(false),
   lastUsed: timestamp('lastUsed', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   revokedAt: timestamp('revokedAt', { mode: 'date' }),
@@ -101,6 +104,24 @@ export const mcpTokens = pgTable('mcp_tokens', {
   return {
     userIdx: index('mcp_tokens_user_id_idx').on(table.userId),
     tokenHashIdx: index('mcp_tokens_token_hash_idx').on(table.tokenHash),
+  };
+});
+
+// Junction table for MCP token drive scopes
+// If a token has no entries here, it has access to ALL user's drives (backward compatible)
+// If a token has entries here, it ONLY has access to those specific drives
+import { drives } from './core';
+
+export const mcpTokenDrives = pgTable('mcp_token_drives', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  tokenId: text('tokenId').notNull().references(() => mcpTokens.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    tokenIdx: index('mcp_token_drives_token_id_idx').on(table.tokenId),
+    driveIdx: index('mcp_token_drives_drive_id_idx').on(table.driveId),
+    tokenDriveUnique: uniqueIndex('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
   };
 });
 
@@ -164,10 +185,22 @@ export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
   }),
 }));
 
-export const mcpTokensRelations = relations(mcpTokens, ({ one }) => ({
+export const mcpTokensRelations = relations(mcpTokens, ({ one, many }) => ({
   user: one(users, {
     fields: [mcpTokens.userId],
     references: [users.id],
+  }),
+  driveScopes: many(mcpTokenDrives),
+}));
+
+export const mcpTokenDrivesRelations = relations(mcpTokenDrives, ({ one }) => ({
+  token: one(mcpTokens, {
+    fields: [mcpTokenDrives.tokenId],
+    references: [mcpTokens.id],
+  }),
+  drive: one(drives, {
+    fields: [mcpTokenDrives.driveId],
+    references: [drives.id],
   }),
 }));
 

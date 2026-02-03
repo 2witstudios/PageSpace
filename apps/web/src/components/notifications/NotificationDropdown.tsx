@@ -198,7 +198,7 @@ export default function NotificationDropdown() {
                           'conversationId' in notification.metadata) {
                         // Navigate to the direct message conversation
                         setIsDropdownOpen(false);
-                        router.push(`/dashboard/messages/${notification.metadata.conversationId}`);
+                        router.push(`/dashboard/inbox/dm/${notification.metadata.conversationId}`);
                       } else if ((notification.type === 'MENTION' || notification.type === 'TASK_ASSIGNED') &&
                           notification.pageId &&
                           notification.driveId) {

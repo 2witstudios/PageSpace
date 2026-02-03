@@ -102,6 +102,7 @@ async function getLastVisitTime(userId: string): Promise<Date | undefined> {
 
 // Compact activity format optimized for AI context efficiency
 interface CompactActivity {
+  id: string;              // CUID2 activity ID from database
   ts: string;              // ISO timestamp
   op: string;              // operation
   res: string;             // resourceType
@@ -512,6 +513,7 @@ When summarizing multiple changes, group them thematically and describe the over
           // Build compact activity
           const actorIdx = actorMap.get(activity.actorEmail)!.idx;
           const compact: CompactActivity = {
+            id: activity.id,
             ts: activity.timestamp.toISOString(),
             op: activity.operation,
             res: activity.resourceType,
