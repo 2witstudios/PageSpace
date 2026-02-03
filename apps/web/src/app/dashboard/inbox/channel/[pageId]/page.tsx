@@ -84,9 +84,17 @@ export default function InboxChannelPage() {
   useEffect(() => {
     const fetchMessages = async () => {
       if (!pageId) return;
-      const res = await fetchWithAuth(`/api/channels/${pageId}/messages`);
-      const data = await res.json();
-      setMessages(data);
+      try {
+        const res = await fetchWithAuth(`/api/channels/${pageId}/messages`);
+        if (!res.ok) {
+          throw new Error(`Failed to fetch messages: ${res.status}`);
+        }
+        const data = await res.json();
+        setMessages(data);
+      } catch (error) {
+        console.error('Error fetching messages:', error);
+        setMessages([]);
+      }
     };
     fetchMessages();
   }, [pageId]);
@@ -195,6 +203,9 @@ export default function InboxChannelPage() {
   const handleRefresh = useCallback(async () => {
     try {
       const res = await fetchWithAuth(`/api/channels/${pageId}/messages`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch messages: ${res.status}`);
+      }
       const data = await res.json();
       setMessages(data);
     } catch (error) {

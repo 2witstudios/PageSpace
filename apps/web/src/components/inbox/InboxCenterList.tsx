@@ -42,7 +42,8 @@ export default function InboxCenterList({ driveId }: InboxCenterListProps) {
     : '/api/inbox?limit=20';
 
   // Socket integration for real-time updates
-  useInboxSocket({ driveId });
+  // Pass hasLoadedRef so socket events only process after initial data loads
+  useInboxSocket({ driveId, hasLoadedRef });
 
   const { data, error, isLoading } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,
