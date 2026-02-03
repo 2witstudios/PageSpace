@@ -13,12 +13,12 @@ import InboxSidebar from './InboxSidebar';
 const MemoizedSidebar = memo((props: SidebarProps) => {
   const pathname = usePathname();
 
-  // Check if on inbox routes (including dm and channel sub-routes)
-  const isInboxRoute = pathname === '/dashboard/inbox' ||
-                       pathname?.startsWith('/dashboard/inbox/') ||
-                       pathname?.match(/^\/dashboard\/[^/]+\/inbox$/);
+  // Only show InboxSidebar when viewing a conversation (DM or channel)
+  // The inbox list view uses the regular dashboard sidebar
+  const isInboxConversation = pathname?.startsWith('/dashboard/inbox/dm/') ||
+                              pathname?.startsWith('/dashboard/inbox/channel/');
 
-  if (isInboxRoute) {
+  if (isInboxConversation) {
     return <InboxSidebar {...props} />;
   }
 
