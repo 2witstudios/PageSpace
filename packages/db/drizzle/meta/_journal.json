@@ -449,6 +449,13 @@
       "when": 1770076445757,
       "tag": "0063_fast_felicia_hardy",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1770081166151,
+      "tag": "0064_curious_tigra",
+      "breakpoints": true
     }
   ]
 }
