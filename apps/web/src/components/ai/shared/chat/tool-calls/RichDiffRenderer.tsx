@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import DOMPurify from 'dompurify';
 import { FileEdit, ExternalLink, Plus, Minus, MoreHorizontal } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -202,7 +202,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
   className,
   contextLines = 3
 }) {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
 
   // Process and compute contextual diff
   const { regions, stats } = useMemo(() => {
@@ -232,7 +232,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
 
   const handleNavigate = () => {
     if (pageId) {
-      router.push(`/p/${pageId}`);
+      navigateToPage(pageId);
     }
   };
 

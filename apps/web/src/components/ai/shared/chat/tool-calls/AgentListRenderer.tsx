@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { Sparkles, ExternalLink, MessageSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -43,14 +43,10 @@ export const AgentListRenderer: React.FC<AgentListRendererProps> = memo(function
   maxHeight = 300,
   className
 }) {
-  const router = useRouter();
+  const { navigateToPage } = usePageNavigation();
 
   const handleNavigate = (pageId: string, driveId?: string) => {
-    if (driveId) {
-      router.push(`/dashboard/${driveId}/${pageId}`);
-    } else {
-      router.push(`/p/${pageId}`);
-    }
+    navigateToPage(pageId, driveId);
   };
 
   const displayTitle = title || (isMultiDrive ? 'AI Agents (All Workspaces)' : 'AI Agents');
