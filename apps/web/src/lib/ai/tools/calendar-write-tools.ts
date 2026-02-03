@@ -165,6 +165,15 @@ export const calendarWriteTools = {
         // Validate attendees constraints
         const otherAttendees = (attendeeIds ?? []).filter((id) => id !== userId);
         if (otherAttendees.length > 0) {
+          // Personal events (no driveId) cannot have additional attendees
+          // to preserve the documented privacy model
+          if (!driveId) {
+            return {
+              success: false,
+              error: 'Personal calendar events cannot have attendees. Use a drive event for collaboration.',
+            };
+          }
+
           // PRIVATE events cannot have additional attendees
           if (visibility === 'PRIVATE') {
             return {
