@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { SortableTree } from "@/components/ui/sortable-tree";
 import { Projection, TreeItem } from "@/lib/tree/sortable-tree";
 import { PageTreeItem, DropPosition } from "./PageTreeItem";
+import { MultiSelectToolbar } from "./MultiSelectToolbar";
 import { KeyedMutator } from "swr";
 
 interface PageTreeProps {
@@ -293,6 +294,7 @@ export default function PageTree({
   return (
     <PullToRefresh direction="top" onRefresh={handleRefresh}>
       <CustomScrollArea className="h-full">
+        <MultiSelectToolbar driveId={driveId} onMutate={mutate} />
         <div
           className={cn("relative", isDraggingFiles && "bg-primary/5")}
           onDragEnter={handleFileDragEnter}
