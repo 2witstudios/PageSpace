@@ -73,7 +73,12 @@ export default function PersonalizationSettingsPage() {
     try {
       await patch('/api/settings/personalization', { enabled });
       toast.success(enabled ? 'AI personalization enabled' : 'AI personalization disabled');
-      mutate();
+      // Update SWR cache optimistically without revalidating to preserve unsaved form edits
+      mutate(
+        (current) =>
+          current ? { personalization: { ...current.personalization, enabled } } : current,
+        { revalidate: false }
+      );
     } catch (error) {
       // Revert on error
       setFormState((prev) => ({ ...prev, enabled: !enabled }));
