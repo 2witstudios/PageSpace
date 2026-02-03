@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -19,30 +20,45 @@ import {
   Alert,
   AlertDescription,
 } from '@/components/ui/alert';
-import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft } from 'lucide-react';
+import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+
+interface DriveScope {
+  id: string;
+  name: string;
+}
 
 interface MCPToken {
   id: string;
   name: string;
   lastUsed: string | null;
   createdAt: string;
+  isScoped: boolean;
+  driveScopes: DriveScope[];
 }
 
 interface NewToken extends MCPToken {
   token: string;
 }
 
+interface Drive {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 export default function MCPSettingsView() {
   const router = useRouter();
   const [tokens, setTokens] = useState<MCPToken[]>([]);
+  const [drives, setDrives] = useState<Drive[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newTokenName, setNewTokenName] = useState('');
+  const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>([]);
   const [newToken, setNewToken] = useState<NewToken | null>(null);
   const [showNewToken, setShowNewToken] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -51,6 +67,7 @@ export default function MCPSettingsView() {
 
   useEffect(() => {
     loadTokens();
+    loadDrives();
   }, []);
 
   const loadTokens = async () => {
@@ -70,6 +87,19 @@ export default function MCPSettingsView() {
     }
   };
 
+  const loadDrives = async () => {
+    try {
+      // Only fetch drives that can be scoped to tokens (owned + member, not page-permission-only)
+      const response = await fetchWithAuth('/api/drives?tokenScopable=true');
+      if (response.ok) {
+        const driveList = await response.json();
+        setDrives(driveList);
+      }
+    } catch (error) {
+      console.error('Error loading drives:', error);
+    }
+  };
+
   const createToken = async () => {
     if (!newTokenName.trim()) {
       toast.error('Please enter a name for the token');
@@ -78,16 +108,32 @@ export default function MCPSettingsView() {
 
     setCreating(true);
     try {
-      const token = await post<NewToken>('/api/auth/mcp-tokens', { name: newTokenName.trim() });
+      const payload: { name: string; driveIds?: string[] } = { name: newTokenName.trim() };
+      if (selectedDriveIds.length > 0) {
+        payload.driveIds = selectedDriveIds;
+      }
+
+      const token = await post<NewToken>('/api/auth/mcp-tokens', payload);
+
+      // Add drive scopes to the token object for display
+      const tokenWithScopes: MCPToken = {
+        ...token,
+        isScoped: selectedDriveIds.length > 0,
+        driveScopes: selectedDriveIds.map(id => {
+          const drive = drives.find(d => d.id === id);
+          return { id, name: drive?.name || 'Unknown' };
+        }),
+      };
 
       setNewToken(token);
-      setTokens(prev => [token, ...prev]);
+      setTokens(prev => [tokenWithScopes, ...prev]);
       // Store the actual token value for the newly created token
       if (token.token) {
         setTokenMap(prev => new Map(prev).set(token.id, token.token));
         setSelectedToken(token.token);
       }
       setNewTokenName('');
+      setSelectedDriveIds([]);
       setCreateDialogOpen(false);
       setShowNewToken(true);
       toast.success('MCP token created successfully');
@@ -97,6 +143,14 @@ export default function MCPSettingsView() {
     } finally {
       setCreating(false);
     }
+  };
+
+  const toggleDriveSelection = (driveId: string) => {
+    setSelectedDriveIds(prev =>
+      prev.includes(driveId)
+        ? prev.filter(id => id !== driveId)
+        : [...prev, driveId]
+    );
   };
 
   const deleteToken = async (tokenId: string) => {
@@ -231,18 +285,24 @@ export default function MCPSettingsView() {
       <section>
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-semibold">Your Tokens</h2>
-          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+          <Dialog open={createDialogOpen} onOpenChange={(open) => {
+              setCreateDialogOpen(open);
+              if (!open) {
+                setNewTokenName('');
+                setSelectedDriveIds([]);
+              }
+            }}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="h-4 w-4 mr-2" />
                 Create Token
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Create New MCP Token</DialogTitle>
                 <DialogDescription>
-                  Give your token a descriptive name to help you identify it later.
+                  Give your token a descriptive name and optionally restrict it to specific drives.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
@@ -260,6 +320,49 @@ export default function MCPSettingsView() {
                       }
                     }}
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-muted-foreground" />
+                    <Label>Drive Access Scope</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {selectedDriveIds.length === 0
+                      ? 'This token will have access to all your drives.'
+                      : `This token will only have access to ${selectedDriveIds.length} selected drive${selectedDriveIds.length === 1 ? '' : 's'}.`}
+                  </p>
+
+                  {drives.length > 0 && (
+                    <div className="border rounded-md p-3 max-h-48 overflow-y-auto space-y-2">
+                      {drives.map((drive) => (
+                        <div key={drive.id} className="flex items-center space-x-2">
+                          <Checkbox
+                            id={`drive-${drive.id}`}
+                            checked={selectedDriveIds.includes(drive.id)}
+                            onCheckedChange={() => toggleDriveSelection(drive.id)}
+                          />
+                          <label
+                            htmlFor={`drive-${drive.id}`}
+                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                          >
+                            {drive.name}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {selectedDriveIds.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => setSelectedDriveIds([])}
+                    >
+                      Clear selection (allow all drives)
+                    </Button>
+                  )}
                 </div>
               </div>
               <DialogFooter>
@@ -295,6 +398,21 @@ export default function MCPSettingsView() {
                       <Badge variant="secondary" className="text-xs">
                         {token.lastUsed ? 'Active' : 'Never Used'}
                       </Badge>
+                      {token.driveScopes && token.driveScopes.length > 0 ? (
+                        <Badge variant="outline" className="text-xs">
+                          <Shield className="w-3 h-3 mr-1" />
+                          {token.driveScopes.length} drive{token.driveScopes.length === 1 ? '' : 's'}
+                        </Badge>
+                      ) : token.isScoped ? (
+                        <Badge variant="destructive" className="text-xs">
+                          <AlertTriangle className="w-3 h-3 mr-1" />
+                          No access
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs text-muted-foreground">
+                          All drives
+                        </Badge>
+                      )}
                     </div>
                     <div className="text-sm text-muted-foreground">
                       Created {formatDistanceToNow(new Date(token.createdAt), { addSuffix: true })}
@@ -302,6 +420,11 @@ export default function MCPSettingsView() {
                         <> • Last used {formatDistanceToNow(new Date(token.lastUsed), { addSuffix: true })}</>
                       )}
                     </div>
+                    {token.driveScopes && token.driveScopes.length > 0 && (
+                      <div className="text-xs text-muted-foreground">
+                        Access: {token.driveScopes.map(d => d.name).join(', ')}
+                      </div>
+                    )}
                   </div>
                   <Button
                     size="sm"
@@ -436,8 +559,9 @@ export default function MCPSettingsView() {
       <Alert>
         <AlertTriangle className="h-4 w-4" />
         <AlertDescription>
-          <strong>Security Notice:</strong> MCP tokens provide full access to read and edit your documents. 
-          Keep them secure and only use them with trusted Claude instances. You can revoke tokens at any time.
+          <strong>Security Notice:</strong> MCP tokens provide access to read and edit your documents.
+          For better security, you can scope tokens to specific drives to limit access.
+          Keep tokens secure and only use them with trusted Claude instances. You can revoke tokens at any time.
         </AlertDescription>
       </Alert>
     </div>

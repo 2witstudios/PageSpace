@@ -19,6 +19,8 @@ interface BaseAuthDetails {
 
 interface MCPAuthDetails extends BaseAuthDetails {
   tokenId: string;
+  // Drive IDs this token is scoped to. Empty array means access to ALL drives.
+  allowedDriveIds: string[];
 }
 
 export interface MCPAuthResult extends MCPAuthDetails {
@@ -71,6 +73,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       columns: {
         id: true,
         userId: true,
+        isScoped: true,
       },
       with: {
         user: {
@@ -81,11 +84,29 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
             adminRoleVersion: true,
           },
         },
+        driveScopes: {
+          columns: {
+            driveId: true,
+          },
+        },
       },
     });
 
     const user = tokenRecord?.user;
     if (!tokenRecord || !user) {
+      return null;
+    }
+
+    // Extract allowed drive IDs from the scopes
+    const allowedDriveIds = tokenRecord.driveScopes.map(scope => scope.driveId);
+
+    // Fail-closed security: if token was originally scoped but all drives have been deleted,
+    // deny access entirely (prevents privilege escalation from scoped -> unrestricted)
+    if (tokenRecord.isScoped && allowedDriveIds.length === 0) {
+      console.warn('MCP token denied - scoped token with no remaining drives', {
+        tokenId: tokenRecord.id,
+        userId: tokenRecord.userId,
+      });
       return null;
     }
 
@@ -100,6 +121,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: tokenRecord.id,
+      allowedDriveIds,
     };
   } catch (error) {
     console.error('validateMCPToken error', error);
@@ -367,6 +389,159 @@ export async function authenticateWithEnforcedContext(
   }
 
   return { ctx: EnforcedAuthContext.fromSession(sessionClaims) };
+}
+
+// ============================================================================
+// MCP Drive Scope Enforcement Helpers
+// ============================================================================
+// These helpers enforce drive-level access restrictions for scoped MCP tokens.
+// Policy: If allowedDriveIds is empty, the token has full access to all user's drives.
+//         If allowedDriveIds is non-empty, only those specific drives are accessible.
+// ============================================================================
+
+/**
+ * Get allowed drive IDs from an authentication result.
+ * Returns empty array for session auth (full access) or unscoped MCP tokens.
+ */
+export function getAllowedDriveIds(auth: AuthResult): string[] {
+  if (isMCPAuthResult(auth)) {
+    return auth.allowedDriveIds;
+  }
+  return []; // Session auth = full access
+}
+
+/**
+ * Check if an MCP token has access to a specific drive.
+ * Returns null if access is allowed, or a 403 response if denied.
+ *
+ * @param auth - The authentication result
+ * @param driveId - The drive ID to check access for
+ * @returns null if allowed, NextResponse with 403 if denied
+ */
+export function checkMCPDriveScope(
+  auth: AuthResult,
+  driveId: string
+): NextResponse | null {
+  const allowedDriveIds = getAllowedDriveIds(auth);
+
+  // Empty allowedDriveIds means full access (unscoped token or session auth)
+  if (allowedDriveIds.length === 0) {
+    return null;
+  }
+
+  // Check if the drive is in the allowed list
+  if (allowedDriveIds.includes(driveId)) {
+    return null;
+  }
+
+  // Drive not in scope - return 403
+  return NextResponse.json(
+    { error: 'This token does not have access to this drive' },
+    { status: 403 }
+  );
+}
+
+/**
+ * Check if an MCP token has access to a page by looking up its drive.
+ * Returns null if access is allowed, or a 403/404 response if denied/not found.
+ *
+ * @param auth - The authentication result
+ * @param pageId - The page ID to check access for
+ * @returns null if allowed, NextResponse with 403/404 if denied/not found
+ */
+export async function checkMCPPageScope(
+  auth: AuthResult,
+  pageId: string
+): Promise<NextResponse | null> {
+  const allowedDriveIds = getAllowedDriveIds(auth);
+
+  // Empty allowedDriveIds means full access
+  if (allowedDriveIds.length === 0) {
+    return null;
+  }
+
+  // Need to look up the page's drive
+  const { pages, eq } = await import('@pagespace/db');
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+
+  if (!page) {
+    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+  }
+
+  if (!allowedDriveIds.includes(page.driveId)) {
+    return NextResponse.json(
+      { error: 'This token does not have access to this drive' },
+      { status: 403 }
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Filter a list of drive IDs by MCP token scope.
+ * Returns all drives for session auth or unscoped tokens.
+ *
+ * @param auth - The authentication result
+ * @param driveIds - List of drive IDs to filter
+ * @returns Filtered list of drive IDs that are within scope
+ */
+export function filterDrivesByMCPScope(
+  auth: AuthResult,
+  driveIds: string[]
+): string[] {
+  const allowedDriveIds = getAllowedDriveIds(auth);
+
+  // Empty allowedDriveIds means full access
+  if (allowedDriveIds.length === 0) {
+    return driveIds;
+  }
+
+  // Filter to only allowed drives
+  const allowedSet = new Set(allowedDriveIds);
+  return driveIds.filter(id => allowedSet.has(id));
+}
+
+/**
+ * Check if a scoped MCP token is trying to create resources outside its scope.
+ * Scoped tokens should not be able to create new drives or resources in unscoped drives.
+ * Returns null if the operation is allowed, or a 403 response if denied.
+ *
+ * @param auth - The authentication result
+ * @param targetDriveId - Optional drive ID where resource will be created (null for drive creation)
+ * @returns null if allowed, NextResponse with 403 if denied
+ */
+export function checkMCPCreateScope(
+  auth: AuthResult,
+  targetDriveId: string | null
+): NextResponse | null {
+  const allowedDriveIds = getAllowedDriveIds(auth);
+
+  // Unscoped tokens can create anywhere
+  if (allowedDriveIds.length === 0) {
+    return null;
+  }
+
+  // Scoped tokens cannot create new drives
+  if (targetDriveId === null) {
+    return NextResponse.json(
+      { error: 'Scoped tokens cannot create new drives' },
+      { status: 403 }
+    );
+  }
+
+  // Check if target drive is in scope
+  if (!allowedDriveIds.includes(targetDriveId)) {
+    return NextResponse.json(
+      { error: 'This token does not have access to this drive' },
+      { status: 403 }
+    );
+  }
+
+  return null;
 }
 
 // Re-export from other auth modules

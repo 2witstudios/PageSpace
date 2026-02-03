@@ -37,6 +37,13 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  // MCP scope check - returns null (allowed) by default for session auth tests
+  checkMCPDriveScope: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
+  logDriveActivity: vi.fn(),
 }));
 
 import {

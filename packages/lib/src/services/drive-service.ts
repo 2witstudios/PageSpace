@@ -38,6 +38,8 @@ export interface DriveWithAccess {
 
 export interface ListDrivesOptions {
   includeTrash?: boolean;
+  /** When true, only returns drives where user is owner or member (excludes page-permission-only drives) */
+  tokenScopable?: boolean;
 }
 
 export interface CreateDriveInput {
@@ -68,7 +70,7 @@ export async function listAccessibleDrives(
   userId: string,
   options: ListDrivesOptions = {}
 ): Promise<DriveWithAccess[]> {
-  const { includeTrash = false } = options;
+  const { includeTrash = false, tokenScopable = false } = options;
 
   // 1. Get owned drives
   const ownedDrives = await db.query.drives.findMany({
@@ -84,11 +86,14 @@ export async function listAccessibleDrives(
     .where(eq(driveMembers.userId, userId));
 
   // 3. Get drives where user has page-level permissions
-  const permissionDrives = await db
-    .selectDistinct({ driveId: pages.driveId })
-    .from(pagePermissions)
-    .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-    .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
+  // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
+  const permissionDrives = tokenScopable
+    ? []
+    : await db
+        .selectDistinct({ driveId: pages.driveId })
+        .from(pagePermissions)
+        .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
+        .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
 
   // 4. Build role map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();

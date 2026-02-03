@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { db, pages, drives, eq, and } from '@pagespace/db';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -35,6 +35,11 @@ export async function GET(
     const { userId } = auth;
 
     const { driveId } = await context.params;
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const { searchParams } = new URL(request.url);
 
     const includeSystemPrompt = searchParams.get('includeSystemPrompt') === 'true';
