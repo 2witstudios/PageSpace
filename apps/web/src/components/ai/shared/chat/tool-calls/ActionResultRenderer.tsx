@@ -16,6 +16,7 @@ import {
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/client-safe';
+import { markdownToHtml, sanitizeHtmlAllowlist } from './content-utils';
 
 type ActionType = 'create' | 'rename' | 'trash' | 'restore' | 'move' | 'update';
 
@@ -176,16 +177,22 @@ export const ActionResultRenderer: React.FC<ActionResultRendererProps> = memo(fu
 
         {/* Error message */}
         {!success && errorMessage && (
-          <div className="mt-2 text-xs text-red-600 dark:text-red-400 bg-red-500/5 px-2 py-1.5 rounded">
-            {errorMessage}
-          </div>
+          <div
+            className="mt-2 text-xs text-red-600 dark:text-red-400 bg-red-500/5 px-2 py-1.5 rounded prose prose-xs prose-red dark:prose-invert max-w-none"
+            dangerouslySetInnerHTML={{
+              __html: sanitizeHtmlAllowlist(markdownToHtml(errorMessage))
+            }}
+          />
         )}
 
         {/* Additional message */}
         {message && success && (
-          <div className="mt-2 text-xs text-muted-foreground">
-            {message}
-          </div>
+          <div
+            className="mt-2 text-xs text-muted-foreground prose prose-xs dark:prose-invert max-w-none"
+            dangerouslySetInnerHTML={{
+              __html: sanitizeHtmlAllowlist(markdownToHtml(message))
+            }}
+          />
         )}
       </div>
     </div>

@@ -1,6 +1,7 @@
 import useSWR from 'swr';
 import { useEffect } from 'react';
 import { useHotkeyStore } from '@/stores/useHotkeyStore';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface HotkeyPreference {
   hotkeyId: string;
@@ -12,7 +13,7 @@ interface HotkeyPreferencesResponse {
 }
 
 const fetcher = async (url: string): Promise<HotkeyPreferencesResponse> => {
-  const res = await fetch(url, { credentials: 'include' });
+  const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch hotkey preferences');
   return res.json();
 };
@@ -45,15 +46,10 @@ export function useHotkeyPreferences() {
 }
 
 export async function updateHotkeyPreference(hotkeyId: string, binding: string): Promise<void> {
-  const csrfMeta = document.querySelector('meta[name="csrf-token"]');
-  const csrfToken = csrfMeta?.getAttribute('content') ?? '';
-
-  const res = await fetch('/api/settings/hotkey-preferences', {
+  const res = await fetchWithAuth('/api/settings/hotkey-preferences', {
     method: 'PATCH',
-    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'X-CSRF-Token': csrfToken,
     },
     body: JSON.stringify({ hotkeyId, binding }),
   });

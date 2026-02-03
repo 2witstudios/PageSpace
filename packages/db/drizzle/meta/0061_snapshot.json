@@ -1,5 +1,5 @@
 {
-  "id": "8b2dd6df-a396-424d-9b14-3e10c6fc8f0c",
+  "id": "5087066b-6cc9-457e-ae68-4085c06d9158",
   "prevId": "131f54ae-dfa3-4dba-b12a-bde039f8e391",
   "version": "7",
   "dialect": "postgresql",
@@ -3599,6 +3599,172 @@
           ]
         }
       }
+    },
+    "public.pulse_summaries": {
+      "name": "pulse_summaries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "greeting": {
+          "name": "greeting",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "type": {
+          "name": "type",
+          "type": "pulse_summary_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'scheduled'"
+        },
+        "contextData": {
+          "name": "contextData",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "aiProvider": {
+          "name": "aiProvider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "aiModel": {
+          "name": "aiModel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "periodStart": {
+          "name": "periodStart",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "periodEnd": {
+          "name": "periodEnd",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "generatedAt": {
+          "name": "generatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "idx_pulse_summaries_user_id": {
+          "name": "idx_pulse_summaries_user_id",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_pulse_summaries_generated_at": {
+          "name": "idx_pulse_summaries_generated_at",
+          "columns": [
+            {
+              "expression": "generatedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_pulse_summaries_expires_at": {
+          "name": "idx_pulse_summaries_expires_at",
+          "columns": [
+            {
+              "expression": "expiresAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_pulse_summaries_user_generated": {
+          "name": "idx_pulse_summaries_user_generated",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "generatedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "pulse_summaries_userId_users_id_fk": {
+          "name": "pulse_summaries_userId_users_id_fk",
+          "tableFrom": "pulse_summaries",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     },
     "public.user_dashboards": {
       "name": "user_dashboards",
@@ -10633,495 +10799,6 @@
           ]
         }
       }
-    },
-    "public.calendar_events": {
-      "name": "calendar_events",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdById": {
-          "name": "createdById",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "pageId": {
-          "name": "pageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "location": {
-          "name": "location",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "startAt": {
-          "name": "startAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "endAt": {
-          "name": "endAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "allDay": {
-          "name": "allDay",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "timezone": {
-          "name": "timezone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'UTC'"
-        },
-        "recurrenceRule": {
-          "name": "recurrenceRule",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "recurrenceExceptions": {
-          "name": "recurrenceExceptions",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'[]'::jsonb"
-        },
-        "recurringEventId": {
-          "name": "recurringEventId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "originalStartAt": {
-          "name": "originalStartAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "visibility": {
-          "name": "visibility",
-          "type": "EventVisibility",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'DRIVE'"
-        },
-        "color": {
-          "name": "color",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'default'"
-        },
-        "metadata": {
-          "name": "metadata",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "isTrashed": {
-          "name": "isTrashed",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "trashedAt": {
-          "name": "trashedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "calendar_events_drive_id_idx": {
-          "name": "calendar_events_drive_id_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_created_by_id_idx": {
-          "name": "calendar_events_created_by_id_idx",
-          "columns": [
-            {
-              "expression": "createdById",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_page_id_idx": {
-          "name": "calendar_events_page_id_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_start_at_idx": {
-          "name": "calendar_events_start_at_idx",
-          "columns": [
-            {
-              "expression": "startAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_end_at_idx": {
-          "name": "calendar_events_end_at_idx",
-          "columns": [
-            {
-              "expression": "endAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_drive_id_start_at_idx": {
-          "name": "calendar_events_drive_id_start_at_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "startAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_recurring_event_id_idx": {
-          "name": "calendar_events_recurring_event_id_idx",
-          "columns": [
-            {
-              "expression": "recurringEventId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "calendar_events_is_trashed_idx": {
-          "name": "calendar_events_is_trashed_idx",
-          "columns": [
-            {
-              "expression": "isTrashed",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "calendar_events_driveId_drives_id_fk": {
-          "name": "calendar_events_driveId_drives_id_fk",
-          "tableFrom": "calendar_events",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_events_createdById_users_id_fk": {
-          "name": "calendar_events_createdById_users_id_fk",
-          "tableFrom": "calendar_events",
-          "tableTo": "users",
-          "columnsFrom": [
-            "createdById"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "calendar_events_pageId_pages_id_fk": {
-          "name": "calendar_events_pageId_pages_id_fk",
-          "tableFrom": "calendar_events",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "pageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
-    },
-    "public.event_attendees": {
-      "name": "event_attendees",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "eventId": {
-          "name": "eventId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "AttendeeStatus",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "responseNote": {
-          "name": "responseNote",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "isOrganizer": {
-          "name": "isOrganizer",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "isOptional": {
-          "name": "isOptional",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "invitedAt": {
-          "name": "invitedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "respondedAt": {
-          "name": "respondedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "event_attendees_event_id_idx": {
-          "name": "event_attendees_event_id_idx",
-          "columns": [
-            {
-              "expression": "eventId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "event_attendees_user_id_idx": {
-          "name": "event_attendees_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "event_attendees_status_idx": {
-          "name": "event_attendees_status_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "event_attendees_user_id_status_idx": {
-          "name": "event_attendees_user_id_status_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "event_attendees_eventId_calendar_events_id_fk": {
-          "name": "event_attendees_eventId_calendar_events_id_fk",
-          "tableFrom": "event_attendees",
-          "tableTo": "calendar_events",
-          "columnsFrom": [
-            "eventId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "event_attendees_userId_users_id_fk": {
-          "name": "event_attendees_userId_users_id_fk",
-          "tableFrom": "event_attendees",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "event_attendees_event_user_key": {
-          "name": "event_attendees_event_user_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "eventId",
-            "userId"
-          ]
-        }
-      }
     }
   },
   "enums": {
@@ -11209,6 +10886,15 @@
         "OWNER",
         "ADMIN",
         "MEMBER"
+      ]
+    },
+    "public.pulse_summary_type": {
+      "name": "pulse_summary_type",
+      "schema": "public",
+      "values": [
+        "scheduled",
+        "on_demand",
+        "welcome"
       ]
     },
     "public.NotificationType": {
@@ -11465,35 +11151,6 @@
         "private",
         "owned_drives",
         "all_drives"
-      ]
-    },
-    "public.AttendeeStatus": {
-      "name": "AttendeeStatus",
-      "schema": "public",
-      "values": [
-        "PENDING",
-        "ACCEPTED",
-        "DECLINED",
-        "TENTATIVE"
-      ]
-    },
-    "public.EventVisibility": {
-      "name": "EventVisibility",
-      "schema": "public",
-      "values": [
-        "DRIVE",
-        "ATTENDEES_ONLY",
-        "PRIVATE"
-      ]
-    },
-    "public.RecurrenceFrequency": {
-      "name": "RecurrenceFrequency",
-      "schema": "public",
-      "values": [
-        "DAILY",
-        "WEEKLY",
-        "MONTHLY",
-        "YEARLY"
       ]
     }
   },

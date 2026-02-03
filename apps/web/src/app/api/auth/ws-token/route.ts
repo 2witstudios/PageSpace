@@ -3,7 +3,10 @@ import { verifyAuth, getClientIP } from '@/lib/auth';
 import { sessionService } from '@pagespace/lib';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
-const WS_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour - connection is persistent
+// WS tokens for desktop/mobile persistent connections need long TTL to match device sessions.
+// The connection is persistent and authenticated - we don't want to kick users mid-interaction.
+// Security is maintained through: session validation, fingerprint checks, and stale connection cleanup.
+const WS_TOKEN_EXPIRY_MS = 90 * 24 * 60 * 60 * 1000; // 90 days - matches device session lifetime
 
 // Rate limit: 10 token requests per minute per user
 const WS_TOKEN_RATE_LIMIT = {

@@ -102,6 +102,7 @@ async function getLastVisitTime(userId: string): Promise<Date | undefined> {
 
 // Compact activity format optimized for AI context efficiency
 interface CompactActivity {
+  id: string;              // CUID2 activity ID from database
   ts: string;              // ISO timestamp
   op: string;              // operation
   res: string;             // resourceType
@@ -216,7 +217,25 @@ Returns activities grouped by drive with:
 - AI attribution (which changes were AI-generated)
 - Contributor breakdown
 
-The AI should use this data to form intuition about ongoing work and provide contextually relevant assistance.`,
+CRITICAL - How to present activity summaries to users:
+- NEVER report raw numbers or metrics like "5 pages updated" or "23 lines changed"
+- ALWAYS describe what actually happened in plain language the user cares about
+- Focus on the MEANING and IMPACT of changes, not counts or technical details
+- Use the delta/diff data to explain WHAT changed, not just THAT something changed
+
+Good examples:
+- "Sarah updated the project timeline - the deadline moved from Feb 15 to March 1"
+- "The API documentation now includes authentication examples for OAuth2"
+- "Alex reorganized the Design folder, moving mockups into a new 'v2' subfolder"
+- "The homepage hero section was rewritten with a new value proposition"
+
+Bad examples (never do this):
+- "There were 5 updates to 3 pages"
+- "15 lines were changed in the documentation"
+- "Activity detected: 2 creates, 3 updates"
+- "John made changes to Project Plan"
+
+When summarizing multiple changes, group them thematically and describe the overall narrative of what happened, not an inventory of operations.`,
 
     inputSchema: z.object({
       since: z
@@ -494,6 +513,7 @@ The AI should use this data to form intuition about ongoing work and provide con
           // Build compact activity
           const actorIdx = actorMap.get(activity.actorEmail)!.idx;
           const compact: CompactActivity = {
+            id: activity.id,
             ts: activity.timestamp.toISOString(),
             op: activity.operation,
             res: activity.resourceType,

@@ -25,6 +25,7 @@ export * from './mention-processor';
 export * from './timestamp-utils';
 export * from './agent-awareness';
 export * from './page-tree-context';
+export * from './personalization-utils';
 
 // Tools
 export * from './ai-tools';

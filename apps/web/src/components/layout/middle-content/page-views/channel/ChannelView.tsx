@@ -342,7 +342,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
                                 <div className="mt-2">
                                   {m.attachmentMeta.mimeType.startsWith('image/') ? (
                                     <a
-                                      href={`/api/files/${m.fileId}/view`}
+                                      href={`/api/files/${m.fileId}/view?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="block max-w-sm"
@@ -355,7 +355,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
                                     </a>
                                   ) : (
                                     <a
-                                      href={`/api/files/${m.fileId}/download`}
+                                      href={`/api/files/${m.fileId}/download?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
                                       className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
                                     >
                                       <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">

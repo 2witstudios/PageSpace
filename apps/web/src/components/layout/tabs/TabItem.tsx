@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useCallback, type CSSProperties } from 'react';
-import { X, Pin } from 'lucide-react';
+import { memo, useCallback, useMemo, type CSSProperties } from 'react';
+import { X, Pin, File, FileText, LayoutDashboard, CheckSquare, Activity, Users, Settings, Trash2, MessageSquare, Layout, Folder, Table } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
@@ -14,7 +14,9 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import type { Tab } from '@/stores/useOpenTabsStore';
+import type { Tab } from '@/stores/useTabsStore';
+import { parseTabPath } from '@/lib/tabs/tab-title';
+import { useTabMeta } from '@/hooks/useTabMeta';
 import { PageType } from '@pagespace/lib/client-safe';
 
 interface TabItemProps {
@@ -29,6 +31,22 @@ interface TabItemProps {
   onUnpin: (tabId: string) => void;
 }
 
+// Map icon names to components
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  LayoutDashboard,
+  CheckSquare,
+  Activity,
+  Users,
+  Settings,
+  Trash2,
+  MessageSquare,
+  File,
+  FileText,
+  Layout,
+  Folder,
+  Table,
+};
+
 export const TabItem = memo(function TabItem({
   tab,
   index,
@@ -40,7 +58,16 @@ export const TabItem = memo(function TabItem({
   onPin,
   onUnpin,
 }: TabItemProps) {
-  const isDirty = useDirtyStore((state) => state.isDirty(tab.id));
+  // Get title and icon from tab (cached metadata or fetch if needed)
+  const tabMeta = useTabMeta(tab);
+
+  // Extract pageId from path for dirty state check (if it's a page)
+  const pageId = useMemo(() => {
+    const parsed = parseTabPath(tab.path);
+    return parsed.pageId;
+  }, [tab.path]);
+
+  const isDirty = useDirtyStore((state) => pageId ? state.isDirty(pageId) : false);
 
   // Drag and drop sortable
   const {
@@ -112,16 +139,25 @@ export const TabItem = memo(function TabItem({
             isDragging && "shadow-lg ring-2 ring-primary/50"
           )}
         >
-          {/* Page type icon */}
-          <PageTypeIcon
-            type={tab.type as PageType}
-            className="h-3.5 w-3.5 flex-shrink-0 text-white"
-          />
+          {/* Tab icon - use static icon from meta or PageTypeIcon for pages */}
+          {(() => {
+            const IconComponent = ICON_MAP[tabMeta.iconName];
+            if (IconComponent) {
+              return <IconComponent className="h-3.5 w-3.5 flex-shrink-0 text-white" />;
+            }
+            // Fallback to PageTypeIcon for page types (shouldn't happen with current icon map)
+            return (
+              <PageTypeIcon
+                type={tabMeta.pageType ?? PageType.DOCUMENT}
+                className="h-3.5 w-3.5 flex-shrink-0 text-white"
+              />
+            );
+          })()}
 
           {/* Title (hidden for pinned tabs) */}
           {!tab.isPinned && (
             <span className="truncate flex-1 text-left">
-              {tab.title}
+              {tabMeta.title}
             </span>
           )}
 
@@ -153,7 +189,7 @@ export const TabItem = memo(function TabItem({
                 "hover:bg-white/20 text-white transition-opacity",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
               )}
-              aria-label={`Close ${tab.title}`}
+              aria-label={`Close ${tabMeta.title}`}
             >
               <X className="h-3 w-3" />
             </button>

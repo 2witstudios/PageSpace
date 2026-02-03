@@ -19,7 +19,7 @@ import {
   DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, MessageSquare, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, Users, CreditCard, Activity, CheckSquare } from 'lucide-react';
+import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, CreditCard, Sparkles } from 'lucide-react';
 import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import useSWR from 'swr';
@@ -103,23 +103,14 @@ export default function UserDropdown() {
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => router.push('/dashboard/messages')}>
-            <MessageSquare className="mr-2 h-4 w-4" />
-            <span>Messages</span>
+          <DropdownMenuItem onClick={() => router.push('/settings/account')}>
+            <LayoutDashboard className="mr-2 h-4 w-4" />
+            <span>Account</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/dashboard/connections')}>
-            <Users className="mr-2 h-4 w-4" />
-            <span>Connections</span>
+          <DropdownMenuItem onClick={() => router.push('/settings/personalization')}>
+            <Sparkles className="mr-2 h-4 w-4" />
+            <span>Personalization</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/dashboard/activity')}>
-            <Activity className="mr-2 h-4 w-4" />
-            <span>Activity</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push('/dashboard/tasks')}>
-            <CheckSquare className="mr-2 h-4 w-4" />
-            <span>Tasks</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => router.push('/dashboard/storage')}>
             <HardDrive className="mr-2 h-4 w-4" />
             <div className="flex-1">
@@ -147,10 +138,6 @@ export default function UserDropdown() {
               </span>
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onClick={() => router.push('/settings/account')}>
-            <LayoutDashboard className="mr-2 h-4 w-4" />
-            <span>Account</span>
-          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
             <MessageSquareText className="mr-2 h-4 w-4" />
             <span>Feedback</span>

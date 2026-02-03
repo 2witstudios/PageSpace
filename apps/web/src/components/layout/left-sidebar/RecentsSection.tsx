@@ -1,12 +1,22 @@
 "use client";
 
+import { useCallback, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Clock } from "lucide-react";
+import { Clock, ExternalLink } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
+import { useCapacitor } from "@/hooks/useCapacitor";
+import { useTabsStore } from "@/stores/useTabsStore";
+import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { cn } from "@/lib/utils";
 import type { PageType } from "@pagespace/lib/client-safe";
@@ -38,6 +48,8 @@ export default function RecentsSection() {
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
+  const createTab = useTabsStore((state) => state.createTab);
+  const { isNative } = useCapacitor();
 
   const { data, isLoading, error } = useSWR<{ recents: RecentPage[] }>(
     "/api/user/recents?limit=8",
@@ -48,12 +60,24 @@ export default function RecentsSection() {
     }
   );
 
-  const handleNavigate = (page: RecentPage) => {
-    router.push(`/dashboard/${page.driveId}/${page.id}`);
+  const handleNavigate = useCallback((page: RecentPage, e?: MouseEvent) => {
+    const href = `/dashboard/${page.driveId}/${page.id}`;
+
+    if (e && shouldOpenInNewTab(e)) {
+      e.preventDefault();
+      createTab({ path: href });
+      return;
+    }
+
+    router.push(href);
     if (isSheetBreakpoint) {
       setLeftSheetOpen(false);
     }
-  };
+  }, [router, isSheetBreakpoint, setLeftSheetOpen, createTab]);
+
+  const handleOpenInNewTab = useCallback((page: RecentPage) => {
+    createTab({ path: `/dashboard/${page.driveId}/${page.id}` });
+  }, [createTab]);
 
   if (isLoading) {
     return <RecentsSkeleton />;
@@ -74,7 +98,9 @@ export default function RecentsSection() {
           <RecentItem
             key={page.id}
             page={page}
-            onNavigate={() => handleNavigate(page)}
+            onNavigate={(e) => handleNavigate(page, e)}
+            onOpenInNewTab={() => handleOpenInNewTab(page)}
+            isNative={isNative}
           />
         ))}
       </div>
@@ -84,13 +110,21 @@ export default function RecentsSection() {
 
 interface RecentItemProps {
   page: RecentPage;
-  onNavigate: () => void;
+  onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
+  onOpenInNewTab: () => void;
+  isNative: boolean;
 }
 
-function RecentItem({ page, onNavigate }: RecentItemProps) {
-  return (
+function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemProps) {
+  const content = (
     <button
       onClick={onNavigate}
+      onAuxClick={isNative ? undefined : (e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          onOpenInNewTab();
+        }
+      }}
       className={cn(
         "flex items-center gap-2.5 w-full py-1.5 px-2 rounded-md text-sm transition-colors",
         "hover:bg-accent hover:text-accent-foreground",
@@ -106,6 +140,25 @@ function RecentItem({ page, onNavigate }: RecentItemProps) {
         {formatRelativeTime(page.viewedAt)}
       </span>
     </button>
+  );
+
+  // On native apps, don't show the context menu with "Open in new tab"
+  if (isNative) {
+    return content;
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        {content}
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={onOpenInNewTab}>
+          <ExternalLink className="mr-2 h-4 w-4" />
+          Open in new tab
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

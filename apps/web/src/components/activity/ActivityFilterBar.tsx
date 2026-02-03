@@ -31,14 +31,14 @@ export function ActivityFilterBar({
   onDriveChange,
 }: ActivityFilterBarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
       {/* Drive Selector - only in user context (dashboard) */}
       {context === 'user' && drives.length > 0 && onDriveChange && (
         <Select
           value={driveId || 'all'}
           onValueChange={(value) => onDriveChange(value === 'all' ? '' : value)}
         >
-          <SelectTrigger className="w-[180px]">
+          <SelectTrigger className="w-[calc(50%-4px)] sm:w-[180px]">
             <SelectValue placeholder="All drives" />
           </SelectTrigger>
           <SelectContent>
@@ -78,7 +78,7 @@ export function ActivityFilterBar({
           onFiltersChange({ operation: value === 'all' ? undefined : value })
         }
       >
-        <SelectTrigger className="w-[150px]">
+        <SelectTrigger className="w-[calc(50%-4px)] sm:w-[150px]">
           <SelectValue placeholder="Operation" />
         </SelectTrigger>
         <SelectContent>
@@ -98,7 +98,7 @@ export function ActivityFilterBar({
           onFiltersChange({ resourceType: value === 'all' ? undefined : value })
         }
       >
-        <SelectTrigger className="w-[130px]">
+        <SelectTrigger className="w-[calc(50%-4px)] sm:w-[130px]">
           <SelectValue placeholder="Resource" />
         </SelectTrigger>
         <SelectContent>
@@ -110,8 +110,8 @@ export function ActivityFilterBar({
         </SelectContent>
       </Select>
 
-      {/* Spacer */}
-      <div className="flex-1" />
+      {/* Spacer - hidden on mobile */}
+      <div className="hidden sm:block sm:flex-1" />
 
       {/* Export Button */}
       <ExportButton context={context} driveId={driveId} filters={filters} />

@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { logger } from '@pagespace/lib';
+import { logger, sessionService } from '@pagespace/lib';
 
 /**
  * WebSocket Connection Manager
@@ -20,6 +20,8 @@ interface ConnectionMetadata {
   lastPing?: Date;
   fingerprint?: string;
   challengeVerified: boolean; // True once authenticated (immediately for opaque tokens)
+  wsToken?: string; // Token for periodic revalidation (detects revoked sessions)
+  lastRevalidated?: Date; // Track when we last validated the session
 }
 
 const connectionMetadata = new Map<WebSocket, ConnectionMetadata>();
@@ -27,6 +29,7 @@ const connectionMetadata = new Map<WebSocket, ConnectionMetadata>();
 // Stale connection cleanup configuration
 const STALE_CONNECTION_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const SESSION_REVALIDATION_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes - revalidate sessions to detect revoked tokens
 
 /**
  * Cleanup interval for removing stale connections
@@ -47,7 +50,8 @@ export function registerConnection(
   ws: WebSocket,
   fingerprint?: string,
   sessionId?: string,
-  sessionExpiresAt?: Date
+  sessionExpiresAt?: Date,
+  wsToken?: string
 ): void {
   // Close existing connection if any
   const existingConnection = connections.get(userId);
@@ -69,6 +73,7 @@ export function registerConnection(
     connectedAt: new Date(),
     fingerprint,
     challengeVerified: false,
+    wsToken,
   });
 
   wsLogger.info('WebSocket connection registered', {
@@ -177,8 +182,9 @@ export function verifyConnectionFingerprint(
 /**
  * Clean up stale connections that are closed, inactive, or have expired sessions
  * Prevents memory leaks and enforces session expiry security
+ * Also revalidates sessions to detect revoked tokens
  */
-function cleanupStaleConnections(): void {
+async function cleanupStaleConnections(): Promise<void> {
   const now = Date.now();
   const nowDate = new Date();
   const staleConnections: Array<{ userId: string; ws: WebSocket; reason: string }> = [];
@@ -258,6 +264,96 @@ function cleanupStaleConnections(): void {
       action: 'cleanup_complete',
     });
   }
+
+  // Revalidate sessions to detect revoked tokens (P1 security fix)
+  await revalidateSessions();
+}
+
+/**
+ * Revalidate active sessions to detect revoked tokens
+ * Closes connections where:
+ * - Session has been revoked (revokedAt set)
+ * - User's tokenVersion changed (password change)
+ * - User was suspended
+ *
+ * Uses parallel validation for scale - all connections are validated concurrently
+ * to minimize total validation time when many connections exist.
+ *
+ * This closes the security gap where 90-day tokens could persist after revocation.
+ */
+async function revalidateSessions(): Promise<void> {
+  const now = Date.now();
+
+  // Collect connections that need revalidation
+  const connectionsToValidate: Array<{
+    userId: string;
+    ws: WebSocket;
+    metadata: ConnectionMetadata;
+  }> = [];
+
+  for (const [userId, ws] of connections.entries()) {
+    const metadata = connectionMetadata.get(ws);
+    if (!metadata?.wsToken) continue;
+
+    // Skip if recently revalidated
+    const lastRevalidated = metadata.lastRevalidated?.getTime() || 0;
+    if (now - lastRevalidated < SESSION_REVALIDATION_INTERVAL_MS) continue;
+
+    connectionsToValidate.push({ userId, ws, metadata });
+  }
+
+  if (connectionsToValidate.length === 0) return;
+
+  // Validate all sessions in parallel for scale
+  const validationResults = await Promise.allSettled(
+    connectionsToValidate.map(async ({ userId, ws, metadata }) => {
+      const claims = await sessionService.validateSession(metadata.wsToken!);
+      return { userId, ws, metadata, claims };
+    })
+  );
+
+  const connectionsToClose: Array<{ userId: string; ws: WebSocket; reason: string }> = [];
+
+  // Process results
+  for (let i = 0; i < validationResults.length; i++) {
+    const result = validationResults[i];
+    const { userId, ws, metadata } = connectionsToValidate[i];
+
+    if (result.status === 'fulfilled') {
+      metadata.lastRevalidated = new Date();
+
+      if (!result.value.claims) {
+        wsLogger.warn('Session revalidation failed', {
+          userId,
+          sessionId: metadata.sessionId,
+          action: 'session_revoked',
+        });
+        connectionsToClose.push({ userId, ws, reason: 'session_revoked' });
+      }
+    } else {
+      // Don't close on transient errors - will retry next interval
+      wsLogger.error('Session revalidation error', {
+        userId,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        action: 'revalidation_error',
+      });
+    }
+  }
+
+  // Close revoked connections
+  for (const { userId, ws, reason } of connectionsToClose) {
+    if (ws.readyState === 0 || ws.readyState === 1) {
+      ws.close(1008, 'Session revoked');
+    }
+    connections.delete(userId);
+    connectionMetadata.delete(ws);
+
+    wsLogger.info('Closed connection due to revoked session', {
+      userId,
+      reason,
+      action: 'session_revoked_cleanup',
+    });
+  }
 }
 
 /**
@@ -273,7 +369,14 @@ export function startCleanupInterval(): void {
     return;
   }
 
-  cleanupInterval = setInterval(cleanupStaleConnections, CLEANUP_INTERVAL_MS);
+  cleanupInterval = setInterval(() => {
+    cleanupStaleConnections().catch(err =>
+      wsLogger.error('Cleanup error', {
+        error: err instanceof Error ? err.message : String(err),
+        action: 'cleanup_interval_error',
+      })
+    );
+  }, CLEANUP_INTERVAL_MS);
   wsLogger.info('Started cleanup interval', {
     intervalMinutes: CLEANUP_INTERVAL_MS / 60000,
     action: 'start_cleanup_interval',
@@ -299,8 +402,8 @@ export function stopCleanupInterval(): void {
 /**
  * Manually trigger cleanup (useful for testing)
  */
-export function triggerCleanup(): void {
-  cleanupStaleConnections();
+export async function triggerCleanup(): Promise<void> {
+  await cleanupStaleConnections();
 }
 
 /**
