@@ -13,7 +13,7 @@ import {
   isNull,
   desc,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
@@ -105,13 +105,48 @@ export async function GET(request: Request) {
         );
       }
 
-      // Fetch drive events within date range
+      // Get event IDs where user is an attendee (for ATTENDEES_ONLY events)
+      const attendeeEventsInDrive = await db
+        .select({ eventId: eventAttendees.eventId })
+        .from(eventAttendees)
+        .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+        .where(
+          and(
+            eq(eventAttendees.userId, userId),
+            eq(calendarEvents.driveId, params.driveId)
+          )
+        );
+      const attendeeEventIdsInDrive = attendeeEventsInDrive.map(e => e.eventId);
+
+      // Fetch drive events within date range, respecting visibility:
+      // - DRIVE: visible to all drive members
+      // - ATTENDEES_ONLY: only visible to creator or attendees
+      // - PRIVATE: only visible to creator
       const events = await db.query.calendarEvents.findMany({
         where: and(
           eq(calendarEvents.driveId, params.driveId),
           eq(calendarEvents.isTrashed, false),
           lte(calendarEvents.startAt, params.endDate),
-          gte(calendarEvents.endAt, params.startDate)
+          gte(calendarEvents.endAt, params.startDate),
+          or(
+            // DRIVE visibility - visible to all drive members
+            eq(calendarEvents.visibility, 'DRIVE'),
+            // PRIVATE - only creator can see
+            and(
+              eq(calendarEvents.visibility, 'PRIVATE'),
+              eq(calendarEvents.createdById, userId)
+            ),
+            // ATTENDEES_ONLY - creator or attendee can see
+            and(
+              eq(calendarEvents.visibility, 'ATTENDEES_ONLY'),
+              or(
+                eq(calendarEvents.createdById, userId),
+                attendeeEventIdsInDrive.length > 0
+                  ? inArray(calendarEvents.id, attendeeEventIdsInDrive)
+                  : eq(calendarEvents.id, '__never_match__') // No attendee events
+              )
+            )
+          )
         ),
         with: {
           createdBy: {
@@ -259,6 +294,32 @@ export async function POST(request: Request) {
         { error: 'End date must be after start date' },
         { status: 400 }
       );
+    }
+
+    // Validate attendees constraints
+    const otherAttendees = (data.attendeeIds ?? []).filter(id => id !== userId);
+    if (otherAttendees.length > 0) {
+      // PRIVATE events cannot have additional attendees
+      if (data.visibility === 'PRIVATE') {
+        return NextResponse.json(
+          { error: 'Private events cannot have attendees other than the creator' },
+          { status: 400 }
+        );
+      }
+
+      // For drive events, verify all proposed attendees are drive members
+      if (data.driveId) {
+        const driveMemberIds = await getDriveMemberUserIds(data.driveId);
+        const driveMemberSet = new Set(driveMemberIds);
+        const nonMembers = otherAttendees.filter(id => !driveMemberSet.has(id));
+
+        if (nonMembers.length > 0) {
+          return NextResponse.json(
+            { error: 'All attendees must be members of the drive', nonMemberCount: nonMembers.length },
+            { status: 400 }
+          );
+        }
+      }
     }
 
     // Create the event

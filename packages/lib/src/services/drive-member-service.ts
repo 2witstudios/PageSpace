@@ -117,6 +117,19 @@ export async function checkDriveAccess(
 }
 
 /**
+ * Get all user IDs that are members of a drive
+ * Efficient query for authorization checks
+ */
+export async function getDriveMemberUserIds(driveId: string): Promise<string[]> {
+  const members = await db
+    .select({ userId: driveMembers.userId })
+    .from(driveMembers)
+    .where(eq(driveMembers.driveId, driveId));
+
+  return members.map((m) => m.userId);
+}
+
+/**
  * List all members of a drive with their details and permission counts
  */
 export async function listDriveMembers(driveId: string): Promise<MemberWithDetails[]> {

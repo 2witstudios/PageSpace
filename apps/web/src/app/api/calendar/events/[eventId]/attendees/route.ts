@@ -7,7 +7,8 @@ import {
   eq,
   and,
 } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
+import { isUserDriveMember } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
@@ -30,6 +31,11 @@ const updateRsvpSchema = z.object({
  * GET /api/calendar/events/[eventId]/attendees
  *
  * Get all attendees for an event
+ *
+ * Access rules:
+ * - PRIVATE: only creator can view
+ * - ATTENDEES_ONLY: creator or attendees can view
+ * - DRIVE: creator, attendees, or drive members can view
  */
 export async function GET(
   request: Request,
@@ -41,10 +47,10 @@ export async function GET(
     return auth.error;
   }
 
-  const _userId = auth.userId;
+  const userId = auth.userId;
 
   try {
-    // Verify event exists and user has access
+    // Verify event exists
     const event = await db.query.calendarEvents.findFirst({
       where: and(
         eq(calendarEvents.id, eventId),
@@ -54,6 +60,66 @@ export async function GET(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    const isCreator = event.createdById === userId;
+
+    // PRIVATE events: only creator can access
+    if (event.visibility === 'PRIVATE') {
+      if (!isCreator) {
+        return NextResponse.json(
+          { error: 'Access denied - this is a private event' },
+          { status: 403 }
+        );
+      }
+    }
+    // ATTENDEES_ONLY events: creator or attendees can access
+    else if (event.visibility === 'ATTENDEES_ONLY') {
+      if (!isCreator) {
+        const isAttendee = await db.query.eventAttendees.findFirst({
+          where: and(
+            eq(eventAttendees.eventId, eventId),
+            eq(eventAttendees.userId, userId)
+          ),
+        });
+
+        if (!isAttendee) {
+          return NextResponse.json(
+            { error: 'Access denied - you are not an attendee of this event' },
+            { status: 403 }
+          );
+        }
+      }
+    }
+    // DRIVE events: creator, attendees, or drive members can access
+    else if (event.visibility === 'DRIVE') {
+      if (!isCreator) {
+        // Check if user is an attendee first (fast path)
+        const isAttendee = await db.query.eventAttendees.findFirst({
+          where: and(
+            eq(eventAttendees.eventId, eventId),
+            eq(eventAttendees.userId, userId)
+          ),
+        });
+
+        if (!isAttendee) {
+          // Must be a drive member
+          if (!event.driveId) {
+            return NextResponse.json(
+              { error: 'Access denied - invalid event configuration' },
+              { status: 403 }
+            );
+          }
+
+          const isDriveMember = await isUserDriveMember(userId, event.driveId);
+          if (!isDriveMember) {
+            return NextResponse.json(
+              { error: 'Access denied - you do not have access to this drive' },
+              { status: 403 }
+            );
+          }
+        }
+      }
     }
 
     // Get attendees with user info
@@ -80,6 +146,10 @@ export async function GET(
  * POST /api/calendar/events/[eventId]/attendees
  *
  * Add attendees to an event (only event creator can do this)
+ *
+ * Constraints:
+ * - PRIVATE events cannot have attendees (only creator)
+ * - Drive events: attendees must be drive members
  */
 export async function POST(
   request: Request,
@@ -114,6 +184,14 @@ export async function POST(
       );
     }
 
+    // PRIVATE events cannot have additional attendees
+    if (event.visibility === 'PRIVATE') {
+      return NextResponse.json(
+        { error: 'Private events cannot have attendees other than the creator' },
+        { status: 400 }
+      );
+    }
+
     const body = await request.json();
     const parseResult = addAttendeesSchema.safeParse(body);
 
@@ -125,6 +203,20 @@ export async function POST(
     }
 
     const { userIds, isOptional } = parseResult.data;
+
+    // For drive events, verify all proposed attendees are drive members
+    if (event.driveId) {
+      const driveMemberIds = await getDriveMemberUserIds(event.driveId);
+      const driveMemberSet = new Set(driveMemberIds);
+      const nonMembers = userIds.filter(id => !driveMemberSet.has(id));
+
+      if (nonMembers.length > 0) {
+        return NextResponse.json(
+          { error: 'All attendees must be members of the drive', nonMemberCount: nonMembers.length },
+          { status: 400 }
+        );
+      }
+    }
 
     // Get existing attendees to avoid duplicates
     const existingAttendees = await db

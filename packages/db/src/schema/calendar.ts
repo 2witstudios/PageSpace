@@ -53,7 +53,8 @@ export const calendarEvents = pgTable('calendar_events', {
   recurrenceExceptions: jsonb('recurrenceExceptions').$type<string[]>().default([]), // ISO date strings to skip
 
   // For recurrence instances - references the parent recurring event
-  recurringEventId: text('recurringEventId').references((): typeof calendarEvents => calendarEvents, { onDelete: 'cascade' }),
+  // Note: Self-referential FK handled via relations to avoid circular type inference
+  recurringEventId: text('recurringEventId'),
   originalStartAt: timestamp('originalStartAt', { mode: 'date', withTimezone: true }), // Original time if modified instance
 
   // Visibility and collaboration

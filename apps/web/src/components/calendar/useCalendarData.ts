@@ -109,7 +109,7 @@ export function useCalendarData({
     }
   );
 
-  // Create event
+  // Create event - post() returns parsed JSON directly, throws on error
   const createEvent = useCallback(
     async (eventData: {
       title: string;
@@ -124,55 +124,40 @@ export function useCalendarData({
       attendeeIds?: string[];
       pageId?: string;
     }) => {
-      const response = await post('/api/calendar/events', {
+      const result = await post<CalendarEvent>('/api/calendar/events', {
         driveId: context === 'drive' ? driveId : null,
         ...eventData,
         startAt: eventData.startAt.toISOString(),
         endAt: eventData.endAt.toISOString(),
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create event');
-      }
-
       // Revalidate events
       mutate(eventsUrl);
-      return response.json();
+      return result;
     },
     [context, driveId, eventsUrl]
   );
 
-  // Update event
+  // Update event - patch() returns parsed JSON directly, throws on error
   const updateEvent = useCallback(
-    async (eventId: string, updates: Partial<CalendarEvent>) => {
-      const response = await patch(`/api/calendar/events/${eventId}`, {
+    async (eventId: string, updates: Partial<Omit<CalendarEvent, 'startAt' | 'endAt'>> & { startAt?: Date | string; endAt?: Date | string }) => {
+      const result = await patch<CalendarEvent>(`/api/calendar/events/${eventId}`, {
         ...updates,
-        startAt: updates.startAt ? new Date(updates.startAt).toISOString() : undefined,
-        endAt: updates.endAt ? new Date(updates.endAt).toISOString() : undefined,
+        startAt: updates.startAt ? (updates.startAt instanceof Date ? updates.startAt.toISOString() : updates.startAt) : undefined,
+        endAt: updates.endAt ? (updates.endAt instanceof Date ? updates.endAt.toISOString() : updates.endAt) : undefined,
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to update event');
-      }
-
       // Revalidate events
       mutate(eventsUrl);
-      return response.json();
+      return result;
     },
     [eventsUrl]
   );
 
-  // Delete event
+  // Delete event - del() throws on error
   const deleteEvent = useCallback(
     async (eventId: string) => {
-      const response = await del(`/api/calendar/events/${eventId}`);
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to delete event');
-      }
+      await del(`/api/calendar/events/${eventId}`);
 
       // Revalidate events
       mutate(eventsUrl);
@@ -180,26 +165,21 @@ export function useCalendarData({
     [eventsUrl]
   );
 
-  // Update RSVP
+  // Update RSVP - patch() returns parsed JSON directly, throws on error
   const updateRsvp = useCallback(
     async (
       eventId: string,
       status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE',
       responseNote?: string
     ) => {
-      const response = await patch(`/api/calendar/events/${eventId}/attendees`, {
+      const result = await patch<CalendarEvent>(`/api/calendar/events/${eventId}/attendees`, {
         status,
         responseNote,
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to update RSVP');
-      }
-
       // Revalidate events
       mutate(eventsUrl);
-      return response.json();
+      return result;
     },
     [eventsUrl]
   );

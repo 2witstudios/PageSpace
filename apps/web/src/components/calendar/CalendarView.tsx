@@ -340,7 +340,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         event={selectedEvent}
         defaultValues={newEventDefaults}
         onSave={handleEventSave}
-        onDelete={selectedEvent ? () => handlers.onEventDelete(selectedEvent.id) : undefined}
+        onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
         driveId={driveId}
         context={context}
       />
