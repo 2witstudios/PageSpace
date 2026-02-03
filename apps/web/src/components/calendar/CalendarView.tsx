@@ -13,11 +13,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { useMobile } from '@/hooks/useMobile';
 import { useCalendarData } from './useCalendarData';
 import { MonthView } from './MonthView';
 import { WeekView } from './WeekView';
 import { DayView } from './DayView';
 import { AgendaView } from './AgendaView';
+import { MobileCalendarView } from './MobileCalendarView';
 import { EventModal } from './EventModal';
 import {
   CalendarViewMode,
@@ -33,6 +35,7 @@ interface CalendarViewProps {
 }
 
 export function CalendarView({ context, driveId, driveName: _driveName, className }: CalendarViewProps) {
+  const isMobile = useMobile();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [showTasks, setShowTasks] = useState(true);
@@ -164,6 +167,33 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     return (
       <div className="flex items-center justify-center h-full text-destructive">
         Failed to load calendar
+      </div>
+    );
+  }
+
+  // Render mobile-optimized view on small screens
+  if (isMobile) {
+    return (
+      <div className={cn('flex flex-col h-full', className)}>
+        <MobileCalendarView
+          events={events}
+          tasks={tasks}
+          handlers={handlers}
+          showTasks={showTasks}
+          onShowTasksChange={setShowTasks}
+          isLoading={isLoading}
+        />
+        {/* Event modal - shared between mobile and desktop */}
+        <EventModal
+          isOpen={isEventModalOpen}
+          onClose={() => setIsEventModalOpen(false)}
+          event={selectedEvent}
+          defaultValues={newEventDefaults}
+          onSave={handleEventSave}
+          onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
+          driveId={driveId}
+          context={context}
+        />
       </div>
     );
   }
