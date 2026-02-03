@@ -115,6 +115,138 @@ describe('tab-title', () => {
       expect(result.type).toBe('unknown');
       expect(result.path).toBe('/random/path');
     });
+
+    // Global dashboard routes
+    it('given global tasks path, should return dashboard-tasks type', () => {
+      const result = parseTabPath('/dashboard/tasks');
+
+      expect(result.type).toBe('dashboard-tasks');
+    });
+
+    it('given global activity path, should return dashboard-activity type', () => {
+      const result = parseTabPath('/dashboard/activity');
+
+      expect(result.type).toBe('dashboard-activity');
+    });
+
+    it('given global storage path, should return dashboard-storage type', () => {
+      const result = parseTabPath('/dashboard/storage');
+
+      expect(result.type).toBe('dashboard-storage');
+    });
+
+    it('given global trash path, should return dashboard-trash type', () => {
+      const result = parseTabPath('/dashboard/trash');
+
+      expect(result.type).toBe('dashboard-trash');
+    });
+
+    it('given global connections path, should return dashboard-connections type', () => {
+      const result = parseTabPath('/dashboard/connections');
+
+      expect(result.type).toBe('dashboard-connections');
+    });
+
+    it('given global calendar path, should return dashboard-calendar type', () => {
+      const result = parseTabPath('/dashboard/calendar');
+
+      expect(result.type).toBe('dashboard-calendar');
+    });
+
+    // Drive calendar and inbox
+    it('given drive calendar path, should return drive-calendar type', () => {
+      const result = parseTabPath('/dashboard/drive-123/calendar');
+
+      expect(result.type).toBe('drive-calendar');
+      expect(result.driveId).toBe('drive-123');
+    });
+
+    it('given drive inbox path, should return drive-inbox type', () => {
+      const result = parseTabPath('/dashboard/drive-123/inbox');
+
+      expect(result.type).toBe('drive-inbox');
+      expect(result.driveId).toBe('drive-123');
+    });
+
+    // Members sub-routes
+    it('given drive members invite path, should return drive-members-invite type', () => {
+      const result = parseTabPath('/dashboard/drive-123/members/invite');
+
+      expect(result.type).toBe('drive-members-invite');
+      expect(result.driveId).toBe('drive-123');
+    });
+
+    it('given drive members user path, should return drive-members-user type', () => {
+      const result = parseTabPath('/dashboard/drive-123/members/user-456');
+
+      expect(result.type).toBe('drive-members-user');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.userId).toBe('user-456');
+    });
+
+    // Admin routes
+    it('given admin root, should return admin type', () => {
+      const result = parseTabPath('/admin');
+
+      expect(result.type).toBe('admin');
+    });
+
+    it('given admin users path, should return admin-users type', () => {
+      const result = parseTabPath('/admin/users');
+
+      expect(result.type).toBe('admin-users');
+      expect(result.adminPage).toBe('users');
+    });
+
+    it('given admin support path, should return admin-support type', () => {
+      const result = parseTabPath('/admin/support');
+
+      expect(result.type).toBe('admin-support');
+    });
+
+    it('given admin monitoring path, should return admin-monitoring type', () => {
+      const result = parseTabPath('/admin/monitoring');
+
+      expect(result.type).toBe('admin-monitoring');
+    });
+
+    it('given admin audit-logs path, should return admin-audit-logs type', () => {
+      const result = parseTabPath('/admin/audit-logs');
+
+      expect(result.type).toBe('admin-audit-logs');
+    });
+
+    it('given admin global-prompt path, should return admin-global-prompt type', () => {
+      const result = parseTabPath('/admin/global-prompt');
+
+      expect(result.type).toBe('admin-global-prompt');
+    });
+
+    it('given admin tables path, should return admin-tables type', () => {
+      const result = parseTabPath('/admin/tables');
+
+      expect(result.type).toBe('admin-tables');
+    });
+
+    // Other standalone routes
+    it('given notifications path, should return notifications type', () => {
+      const result = parseTabPath('/notifications');
+
+      expect(result.type).toBe('notifications');
+    });
+
+    it('given friends path, should return friends type', () => {
+      const result = parseTabPath('/friends');
+
+      expect(result.type).toBe('friends');
+    });
+
+    // Empty path edge case
+    it('given empty path, should return unknown type', () => {
+      const result = parseTabPath('/');
+
+      expect(result.type).toBe('unknown');
+    });
   });
 
   describe('getStaticTabMeta', () => {
@@ -146,10 +278,10 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Users');
     });
 
-    it('given drive-settings type, should return Settings title', () => {
+    it('given drive-settings type, should return Drive Settings title', () => {
       const meta = getStaticTabMeta({ type: 'drive-settings', driveId: 'drive-123' });
 
-      expect(meta!.title).toBe('Settings');
+      expect(meta!.title).toBe('Drive Settings');
       expect(meta!.iconName).toBe('Settings');
     });
 
@@ -216,6 +348,163 @@ describe('tab-title', () => {
 
       expect(meta!.title).toBe('/some/path');
       expect(meta!.iconName).toBe('File');
+    });
+
+    // Global dashboard routes
+    it('given dashboard-tasks type, should return Tasks title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-tasks' });
+
+      expect(meta!.title).toBe('Tasks');
+      expect(meta!.iconName).toBe('CheckSquare');
+    });
+
+    it('given dashboard-activity type, should return Activity title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-activity' });
+
+      expect(meta!.title).toBe('Activity');
+      expect(meta!.iconName).toBe('Activity');
+    });
+
+    it('given dashboard-storage type, should return Storage title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-storage' });
+
+      expect(meta!.title).toBe('Storage');
+      expect(meta!.iconName).toBe('HardDrive');
+    });
+
+    it('given dashboard-trash type, should return Trash title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-trash' });
+
+      expect(meta!.title).toBe('Trash');
+      expect(meta!.iconName).toBe('Trash2');
+    });
+
+    it('given dashboard-connections type, should return Connections title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-connections' });
+
+      expect(meta!.title).toBe('Connections');
+      expect(meta!.iconName).toBe('Link');
+    });
+
+    it('given dashboard-calendar type, should return Calendar title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-calendar' });
+
+      expect(meta!.title).toBe('Calendar');
+      expect(meta!.iconName).toBe('Calendar');
+    });
+
+    // Drive calendar and inbox
+    it('given drive-calendar type, should return Calendar title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-calendar', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Calendar');
+      expect(meta!.iconName).toBe('Calendar');
+    });
+
+    it('given drive-inbox type, should return Inbox title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-inbox', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Inbox');
+      expect(meta!.iconName).toBe('Inbox');
+    });
+
+    // Members sub-routes
+    it('given drive-members-invite type, should return Invite Members title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-members-invite', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Invite Members');
+      expect(meta!.iconName).toBe('UserPlus');
+    });
+
+    it('given drive-members-user type, should return Member title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-members-user', driveId: 'drive-123', userId: 'user-456' });
+
+      expect(meta!.title).toBe('Member');
+      expect(meta!.iconName).toBe('User');
+    });
+
+    // Admin routes
+    it('given admin type, should return Admin title', () => {
+      const meta = getStaticTabMeta({ type: 'admin' });
+
+      expect(meta!.title).toBe('Admin');
+      expect(meta!.iconName).toBe('Shield');
+    });
+
+    it('given admin-users type, should return Admin - Users title', () => {
+      const meta = getStaticTabMeta({ type: 'admin-users' });
+
+      expect(meta!.title).toBe('Admin - Users');
+      expect(meta!.iconName).toBe('Users');
+    });
+
+    it('given admin-support type, should return Admin - Support title', () => {
+      const meta = getStaticTabMeta({ type: 'admin-support' });
+
+      expect(meta!.title).toBe('Admin - Support');
+      expect(meta!.iconName).toBe('LifeBuoy');
+    });
+
+    it('given admin-monitoring type, should return Admin - Monitoring title', () => {
+      const meta = getStaticTabMeta({ type: 'admin-monitoring' });
+
+      expect(meta!.title).toBe('Admin - Monitoring');
+      expect(meta!.iconName).toBe('Activity');
+    });
+
+    it('given admin-audit-logs type, should return Admin - Audit Logs title', () => {
+      const meta = getStaticTabMeta({ type: 'admin-audit-logs' });
+
+      expect(meta!.title).toBe('Admin - Audit Logs');
+      expect(meta!.iconName).toBe('FileText');
+    });
+
+    it('given admin-global-prompt type, should return Admin - Global Prompt title', () => {
+      const meta = getStaticTabMeta({ type: 'admin-global-prompt' });
+
+      expect(meta!.title).toBe('Admin - Global Prompt');
+      expect(meta!.iconName).toBe('MessageSquare');
+    });
+
+    it('given admin-tables type, should return Admin - Tables title', () => {
+      const meta = getStaticTabMeta({ type: 'admin-tables' });
+
+      expect(meta!.title).toBe('Admin - Tables');
+      expect(meta!.iconName).toBe('Table');
+    });
+
+    // Other standalone routes
+    it('given notifications type, should return Notifications title', () => {
+      const meta = getStaticTabMeta({ type: 'notifications' });
+
+      expect(meta!.title).toBe('Notifications');
+      expect(meta!.iconName).toBe('Bell');
+    });
+
+    it('given friends type, should return Friends title', () => {
+      const meta = getStaticTabMeta({ type: 'friends' });
+
+      expect(meta!.title).toBe('Friends');
+      expect(meta!.iconName).toBe('Users');
+    });
+
+    // Settings with hyphenated subpages
+    it('given settings type with ai-api subpage, should return correctly formatted title', () => {
+      const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'ai-api' });
+
+      expect(meta!.title).toBe('Settings - AI API');
+    });
+
+    it('given settings type with local-mcp subpage, should return correctly formatted title', () => {
+      const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'local-mcp' });
+
+      expect(meta!.title).toBe('Settings - Local MCP');
+    });
+
+    it('given settings type with personalization subpage, should return correctly formatted title', () => {
+      const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'personalization' });
+
+      expect(meta!.title).toBe('Settings - Personalization');
     });
   });
 });

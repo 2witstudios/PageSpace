@@ -7,16 +7,41 @@ export type PathType =
   | 'dashboard'
   | 'drive'
   | 'page'
+  // Drive-specific routes
   | 'drive-tasks'
   | 'drive-activity'
   | 'drive-members'
+  | 'drive-members-invite'
+  | 'drive-members-user'
   | 'drive-settings'
   | 'drive-trash'
+  | 'drive-calendar'
+  | 'drive-inbox'
+  // Global dashboard routes
+  | 'dashboard-tasks'
+  | 'dashboard-activity'
+  | 'dashboard-storage'
+  | 'dashboard-trash'
+  | 'dashboard-connections'
+  | 'dashboard-calendar'
+  // Inbox routes
   | 'inbox'
   | 'inbox-dm'
   | 'inbox-channel'
   | 'inbox-new'
+  // Settings routes
   | 'settings'
+  // Admin routes
+  | 'admin'
+  | 'admin-users'
+  | 'admin-support'
+  | 'admin-monitoring'
+  | 'admin-audit-logs'
+  | 'admin-global-prompt'
+  | 'admin-tables'
+  // Other standalone routes
+  | 'notifications'
+  | 'friends'
   | 'unknown';
 
 export interface ParsedPath {
@@ -24,7 +49,9 @@ export interface ParsedPath {
   driveId?: string;
   pageId?: string;
   conversationId?: string;
+  userId?: string;
   settingsPage?: string;
+  adminPage?: string;
   path?: string;
 }
 
@@ -33,10 +60,21 @@ export interface TabMeta {
   iconName: string;
 }
 
-const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash'] as const;
+// Global dashboard routes (not drive-specific)
+const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'inbox'] as const;
+
+// Drive-specific special routes
+const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'inbox'] as const;
+
+// Admin sub-pages
+const ADMIN_ROUTES = ['users', 'support', 'monitoring', 'audit-logs', 'global-prompt', 'tables'] as const;
 
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
+
+  if (segments.length === 0) {
+    return { type: 'unknown', path };
+  }
 
   // /settings or /settings/subpage
   if (segments[0] === 'settings') {
@@ -46,7 +84,40 @@ export const parseTabPath = (path: string): ParsedPath => {
     };
   }
 
-  // Must start with /dashboard
+  // /admin or /admin/subpage
+  if (segments[0] === 'admin') {
+    if (segments.length === 1) {
+      return { type: 'admin' };
+    }
+    const adminPage = segments[1];
+    const adminTypeMap: Record<string, PathType> = {
+      users: 'admin-users',
+      support: 'admin-support',
+      monitoring: 'admin-monitoring',
+      'audit-logs': 'admin-audit-logs',
+      'global-prompt': 'admin-global-prompt',
+      tables: 'admin-tables',
+    };
+    if (adminTypeMap[adminPage]) {
+      return {
+        type: adminTypeMap[adminPage],
+        adminPage,
+      };
+    }
+    return { type: 'admin', adminPage };
+  }
+
+  // /notifications
+  if (segments[0] === 'notifications') {
+    return { type: 'notifications' };
+  }
+
+  // /friends
+  if (segments[0] === 'friends') {
+    return { type: 'friends' };
+  }
+
+  // Must start with /dashboard for remaining routes
   if (segments[0] !== 'dashboard') {
     return { type: 'unknown', path };
   }
@@ -56,31 +127,48 @@ export const parseTabPath = (path: string): ParsedPath => {
     return { type: 'dashboard' };
   }
 
-  // /dashboard/inbox routes
-  if (segments[1] === 'inbox') {
-    // /dashboard/inbox/dm/[conversationId]
-    if (segments[2] === 'dm' && segments[3]) {
-      return {
-        type: 'inbox-dm',
-        conversationId: segments[3],
-      };
+  const secondSegment = segments[1];
+
+  // Check if it's a global dashboard route first
+  if (GLOBAL_DASHBOARD_ROUTES.includes(secondSegment as typeof GLOBAL_DASHBOARD_ROUTES[number])) {
+    // /dashboard/inbox routes
+    if (secondSegment === 'inbox') {
+      // /dashboard/inbox/dm/[conversationId]
+      if (segments[2] === 'dm' && segments[3]) {
+        return {
+          type: 'inbox-dm',
+          conversationId: segments[3],
+        };
+      }
+      // /dashboard/inbox/channel/[pageId]
+      if (segments[2] === 'channel' && segments[3]) {
+        return {
+          type: 'inbox-channel',
+          pageId: segments[3],
+        };
+      }
+      // /dashboard/inbox/new
+      if (segments[2] === 'new') {
+        return { type: 'inbox-new' };
+      }
+      // /dashboard/inbox
+      return { type: 'inbox' };
     }
-    // /dashboard/inbox/channel/[pageId]
-    if (segments[2] === 'channel' && segments[3]) {
-      return {
-        type: 'inbox-channel',
-        pageId: segments[3],
-      };
-    }
-    // /dashboard/inbox/new
-    if (segments[2] === 'new') {
-      return { type: 'inbox-new' };
-    }
-    // /dashboard/inbox
-    return { type: 'inbox' };
+
+    // Other global dashboard routes
+    const globalTypeMap: Record<string, PathType> = {
+      tasks: 'dashboard-tasks',
+      activity: 'dashboard-activity',
+      storage: 'dashboard-storage',
+      trash: 'dashboard-trash',
+      connections: 'dashboard-connections',
+      calendar: 'dashboard-calendar',
+    };
+    return { type: globalTypeMap[secondSegment] };
   }
 
-  const driveId = segments[1];
+  // At this point, secondSegment is a driveId
+  const driveId = secondSegment;
 
   // /dashboard/[driveId]
   if (segments.length === 2) {
@@ -91,12 +179,37 @@ export const parseTabPath = (path: string): ParsedPath => {
 
   // /dashboard/[driveId]/[specialRoute]
   if (DRIVE_SPECIAL_ROUTES.includes(thirdSegment as typeof DRIVE_SPECIAL_ROUTES[number])) {
+    // Handle members sub-routes
+    if (thirdSegment === 'members') {
+      // /dashboard/[driveId]/members/invite
+      if (segments[3] === 'invite') {
+        return {
+          type: 'drive-members-invite',
+          driveId,
+        };
+      }
+      // /dashboard/[driveId]/members/[userId]
+      if (segments[3]) {
+        return {
+          type: 'drive-members-user',
+          driveId,
+          userId: segments[3],
+        };
+      }
+      // /dashboard/[driveId]/members
+      return {
+        type: 'drive-members',
+        driveId,
+      };
+    }
+
     const typeMap: Record<string, PathType> = {
       tasks: 'drive-tasks',
       activity: 'drive-activity',
-      members: 'drive-members',
       settings: 'drive-settings',
       trash: 'drive-trash',
+      calendar: 'drive-calendar',
+      inbox: 'drive-inbox',
     };
     return {
       type: typeMap[thirdSegment],
@@ -112,20 +225,51 @@ export const parseTabPath = (path: string): ParsedPath => {
   };
 };
 
-const ACRONYMS = ['mcp', 'api', 'ai'] as const;
+const ACRONYMS = new Set(['mcp', 'api', 'ai']);
 
-const formatSettingsPage = (str: string): string => {
-  if (ACRONYMS.includes(str.toLowerCase() as typeof ACRONYMS[number])) {
-    return str.toUpperCase();
-  }
-  return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+/**
+ * Format a settings/admin page name for display.
+ * Handles hyphenated names like "ai-api" -> "AI API" and "local-mcp" -> "Local MCP"
+ */
+const formatPageName = (str: string): string => {
+  return str
+    .split('-')
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (ACRONYMS.has(lower)) {
+        return word.toUpperCase();
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(' ');
 };
 
 export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
   switch (parsed.type) {
+    // Main dashboard
     case 'dashboard':
       return { title: 'Dashboard', iconName: 'LayoutDashboard' };
 
+    // Global dashboard routes
+    case 'dashboard-tasks':
+      return { title: 'Tasks', iconName: 'CheckSquare' };
+
+    case 'dashboard-activity':
+      return { title: 'Activity', iconName: 'Activity' };
+
+    case 'dashboard-storage':
+      return { title: 'Storage', iconName: 'HardDrive' };
+
+    case 'dashboard-trash':
+      return { title: 'Trash', iconName: 'Trash2' };
+
+    case 'dashboard-connections':
+      return { title: 'Connections', iconName: 'Link' };
+
+    case 'dashboard-calendar':
+      return { title: 'Calendar', iconName: 'Calendar' };
+
+    // Drive-specific routes
     case 'drive-tasks':
       return { title: 'Tasks', iconName: 'CheckSquare' };
 
@@ -135,12 +279,26 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     case 'drive-members':
       return { title: 'Members', iconName: 'Users' };
 
+    case 'drive-members-invite':
+      return { title: 'Invite Members', iconName: 'UserPlus' };
+
+    case 'drive-members-user':
+      // Could return a generic title or fetch user name
+      return { title: 'Member', iconName: 'User' };
+
     case 'drive-settings':
-      return { title: 'Settings', iconName: 'Settings' };
+      return { title: 'Drive Settings', iconName: 'Settings' };
 
     case 'drive-trash':
       return { title: 'Trash', iconName: 'Trash2' };
 
+    case 'drive-calendar':
+      return { title: 'Calendar', iconName: 'Calendar' };
+
+    case 'drive-inbox':
+      return { title: 'Inbox', iconName: 'Inbox' };
+
+    // Global inbox routes
     case 'inbox':
       return { title: 'Inbox', iconName: 'Inbox' };
 
@@ -155,18 +313,48 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     case 'inbox-new':
       return { title: 'New Message', iconName: 'PenSquare' };
 
+    // Settings routes
     case 'settings':
       if (parsed.settingsPage) {
         return {
-          title: `Settings - ${formatSettingsPage(parsed.settingsPage)}`,
+          title: `Settings - ${formatPageName(parsed.settingsPage)}`,
           iconName: 'Settings',
         };
       }
       return { title: 'Settings', iconName: 'Settings' };
 
+    // Admin routes
+    case 'admin':
+      return { title: 'Admin', iconName: 'Shield' };
+
+    case 'admin-users':
+      return { title: 'Admin - Users', iconName: 'Users' };
+
+    case 'admin-support':
+      return { title: 'Admin - Support', iconName: 'LifeBuoy' };
+
+    case 'admin-monitoring':
+      return { title: 'Admin - Monitoring', iconName: 'Activity' };
+
+    case 'admin-audit-logs':
+      return { title: 'Admin - Audit Logs', iconName: 'FileText' };
+
+    case 'admin-global-prompt':
+      return { title: 'Admin - Global Prompt', iconName: 'MessageSquare' };
+
+    case 'admin-tables':
+      return { title: 'Admin - Tables', iconName: 'Table' };
+
+    // Other standalone routes
+    case 'notifications':
+      return { title: 'Notifications', iconName: 'Bell' };
+
+    case 'friends':
+      return { title: 'Friends', iconName: 'Users' };
+
+    // Dynamic routes requiring async lookup
     case 'page':
     case 'drive':
-      // Requires async lookup
       return null;
 
     case 'unknown':
