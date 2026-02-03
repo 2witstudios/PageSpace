@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles } from "lucide-react";
 
 interface SettingsItem {
   title: string;
@@ -77,6 +77,13 @@ export default function SettingsPage() {
           description: "Manage your account and profile",
           icon: User,
           href: "/settings/account",
+          available: true,
+        },
+        {
+          title: "Personalization",
+          description: "Customize how AI interacts with you",
+          icon: Sparkles,
+          href: "/settings/personalization",
           available: true,
         },
         {

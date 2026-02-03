@@ -30,6 +30,7 @@ import {
   convertMCPToolsToAISDKSchemas,
   parseMCPToolName,
   sanitizeToolNamesForProvider,
+  getUserPersonalization,
 } from '@/lib/ai/core';
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -477,6 +478,17 @@ export async function POST(
     
     const modelMessages = convertToModelMessages(processedMessages);
 
+    // Fetch user personalization for AI system prompt injection
+    const personalization = await getUserPersonalization(userId);
+    if (personalization) {
+      loggers.api.debug('Global Assistant: User personalization loaded', {
+        hasPersonalization: true,
+        hasBio: !!personalization.bio,
+        hasWritingStyle: !!personalization.writingStyle,
+        hasRules: !!personalization.rules,
+      });
+    }
+
     // Build system prompt with context
     const contextType = locationContext?.currentPage ? 'page' :
                        locationContext?.currentDrive ? 'drive' :
@@ -492,7 +504,8 @@ export async function POST(
         pageType: locationContext.currentPage?.type,
         breadcrumbs: locationContext.breadcrumbs,
       } : undefined,
-      readOnlyMode
+      readOnlyMode,
+      personalization ?? undefined
     );
 
     // Build timestamp system prompt for temporal awareness

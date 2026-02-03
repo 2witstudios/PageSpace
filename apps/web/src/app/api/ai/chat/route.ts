@@ -41,6 +41,7 @@ import {
   processMentionsInMessage,
   buildTimestampSystemPrompt,
   buildSystemPrompt,
+  buildPersonalizationPrompt,
   filterToolsForReadOnly,
   filterToolsForWebSearch,
   getPageTreeContext,
@@ -48,6 +49,7 @@ import {
   convertMCPToolsToAISDKSchemas,
   parseMCPToolName,
   sanitizeToolNamesForProvider,
+  getUserPersonalization,
 } from '@/lib/ai/core';
 import { db, users, chatMessages, pages, drives, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -656,6 +658,17 @@ export async function POST(request: Request) {
       tools: filteredTools  // Use original tools - no wrapping needed
     });
 
+    // Fetch user personalization for AI system prompt injection
+    const personalization = await getUserPersonalization(userId);
+    if (personalization) {
+      loggers.ai.debug('AI Chat API: User personalization loaded', {
+        hasPersonalization: true,
+        hasBio: !!personalization.bio,
+        hasWritingStyle: !!personalization.writingStyle,
+        hasRules: !!personalization.rules,
+      });
+    }
+
     // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
     let systemPrompt: string;
     if (customSystemPrompt) {
@@ -665,12 +678,17 @@ export async function POST(request: Request) {
       if (pageContext) {
         systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
       }
+      // Add user personalization if enabled
+      const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
+      if (personalizationPrompt) {
+        systemPrompt += `\n\n${personalizationPrompt}`;
+      }
       // Add read-only constraint if applicable
       if (readOnlyMode) {
         systemPrompt += `\n\nREAD-ONLY MODE:\n• You cannot modify, create, or delete any content\n• Focus on exploring, analyzing, and planning\n• Create actionable plans for the user to execute later`;
       }
     } else {
-      // Fallback to default PageSpace system prompt with read-only mode
+      // Fallback to default PageSpace system prompt with read-only mode and personalization
       systemPrompt = buildSystemPrompt(
         'page',
         pageContext ? {
@@ -681,7 +699,8 @@ export async function POST(request: Request) {
           pageType: pageContext.pageType,
           breadcrumbs: pageContext.breadcrumbs,
         } : undefined,
-        readOnlyMode
+        readOnlyMode,
+        personalization ?? undefined
       );
     }
     
