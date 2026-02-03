@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSWRConfig } from "swr";
-import { Home, Inbox, Lock, Plus, Search } from "lucide-react";
+import { Lock, Plus, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,13 +18,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
-import { useLayoutStore } from "@/stores/useLayoutStore";
 
 import CreatePageDialog from "./CreatePageDialog";
 import DashboardFooter from "./DashboardFooter";
 import DashboardSidebar from "./DashboardSidebar";
 import DriveFooter from "./DriveFooter";
 import PageTree from "./page-tree/PageTree";
+import PrimaryNavigation from "./PrimaryNavigation";
 import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
 
 export interface SidebarProps {
@@ -41,7 +40,6 @@ export default function Sidebar({ className }: SidebarProps) {
   const { driveId: driveIdParams } = params;
   const { user } = useAuth();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
-  const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore((state) => state.drives);
@@ -84,25 +82,8 @@ export default function Sidebar({ className }: SidebarProps) {
           <DriveSwitcher />
         </div>
 
-        {/* Dashboard link - always visible */}
-        <Link
-          href="/dashboard"
-          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-        >
-          <Home className="h-4 w-4" />
-          Dashboard
-        </Link>
-
-        {/* Inbox link - always visible */}
-        <Link
-          href={driveId ? `/dashboard/${driveId}/inbox` : "/dashboard/inbox"}
-          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground mb-3"
-        >
-          <Inbox className="h-4 w-4" />
-          Inbox
-        </Link>
+        {/* Primary Navigation (Dashboard, Inbox, Tasks, Calendar) */}
+        <PrimaryNavigation driveId={driveId as string} />
 
         {/* Main content area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">

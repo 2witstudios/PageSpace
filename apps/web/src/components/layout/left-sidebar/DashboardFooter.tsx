@@ -4,7 +4,6 @@ import { type MouseEvent } from "react";
 import Link from "next/link";
 import {
   Activity,
-  CheckSquare,
   ChevronDown,
   ExternalLink,
   Settings,
@@ -31,11 +30,6 @@ import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { cn } from "@/lib/utils";
 
 const actions = [
-  {
-    icon: CheckSquare,
-    label: "Tasks",
-    href: "/dashboard/tasks",
-  },
   {
     icon: Activity,
     label: "Activity",

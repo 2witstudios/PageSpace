@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   Activity,
-  CheckSquare,
   ChevronDown,
   ExternalLink,
   Settings,
@@ -70,12 +69,6 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
       icon: Activity,
       label: "Activity",
       href: `/dashboard/${driveId}/activity`,
-      show: true,
-    },
-    {
-      icon: CheckSquare,
-      label: "Tasks",
-      href: `/dashboard/${driveId}/tasks`,
       show: true,
     },
     {
