@@ -159,10 +159,10 @@ export function EventModal({
     }
 
     const startAt = allDay
-      ? new Date(startDate.setHours(0, 0, 0, 0))
+      ? (() => { const d = new Date(startDate); d.setHours(0, 0, 0, 0); return d; })()
       : buildDateTime(startDate, startTime);
     const endAt = allDay
-      ? new Date(endDate.setHours(23, 59, 59, 999))
+      ? (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })()
       : buildDateTime(endDate, endTime);
 
     if (endAt <= startAt) {

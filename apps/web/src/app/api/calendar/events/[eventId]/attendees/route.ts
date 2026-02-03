@@ -202,7 +202,10 @@ export async function POST(
       );
     }
 
-    const { userIds, isOptional } = parseResult.data;
+    const { userIds: rawUserIds, isOptional } = parseResult.data;
+
+    // Deduplicate userIds to prevent unique constraint errors
+    const userIds = [...new Set(rawUserIds)];
 
     // For drive events, verify all proposed attendees are drive members
     if (event.driveId) {

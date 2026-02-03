@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 2
+iteration: 3
 max_iterations: 40
 completion_promise: "PR_READY"
 started_at: "2026-02-03T00:48:37Z"

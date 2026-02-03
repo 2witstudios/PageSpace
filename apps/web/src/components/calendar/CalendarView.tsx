@@ -175,13 +175,13 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         <div className="flex items-center gap-3">
           {/* Navigation */}
           <div className="flex items-center gap-1">
-            <Button variant="outline" size="icon" onClick={handlePrevious}>
+            <Button variant="outline" size="icon" onClick={handlePrevious} aria-label="Previous">
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <Button variant="outline" size="sm" onClick={handleToday}>
               Today
             </Button>
-            <Button variant="outline" size="icon" onClick={handleNext}>
+            <Button variant="outline" size="icon" onClick={handleNext} aria-label="Next">
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
@@ -202,6 +202,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Month view"
+              aria-label="Month view"
             >
               <LayoutGrid className="h-4 w-4" />
             </button>
@@ -214,6 +215,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Week view"
+              aria-label="Week view"
             >
               <CalendarIcon className="h-4 w-4" />
             </button>
@@ -226,6 +228,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Day view"
+              aria-label="Day view"
             >
               <Clock className="h-4 w-4" />
             </button>
@@ -238,6 +241,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
                   : 'text-muted-foreground hover:text-foreground'
               )}
               title="Agenda view"
+              aria-label="Agenda view"
             >
               <List className="h-4 w-4" />
             </button>
@@ -274,10 +278,18 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           <Button
             size="sm"
             onClick={() => {
+              // Use currentDate to respect user's navigation
+              const baseDate = new Date(currentDate);
               const now = new Date();
-              const start = new Date(now);
-              start.setMinutes(0, 0, 0);
-              start.setHours(start.getHours() + 1);
+              // If viewing today, use current time; otherwise use a reasonable default (9 AM)
+              const isToday = baseDate.toDateString() === now.toDateString();
+              const start = new Date(baseDate);
+              if (isToday) {
+                start.setMinutes(0, 0, 0);
+                start.setHours(now.getHours() + 1);
+              } else {
+                start.setHours(9, 0, 0, 0);
+              }
               const end = new Date(start);
               end.setHours(end.getHours() + 1);
               handlers.onEventCreate(start, end);
