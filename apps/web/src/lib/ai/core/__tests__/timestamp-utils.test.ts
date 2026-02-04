@@ -1,204 +1,145 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  getUserTimeOfDay,
-  getStartOfTodayInTimezone,
   buildTimestampSystemPrompt,
+  getStartOfTodayInTimezone,
+  getUserTimeOfDay,
+  isValidTimezone,
+  normalizeTimezone,
 } from '../timestamp-utils';
 
 describe('timestamp-utils', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe('isValidTimezone', () => {
+    it('returns true for valid IANA timezone names', () => {
+      expect(isValidTimezone('UTC')).toBe(true);
+      expect(isValidTimezone('America/New_York')).toBe(true);
+    });
+
+    it('returns false for invalid timezone names', () => {
+      expect(isValidTimezone('Invalid/Timezone')).toBe(false);
+    });
+  });
+
+  describe('normalizeTimezone', () => {
+    it('returns UTC for null, undefined, or empty values', () => {
+      expect(normalizeTimezone(undefined)).toBe('UTC');
+      expect(normalizeTimezone(null)).toBe('UTC');
+      expect(normalizeTimezone('')).toBe('UTC');
+      expect(normalizeTimezone('   ')).toBe('UTC');
+    });
+
+    it('returns UTC for invalid timezone values', () => {
+      expect(normalizeTimezone('Invalid/Timezone')).toBe('UTC');
+    });
+
+    it('trims and returns valid timezone values', () => {
+      expect(normalizeTimezone('  America/Los_Angeles  ')).toBe('America/Los_Angeles');
+    });
+  });
+
   describe('getUserTimeOfDay', () => {
-    it('should return morning for hours before 12', () => {
-      // Mock the current time to 9 AM UTC
-      const testDate = new Date('2024-06-15T09:00:00Z');
-      const originalDate = Date;
-      global.Date = class extends originalDate {
-        constructor(...args: unknown[]) {
-          if (args.length === 0) {
-            super(testDate);
-          } else {
-            // @ts-expect-error - spread args
-            super(...args);
-          }
-        }
-        static now() {
-          return testDate.getTime();
-        }
-      } as DateConstructor;
+    it('returns morning for hours before 12', () => {
+      vi.setSystemTime(new Date('2024-06-15T09:00:00Z'));
 
       const result = getUserTimeOfDay('UTC');
       expect(result.hour).toBe(9);
       expect(result.timeOfDay).toBe('morning');
-
-      global.Date = originalDate;
     });
 
-    it('should return afternoon for hours between 12 and 17', () => {
-      const testDate = new Date('2024-06-15T14:00:00Z');
-      const originalDate = Date;
-      global.Date = class extends originalDate {
-        constructor(...args: unknown[]) {
-          if (args.length === 0) {
-            super(testDate);
-          } else {
-            // @ts-expect-error - spread args
-            super(...args);
-          }
-        }
-        static now() {
-          return testDate.getTime();
-        }
-      } as DateConstructor;
+    it('returns afternoon for hours between 12 and 17', () => {
+      vi.setSystemTime(new Date('2024-06-15T14:00:00Z'));
 
       const result = getUserTimeOfDay('UTC');
       expect(result.hour).toBe(14);
       expect(result.timeOfDay).toBe('afternoon');
-
-      global.Date = originalDate;
     });
 
-    it('should return evening for hours 17 and later', () => {
-      const testDate = new Date('2024-06-15T19:00:00Z');
-      const originalDate = Date;
-      global.Date = class extends originalDate {
-        constructor(...args: unknown[]) {
-          if (args.length === 0) {
-            super(testDate);
-          } else {
-            // @ts-expect-error - spread args
-            super(...args);
-          }
-        }
-        static now() {
-          return testDate.getTime();
-        }
-      } as DateConstructor;
+    it('returns evening for hours 17 and later', () => {
+      vi.setSystemTime(new Date('2024-06-15T19:00:00Z'));
 
       const result = getUserTimeOfDay('UTC');
       expect(result.hour).toBe(19);
       expect(result.timeOfDay).toBe('evening');
-
-      global.Date = originalDate;
     });
 
-    it('should handle different timezones correctly', () => {
+    it('handles different timezones correctly', () => {
       // At 14:00 UTC, it's 10:00 in New York (EDT, UTC-4)
-      const testDate = new Date('2024-06-15T14:00:00Z');
-      const originalDate = Date;
-      global.Date = class extends originalDate {
-        constructor(...args: unknown[]) {
-          if (args.length === 0) {
-            super(testDate);
-          } else {
-            // @ts-expect-error - spread args
-            super(...args);
-          }
-        }
-        static now() {
-          return testDate.getTime();
-        }
-      } as DateConstructor;
+      vi.setSystemTime(new Date('2024-06-15T14:00:00Z'));
 
       const utcResult = getUserTimeOfDay('UTC');
-      expect(utcResult.timeOfDay).toBe('afternoon'); // 14:00 UTC
+      expect(utcResult.timeOfDay).toBe('afternoon');
 
       const nyResult = getUserTimeOfDay('America/New_York');
-      expect(nyResult.timeOfDay).toBe('morning'); // 10:00 EDT
-
-      global.Date = originalDate;
+      expect(nyResult.timeOfDay).toBe('morning');
     });
 
-    it('should default to UTC when timezone is null or undefined', () => {
-      const result1 = getUserTimeOfDay(null);
-      const result2 = getUserTimeOfDay(undefined);
+    it('falls back to UTC when timezone is invalid', () => {
+      vi.setSystemTime(new Date('2024-06-15T14:00:00Z'));
 
-      // Both should work without throwing
-      expect(result1.timeOfDay).toBeDefined();
-      expect(result2.timeOfDay).toBeDefined();
+      const result = getUserTimeOfDay('Invalid/Timezone');
+      expect(result.timeOfDay).toBe('afternoon');
     });
   });
 
   describe('getStartOfTodayInTimezone', () => {
-    it('should return midnight UTC for UTC timezone', () => {
-      const testDate = new Date('2024-06-15T14:30:00Z');
-      const originalDate = Date;
-      global.Date = class extends originalDate {
-        constructor(...args: unknown[]) {
-          if (args.length === 0) {
-            super(testDate);
-          } else {
-            // @ts-expect-error - spread args
-            super(...args);
-          }
-        }
-        static now() {
-          return testDate.getTime();
-        }
-      } as DateConstructor;
+    it('returns midnight UTC for UTC timezone', () => {
+      vi.setSystemTime(new Date('2024-06-15T14:30:00Z'));
 
       const result = getStartOfTodayInTimezone('UTC');
       const expected = new Date('2024-06-15T00:00:00Z');
       expect(result.toISOString()).toBe(expected.toISOString());
-
-      global.Date = originalDate;
     });
 
-    it('should handle null timezone by defaulting to UTC', () => {
-      const result = getStartOfTodayInTimezone(null);
-      expect(result).toBeInstanceOf(Date);
-    });
-
-    it('should handle different timezones', () => {
+    it('handles different timezones', () => {
       // At 2:00 UTC on June 15, it's June 14 22:00 in New York (EDT, UTC-4)
-      const testDate = new Date('2024-06-15T02:00:00Z');
-      const originalDate = Date;
-      global.Date = class extends originalDate {
-        constructor(...args: unknown[]) {
-          if (args.length === 0) {
-            super(testDate);
-          } else {
-            // @ts-expect-error - spread args
-            super(...args);
-          }
-        }
-        static now() {
-          return testDate.getTime();
-        }
-      } as DateConstructor;
+      vi.setSystemTime(new Date('2024-06-15T02:00:00Z'));
 
       const utcStart = getStartOfTodayInTimezone('UTC');
       const nyStart = getStartOfTodayInTimezone('America/New_York');
 
-      // UTC midnight June 15 is 2024-06-15T00:00:00Z
-      expect(utcStart.toISOString().split('T')[0]).toBe('2024-06-15');
+      expect(utcStart.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+      expect(nyStart.toISOString()).toBe('2024-06-14T04:00:00.000Z');
+    });
 
-      // NY midnight June 14 is 2024-06-14T04:00:00Z
-      // (midnight in EDT = 4:00 UTC due to -4 offset)
-      expect(nyStart.toISOString().split('T')[0]).toBe('2024-06-14');
+    it('falls back to UTC for invalid timezones', () => {
+      vi.setSystemTime(new Date('2024-06-15T14:30:00Z'));
 
-      global.Date = originalDate;
+      const result = getStartOfTodayInTimezone('Invalid/Timezone');
+      expect(result.toISOString()).toBe('2024-06-15T00:00:00.000Z');
     });
   });
 
   describe('buildTimestampSystemPrompt', () => {
-    it('should include the timezone in the output', () => {
+    it('includes the timezone in the output', () => {
       const result = buildTimestampSystemPrompt('America/Los_Angeles');
       expect(result).toContain('America/Los_Angeles');
       expect(result).toContain("User's timezone");
     });
 
-    it('should default to UTC when no timezone provided', () => {
+    it('defaults to UTC when no timezone provided', () => {
       const result = buildTimestampSystemPrompt(null);
       expect(result).toContain('UTC');
     });
 
-    it('should include time of day information', () => {
-      const result = buildTimestampSystemPrompt('UTC');
-      expect(result).toContain('Time of day:');
-      // Should contain one of: morning, afternoon, evening, or day
-      expect(result).toMatch(/Time of day: (morning|afternoon|evening|day)/);
+    it('defaults to UTC when timezone is invalid', () => {
+      const result = buildTimestampSystemPrompt('Invalid/Timezone');
+      expect(result).toContain("User's timezone: UTC");
     });
 
-    it('should include current timestamp information', () => {
+    it('includes time of day information', () => {
+      const result = buildTimestampSystemPrompt('UTC');
+      expect(result).toContain('Time of day:');
+      expect(result).toMatch(/Time of day: (morning|afternoon|evening)/);
+    });
+
+    it('includes current timestamp information', () => {
       const result = buildTimestampSystemPrompt('UTC');
       expect(result).toContain('CURRENT TIMESTAMP CONTEXT');
       expect(result).toContain('Current date and time');

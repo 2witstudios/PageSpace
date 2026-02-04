@@ -7,6 +7,8 @@ import {
   buildTimestampSystemPrompt,
   getUserTimeOfDay,
   getStartOfTodayInTimezone,
+  isValidTimezone,
+  normalizeTimezone,
 } from '@/lib/ai/core';
 import {
   db,
@@ -110,7 +112,10 @@ export async function POST(req: Request) {
     let clientTimezone: string | undefined;
     try {
       const body = await req.json();
-      clientTimezone = body?.timezone;
+      const requestedTimezone = typeof body?.timezone === 'string' ? body.timezone.trim() : undefined;
+      if (requestedTimezone && isValidTimezone(requestedTimezone)) {
+        clientTimezone = requestedTimezone;
+      }
     } catch {
       // No body or invalid JSON is fine - timezone is optional
     }
@@ -120,7 +125,7 @@ export async function POST(req: Request) {
     const userName = user?.name || user?.email?.split('@')[0] || 'there';
 
     // Determine timezone: use client-provided, then stored preference, then UTC
-    const userTimezone = clientTimezone || user?.timezone || 'UTC';
+    const userTimezone = clientTimezone || normalizeTimezone(user?.timezone);
 
     // If client provided a timezone and it differs from stored, update user profile
     if (clientTimezone && clientTimezone !== user?.timezone) {
@@ -215,6 +220,7 @@ export async function POST(req: Request) {
     // Filter to page content changes that we can diff
     const pageActivities = rawActivity.filter(
       a => a.pageId &&
+           a.driveId &&
            a.resourceType === 'page' &&
            (a.operation === 'update' || a.operation === 'create') &&
            (a.contentRef || a.contentSnapshot)
@@ -225,6 +231,8 @@ export async function POST(req: Request) {
     const activityContentRefs = new Map<string, string>();
 
     for (const activity of pageActivities) {
+      if (!activity.driveId) continue;
+
       if (activity.contentRef) {
         activityContentRefs.set(activity.id, activity.contentRef);
       }
@@ -240,7 +248,7 @@ export async function POST(req: Request) {
         actorEmail: activity.actorEmail,
         actorDisplayName: activity.actorName,
         content: activity.contentSnapshot ?? null,
-        driveId: activity.driveId!,
+        driveId: activity.driveId,
       });
     }
 

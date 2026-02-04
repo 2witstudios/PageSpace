@@ -6,6 +6,7 @@ import {
   buildTimestampSystemPrompt,
   getUserTimeOfDay,
   getStartOfTodayInTimezone,
+  normalizeTimezone,
 } from '@/lib/ai/core';
 import {
   db,
@@ -197,7 +198,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
 
   const userName = user.name || user.email?.split('@')[0] || 'there';
   // Use stored timezone or default to UTC
-  const userTimezone = user.timezone || 'UTC';
+  const userTimezone = normalizeTimezone(user.timezone);
 
   // Time windows - use user's timezone for "today" calculations
   const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -284,6 +285,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   // ========================================
   const pageActivities = rawActivity.filter(
     a => a.pageId &&
+         a.driveId &&
          a.resourceType === 'page' &&
          (a.operation === 'update' || a.operation === 'create') &&
          (a.contentRef || a.contentSnapshot)
@@ -293,6 +295,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   const activityContentRefs = new Map<string, string>();
 
   for (const activity of pageActivities) {
+    if (!activity.driveId) continue;
+
     if (activity.contentRef) {
       activityContentRefs.set(activity.id, activity.contentRef);
     }
@@ -308,7 +312,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       actorEmail: activity.actorEmail,
       actorDisplayName: activity.actorName,
       content: activity.contentSnapshot ?? null,
-      driveId: activity.driveId!,
+      driveId: activity.driveId,
     });
   }
 
