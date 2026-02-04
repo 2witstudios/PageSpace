@@ -12,27 +12,6 @@ import { loggers } from '@pagespace/lib/server';
 const GOOGLE_CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3';
 
 // Types matching Google Calendar API responses
-export interface GoogleCalendar {
-  id: string;
-  summary: string;
-  description?: string;
-  timeZone?: string;
-  colorId?: string;
-  backgroundColor?: string;
-  foregroundColor?: string;
-  selected?: boolean;
-  primary?: boolean;
-  accessRole: 'freeBusyReader' | 'reader' | 'writer' | 'owner';
-}
-
-export interface GoogleCalendarListResponse {
-  kind: 'calendar#calendarList';
-  etag: string;
-  nextPageToken?: string;
-  nextSyncToken?: string;
-  items: GoogleCalendar[];
-}
-
 export interface GoogleEventDateTime {
   date?: string; // For all-day events (YYYY-MM-DD)
   dateTime?: string; // For timed events (RFC3339)
@@ -107,17 +86,6 @@ export const buildAuthHeader = (accessToken: string): Record<string, string> => 
   Authorization: `Bearer ${accessToken}`,
   'Content-Type': 'application/json',
 });
-
-/**
- * Pure function: Build calendar list URL
- */
-export const buildCalendarListUrl = (pageToken?: string): string => {
-  const url = new URL(`${GOOGLE_CALENDAR_API_BASE}/users/me/calendarList`);
-  if (pageToken) {
-    url.searchParams.set('pageToken', pageToken);
-  }
-  return url.toString();
-};
 
 /**
  * Pure function: Build events list URL
@@ -221,30 +189,6 @@ const makeGoogleApiRequest = async <T>(
 };
 
 /**
- * IO function: List user's calendars
- */
-export const listCalendars = async (
-  accessToken: string
-): Promise<GoogleApiResult<GoogleCalendar[]>> => {
-  const calendars: GoogleCalendar[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const url = buildCalendarListUrl(pageToken);
-    const result = await makeGoogleApiRequest<GoogleCalendarListResponse>(url, accessToken);
-
-    if (!result.success) {
-      return result;
-    }
-
-    calendars.push(...result.data.items);
-    pageToken = result.data.nextPageToken;
-  } while (pageToken);
-
-  return { success: true, data: calendars };
-};
-
-/**
  * IO function: List events from a calendar
  *
  * Handles pagination automatically. For large calendars, consider using
@@ -297,16 +241,4 @@ export const listEvents = async (
   } while (pageToken);
 
   return { success: true, data: { events, nextSyncToken } };
-};
-
-/**
- * IO function: Get a single event
- */
-export const getEvent = async (
-  accessToken: string,
-  calendarId: string,
-  eventId: string
-): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
-  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
-  return makeGoogleApiRequest<GoogleCalendarEvent>(url, accessToken);
 };
