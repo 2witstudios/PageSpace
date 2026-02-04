@@ -419,7 +419,9 @@ The changes are modular and can be reverted independently.
 
 ---
 
-## Appendix: File Change Summary
+## Appendix A: File Change Summary
+
+### Code Changes
 
 | File | Action | Lines Changed (est.) |
 |------|--------|---------------------|
@@ -429,9 +431,190 @@ The changes are modular and can be reverted independently.
 | `app/api/mcp/documents/route.ts` | MODIFY | -30, +5 |
 | `components/editors/RichEditor.tsx` | MODIFY | -40 |
 | `components/.../DocumentView.tsx` | MODIFY | -10 |
-| `lib/editor/prettier.ts` | DEPRECATE | (keep for now) |
+| `hooks/useDocument.ts` | MODIFY | -15 (remove `updateContentSilently`) |
+| `lib/editor/prettier.ts` | DEPRECATE | (keep for other uses) |
 
-**Total estimated changes:** ~150 lines (mostly deletions)
+**Total estimated changes:** ~165 lines (mostly deletions)
+
+---
+
+## Appendix B: Tests Requiring Updates
+
+### Tests That Reference Prettier/Formatting
+
+| Test File | Impact | Required Changes |
+|-----------|--------|------------------|
+| `app/api/mcp/documents/__tests__/route.security.test.ts` | **MEDIUM** | Update mock for `prettier` (line 90-94) - replace with `addLineBreaksForAI` mock |
+| `lib/ai/tools/__tests__/page-read-tools.test.ts` | **LOW** | Add tests for `addLineBreaksForAI` being applied to content |
+| `lib/ai/tools/__tests__/page-write-tools.test.ts` | **LOW** | Add tests for `addLineBreaksForAI` being applied before line operations |
+| `hooks/__tests__/useDocument.test.ts` | **LOW** | Remove any references to `updateContentSilently` if present |
+
+### New Tests Required
+
+| Test File | Purpose |
+|-----------|---------|
+| `lib/editor/__tests__/line-breaks.test.ts` | **CREATE** - Test `addLineBreaksForAI()` preserves trailing spaces, adds newlines correctly |
+
+### Test Scenarios for `addLineBreaksForAI`
+
+```typescript
+describe('addLineBreaksForAI', () => {
+  it('preserves trailing spaces in text content', () => {
+    const input = '<p>Hello </p>';
+    const output = addLineBreaksForAI(input);
+    expect(output).toContain('Hello '); // Space preserved
+  });
+
+  it('adds newlines after block-level opening tags', () => {
+    const input = '<p>Text</p>';
+    const output = addLineBreaksForAI(input);
+    expect(output).toBe('<p>\nText\n</p>');
+  });
+
+  it('does not modify inline elements', () => {
+    const input = '<p>Hello <strong>world</strong></p>';
+    const output = addLineBreaksForAI(input);
+    expect(output).toContain('<strong>world</strong>');
+  });
+
+  it('handles nested block elements', () => {
+    const input = '<div><p>Nested</p></div>';
+    const output = addLineBreaksForAI(input);
+    const lines = output.split('\n');
+    expect(lines.length).toBeGreaterThan(1);
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(addLineBreaksForAI('')).toBe('');
+  });
+
+  it('handles null/undefined gracefully', () => {
+    expect(addLineBreaksForAI(null as any)).toBe(null);
+    expect(addLineBreaksForAI(undefined as any)).toBe(undefined);
+  });
+});
+```
+
+---
+
+## Appendix C: Documentation Requiring Updates
+
+### Documentation Files
+
+| File | Impact | Required Changes |
+|------|--------|------------------|
+| `docs/2.0-architecture/2.5-integrations/prettier.md` | **HIGH** | Rewrite to explain deprecation of client-side formatting, new `addLineBreaksForAI` approach |
+| `docs/2.0-architecture/2.5-integrations/tiptap.md` | **MEDIUM** | Remove references to Prettier formatting in editor flow |
+| `docs/2.0-architecture/2.6-features/editor-architecture.md` | **HIGH** | Major rewrite - remove formatting pipeline section, update data flow diagrams |
+| `docs/2.0-architecture/2.1-frontend/state-management.md` | **LOW** | Remove references to `updateContentSilently` if present |
+| `docs/1.0-overview/changelog.md` | **LOW** | Add entry for this change |
+
+### Key Documentation Changes
+
+**`prettier.md` - New Content:**
+```markdown
+# Integration: Prettier (Deprecated for Real-Time Use)
+
+## Status: Deprecated
+
+As of [date], Prettier is no longer used for real-time HTML formatting during
+editing. This was causing data loss (trailing spaces) and visual disruption.
+
+## Replacement: addLineBreaksForAI
+
+A minimal line-break inserter is now used exclusively in AI tools:
+- Location: `apps/web/src/lib/editor/line-breaks.ts`
+- Only adds newlines between block tags
+- Never removes or modifies any content
+- Preserves all whitespace including trailing spaces
+
+## When Prettier Is Still Used
+
+- [List any remaining uses, e.g., explicit "Format Document" command if added]
+- Development tooling (source code formatting via prettier config)
+```
+
+**`editor-architecture.md` - Sections to Remove/Update:**
+- Section 3: "The Critical Role of Prettier in AI Editability" → Rewrite for `addLineBreaksForAI`
+- Section 4.3: "Dual-Layer Debouncing" → Remove 2500ms format timer reference
+- Section 6: "Content Update Types" → Remove `updateContentSilently`
+- All flow diagrams showing Prettier → Update to show direct save without formatting
+
+---
+
+## Appendix D: RichEditor.tsx Changes Detail
+
+### Lines to Remove (approx. lines 13, 21, 39-70, 125)
+
+```typescript
+// REMOVE: Line 13 - Prettier import
+import { formatHtml } from '@/lib/editor/prettier';
+
+// REMOVE: Line 21 - onFormatChange prop
+onFormatChange?: (value: string) => void;
+
+// REMOVE: Lines 39-70 - Entire formatting timer logic
+// Formatting timer - CRITICAL for AI editability (2500ms)
+const formatTimeout = useRef<NodeJS.Timeout | null>(null);
+const formatVersion = useRef(0);
+
+const debouncedFormat = useCallback(
+  (editor: Editor) => {
+    // ... entire function body
+  },
+  [onChange, onFormatChange]
+);
+
+// REMOVE: Line 125 - debouncedFormat call in onUpdate
+debouncedFormat(editor);
+```
+
+### Updated Interface
+
+```typescript
+interface RichEditorProps {
+  value: string;
+  onChange: (value: string) => void;
+  // REMOVED: onFormatChange?: (value: string) => void;
+  onEditorChange: (editor: Editor | null) => void;
+  readOnly?: boolean;
+  isPaginated?: boolean;
+}
+```
+
+---
+
+## Appendix E: MCP Documents Route Changes Detail
+
+### Current Code (to remove)
+
+```typescript
+// REMOVE: Lines with formatHtml import and usage
+import { format } from 'prettier/standalone';
+import * as prettierPluginHtml from 'prettier/plugins/html';
+
+// REMOVE: Duplicate formatHtml function
+const formatHtml = async (html: string): Promise<string> => {
+  // ... implementation
+};
+
+// In replace/insert/delete operations:
+const formattedContent = await formatHtml(newContent); // REMOVE
+```
+
+### New Code
+
+```typescript
+// ADD: Import
+import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
+
+// In replace/insert/delete operations:
+const formattedContent = addLineBreaksForAI(newContent); // Synchronous, fast
+```
+
+---
+
+**Total estimated changes:** ~165 lines code + documentation updates
 
 ---
 
