@@ -12,7 +12,12 @@ export default function Page() {
   const pageId = params.pageId as string;
   const driveId = params.driveId as string;
   const recordedViewRef = useRef<string | null>(null);
-  const { updateNode } = usePageTree(driveId);
+  const { updateNode, mutate, isLoading } = usePageTree(driveId);
+  const isTreeLoadingRef = useRef(isLoading);
+
+  useEffect(() => {
+    isTreeLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   useEffect(() => {
     if (pageId) {
@@ -24,6 +29,11 @@ export default function Page() {
         post(`/api/pages/${pageId}/view`).then(() => {
           // Clear the change indicator dot after recording the view
           updateNode(pageId, { hasChanges: false });
+
+          // If tree data is still loading, force one revalidation so unread state reflects server view timestamp.
+          if (isTreeLoadingRef.current) {
+            void mutate();
+          }
         }).catch(() => {
           // Silently fail - page view tracking is non-critical
         });
@@ -31,7 +41,7 @@ export default function Page() {
     }
     // Cleanup: Only clear pageId when component is truly unmounting
     // Not when pageId changes, to prevent unnecessary state updates
-  }, [pageId, setPageId, updateNode]);
+  }, [pageId, setPageId, updateNode, mutate]);
 
   // Clear pageId only on component unmount
   useEffect(() => {
