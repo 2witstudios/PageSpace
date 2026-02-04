@@ -2,7 +2,8 @@
 
 import { useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Clock, File, LayoutDashboard, CheckSquare, Activity, Users, Settings, Trash2, MessageSquare } from 'lucide-react';
+import useSWR from 'swr';
+import { Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -12,54 +13,53 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useTabsStore, type Tab } from '@/stores/useTabsStore';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
-import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { PageType } from '@pagespace/lib/client-safe';
 import { cn } from '@/lib/utils';
-
-// Map icon names to components
-const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-  LayoutDashboard,
-  CheckSquare,
-  Activity,
-  Users,
-  Settings,
-  Trash2,
-  MessageSquare,
-  File,
-};
+import type { RecentPage } from '@/app/api/user/recents/route';
 
 interface RecentsDropdownProps {
   className?: string;
 }
 
-// Helper to derive tab display info
-function getTabDisplayInfo(tab: Tab) {
-  const parsed = parseTabPath(tab.path);
-  const meta = getStaticTabMeta(parsed);
-
-  if (meta) {
-    return { title: meta.title, iconName: meta.iconName };
+const fetcher = async (url: string) => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error('Failed to fetch recents');
   }
+  return response.json();
+};
 
-  // Fallback for page/drive types
-  if (parsed.type === 'page') {
-    return { title: 'Page', iconName: 'File' };
-  }
-  if (parsed.type === 'drive') {
-    return { title: 'Drive', iconName: 'LayoutDashboard' };
-  }
+function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  return { title: tab.path, iconName: 'File' };
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 export default function RecentsDropdown({ className }: RecentsDropdownProps) {
   const router = useRouter();
-  const tabs = useTabsStore((state) => state.tabs);
+  const { data, isLoading, error } = useSWR<{ recents: RecentPage[] }>(
+    '/api/user/recents?limit=8',
+    fetcher,
+    {
+      refreshInterval: 5 * 60 * 1000,
+      revalidateOnFocus: false,
+    }
+  );
 
-  const handleNavigate = useCallback((path: string) => {
-    router.push(path);
+  const handleNavigate = useCallback((page: RecentPage) => {
+    router.push(`/dashboard/${page.driveId}/${page.id}`);
   }, [router]);
 
   return (
@@ -77,30 +77,30 @@ export default function RecentsDropdown({ className }: RecentsDropdownProps) {
       <DropdownMenuContent className="w-64" align="end" forceMount>
         <DropdownMenuLabel>Recent Pages</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {tabs.length === 0 ? (
+        {isLoading ? (
+          <div className="px-2 py-4 text-sm text-muted-foreground text-center">
+            Loading...
+          </div>
+        ) : error || !data?.recents || data.recents.length === 0 ? (
           <div className="px-2 py-4 text-sm text-muted-foreground text-center">
             No recent pages
           </div>
         ) : (
-          tabs.map((tab) => {
-            const { title, iconName } = getTabDisplayInfo(tab);
-            const IconComponent = ICON_MAP[iconName];
-
+          data.recents.map((page) => {
             return (
               <DropdownMenuItem
-                key={tab.id}
-                onClick={() => handleNavigate(tab.path)}
+                key={page.id}
+                onSelect={() => handleNavigate(page)}
                 className="cursor-pointer"
               >
-                {IconComponent ? (
-                  <IconComponent className="mr-2 h-4 w-4 flex-shrink-0" />
-                ) : (
-                  <PageTypeIcon
-                    type={'DOCUMENT' as PageType}
-                    className="mr-2 h-4 w-4 flex-shrink-0"
-                  />
-                )}
-                <span className="truncate">{title}</span>
+                <PageTypeIcon
+                  type={page.type as PageType}
+                  className="mr-2 h-4 w-4 flex-shrink-0 text-muted-foreground"
+                />
+                <span className="min-w-0 flex-1 truncate">{page.title}</span>
+                <span className="ml-2 text-[10px] text-muted-foreground/70">
+                  {formatRelativeTime(page.viewedAt)}
+                </span>
               </DropdownMenuItem>
             );
           })
