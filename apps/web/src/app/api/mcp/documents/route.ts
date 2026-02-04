@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
 import { getUserAccessLevel, PageType, isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/server';
 import { z } from 'zod/v4';
-import prettier from 'prettier';
+import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
@@ -51,23 +51,6 @@ async function getDriveIdFromPage(pageId: string): Promise<string | null> {
   }
 }
 
-// Format HTML content with Prettier
-async function formatHtml(html: string): Promise<string> {
-  try {
-    const formatted = await prettier.format(html, {
-      parser: 'html',
-      printWidth: 120,
-      tabWidth: 2,
-      useTabs: false,
-      singleQuote: false,
-      bracketSpacing: true,
-    });
-    return formatted;
-  } catch (error) {
-    loggers.api.error('Prettier formatting error:', error as Error);
-    return html; // Return unformatted if Prettier fails
-  }
-}
 
 // Split content into lines and add line numbers
 function getNumberedLines(content: string): string[] {
@@ -182,7 +165,7 @@ export async function POST(req: NextRequest) {
           ...lines.slice(actualEndLine),
         ];
         
-        const newContent = await formatHtml(newLines.join('\n'));
+        const newContent = addLineBreaksForAI(newLines.join('\n'));
         
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -238,7 +221,7 @@ export async function POST(req: NextRequest) {
           ...lines.slice(insertIndex),
         ];
 
-        const newContent = await formatHtml(newLines.join('\n'));
+        const newContent = addLineBreaksForAI(newLines.join('\n'));
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -299,7 +282,7 @@ export async function POST(req: NextRequest) {
           ...lines.slice(actualEndLine),
         ];
 
-        const newContent = await formatHtml(newLines.join('\n'));
+        const newContent = addLineBreaksForAI(newLines.join('\n'));
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
