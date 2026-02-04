@@ -91,6 +91,11 @@ export default function InboxChannelPage() {
         }
         const data = await res.json();
         setMessages(data);
+
+        // Mark channel as read when viewed
+        post(`/api/channels/${pageId}/read`, {}).catch(() => {
+          // Silently ignore errors - marking as read is not critical
+        });
       } catch (error) {
         console.error('Error fetching messages:', error);
         setMessages([]);
