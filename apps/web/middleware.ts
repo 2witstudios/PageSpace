@@ -15,6 +15,7 @@ import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
 
 const MCP_BEARER_PREFIX = 'Bearer mcp_';
+const SESSION_BEARER_PREFIX = 'Bearer ps_sess_';
 
 export async function middleware(req: NextRequest) {
   return monitoringMiddleware(req, async () => {
@@ -55,10 +56,10 @@ export async function middleware(req: NextRequest) {
       }
     }
 
-    // MCP token format check (Edge-safe - no database access)
-    // Full validation happens in route handlers via validateMCPToken()
+    // Bearer token format check (Edge-safe - no database access)
+    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()
     const authHeader = req.headers.get('authorization');
-    if (authHeader?.startsWith(MCP_BEARER_PREFIX)) {
+    if (authHeader?.startsWith(MCP_BEARER_PREFIX) || authHeader?.startsWith(SESSION_BEARER_PREFIX)) {
       // API routes get restrictive CSP (no nonce needed)
       const { response } = createSecureResponse(isProduction, req, true);
       return response;

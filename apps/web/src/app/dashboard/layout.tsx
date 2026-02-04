@@ -31,7 +31,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return <Layout>{children}</Layout>;
   }
 
-  // Default: Dashboard pages return null, CenterPanel handles content
-  return <Layout />;
+  // Default: CenterPanel handles visual content, but children must render
+  // for page-level effects (like view recording) to run
+  return <Layout>{children}</Layout>;
 }
 
