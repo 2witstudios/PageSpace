@@ -14,7 +14,8 @@ import {
   isYesterday,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { ChevronDown, ListTodo, CalendarDays } from 'lucide-react';
+import { ChevronDown, ListTodo, CalendarDays, Calendar } from 'lucide-react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 import {
@@ -330,6 +331,13 @@ function MobileMonthAgenda({
         <p className="text-sm text-muted-foreground mt-1">
           Tap a day to add an event
         </p>
+        <Link
+          href="/settings/integrations/google-calendar"
+          className="flex items-center gap-1.5 text-sm mt-4 text-muted-foreground/70 hover:text-primary transition-colors"
+        >
+          <Calendar className="h-4 w-4" />
+          Import from Google Calendar
+        </Link>
       </div>
     );
   }
