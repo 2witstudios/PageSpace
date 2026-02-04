@@ -632,13 +632,6 @@ export default function TaskListView({ page }: TaskListViewProps) {
     onStartEdit: handleStartEdit,
   };
 
-  // Stats
-  const stats = {
-    total: data?.tasks.length || 0,
-    completed: data?.tasks.filter(t => t.status === 'completed').length || 0,
-    inProgress: data?.tasks.filter(t => t.status === 'in_progress').length || 0,
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -1020,11 +1013,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
 
       {/* Footer stats */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
-        <div className="flex flex-wrap gap-x-4 gap-y-1">
-          <span><strong>{stats.total}</strong> tasks</span>
-          <span><strong>{stats.inProgress}</strong> in progress</span>
-          <span><strong>{stats.completed}</strong> completed</span>
-        </div>
+        <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
         <span className="text-xs sm:text-sm">
           Updated {data?.taskList.updatedAt
             ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
