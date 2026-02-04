@@ -32,9 +32,13 @@ interface ConnectionStatus {
 const ERROR_MESSAGES: Record<string, string> = {
   access_denied: "You denied access to Google Calendar. Click Connect to try again.",
   oauth_error: "There was a problem connecting to Google. Please try again.",
+  oauth_config: "Google Calendar integration is not configured correctly. Please contact support.",
   invalid_request: "Invalid request. Please try again.",
+  invalid_state: "The connection request could not be verified. Please try again.",
   state_expired: "The connection request expired. Please try again.",
   missing_tokens: "Google did not return the required permissions. Please try again.",
+  user_info_failed: "Could not verify your Google account. Please try again.",
+  user_info_incomplete: "Google account details were incomplete. Please try again.",
   unexpected: "An unexpected error occurred. Please try again.",
 };
 
@@ -50,6 +54,9 @@ export default function GoogleCalendarSettingsPage() {
 
   const error = searchParams.get("error");
   const justConnected = searchParams.get("connected") === "true";
+  const connection = status?.connection ?? null;
+  const connectionStatus = connection?.status;
+  const isActiveConnection = connectionStatus === "active";
 
   const fetchStatus = async () => {
     try {
@@ -289,49 +296,78 @@ export default function GoogleCalendarSettingsPage() {
                 <Skeleton className="h-4 w-48" />
                 <Skeleton className="h-10 w-32" />
               </div>
-            ) : status?.connected && status.connection ? (
+            ) : connection ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between py-2 border-b">
                   <span className="text-sm text-muted-foreground">Connected as</span>
-                  <span className="font-medium">{status.connection.googleEmail}</span>
+                  <span className="font-medium">{connection.googleEmail}</span>
                 </div>
-                <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Last synced</span>
-                  <span className="text-sm">
-                    {formatLastSync(status.connection.lastSyncAt)}
-                  </span>
-                </div>
-                {status.connection.lastSyncError && (
+                {connection.lastSyncAt && (
+                  <div className="flex items-center justify-between py-2 border-b">
+                    <span className="text-sm text-muted-foreground">Last synced</span>
+                    <span className="text-sm">
+                      {formatLastSync(connection.lastSyncAt)}
+                    </span>
+                  </div>
+                )}
+                {connection.lastSyncError && (
                   <Alert variant="destructive">
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription>
-                      Last sync failed: {status.connection.lastSyncError}
+                      Last sync failed: {connection.lastSyncError}
                     </AlertDescription>
                   </Alert>
                 )}
+                {!isActiveConnection && connection.statusMessage && (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{connection.statusMessage}</AlertDescription>
+                  </Alert>
+                )}
                 <div className="flex gap-2 pt-2">
-                  <Button
-                    variant="default"
-                    size="sm"
-                    disabled={syncing || disconnecting}
-                    onClick={() => handleSync()}
-                  >
-                    {syncing ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                        Syncing...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Sync Now
-                      </>
-                    )}
-                  </Button>
+                  {isActiveConnection ? (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      disabled={syncing || disconnecting}
+                      onClick={() => handleSync()}
+                    >
+                      {syncing ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Sync Now
+                        </>
+                      )}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      disabled={connecting || disconnecting}
+                      onClick={handleConnect}
+                    >
+                      {connecting ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Reconnecting...
+                        </>
+                      ) : (
+                        <>
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          Reconnect
+                        </>
+                      )}
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={disconnecting || syncing}
+                    disabled={disconnecting || syncing || connecting}
                     onClick={handleDisconnect}
                   >
                     {disconnecting ? (

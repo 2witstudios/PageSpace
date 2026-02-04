@@ -4,6 +4,10 @@ import { loggers } from '@pagespace/lib/server';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
 import crypto from 'crypto';
+import {
+  GOOGLE_CALENDAR_DEFAULT_RETURN_PATH,
+  normalizeGoogleCalendarReturnPath,
+} from '@/lib/integrations/google-calendar/return-url';
 
 // State expiration: 10 minutes
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -183,7 +187,10 @@ export async function GET(req: Request) {
     });
 
     // Redirect back to settings with success
-    const redirectUrl = new URL(returnUrl || '/settings/integrations/google-calendar', baseUrl);
+    const redirectPath = normalizeGoogleCalendarReturnPath(
+      returnUrl || GOOGLE_CALENDAR_DEFAULT_RETURN_PATH
+    );
+    const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('connected', 'true');
 
     return NextResponse.redirect(redirectUrl);

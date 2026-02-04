@@ -14,6 +14,8 @@ import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const GOOGLE_READ_ONLY_ERROR =
+  'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
 
 // Schema for updating an event
 const updateEventSchema = z.object({
@@ -177,6 +179,10 @@ export async function PATCH(
       );
     }
 
+    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
+    }
+
     const body = await request.json();
     const parseResult = updateEventSchema.safeParse(body);
 
@@ -301,6 +307,10 @@ export async function DELETE(
         { error: 'Only the event creator can delete this event' },
         { status: 403 }
       );
+    }
+
+    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     // Get all attendee IDs before deletion for broadcasting

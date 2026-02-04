@@ -100,6 +100,11 @@ export const calendarEvents = pgTable('calendar_events', {
     trashedIdx: index('calendar_events_is_trashed_idx').on(table.isTrashed),
     googleEventIdx: index('calendar_events_google_event_id_idx').on(table.googleEventId),
     syncedFromGoogleIdx: index('calendar_events_synced_from_google_idx').on(table.syncedFromGoogle),
+    googleSourcePerUserKey: unique('calendar_events_google_source_per_user_key').on(
+      table.createdById,
+      table.googleCalendarId,
+      table.googleEventId
+    ),
   }
 });
 

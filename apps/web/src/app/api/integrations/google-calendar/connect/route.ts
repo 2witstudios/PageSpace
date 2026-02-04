@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import crypto from 'crypto';
+import { normalizeGoogleCalendarReturnPath } from '@/lib/integrations/google-calendar/return-url';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -55,7 +56,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { returnUrl } = validation.data;
+    const returnUrl = normalizeGoogleCalendarReturnPath(validation.data.returnUrl);
 
     // Rate limiting by user ID (more restrictive for integration connections)
     const clientIP = getClientIP(req);
@@ -78,7 +79,7 @@ export async function POST(req: Request) {
     // Create signed state to prevent CSRF and preserve context
     const stateData = {
       userId,
-      returnUrl: returnUrl || '/settings/integrations/google-calendar',
+      returnUrl,
       timestamp: Date.now(),
     };
 
