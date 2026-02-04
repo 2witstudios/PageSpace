@@ -104,34 +104,36 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     }
   }, [swrKey, cache, mutate]);
 
-  const updateNode = (nodeId: string, updates: Partial<TreePage>) => {
-    let found = false;
+  const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {
+    mutate((currentData) => {
+      if (!currentData) return currentData;
 
-    const update = (pages: TreePage[]): TreePage[] => {
-      const newPages = pages.map(page => {
-        if (page.id === nodeId) {
-          found = true;
-          return { ...page, ...updates, children: page.children || [] };
-        }
+      let found = false;
 
-        if (page.children && page.children.length > 0) {
-          const newChildren = update(page.children);
-          if (newChildren !== page.children) {
-            return { ...page, children: newChildren };
+      const update = (pages: TreePage[]): TreePage[] => {
+        const newPages = pages.map(page => {
+          if (page.id === nodeId) {
+            found = true;
+            return { ...page, ...updates, children: page.children || [] };
           }
-        }
-        return page;
-      });
 
-      const hasChanged = newPages.some((newPage, i) => newPage !== pages[i]);
-      return hasChanged ? newPages : pages;
-    };
+          if (page.children && page.children.length > 0) {
+            const newChildren = update(page.children);
+            if (newChildren !== page.children) {
+              return { ...page, children: newChildren };
+            }
+          }
+          return page;
+        });
 
-    const newTree = update(data || []);
-    if (found) {
-      mutate(newTree, false);
-    }
-  };
+        const hasChanged = newPages.some((newPage, i) => newPage !== pages[i]);
+        return hasChanged ? newPages : pages;
+      };
+
+      const newTree = update(currentData);
+      return found ? newTree : currentData;
+    }, { revalidate: false });
+  }, [mutate]);
 
   return {
     tree: data ?? [],
