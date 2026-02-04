@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Calendar } from "lucide-react";
 
 interface SettingsItem {
   title: string;
@@ -80,6 +80,13 @@ export default function SettingsPage() {
           available: true,
         },
         {
+          title: "Personalization",
+          description: "Customize how AI interacts with you",
+          icon: Sparkles,
+          href: "/settings/personalization",
+          available: true,
+        },
+        {
           title: "Notifications",
           description: "Manage email notification preferences",
           icon: Bell,
@@ -106,6 +113,13 @@ export default function SettingsPage() {
     {
       title: "AI Integrations",
       items: filterItems([
+        {
+          title: "Google Calendar",
+          description: "Import events from Google Calendar",
+          icon: Calendar,
+          href: "/settings/integrations/google-calendar",
+          available: true,
+        },
         {
           title: "MCP Connection",
           description: "Connect external tools to PageSpace (Cloud)",

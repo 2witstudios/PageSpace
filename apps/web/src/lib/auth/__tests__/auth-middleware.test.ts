@@ -159,7 +159,9 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user' as const,
           tokenVersion: 0,
+          adminRoleVersion: 0,
         },
+        driveScopes: [],
       };
       (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
@@ -171,7 +173,9 @@ describe('Auth Middleware', () => {
         userId: 'test-user-id',
         role: 'user',
         tokenVersion: 0,
+        adminRoleVersion: 0,
         tokenId: 'token-id',
+        allowedDriveIds: [],
       });
     });
 
@@ -184,7 +188,9 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user',
           tokenVersion: 0,
+          adminRoleVersion: 0,
         },
+        driveScopes: [],
       };
       (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
@@ -366,7 +372,9 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user',
           tokenVersion: 0,
+          adminRoleVersion: 0,
         },
+        driveScopes: [],
       };
       (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
@@ -441,7 +449,9 @@ describe('Auth Middleware', () => {
             id: 'test-user-id',
             role: 'user',
             tokenVersion: 0,
+            adminRoleVersion: 0,
           },
+          driveScopes: [],
         };
         (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
@@ -675,7 +685,9 @@ describe('Auth Middleware', () => {
             id: 'test-user-id',
             role: 'user',
             tokenVersion: 0,
+            adminRoleVersion: 0,
           },
+          driveScopes: [],
         };
         (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
@@ -757,7 +769,9 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user',
           tokenVersion: 0,
+          adminRoleVersion: 0,
         },
+        driveScopes: [],
       };
       (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
 
@@ -812,6 +826,7 @@ describe('Auth Middleware', () => {
           adminRoleVersion: 0,
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
+          allowedDriveIds: [],
         };
         expect(isMCPAuthResult(mcpResult)).toBe(true);
       });
@@ -850,6 +865,7 @@ describe('Auth Middleware', () => {
           adminRoleVersion: 0,
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
+          allowedDriveIds: [],
         };
         expect(isSessionAuthResult(mcpResult)).toBe(false);
       });

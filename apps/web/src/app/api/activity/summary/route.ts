@@ -6,6 +6,7 @@ import {
   directMessages,
   dmConversations,
   pages,
+  drives,
   driveMembers,
   eq,
   and,
@@ -131,11 +132,18 @@ export async function GET(req: Request) {
     }
 
     // Get pages updated count (pages in drives user has access to)
-    // First get drives user has access to
-    const userDrives = await db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(eq(driveMembers.userId, userId));
+    // First get drives user has access to (both owned and member drives)
+    const [ownedDrives, memberDrives] = await Promise.all([
+      db.select({ driveId: drives.id }).from(drives).where(eq(drives.ownerId, userId)),
+      db.select({ driveId: driveMembers.driveId }).from(driveMembers).where(eq(driveMembers.userId, userId)),
+    ]);
+
+    // Combine and deduplicate drive IDs
+    const driveIdSet = new Set([
+      ...ownedDrives.map(d => d.driveId),
+      ...memberDrives.map(d => d.driveId),
+    ]);
+    const userDrives = Array.from(driveIdSet).map(driveId => ({ driveId }));
 
     let pagesUpdatedToday = 0;
     let pagesUpdatedThisWeek = 0;

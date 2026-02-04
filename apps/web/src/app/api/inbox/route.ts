@@ -48,10 +48,11 @@ export async function GET(request: Request) {
             d.name as drive_name
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
-          INNER JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
+            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
@@ -144,7 +145,12 @@ export async function GET(request: Request) {
     } else {
       // Dashboard inbox: DMs + all channels from all drives
 
-      // Fetch DM conversations
+      // Parse cursor for SQL filtering - can be ISO timestamp or "id:<itemId>" for null timestamps
+      const isIdCursor = cursor !== null && cursor.startsWith('id:');
+      const cursorId = isIdCursor ? cursor.slice(3) : null;
+      const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
+
+      // Fetch DM conversations with cursor filtering
       const dmResults = await db.execute(sql`
         WITH dm_data AS (
           SELECT
@@ -180,6 +186,11 @@ export async function GET(request: Request) {
         LEFT JOIN users u ON u.id = dd.other_user_id
         LEFT JOIN user_profiles up ON up."userId" = dd.other_user_id
         LEFT JOIN unread_counts uc ON uc."conversationId" = dd.id
+        ${cursorTimestamp
+          ? sql`WHERE (dd."lastMessageAt" < ${cursorTimestamp} OR dd."lastMessageAt" IS NULL)`
+          : cursorId
+            ? sql`WHERE dd."lastMessageAt" IS NULL AND dd.id < ${cursorId}`
+            : sql``}
         ORDER BY dd."lastMessageAt" DESC NULLS LAST
         LIMIT ${fetchLimit}
       `);
@@ -208,7 +219,7 @@ export async function GET(request: Request) {
         });
       }
 
-      // Fetch channels from all drives user is member of
+      // Fetch channels from all drives user is member of or owns
       const channelResults = await db.execute(sql`
         WITH user_channels AS (
           SELECT
@@ -218,9 +229,10 @@ export async function GET(request: Request) {
             d.name as drive_name
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
-          INNER JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
+          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
           WHERE p.type = 'CHANNEL'
             AND p."isTrashed" = false
+            AND (d."ownerId" = ${userId} OR dm."userId" IS NOT NULL)
         ),
         channel_last_messages AS (
           SELECT DISTINCT ON (cm."pageId")
@@ -254,6 +266,11 @@ export async function GET(request: Request) {
         FROM user_channels uc
         LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
         LEFT JOIN channel_unread cu ON cu."pageId" = uc.id
+        ${cursorTimestamp
+          ? sql`WHERE (clm.last_message_at < ${cursorTimestamp} OR clm.last_message_at IS NULL)`
+          : cursorId
+            ? sql`WHERE clm.last_message_at IS NULL AND uc.id < ${cursorId}`
+            : sql``}
         ORDER BY clm.last_message_at DESC NULLS LAST
         LIMIT ${fetchLimit}
       `);
@@ -299,32 +316,11 @@ export async function GET(request: Request) {
       });
     }
 
-    // Apply cursor-based pagination for combined results
-    // Parse cursor - can be ISO timestamp or "id:<itemId>" for null timestamps
-    const isIdCursor = cursor !== null && cursor.startsWith('id:');
-    const cursorId = isIdCursor ? cursor.slice(3) : null;
-    const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
-
-    let filteredItems = items;
-    if (cursorTimestamp) {
-      const cursorDate = new Date(cursorTimestamp);
-      filteredItems = items.filter(item => {
-        if (!item.lastMessageAt) return true; // Include items with no timestamp
-        return new Date(item.lastMessageAt) < cursorDate;
-      });
-    } else if (cursorId) {
-      // For id-based cursor, skip items until we find the cursor id, then skip that item too
-      const cursorIndex = items.findIndex(item => item.id === cursorId);
-      if (cursorIndex >= 0) {
-        filteredItems = items.slice(cursorIndex + 1);
-      }
-    }
-
-    // Apply limit (we fetch extra to check for more, but only for drive queries)
-    const paginatedItems = filteredItems.slice(0, limit);
+    // Apply limit - cursor filtering is already done in SQL queries
+    const paginatedItems = items.slice(0, limit);
 
     // Determine pagination info
-    const hasMore = filteredItems.length > limit;
+    const hasMore = items.length > limit;
     const lastItem = paginatedItems[paginatedItems.length - 1];
     const nextCursor = lastItem
       ? lastItem.lastMessageAt || `id:${lastItem.id}`

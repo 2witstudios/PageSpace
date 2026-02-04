@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db, pages, drives, eq, and } from '@pagespace/db';
@@ -57,6 +57,12 @@ export async function GET(request: Request) {
       }
     }
 
+    // Filter by MCP token scope (if scoped)
+    const allowedDriveIds = getAllowedDriveIds(auth);
+    const scopedDrives = allowedDriveIds.length > 0
+      ? accessibleDrives.filter(d => allowedDriveIds.includes(d.id))
+      : accessibleDrives;
+
     let totalAgentCount = 0;
     const agentsByDrive: {
       driveId: string;
@@ -67,8 +73,8 @@ export async function GET(request: Request) {
     }[] = [];
     const allAccessibleAgents: AgentSummary[] = [];
 
-    // Get agents from each accessible drive
-    for (const drive of accessibleDrives) {
+    // Get agents from each accessible drive (filtered by MCP scope)
+    for (const drive of scopedDrives) {
       // Get all AI_CHAT pages in this drive
       const driveAgents = await db
         .select({
@@ -148,7 +154,7 @@ export async function GET(request: Request) {
     }
 
     loggers.api.info('Listed agents across all drives', {
-      driveCount: accessibleDrives.length,
+      driveCount: scopedDrives.length,
       totalAgents: totalAgentCount,
       userId
     });
@@ -156,20 +162,20 @@ export async function GET(request: Request) {
     const baseResult = {
       success: true,
       totalCount: totalAgentCount,
-      driveCount: accessibleDrives.length,
-      summary: `Found ${totalAgentCount} accessible AI agent(s) across ${accessibleDrives.length} drive(s)`,
+      driveCount: scopedDrives.length,
+      summary: `Found ${totalAgentCount} accessible AI agent(s) across ${scopedDrives.length} drive(s)`,
       stats: {
-        accessibleDrives: accessibleDrives.length,
+        accessibleDrives: scopedDrives.length,
         totalAgents: totalAgentCount,
         withSystemPrompt: allAccessibleAgents.filter(a => a.hasSystemPrompt).length,
         withTools: allAccessibleAgents.filter(a => (a.enabledToolsCount || 0) > 0).length,
-        averageAgentsPerDrive: accessibleDrives.length > 0 ? Math.round((totalAgentCount / accessibleDrives.length) * 10) / 10 : 0
+        averageAgentsPerDrive: scopedDrives.length > 0 ? Math.round((totalAgentCount / scopedDrives.length) * 10) / 10 : 0
       },
       nextSteps: [
         totalAgentCount > 0 ? 'Use read_page to view full agent configurations' : 'No agents found - consider creating some',
         'Use ask_agent to consult with specific agents',
         'Use list_agents for drive-specific agent listings',
-        `Accessible drives: ${accessibleDrives.map(d => d.name).join(', ')}`
+        `Accessible drives: ${scopedDrives.map(d => d.name).join(', ')}`
       ]
     };
 

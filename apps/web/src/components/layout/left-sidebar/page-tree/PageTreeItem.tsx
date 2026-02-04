@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, CSSProperties, MouseEvent } from "react";
+import { useState, useCallback, useMemo, CSSProperties, MouseEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useTabsStore } from "@/stores/useTabsStore";
@@ -14,24 +14,33 @@ import {
   Pencil,
   Star,
   Undo2,
+  CheckSquare,
+  FolderInput,
+  Copy,
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
+import { useCapacitor } from "@/hooks/useCapacitor";
 import { TreePage } from "@/hooks/usePageTree";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useFavorites } from "@/hooks/useFavorites";
 import { toast } from "sonner";
 import { DeletePageDialog } from "@/components/dialogs/DeletePageDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
+import { MovePageDialog } from "@/components/dialogs/MovePageDialog";
+import { CopyPageDialog } from "@/components/dialogs/CopyPageDialog";
 import { patch, del, post } from "@/lib/auth/auth-fetch";
 import { Projection } from "@/lib/tree/sortable-tree";
 import { cn } from "@/lib/utils";
 import { useSortable } from "@dnd-kit/sortable";
+import { useMultiSelectStore, SelectedPageInfo } from "@/stores/useMultiSelectStore";
 
 export type DropPosition = "before" | "after" | "inside" | null;
 
@@ -94,11 +103,47 @@ export function PageTreeItem({
   const [isHovered, setIsHovered] = useState(false);
   const [isConfirmTrashOpen, setConfirmTrashOpen] = useState(false);
   const [isRenameOpen, setRenameOpen] = useState(false);
+  const [isMoveOpen, setMoveOpen] = useState(false);
+  const [isCopyOpen, setCopyOpen] = useState(false);
   const params = useParams();
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const createTab = useTabsStore((state) => state.createTab);
   const isTouchDevice = useTouchDevice();
+  const { isNative } = useCapacitor();
   const hasChildren = item.children && item.children.length > 0;
+  const driveId = params.driveId as string;
+
+  // Multi-select state
+  const {
+    isMultiSelectMode,
+    activeDriveId,
+    enterMultiSelectMode,
+    togglePageSelection,
+    isSelected,
+  } = useMultiSelectStore();
+
+  const isInMultiSelectMode = isMultiSelectMode && activeDriveId === driveId;
+  const isPageSelected = isSelected(item.id);
+
+  // Memoize page info for selection to prevent unnecessary re-renders
+  const pageInfo: SelectedPageInfo = useMemo(() => ({
+    id: item.id,
+    title: item.title,
+    type: item.type,
+    driveId: driveId,
+    parentId: item.parentId ?? null,
+  }), [item.id, item.title, item.type, item.parentId, driveId]);
+
+  const handleEnterMultiSelect = useCallback(() => {
+    enterMultiSelectMode(driveId);
+    togglePageSelection(pageInfo);
+  }, [enterMultiSelectMode, driveId, togglePageSelection, pageInfo]);
+
+  const handleCheckboxClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    togglePageSelection(pageInfo);
+  }, [togglePageSelection, pageInfo]);
 
   const linkHref = `/dashboard/${params.driveId}/${item.id}`;
 
@@ -229,10 +274,26 @@ export function PageTreeItem({
                   "bg-primary/10 dark:bg-primary/20 ring-2 ring-primary ring-inset",
                 !isActive && !showDropIndicator &&
                   "hover:bg-gray-200 dark:hover:bg-gray-700",
-                params.pageId === item.id && "bg-gray-200 dark:bg-gray-700"
+                params.pageId === item.id && "bg-gray-200 dark:bg-gray-700",
+                isInMultiSelectMode && isPageSelected && "bg-primary/10 dark:bg-primary/20 ring-1 ring-primary/50"
               )}
               style={{ paddingLeft: `${depth * 8 + 4}px` }}
             >
+              {/* Multi-select Checkbox */}
+              {isInMultiSelectMode && (
+                <div
+                  className="flex items-center mr-1"
+                  onClick={handleCheckboxClick}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <Checkbox
+                    checked={isPageSelected}
+                    className="h-4 w-4"
+                    aria-label={`Select ${item.title}`}
+                  />
+                </div>
+              )}
+
               {/* Expand/Collapse Chevron */}
               {hasChildren && (
                 <button
@@ -283,7 +344,7 @@ export function PageTreeItem({
               <Link
                 href={linkHref}
                 onClick={handleLinkClick}
-                onMouseDown={handleMouseDown}
+                onMouseDown={isNative ? undefined : handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}
                 onTouchEnd={(e) => e.stopPropagation()}
                 className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer touch-manipulation"
@@ -336,10 +397,12 @@ export function PageTreeItem({
               </>
             ) : (
               <>
-                <ContextMenuItem onSelect={handleOpenInNewTab}>
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  <span>Open in new tab</span>
-                </ContextMenuItem>
+                {!isNative && (
+                  <ContextMenuItem onSelect={handleOpenInNewTab}>
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    <span>Open in new tab</span>
+                  </ContextMenuItem>
+                )}
                 <ContextMenuItem onSelect={() => onOpenCreateDialog(item.id)}>
                   <FolderPlus className="mr-2 h-4 w-4" />
                   <span>Add child page</span>
@@ -357,6 +420,20 @@ export function PageTreeItem({
                   />
                   <span>{isFavorite(item.id) ? "Unfavorite" : "Favorite"}</span>
                 </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={handleEnterMultiSelect}>
+                  <CheckSquare className="mr-2 h-4 w-4" />
+                  <span>Select multiple</span>
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => setMoveOpen(true)}>
+                  <FolderInput className="mr-2 h-4 w-4" />
+                  <span>Move to...</span>
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => setCopyOpen(true)}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  <span>Copy to...</span>
+                </ContextMenuItem>
+                <ContextMenuSeparator />
                 <ContextMenuItem
                   onSelect={() => setConfirmTrashOpen(true)}
                   className="text-red-500 focus:text-red-500"
@@ -395,6 +472,20 @@ export function PageTreeItem({
         initialName={item.title}
         title="Rename Page"
         description="Enter a new name for your page."
+      />
+
+      <MovePageDialog
+        isOpen={isMoveOpen}
+        onClose={() => setMoveOpen(false)}
+        pages={[pageInfo]}
+        onSuccess={() => mutate()}
+      />
+
+      <CopyPageDialog
+        isOpen={isCopyOpen}
+        onClose={() => setCopyOpen(false)}
+        pages={[pageInfo]}
+        onSuccess={() => mutate()}
       />
     </>
   );

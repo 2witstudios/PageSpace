@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import {
   checkDriveAccessForSearch,
   regexSearchPages,
@@ -22,6 +22,11 @@ export async function GET(
     const { userId } = auth;
 
     const { driveId } = await context.params;
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const { searchParams } = new URL(request.url);
     const pattern = searchParams.get('pattern');
     const searchIn = (searchParams.get('searchIn') || 'content') as 'content' | 'title' | 'both';

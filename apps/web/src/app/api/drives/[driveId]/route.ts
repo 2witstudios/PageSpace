@@ -9,7 +9,7 @@ import {
 } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -36,6 +36,11 @@ export async function GET(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const userId = auth.userId;
 
     const driveWithAccess = await getDriveWithAccess(driveId, userId);
@@ -70,6 +75,11 @@ export async function PATCH(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const userId = auth.userId;
 
     const body = await request.json();
@@ -163,6 +173,11 @@ export async function DELETE(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     const userId = auth.userId;
 
     // Check drive exists

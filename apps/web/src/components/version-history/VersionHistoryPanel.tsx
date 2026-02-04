@@ -24,7 +24,7 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { VersionHistoryItem } from './VersionHistoryItem';
 import { useToast } from '@/hooks/useToast';
-import { post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog } from '@/components/activity/types';
 
@@ -106,7 +106,7 @@ export function VersionHistoryPanel({
         ? `/api/pages/${pageId}/history?${params}`
         : `/api/drives/${driveId}/history?${params}`;
 
-      const response = await fetch(endpoint);
+      const response = await fetchWithAuth(endpoint);
       if (!response.ok) {
         logger.debug('[History:Fetch] Fetch failed with status', {
           status: response.status,

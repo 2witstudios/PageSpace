@@ -8,6 +8,7 @@ import { ChevronLeft, Shield } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
 import { RolesManager } from '@/components/settings/RolesManager';
 import { DriveAISettings } from '@/components/settings/DriveAISettings';
+import { DriveDeleteSection } from '@/components/settings/DriveDeleteSection';
 
 export default function DriveSettingsPage() {
   const params = useParams();
@@ -86,6 +87,11 @@ export default function DriveSettingsPage() {
         <div className="space-y-6">
           <RolesManager driveId={driveId} />
           <DriveAISettings driveId={driveId} />
+
+          {/* Danger Zone - Only show to owners */}
+          {drive.isOwned && (
+            <DriveDeleteSection driveId={driveId} driveName={drive.name} />
+          )}
         </div>
       </div>
     </div>

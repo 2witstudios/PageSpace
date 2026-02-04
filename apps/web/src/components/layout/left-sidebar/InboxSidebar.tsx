@@ -5,7 +5,7 @@ import { useParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { formatDistanceToNow } from 'date-fns';
-import { Search, Hash, Home, Inbox } from 'lucide-react';
+import { Search, Hash } from 'lucide-react';
 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -14,6 +14,8 @@ import { cn, isElectron } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { SidebarProps } from './index';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
+import DashboardFooter from './DashboardFooter';
+import PrimaryNavigation from './PrimaryNavigation';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
@@ -130,9 +132,9 @@ export default function InboxSidebar({ className }: SidebarProps) {
 
   const getItemHref = (item: InboxItem) => {
     if (item.type === 'dm') {
-      return `/dashboard/messages/${item.id}`;
+      return `/dashboard/inbox/dm/${item.id}`;
     }
-    return `/dashboard/${item.driveId}/${item.id}`;
+    return `/dashboard/inbox/channel/${item.id}`;
   };
 
   const isItemActive = (item: InboxItem) => {
@@ -153,25 +155,8 @@ export default function InboxSidebar({ className }: SidebarProps) {
           <DriveSwitcher />
         </div>
 
-        {/* Dashboard link */}
-        <Link
-          href="/dashboard"
-          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-        >
-          <Home className="h-4 w-4" />
-          Dashboard
-        </Link>
-
-        {/* Inbox link - active */}
-        <Link
-          href={driveId ? `/dashboard/${driveId}/inbox` : "/dashboard/inbox"}
-          onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors bg-accent text-accent-foreground mb-3"
-        >
-          <Inbox className="h-4 w-4" />
-          Inbox
-        </Link>
+        {/* Primary Navigation (Dashboard, Inbox, Tasks, Calendar) */}
+        <PrimaryNavigation driveId={driveId} />
 
         {/* Search */}
         <div className="relative mb-3">
@@ -284,6 +269,9 @@ export default function InboxSidebar({ className }: SidebarProps) {
             )}
           </div>
         </ScrollArea>
+
+        {/* User Actions Footer */}
+        <DashboardFooter />
       </div>
     </aside>
   );

@@ -24,6 +24,7 @@ vi.mock('@/lib/repositories/page-agent-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
 // Mock permissions (boundary)
@@ -63,7 +64,7 @@ vi.mock('@/lib/ai/core', () => ({
 }));
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
@@ -101,6 +102,9 @@ describe('POST /api/ai/page-agents/create', () => {
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+    // Default: MCP scope check passes (returns null = allowed)
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
 
     // Default: drive exists, owned by user
     vi.mocked(pageAgentRepository.getDriveById).mockResolvedValue({

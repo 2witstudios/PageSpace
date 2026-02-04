@@ -59,6 +59,11 @@ export default function ChannelView({ page }: ChannelViewProps) {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
       const data = await res.json();
       setMessages(data);
+
+      // Mark channel as read when viewed
+      post(`/api/channels/${page.id}/read`, {}).catch(() => {
+        // Silently ignore errors - marking as read is not critical
+      });
     };
     fetchMessages();
   }, [page.id]);

@@ -244,6 +244,25 @@ services:
     networks:
       - internal
 
+  # Cron service for scheduled background jobs
+  # Runs inside Docker network, hits internal URLs (localhost-only auth)
+  cron:
+    build:
+      context: ./docker/cron
+      dockerfile: Dockerfile
+    depends_on:
+      web:
+        condition: service_started
+    volumes:
+      - cron_logs:/var/log/cron
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+    restart: unless-stopped
+    networks:
+      - internal
+
   # Test service for running unit tests with database access
   test:
     build:
@@ -306,3 +325,4 @@ volumes:
   cache_storage:
   redis_data:
   redis_sessions_data:
+  cron_logs:

@@ -7,6 +7,11 @@ import { NextResponse } from 'next/server';
 import { trackActivity, trackFeature, trackError } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
+// CSRF protection intentionally disabled for analytics tracking:
+// 1. Beacon API (navigator.sendBeacon) cannot set custom headers including CSRF tokens
+// 2. This endpoint only writes to analytics logs, not user data
+// 3. Auth is optional - allows tracking even for unauthenticated users
+// 4. All events are fire-and-forget with no user-visible effects
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 export async function POST(request: Request) {

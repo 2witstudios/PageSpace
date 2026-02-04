@@ -44,6 +44,8 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  filterDrivesByMCPScope: vi.fn((auth, driveIds) => driveIds), // Pass through all drive IDs by default
+  checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
 }));
 
 import { listAccessibleDrives, createDrive, loggers } from '@pagespace/lib/server';
@@ -125,14 +127,21 @@ describe('GET /api/drives', () => {
       const request = new Request('https://example.com/api/drives');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: false });
     });
 
     it('should pass includeTrash=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?includeTrash=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: true });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: true, tokenScopable: false });
+    });
+
+    it('should pass tokenScopable=true when query param is set', async () => {
+      const request = new Request('https://example.com/api/drives?tokenScopable=true');
+      await GET(request);
+
+      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: true });
     });
   });
 

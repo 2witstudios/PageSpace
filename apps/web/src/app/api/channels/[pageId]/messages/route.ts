@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, db, eq, asc, files, pages, driveMembers } from '@pagespace/db';
+import { channelMessages, db, eq, asc, files, pages, driveMembers, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -109,6 +109,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     attachmentMeta: attachmentMeta || null,
   }).returning();
 
+  // Update sender's read status - sending a message means they've read the channel
+  await db.execute(sql`
+    INSERT INTO channel_read_status ("userId", "channelId", "lastReadAt")
+    VALUES (${userId}, ${pageId}, NOW())
+    ON CONFLICT ("userId", "channelId")
+    DO UPDATE SET "lastReadAt" = NOW()
+  `);
+
   const newMessage = await db.query.channelMessages.findFirst({
       where: eq(channelMessages.id, createdMessage.id),
       with: {
@@ -153,10 +161,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Broadcast inbox update to channel members who have view permission
   try {
-    // Get channel's driveId
+    // Get channel's driveId and drive owner
     const channel = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
       columns: { driveId: true, title: true },
+      with: {
+        drive: {
+          columns: { ownerId: true },
+        },
+      },
     });
 
     if (channel?.driveId) {
@@ -165,6 +178,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         where: eq(driveMembers.driveId, channel.driveId),
         columns: { userId: true },
       });
+
+      // Include drive owner in recipient list (if not already a member)
+      const driveOwnerId = channel.drive?.ownerId;
+      const memberUserIds = new Set(members.map(m => m.userId));
+      if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
+        members.push({ userId: driveOwnerId });
+      }
 
       // Create message preview
       const messagePreview = content.length > 100
@@ -197,6 +217,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         );
 
       await Promise.all(broadcastPromises);
+
+      // Broadcast read status change to sender to update their unread count
+      await broadcastInboxEvent(userId, {
+        operation: 'read_status_changed',
+        type: 'channel',
+        id: pageId,
+        driveId: channel.driveId,
+        unreadCount: 0,
+      });
     }
   } catch (error) {
     loggers.realtime.error('Failed to broadcast inbox update:', error as Error);

@@ -3,7 +3,6 @@
 import { memo } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar, { type SidebarProps } from './index';
-import MessagesLeftSidebar from './MessagesLeftSidebar';
 import InboxSidebar from './InboxSidebar';
 
 /**
@@ -13,15 +12,13 @@ import InboxSidebar from './InboxSidebar';
  */
 const MemoizedSidebar = memo((props: SidebarProps) => {
   const pathname = usePathname();
-  const isMessagesRoute = pathname?.startsWith('/dashboard/messages');
-  const isInboxRoute = pathname === '/dashboard/inbox' ||
-                       pathname?.match(/^\/dashboard\/[^/]+\/inbox$/);
 
-  if (isMessagesRoute) {
-    return <MessagesLeftSidebar {...props} />;
-  }
+  // Only show InboxSidebar when viewing a conversation (DM or channel)
+  // The inbox list view uses the regular dashboard sidebar
+  const isInboxConversation = pathname?.startsWith('/dashboard/inbox/dm/') ||
+                              pathname?.startsWith('/dashboard/inbox/channel/');
 
-  if (isInboxRoute) {
+  if (isInboxConversation) {
     return <InboxSidebar {...props} />;
   }
 

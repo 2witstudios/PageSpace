@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { Search, ExternalLink, FileText, Hash } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
@@ -59,15 +59,7 @@ export const SearchResultsRenderer: React.FC<SearchResultsRendererProps> = memo(
   maxHeight = 350,
   className
 }) {
-  const router = useRouter();
-
-  const handleNavigate = (pageId: string, driveId?: string) => {
-    if (driveId) {
-      router.push(`/dashboard/${driveId}/${pageId}`);
-    } else {
-      router.push(`/p/${pageId}`);
-    }
-  };
+  const { navigateToPage } = usePageNavigation();
 
   const displayTitle = title || (
     searchType === 'multi-drive' ? 'Search Results (All Workspaces)' :
@@ -115,7 +107,7 @@ export const SearchResultsRenderer: React.FC<SearchResultsRendererProps> = memo(
             <button
               key={`${result.pageId}-${index}`}
               type="button"
-              onClick={() => handleNavigate(result.pageId, result.driveId)}
+              onClick={() => navigateToPage(result.pageId, result.driveId)}
               className="w-full text-left px-3 py-2 hover:bg-muted/50 transition-colors group"
             >
               {/* Page header */}

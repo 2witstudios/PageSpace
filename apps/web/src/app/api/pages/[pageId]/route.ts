@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { pageService } from '@/services/api';
 
@@ -16,6 +16,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   try {
@@ -49,6 +54,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   try {
@@ -135,6 +145,11 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   if (isAuthError(auth)) {
     return auth.error;
   }
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
+
   const userId = auth.userId;
 
   try {

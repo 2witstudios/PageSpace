@@ -23,7 +23,6 @@ import { memo, useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
-import { useTabSync } from '@/hooks/useTabSync';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
 
 // Memoized page content component to prevent unnecessary re-renders
@@ -157,9 +156,6 @@ export default function CenterPanel() {
 
   // Initialize global drive socket listener for real-time updates
   useGlobalDriveSocket();
-
-  // Sync URL navigation with tabs store
-  useTabSync();
 
   // Track if GlobalAssistantView has ever been rendered (lazy mount, then persist)
   // This ensures we don't mount it until the user visits dashboard, but once mounted it stays

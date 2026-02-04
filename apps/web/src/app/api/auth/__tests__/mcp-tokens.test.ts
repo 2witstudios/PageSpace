@@ -18,6 +18,8 @@ vi.mock('@pagespace/db', () => ({
         ]),
       }),
     }),
+    // Support for db.transaction() - executes callback with a mock tx object
+    transaction: vi.fn(),
     query: {
       mcpTokens: {
         findMany: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@pagespace/db', () => ({
     }),
   },
   mcpTokens: {},
+  mcpTokenDrives: {},
   eq: vi.fn((field, value) => ({ field, value })),
   and: vi.fn((...conditions) => conditions),
 }));
@@ -64,9 +67,27 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logTokenActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn().mockResolvedValue({
+    isOwner: true,
+    isAdmin: true,
+    isMember: true,
+    role: 'OWNER',
+  }),
+  listAccessibleDrives: vi.fn().mockResolvedValue([]),
+}));
+
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
+
+// Helper to create a mock transaction that executes callback with a mock tx
+const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
+  (db.transaction as unknown as Mock).mockImplementation(async (callback) => {
+    const tx = { insert: insertMock };
+    return callback(tx);
+  });
+};
 
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
@@ -78,31 +99,45 @@ describe('/api/auth/mcp-tokens', () => {
       role: 'user',
       tokenVersion: 0,
       tokenType: 'session',
-  sessionId: 'test-session-id',
-      
+      sessionId: 'test-session-id',
     });
     (isAuthError as unknown as Mock).mockReturnValue(false);
+
+    // Default transaction mock that returns a basic token
+    const defaultInsertMock = vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([
+          {
+            id: 'new-mcp-token-id',
+            name: 'Test Token',
+            createdAt: new Date(),
+          },
+        ]),
+      }),
+    });
+    setupTransactionMock(defaultInsertMock);
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
     describe('successful token creation', () => {
       it('returns 200 with new token data', async () => {
-        // Arrange - capture the values passed to insert
+        // Arrange - capture the values passed to insert via transaction
         let capturedValues: Record<string, unknown> | undefined;
-        const mockValues = vi.fn().mockImplementation((vals) => {
-          capturedValues = vals;
-          return {
-            returning: vi.fn().mockResolvedValue([
-              {
-                id: 'new-mcp-token-id',
-                name: vals.name,
-                token: vals.token,
-                createdAt: new Date(),
-              },
-            ]),
-          };
+        const mockInsert = vi.fn().mockReturnValue({
+          values: vi.fn().mockImplementation((vals) => {
+            capturedValues = vals;
+            return {
+              returning: vi.fn().mockResolvedValue([
+                {
+                  id: 'new-mcp-token-id',
+                  name: vals.name,
+                  createdAt: new Date(),
+                },
+              ]),
+            };
+          }),
         });
-        (db.insert as unknown as Mock).mockReturnValue({ values: mockValues });
+        setupTransactionMock(mockInsert);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -146,15 +181,15 @@ describe('/api/auth/mcp-tokens', () => {
       });
 
       it('generates token with mcp_ prefix', async () => {
-        // Arrange - mock returns token with mcp_ prefix
-        const mockValues = vi.fn().mockImplementation((vals) => {
-          return {
+        // Arrange - mock transaction returns token
+        const mockInsert = vi.fn().mockReturnValue({
+          values: vi.fn().mockImplementation((vals) => ({
             returning: vi.fn().mockResolvedValue([
-              { id: 'id', name: vals.name, token: vals.token, createdAt: new Date() },
+              { id: 'id', name: vals.name, createdAt: new Date() },
             ]),
-          };
+          })),
         });
-        (db.insert as Mock).mockReturnValue({ values: mockValues });
+        setupTransactionMock(mockInsert);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -171,23 +206,25 @@ describe('/api/auth/mcp-tokens', () => {
         const body = await response.json();
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
-        expect(db.insert).toHaveBeenCalled();
+        expect(db.transaction).toHaveBeenCalled();
         expect(body.token).toBeDefined();
         expect(body.token).toMatch(/^mcp_/);
       });
 
       it('associates token with authenticated user', async () => {
-        // Arrange - capture userId
+        // Arrange - capture userId via transaction mock
         let capturedUserId: string | undefined;
-        const mockValues = vi.fn().mockImplementation((vals) => {
-          capturedUserId = vals.userId;
-          return {
-            returning: vi.fn().mockResolvedValue([
-              { id: 'id', name: vals.name, token: vals.token, createdAt: new Date() },
-            ]),
-          };
+        const mockInsert = vi.fn().mockReturnValue({
+          values: vi.fn().mockImplementation((vals) => {
+            capturedUserId = vals.userId;
+            return {
+              returning: vi.fn().mockResolvedValue([
+                { id: 'id', name: vals.name, createdAt: new Date() },
+              ]),
+            };
+          }),
         });
-        (db.insert as Mock).mockReturnValue({ values: mockValues });
+        setupTransactionMock(mockInsert);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -203,7 +240,7 @@ describe('/api/auth/mcp-tokens', () => {
         await POST(request);
 
         // Assert - verify token is associated with authenticated user
-        expect(db.insert).toHaveBeenCalled();
+        expect(db.transaction).toHaveBeenCalled();
         expect(capturedUserId).toBe('test-user-id');
       });
     });
@@ -332,12 +369,14 @@ describe('/api/auth/mcp-tokens', () => {
           name: 'Token 1',
           lastUsed: new Date(),
           createdAt: new Date(),
+          driveScopes: [{ driveId: 'drive-1', drive: { id: 'drive-1', name: 'Work Drive' } }],
         },
         {
           id: 'token-2',
           name: 'Token 2',
           lastUsed: null,
           createdAt: new Date(),
+          driveScopes: [],
         },
       ]);
     });
