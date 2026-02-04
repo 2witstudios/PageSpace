@@ -15,7 +15,7 @@ interface ConnectionStatus {
   connected: boolean;
   connection: {
     id: string;
-    status: "active" | "expired" | "error" | "disconnected";
+    status: "active" | "expired" | "error" | "disconnected" | "pending" | "revoked";
     statusMessage: string | null;
     googleEmail: string;
     selectedCalendars: string[];
@@ -212,6 +212,20 @@ export default function GoogleCalendarSettingsPage() {
           <Badge variant="destructive">
             <XCircle className="h-3 w-3 mr-1" />
             Error
+          </Badge>
+        );
+      case "pending":
+        return (
+          <Badge variant="secondary">
+            <AlertCircle className="h-3 w-3 mr-1" />
+            Pending
+          </Badge>
+        );
+      case "revoked":
+        return (
+          <Badge variant="destructive">
+            <XCircle className="h-3 w-3 mr-1" />
+            Revoked
           </Badge>
         );
       default:
