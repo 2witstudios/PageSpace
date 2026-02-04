@@ -39,6 +39,8 @@ export interface CalendarEvent {
   recurrenceRule: RecurrenceRule | null;
   visibility: EventVisibility;
   color: string;
+  syncedFromGoogle: boolean;
+  googleSyncReadOnly: boolean | null;
   createdAt: string;
   updatedAt: string;
   createdBy: {

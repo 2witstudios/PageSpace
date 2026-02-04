@@ -260,6 +260,7 @@ const upsertEvent = async (
   // Check if event already exists
   const existingEvent = await db.query.calendarEvents.findFirst({
     where: and(
+      eq(calendarEvents.createdById, userId),
       eq(calendarEvents.googleEventId, googleEvent.id),
       eq(calendarEvents.googleCalendarId, calendarId)
     ),
@@ -329,10 +330,24 @@ const upsertEvent = async (
   }
 
   // Create new event
-  await db.insert(calendarEvents).values({
-    ...pageSpaceEvent,
-    updatedAt: new Date(),
-  });
+  const inserted = await db
+    .insert(calendarEvents)
+    .values({
+      ...pageSpaceEvent,
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing({
+      target: [
+        calendarEvents.createdById,
+        calendarEvents.googleCalendarId,
+        calendarEvents.googleEventId,
+      ],
+    })
+    .returning({ id: calendarEvents.id });
+
+  if (inserted.length === 0) {
+    return { action: 'skipped' };
+  }
 
   return { action: 'created' };
 };

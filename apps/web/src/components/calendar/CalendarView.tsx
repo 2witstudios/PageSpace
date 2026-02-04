@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock } from 'lucide-react';
+import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 import {
@@ -14,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { useMobile } from '@/hooks/useMobile';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useCalendarData } from './useCalendarData';
 import { MonthView } from './MonthView';
 import { WeekView } from './WeekView';
@@ -33,6 +35,21 @@ interface CalendarViewProps {
   driveName?: string;
   className?: string;
 }
+
+interface GoogleCalendarStatusResponse {
+  connected: boolean;
+  connection: {
+    id: string;
+  } | null;
+}
+
+const googleCalendarStatusFetcher = async (url: string): Promise<GoogleCalendarStatusResponse> => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error('Failed to fetch Google Calendar status');
+  }
+  return response.json();
+};
 
 export function CalendarView({ context, driveId, driveName: _driveName, className }: CalendarViewProps) {
   const isMobile = useMobile();
@@ -63,6 +80,17 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     includePersonal: context === 'user',
     includeTasks: showTasks,
   });
+
+  const { data: googleCalendarStatus } = useSWR<GoogleCalendarStatusResponse>(
+    '/api/integrations/google-calendar/status',
+    googleCalendarStatusFetcher,
+    {
+      revalidateOnFocus: false,
+      refreshInterval: 60000,
+    }
+  );
+
+  const showGoogleCalendarHint = !googleCalendarStatus?.connection;
 
   // Navigation handlers
   const handlePrevious = useCallback(() => {
@@ -181,6 +209,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           handlers={handlers}
           showTasks={showTasks}
           onShowTasksChange={setShowTasks}
+          showGoogleCalendarHint={showGoogleCalendarHint}
           isLoading={isLoading}
           currentDate={currentDate}
         />
@@ -370,6 +399,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
                 events={events}
                 tasks={showTasks ? tasks : []}
                 handlers={handlers}
+                showGoogleCalendarHint={showGoogleCalendarHint}
               />
             )}
           </>
