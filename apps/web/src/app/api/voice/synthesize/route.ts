@@ -14,7 +14,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserOpenAISettings } from '@/lib/ai/core/ai-utils';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // Available TTS voices
 const VALID_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;
@@ -99,7 +99,14 @@ export async function POST(request: Request) {
     }
 
     // Validate speed (0.25 to 4.0)
-    const clampedSpeed = Math.min(4.0, Math.max(0.25, speed));
+    const speedNumber = typeof speed === 'number' ? speed : Number(speed);
+    if (!Number.isFinite(speedNumber)) {
+      return NextResponse.json(
+        { error: 'Invalid speed', message: 'Speed must be a valid number' },
+        { status: 400 }
+      );
+    }
+    const clampedSpeed = Math.min(4.0, Math.max(0.25, speedNumber));
 
     // Call OpenAI TTS API
     const response = await fetch('https://api.openai.com/v1/audio/speech', {

@@ -380,7 +380,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const pagePathInfo = buildPagePath(tree, page.id, driveId);
 
     sendMessage(
-      { text },
+      { parts: [{ type: 'text', text }] },
       {
         body: {
           chatId: page.id,

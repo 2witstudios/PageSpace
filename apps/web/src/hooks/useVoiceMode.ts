@@ -3,7 +3,7 @@
 import { useRef, useCallback, useEffect } from 'react';
 import { useVoiceModeStore, type TTSVoice } from '@/stores/useVoiceModeStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { nanoid } from 'nanoid';
+import { createId } from '@paralleldrive/cuid2';
 
 export interface UseVoiceModeOptions {
   /** Callback when transcript is available */
@@ -135,7 +135,8 @@ export function useVoiceMode({
     async (audioBlob: Blob) => {
       try {
         const formData = new FormData();
-        formData.append('audio', audioBlob, 'recording.webm');
+        const extension = audioBlob.type.includes('mp4') ? 'mp4' : 'webm';
+        formData.append('audio', audioBlob, `recording.${extension}`);
         if (language) {
           formData.append('language', language);
         }
@@ -332,7 +333,7 @@ export function useVoiceMode({
 
       try {
         setError(null);
-        const audioId = nanoid();
+        const audioId = createId();
 
         const response = await fetchWithAuth('/api/voice/synthesize', {
           method: 'POST',
