@@ -144,13 +144,14 @@ describe('usePageTree', () => {
         result.current.updateNode('page-1', { title: 'New Title' });
       });
 
-      // Observable: tree updated with new title
-      const updatedTree = mockMutate.mock.calls[0][0];
+      /** @boundary-contract Optimistic update: mutate with functional updater and revalidate=false */
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+
+      // Observable: verify the updater function produces correct tree
+      const updaterFn = mockMutate.mock.calls[0][0];
+      const updatedTree = updaterFn(mockTree);
       expect(Array.isArray(updatedTree)).toBe(true);
       expect(updatedTree[0].title).toBe('New Title');
-
-      /** @boundary-contract Optimistic update: mutate with revalidate=false to prevent refetch */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
     it('given a nested node, should optimistically update nested tree', () => {
@@ -170,16 +171,18 @@ describe('usePageTree', () => {
         result.current.updateNode('child', { title: 'Updated Child' });
       });
 
-      // Observable: nested child updated
-      const updatedTree = mockMutate.mock.calls[0][0];
-      expect(updatedTree[0].children[0].title).toBe('Updated Child');
-
       /** @boundary-contract Optimistic update: no refetch for nested updates */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+
+      // Observable: verify the updater function produces correct nested tree
+      const updaterFn = mockMutate.mock.calls[0][0];
+      const updatedTree = updaterFn(mockTree);
+      expect(updatedTree[0].children[0].title).toBe('Updated Child');
     });
 
-    it('given a non-existent node, should not throw and not mutate', () => {
-      mockSWRState.data = [createMockTreePage({ id: 'page-1' })];
+    it('given a non-existent node, should not throw and return unchanged data', () => {
+      const mockTree = [createMockTreePage({ id: 'page-1' })];
+      mockSWRState.data = mockTree;
 
       const { result } = renderHook(() => usePageTree('drive-123'));
 
@@ -189,7 +192,28 @@ describe('usePageTree', () => {
         });
       }).not.toThrow();
 
-      expect(mockMutate).not.toHaveBeenCalled();
+      // mutate is called with functional updater, but the function returns unchanged data
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      const updaterFn = mockMutate.mock.calls[0][0];
+      const updatedTree = updaterFn(mockTree);
+      expect(updatedTree).toBe(mockTree); // Same reference, unchanged
+    });
+
+    it('given no data loaded yet, should return undefined without error', () => {
+      mockSWRState.data = undefined;
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      expect(() => {
+        act(() => {
+          result.current.updateNode('page-1', { title: 'Test' });
+        });
+      }).not.toThrow();
+
+      // mutate is called, and updater returns undefined when no data
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+      const updaterFn = mockMutate.mock.calls[0][0];
+      expect(updaterFn(undefined)).toBeUndefined();
     });
   });
 
