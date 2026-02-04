@@ -1,8 +1,16 @@
-import { pgTable, text, timestamp, boolean, pgEnum, index, unique, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, pgEnum, index, unique, jsonb, integer } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { drives, pages } from './core';
 import { createId } from '@paralleldrive/cuid2';
+
+// Google Calendar connection status
+export const googleCalendarConnectionStatus = pgEnum('GoogleCalendarConnectionStatus', [
+  'active',
+  'expired',
+  'error',
+  'disconnected',
+]);
 
 // Event visibility levels
 export const eventVisibility = pgEnum('EventVisibility', ['DRIVE', 'ATTENDEES_ONLY', 'PRIVATE']);
@@ -70,6 +78,13 @@ export const calendarEvents = pgTable('calendar_events', {
   isTrashed: boolean('isTrashed').default(false).notNull(),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
 
+  // Google Calendar sync tracking
+  googleEventId: text('googleEventId'),          // Google's event ID
+  googleCalendarId: text('googleCalendarId'),    // Which Google calendar this came from
+  syncedFromGoogle: boolean('syncedFromGoogle').default(false).notNull(), // true = imported from Google
+  lastGoogleSync: timestamp('lastGoogleSync', { mode: 'date', withTimezone: true }), // Last sync timestamp
+  googleSyncReadOnly: boolean('googleSyncReadOnly').default(true), // Prevent editing if synced
+
   // Audit timestamps
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
@@ -83,6 +98,8 @@ export const calendarEvents = pgTable('calendar_events', {
     driveStartAtIdx: index('calendar_events_drive_id_start_at_idx').on(table.driveId, table.startAt),
     recurringEventIdx: index('calendar_events_recurring_event_id_idx').on(table.recurringEventId),
     trashedIdx: index('calendar_events_is_trashed_idx').on(table.isTrashed),
+    googleEventIdx: index('calendar_events_google_event_id_idx').on(table.googleEventId),
+    syncedFromGoogleIdx: index('calendar_events_synced_from_google_idx').on(table.syncedFromGoogle),
   }
 });
 
@@ -115,6 +132,50 @@ export const eventAttendees = pgTable('event_attendees', {
     userIdx: index('event_attendees_user_id_idx').on(table.userId),
     statusIdx: index('event_attendees_status_idx').on(table.status),
     userStatusIdx: index('event_attendees_user_id_status_idx').on(table.userId, table.status),
+  }
+});
+
+/**
+ * Google Calendar Connections
+ * Stores OAuth tokens and sync configuration for Google Calendar integration.
+ * One connection per user (unique constraint on userId).
+ */
+export const googleCalendarConnections = pgTable('google_calendar_connections', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
+
+  // OAuth tokens (encrypted at rest via application layer)
+  accessToken: text('accessToken').notNull(),
+  refreshToken: text('refreshToken').notNull(),
+  tokenExpiresAt: timestamp('tokenExpiresAt', { mode: 'date', withTimezone: true }).notNull(),
+
+  // Google account info
+  googleEmail: text('googleEmail').notNull(),
+  googleAccountId: text('googleAccountId').notNull(),
+
+  // Connection status
+  status: googleCalendarConnectionStatus('status').default('active').notNull(),
+  statusMessage: text('statusMessage'),
+
+  // Sync configuration
+  targetDriveId: text('targetDriveId').references(() => drives.id, { onDelete: 'set null' }),
+  selectedCalendars: jsonb('selectedCalendars').$type<string[]>().default([]), // Google calendar IDs
+  syncFrequencyMinutes: integer('syncFrequencyMinutes').default(15).notNull(),
+  markAsReadOnly: boolean('markAsReadOnly').default(true).notNull(),
+
+  // Sync state
+  lastSyncAt: timestamp('lastSyncAt', { mode: 'date', withTimezone: true }),
+  lastSyncError: text('lastSyncError'),
+  syncCursor: text('syncCursor'), // Google's sync token for incremental sync
+
+  // Audit timestamps
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
+}, (table) => {
+  return {
+    userIdx: index('google_calendar_connections_user_id_idx').on(table.userId),
+    statusIdx: index('google_calendar_connections_status_idx').on(table.status),
+    targetDriveIdx: index('google_calendar_connections_target_drive_id_idx').on(table.targetDriveId),
   }
 });
 
@@ -154,3 +215,24 @@ export const eventAttendeesRelations = relations(eventAttendees, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+export const googleCalendarConnectionsRelations = relations(googleCalendarConnections, ({ one }) => ({
+  user: one(users, {
+    fields: [googleCalendarConnections.userId],
+    references: [users.id],
+  }),
+  targetDrive: one(drives, {
+    fields: [googleCalendarConnections.targetDriveId],
+    references: [drives.id],
+  }),
+}));
+
+// Type exports
+export type CalendarEvent = typeof calendarEvents.$inferSelect;
+export type NewCalendarEvent = typeof calendarEvents.$inferInsert;
+
+export type EventAttendee = typeof eventAttendees.$inferSelect;
+export type NewEventAttendee = typeof eventAttendees.$inferInsert;
+
+export type GoogleCalendarConnection = typeof googleCalendarConnections.$inferSelect;
+export type NewGoogleCalendarConnection = typeof googleCalendarConnections.$inferInsert;
