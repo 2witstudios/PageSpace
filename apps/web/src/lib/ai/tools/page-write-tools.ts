@@ -28,6 +28,7 @@ import { applyPageMutation, type PageMutationContext } from '@/services/api/page
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -431,8 +432,10 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to edit this document');
         }
 
-        // Split content into lines
-        const lines = page.content.split('\n');
+        // Format content for AI line-based editing, then split into lines
+        // addLineBreaksForAI adds newlines between block tags without removing any content
+        const formattedContent = addLineBreaksForAI(page.content || '');
+        const lines = formattedContent.split('\n');
         
         // Validate line numbers
         if (startLine < 1 || startLine > lines.length || endLine < startLine || endLine > lines.length) {
