@@ -53,6 +53,8 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { VoiceModeOverlay } from '@/components/ai/voice';
 
 // Shared hooks and components
 import {
@@ -125,10 +127,18 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
 
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
+
+  // Voice mode state
+  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
+  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -222,6 +232,22 @@ const GlobalAssistantView: React.FC = () => {
     };
     loadAgentConfig();
   }, [selectedAgent]);
+
+  // Check if OpenAI is configured (required for voice mode)
+  useEffect(() => {
+    const checkOpenAI = async () => {
+      try {
+        const response = await fetchWithAuth('/api/ai/settings');
+        if (response.ok) {
+          const data = await response.json();
+          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
+        }
+      } catch {
+        setIsOpenAIConfigured(false);
+      }
+    };
+    checkOpenAI();
+  }, []);
 
   // ============================================
   // CHAT CONFIGURATION
@@ -572,6 +598,71 @@ const GlobalAssistantView: React.FC = () => {
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    const requestBody = selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: currentConversationId,
+          selectedProvider: agentSelectedProvider,
+          selectedModel: agentSelectedModel,
+          isReadOnly,
+          webSearchEnabled,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+        }
+      : {
+          isReadOnly,
+          webSearchEnabled,
+          showPageTree,
+          locationContext: locationContext || undefined,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+        };
+
+    sendMessage({ text }, { body: requestBody });
+  }, [
+    currentConversationId,
+    selectedAgent,
+    agentSelectedProvider,
+    agentSelectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    mcpToolSchemas,
+    sendMessage,
+  ]);
+
+  // Track last AI response for voice mode TTS
+  useEffect(() => {
+    if (!isVoiceModeEnabled || isStreaming) return;
+
+    // Get the last assistant message
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastAssistantMsg) {
+      // Extract text from message parts
+      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
+      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+      if (text && text !== lastAIResponse) {
+        setLastAIResponse(text);
+      }
+    }
+  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+
+  // Voice mode toggle handler
+  const handleVoiceModeToggle = useCallback(() => {
+    if (isVoiceModeEnabled) {
+      disableVoiceMode();
+    } else {
+      enableVoiceMode();
+    }
+  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
+
   // ============================================
   // RENDER
   // ============================================
@@ -600,6 +691,18 @@ const GlobalAssistantView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Voice Mode Overlay */}
+      {isVoiceModeEnabled && (
+        <VoiceModeOverlay
+          onClose={disableVoiceMode}
+          onSend={handleVoiceSend}
+          aiResponse={lastAIResponse}
+          isAIStreaming={isStreaming}
+          showSettings={showVoiceSettings}
+          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+        />
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
         <div className="flex items-center space-x-2">
@@ -715,6 +818,9 @@ const GlobalAssistantView: React.FC = () => {
             onMcpServerToggle={props.onMcpServerToggle}
             showMcp={props.showMcp}
             popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
+            onVoiceModeClick={handleVoiceModeToggle}
+            isVoiceModeActive={isVoiceModeEnabled}
+            isVoiceModeAvailable={isOpenAIConfigured}
           />
         )}
       />
