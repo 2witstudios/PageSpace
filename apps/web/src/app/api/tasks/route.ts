@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, ilike } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -26,6 +26,17 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
+
+/**
+ * Escape SQL LIKE pattern special characters to prevent wildcard injection.
+ * Must be used with ESCAPE '\\' clause in the query.
+ */
+function escapeLikePattern(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')  // Escape backslashes first
+    .replace(/%/g, '\\%')    // Escape percent
+    .replace(/_/g, '\\_');   // Escape underscore
+}
 
 /**
  * GET /api/tasks
@@ -225,11 +236,12 @@ export async function GET(request: Request) {
     }
     // Search filter (case-insensitive title/description)
     if (params.search) {
-      const searchPattern = `%${params.search}%`;
+      const escapedSearch = escapeLikePattern(params.search);
+      const searchPattern = `%${escapedSearch}%`;
       filterConditions.push(
         or(
-          ilike(taskItems.title, searchPattern),
-          ilike(taskItems.description, searchPattern)
+          sql`${taskItems.title} ILIKE ${searchPattern} ESCAPE '\\'`,
+          sql`${taskItems.description} ILIKE ${searchPattern} ESCAPE '\\'`
         )
       );
     }

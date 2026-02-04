@@ -939,10 +939,15 @@ function TaskTableRow({
           <button
             type="button"
             className={cn(
-              'font-medium cursor-pointer hover:text-primary hover:underline bg-transparent border-0 p-0 text-left',
+              'font-medium bg-transparent border-0 p-0 text-left',
+              task.pageId && task.driveId
+                ? 'cursor-pointer hover:text-primary hover:underline'
+                : 'cursor-default',
               isCompleted && 'line-through text-muted-foreground'
             )}
-            onClick={() => onNavigate(task)}
+            onClick={task.pageId && task.driveId ? () => onNavigate(task) : undefined}
+            disabled={!task.pageId || !task.driveId}
+            title={!task.pageId || !task.driveId ? 'No linked page' : undefined}
           >
             {task.title}
           </button>
@@ -1260,10 +1265,15 @@ function KanbanCard({
               <button
                 type="button"
                 className={cn(
-                  'text-sm font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left w-full truncate',
+                  'text-sm font-medium bg-transparent border-0 p-0 text-left w-full truncate',
+                  task.pageId && task.driveId
+                    ? 'cursor-pointer hover:text-primary'
+                    : 'cursor-default',
                   isCompleted && 'line-through text-muted-foreground'
                 )}
-                onClick={() => onNavigate(task)}
+                onClick={task.pageId && task.driveId ? () => onNavigate(task) : undefined}
+                disabled={!task.pageId || !task.driveId}
+                title={!task.pageId || !task.driveId ? 'No linked page' : undefined}
               >
                 {task.title}
               </button>
