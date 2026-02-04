@@ -419,9 +419,40 @@ The changes are modular and can be reverted independently.
 
 ---
 
-## Appendix A: File Change Summary
+## Appendix A: Tool Call Renderers (No Changes Required)
 
-### Code Changes
+### Analysis
+
+The tool call renderers display content from `read_page` and `replace_lines` tools:
+
+| Renderer | File | Impact |
+|----------|------|--------|
+| `RichContentRenderer` | `components/ai/shared/chat/tool-calls/RichContentRenderer.tsx` | **NONE** |
+| `RichDiffRenderer` | `components/ai/shared/chat/tool-calls/RichDiffRenderer.tsx` | **NONE** |
+| `CompactToolCallRenderer` | `components/ai/shared/chat/tool-calls/CompactToolCallRenderer.tsx` | **NONE** |
+| `ToolCallRenderer` | `components/ai/shared/chat/tool-calls/ToolCallRenderer.tsx` | **NONE** |
+
+### Why No Changes Needed
+
+1. **RichContentRenderer** (lines 66-88):
+   - Already strips line numbers via `stripLineNumbers(content)`
+   - Renders HTML with `dangerouslySetInnerHTML`
+   - Extra newlines in HTML are ignored by browsers (whitespace collapsed)
+
+2. **RichDiffRenderer** (lines 208-230):
+   - Also strips line numbers
+   - Does line-based diff by splitting on `\n`
+   - Consistent newlines actually **improve** diffs (more granular line changes)
+
+3. **Content processing**:
+   - `<p>\nHello World \n</p>` renders identically to `<p>Hello World </p>`
+   - Trailing spaces inside tags are preserved in both cases
+
+---
+
+## Appendix B: Code Changes
+
+### Files to Modify
 
 | File | Action | Lines Changed (est.) |
 |------|--------|---------------------|
@@ -438,7 +469,7 @@ The changes are modular and can be reverted independently.
 
 ---
 
-## Appendix B: Tests Requiring Updates
+## Appendix C: Tests Requiring Updates
 
 ### Tests That Reference Prettier/Formatting
 
@@ -497,7 +528,7 @@ describe('addLineBreaksForAI', () => {
 
 ---
 
-## Appendix C: Documentation Requiring Updates
+## Appendix D: Documentation Requiring Updates
 
 ### Documentation Files
 
@@ -542,7 +573,7 @@ A minimal line-break inserter is now used exclusively in AI tools:
 
 ---
 
-## Appendix D: RichEditor.tsx Changes Detail
+## Appendix E: RichEditor.tsx Changes Detail
 
 ### Lines to Remove (approx. lines 13, 21, 39-70, 125)
 
@@ -584,7 +615,7 @@ interface RichEditorProps {
 
 ---
 
-## Appendix E: MCP Documents Route Changes Detail
+## Appendix F: MCP Documents Route Changes Detail
 
 ### Current Code (to remove)
 
