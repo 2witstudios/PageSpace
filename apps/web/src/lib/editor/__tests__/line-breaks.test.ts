@@ -20,6 +20,12 @@ describe('addLineBreaksForAI', () => {
       const output = addLineBreaksForAI(input);
       expect(output).toContain('   Hello'); // Leading spaces preserved
     });
+
+    it('preserves runs of three or more blank lines', () => {
+      const input = '<p>Line 1\n\n\nLine 2</p>';
+      const output = addLineBreaksForAI(input);
+      expect(output).toContain('Line 1\n\n\nLine 2');
+    });
   });
 
   describe('line break insertion', () => {
@@ -125,6 +131,13 @@ describe('addLineBreaksForAI', () => {
       const input = '<p class="test" id="para">Text</p>';
       const output = addLineBreaksForAI(input);
       expect(output).toMatch(/<p class="test" id="para">\n/);
+    });
+
+    it('handles attributes containing > inside quoted values', () => {
+      const input = '<p data-test="a > b">Text</p>';
+      const output = addLineBreaksForAI(input);
+      expect(output).toContain('<p data-test="a > b">\nText');
+      expect(output).not.toContain('a >\n b');
     });
   });
 

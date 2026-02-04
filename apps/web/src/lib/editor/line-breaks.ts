@@ -74,11 +74,12 @@ export function addLineBreaksForAI(html: string): string {
 
   // Create regex pattern for block tags
   const blockTagPattern = BLOCK_TAGS.join('|');
+  const blockOpeningTagPattern = `<(?:${blockTagPattern})(?:\\s+(?:[^"'<>]|"[^"]*"|'[^']*')*)?\\s*>`;
 
   // Add newline after opening block tags (if not already present)
   // Match: <tag> or <tag attr="value"> but not if followed by newline
   const openingTagRegex = new RegExp(
-    `(<(?:${blockTagPattern})(?:\\s[^>]*)?>)(?!\\n)`,
+    `(${blockOpeningTagPattern})(?!\\n)`,
     'gi'
   );
   result = result.replace(openingTagRegex, '$1\n');
@@ -94,14 +95,10 @@ export function addLineBreaksForAI(html: string): string {
   // Add newline between adjacent closing and opening block tags
   // Match: </tag><tag> or </tag> <tag> (with optional whitespace)
   const adjacentTagRegex = new RegExp(
-    `(</(?:${blockTagPattern})>)\\s*(<(?:${blockTagPattern})(?:\\s[^>]*)?>)`,
+    `(</(?:${blockTagPattern})>)\\s*(${blockOpeningTagPattern})`,
     'gi'
   );
   result = result.replace(adjacentTagRegex, '$1\n$2');
-
-  // Clean up: collapse multiple consecutive newlines to maximum of 2
-  // (preserves intentional double-spacing but prevents runaway newlines)
-  result = result.replace(/\n{3,}/g, '\n\n');
 
   return result;
 }
