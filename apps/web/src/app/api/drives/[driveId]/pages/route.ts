@@ -8,8 +8,8 @@ import { jsonResponse } from '@pagespace/lib/api-utils';
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 // Cutoff date for unread indicators on never-viewed pages
-// Pages created after this date will show as unread if never viewed
-// Pages created before this date won't show as unread (to avoid overwhelming users with old content)
+// For pages the user has never viewed, only show as unread if there's activity after this date
+// This prevents overwhelming users with indicators on old content they've never seen
 const UNREAD_INDICATOR_CUTOFF_DATE = new Date('2026-02-03T00:00:00.000Z');
 
 async function getPermittedPages(driveId: string, userId: string) {
@@ -159,7 +159,11 @@ export async function GET(
         WHERE al."resourceType" = 'page'
           AND al.operation IN ('create', 'update')
           AND al.timestamp > pc.cutoff_time
-          AND (al."userId" != ${userId} OR al."isAiGenerated" = true)
+          AND (
+            al."userId" IS NULL                    -- system/unknown actor
+            OR al."userId" != ${userId}            -- different user
+            OR al."isAiGenerated" = true           -- AI edit (even if triggered by current user - should review)
+          )
       `);
 
       for (const row of unreadPagesResult.rows as { page_id: string }[]) {
