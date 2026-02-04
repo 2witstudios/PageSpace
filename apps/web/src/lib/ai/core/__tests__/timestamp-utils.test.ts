@@ -108,6 +108,22 @@ describe('timestamp-utils', () => {
       expect(nyStart.toISOString()).toBe('2024-06-14T04:00:00.000Z');
     });
 
+    it('handles DST start day without shifting away from midnight', () => {
+      // On 2024-10-06 in Sydney, DST starts and local offset changes from +10 to +11.
+      vi.setSystemTime(new Date('2024-10-06T12:00:00Z'));
+
+      const sydneyStart = getStartOfTodayInTimezone('Australia/Sydney');
+      expect(sydneyStart.toISOString()).toBe('2024-10-05T14:00:00.000Z');
+    });
+
+    it('handles DST end day without shifting away from midnight', () => {
+      // On 2024-04-07 in Sydney, DST ends and local offset changes from +11 to +10.
+      vi.setSystemTime(new Date('2024-04-07T12:00:00Z'));
+
+      const sydneyStart = getStartOfTodayInTimezone('Australia/Sydney');
+      expect(sydneyStart.toISOString()).toBe('2024-04-06T13:00:00.000Z');
+    });
+
     it('falls back to UTC for invalid timezones', () => {
       vi.setSystemTime(new Date('2024-06-15T14:30:00Z'));
 

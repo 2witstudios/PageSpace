@@ -477,6 +477,13 @@
       "when": 1770178597836,
       "tag": "0067_absent_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1770218664952,
+      "tag": "0068_tan_toro",
+      "breakpoints": true
     }
   ]
 }
