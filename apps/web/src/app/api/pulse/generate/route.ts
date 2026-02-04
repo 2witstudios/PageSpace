@@ -5,6 +5,8 @@ import {
   createAIProvider,
   isProviderError,
   buildTimestampSystemPrompt,
+  getUserTimeOfDay,
+  getStartOfTodayInTimezone,
 } from '@/lib/ai/core';
 import {
   db,
@@ -104,15 +106,32 @@ export async function POST(req: Request) {
   const userId = auth.userId;
 
   try {
+    // Parse request body for timezone
+    let clientTimezone: string | undefined;
+    try {
+      const body = await req.json();
+      clientTimezone = body?.timezone;
+    } catch {
+      // No body or invalid JSON is fine - timezone is optional
+    }
+
     // Get user info for personalization
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const userName = user?.name || user?.email?.split('@')[0] || 'there';
 
-    // Time windows
+    // Determine timezone: use client-provided, then stored preference, then UTC
+    const userTimezone = clientTimezone || user?.timezone || 'UTC';
+
+    // If client provided a timezone and it differs from stored, update user profile
+    if (clientTimezone && clientTimezone !== user?.timezone) {
+      await db.update(users).set({ timezone: clientTimezone }).where(eq(users.id, userId));
+    }
+
+    // Time windows - use user's timezone for "today" calculations
     const now = new Date();
     const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfToday = getStartOfTodayInTimezone(userTimezone);
 
     // Get user's drives
     const userDrives = await db
@@ -575,12 +594,8 @@ export async function POST(req: Request) {
       })),
     };
 
-    // Determine greeting based on time of day
-    const hour = now.getHours();
-    let timeOfDay = 'day';
-    if (hour < 12) timeOfDay = 'morning';
-    else if (hour < 17) timeOfDay = 'afternoon';
-    else timeOfDay = 'evening';
+    // Determine greeting based on time of day in user's timezone
+    const { timeOfDay } = getUserTimeOfDay(userTimezone);
 
     // Build prompt for AI
     const userPrompt = `You're checking in with ${userName}. It's ${timeOfDay}.
@@ -606,7 +621,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     // Generate summary
     const result = await generateText({
       model: providerResult.model,
-      system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt()}`,
+      system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
       messages: [{ role: 'user', content: userPrompt }],
       temperature: 0.7,
       maxRetries: 3,

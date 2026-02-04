@@ -69,6 +69,7 @@ describe('validateServiceUser', () => {
         lockedUntil: null,
         suspendedAt: null,
         suspendedReason: null,
+        timezone: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -164,6 +165,7 @@ describe('validateServiceUser', () => {
         lockedUntil: null,
         suspendedAt: null,
         suspendedReason: null,
+        timezone: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -208,6 +210,7 @@ describe('validateServiceUser', () => {
         lockedUntil: null,
         suspendedAt: new Date(), // User is suspended
         suspendedReason: 'Terms of service violation',
+        timezone: null,
       };
 
       vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
