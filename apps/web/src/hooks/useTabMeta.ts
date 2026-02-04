@@ -66,9 +66,9 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   const drives = useDriveStore((state) => state.drives);
   const updateTabMeta = useTabsStore((state) => state.updateTabMeta);
 
-  // Check if tab already has cached metadata for a page or channel
-  const isPageType = parsed.type === 'page' || parsed.type === 'inbox-channel';
-  const pageId = parsed.type === 'page' ? parsed.pageId : parsed.type === 'inbox-channel' ? parsed.pageId : undefined;
+  // Check if tab already has cached metadata for a page, channel, or public-page
+  const isPageType = parsed.type === 'page' || parsed.type === 'inbox-channel' || parsed.type === 'public-page';
+  const pageId = (parsed.type === 'page' || parsed.type === 'inbox-channel' || parsed.type === 'public-page') ? parsed.pageId : undefined;
   const hasCachedPageMeta = isPageType && pageId && tab.title;
 
   // Only fetch if it's a page/channel without cached metadata
@@ -222,6 +222,44 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
     return {
       title: 'Loading...',
       iconName: 'Hash',
+      isLoading: true,
+    };
+  }
+
+  // Public page tab (/p/[pageId]) - use cached or fetched data
+  if (parsed.type === 'public-page' && parsed.pageId) {
+    // Return cached metadata from tab if available
+    if (hasCachedPageMeta) {
+      return {
+        title: tab.title!,
+        iconName: tab.pageType ? PAGE_ICON_MAP[tab.pageType] : 'Link',
+        pageType: tab.pageType,
+        isLoading: false,
+      };
+    }
+
+    // Return fetched data
+    if (pageData) {
+      return {
+        title: pageData.title || 'Untitled',
+        iconName: PAGE_ICON_MAP[pageData.type] ?? 'Link',
+        pageType: pageData.type,
+        isLoading: false,
+      };
+    }
+
+    // Fetch failed or completed with no data
+    if (pageError || (!pageData && !isPageLoading)) {
+      return {
+        title: 'Page',
+        iconName: 'Link',
+        isLoading: false,
+      };
+    }
+
+    return {
+      title: 'Loading...',
+      iconName: 'Link',
       isLoading: true,
     };
   }

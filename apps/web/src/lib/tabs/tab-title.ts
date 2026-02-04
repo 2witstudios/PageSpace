@@ -7,6 +7,7 @@ export type PathType =
   | 'dashboard'
   | 'drive'
   | 'page'
+  | 'public-page'
   // Drive-specific routes
   | 'drive-tasks'
   | 'drive-activity'
@@ -40,6 +41,7 @@ export type PathType =
   | 'admin-global-prompt'
   | 'admin-tables'
   // Other standalone routes
+  | 'account'
   | 'notifications'
   | 'friends'
   | 'unknown';
@@ -51,6 +53,7 @@ export interface ParsedPath {
   conversationId?: string;
   userId?: string;
   settingsPage?: string;
+  settingsSubPage?: string;
   adminPage?: string;
   path?: string;
 }
@@ -73,11 +76,25 @@ export const parseTabPath = (path: string): ParsedPath => {
     return { type: 'unknown', path };
   }
 
-  // /settings or /settings/subpage
+  // /account
+  if (segments[0] === 'account') {
+    return { type: 'account' };
+  }
+
+  // /p/[pageId] - public page link
+  if (segments[0] === 'p' && segments[1]) {
+    return {
+      type: 'public-page',
+      pageId: segments[1],
+    };
+  }
+
+  // /settings or /settings/subpage or /settings/subpage/subsubpage
   if (segments[0] === 'settings') {
     return {
       type: 'settings',
       settingsPage: segments[1],
+      settingsSubPage: segments[2],
     };
   }
 
@@ -312,9 +329,16 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
 
     // Settings routes
     case 'settings':
+      if (parsed.settingsPage && parsed.settingsSubPage) {
+        // Nested settings like /settings/integrations/google-calendar
+        return {
+          title: `${formatPageName(parsed.settingsPage)} - ${formatPageName(parsed.settingsSubPage)}`,
+          iconName: 'Settings',
+        };
+      }
       if (parsed.settingsPage) {
         return {
-          title: `Settings - ${formatPageName(parsed.settingsPage)}`,
+          title: formatPageName(parsed.settingsPage),
           iconName: 'Settings',
         };
       }
@@ -343,6 +367,9 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
       return { title: 'Admin - Tables', iconName: 'Table' };
 
     // Other standalone routes
+    case 'account':
+      return { title: 'Account', iconName: 'User' };
+
     case 'notifications':
       return { title: 'Notifications', iconName: 'Bell' };
 
@@ -352,6 +379,7 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     // Dynamic routes requiring async lookup
     case 'page':
     case 'drive':
+    case 'public-page':
       return null;
 
     case 'unknown':
