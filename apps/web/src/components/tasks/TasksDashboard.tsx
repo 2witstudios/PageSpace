@@ -502,13 +502,6 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     return grouped;
   }, [tasks]);
 
-  // Stats
-  const stats = {
-    total: tasks.length,
-    completed: tasks.filter(t => t.status === 'completed').length,
-    inProgress: tasks.filter(t => t.status === 'in_progress').length,
-  };
-
   // Loading skeleton
   if (loading && tasks.length === 0) {
     return (
@@ -847,11 +840,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
       {/* Stats Footer */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
-        <div className="flex flex-wrap gap-x-4 gap-y-1">
-          <span><strong>{stats.total}</strong> tasks</span>
-          <span><strong>{stats.inProgress}</strong> in progress</span>
-          <span><strong>{stats.completed}</strong> completed</span>
-        </div>
+        <span><strong>{pagination?.total ?? tasks.length}</strong> tasks</span>
         <span className="text-xs sm:text-sm">
           Updated {formatDistanceToNow(lastRefreshTime, { addSuffix: true })}
         </span>
