@@ -3,7 +3,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * Debug endpoint to test chat message persistence
@@ -15,7 +16,7 @@ export async function GET(request: Request) {
   try {
     loggers.api.debug('🔍 Debug: GET /api/debug/chat-messages', {});
 
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
 
     const { searchParams } = new URL(request.url);
@@ -115,7 +116,7 @@ export async function POST(request: Request) {
   try {
     loggers.api.debug('🧪 Debug: POST /api/debug/chat-messages - Manual save test', {});
 
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
 
     const { pageId, testMessages }: { pageId: string; testMessages?: TestMessage[] } = await request.json();
