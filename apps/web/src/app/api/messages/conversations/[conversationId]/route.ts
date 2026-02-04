@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, dmConversations, eq, and, or, sql } from '@pagespace/db';
+import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
