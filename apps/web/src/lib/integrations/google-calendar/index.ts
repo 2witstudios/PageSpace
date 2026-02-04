@@ -30,3 +30,9 @@ export {
   shouldSyncEvent,
   needsUpdate,
 } from './event-transform';
+
+export {
+  syncGoogleCalendar,
+  triggerSync,
+  type SyncResult,
+} from './sync-service';
