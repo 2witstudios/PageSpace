@@ -43,7 +43,6 @@ export type PathType =
   // Other standalone routes
   | 'account'
   | 'notifications'
-  | 'friends'
   | 'unknown';
 
 export interface ParsedPath {
@@ -124,11 +123,6 @@ export const parseTabPath = (path: string): ParsedPath => {
   // /notifications
   if (segments[0] === 'notifications') {
     return { type: 'notifications' };
-  }
-
-  // /friends
-  if (segments[0] === 'friends') {
-    return { type: 'friends' };
   }
 
   // Must start with /dashboard for remaining routes
@@ -372,9 +366,6 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
 
     case 'notifications':
       return { title: 'Notifications', iconName: 'Bell' };
-
-    case 'friends':
-      return { title: 'Friends', iconName: 'Users' };
 
     // Dynamic routes requiring async lookup
     case 'page':
