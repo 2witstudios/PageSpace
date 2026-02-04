@@ -7,7 +7,7 @@
 
 import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
+import { getValidAccessToken } from './token-refresh';
 import { listEvents, type GoogleCalendarEvent } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
 
@@ -18,6 +18,37 @@ export interface SyncResult {
   eventsDeleted: number;
   error?: string;
 }
+
+/**
+ * Per-calendar sync cursors stored as JSON in the syncCursor field.
+ * Maps calendar ID to Google's sync token.
+ */
+type SyncCursors = Record<string, string>;
+
+/**
+ * Parse sync cursors from the stored string.
+ * Handles migration from old single-cursor format.
+ */
+const parseSyncCursors = (stored: string | null): SyncCursors => {
+  if (!stored) return {};
+  try {
+    const parsed = JSON.parse(stored);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as SyncCursors;
+    }
+    return {};
+  } catch {
+    // Old format was a single string token - discard it since we can't know which calendar it was for
+    return {};
+  }
+};
+
+/**
+ * Serialize sync cursors for storage.
+ */
+const serializeSyncCursors = (cursors: SyncCursors): string => {
+  return JSON.stringify(cursors);
+};
 
 /**
  * Sync events from Google Calendar for a user.
@@ -71,18 +102,21 @@ export const syncGoogleCalendar = async (
     const timeMin = options.timeMin || new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
     const timeMax = options.timeMax || new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000); // 90 days ahead
 
-    // Use sync token for incremental sync if available and not forcing full sync
-    const useSyncToken = !options.fullSync && connection.syncCursor;
+    // Parse per-calendar sync cursors
+    const syncCursors = parseSyncCursors(connection.syncCursor);
 
     // Sync each selected calendar
     for (const calendarId of calendarsToSync) {
+      // Use per-calendar sync token for incremental sync if available and not forcing full sync
+      const calendarSyncToken = !options.fullSync ? syncCursors[calendarId] : undefined;
+
       const calendarResult = await syncCalendar(
         userId,
         accessToken,
         calendarId,
         connection.targetDriveId,
         connection.markAsReadOnly,
-        useSyncToken ? connection.syncCursor : undefined,
+        calendarSyncToken,
         timeMin,
         timeMax
       );
@@ -91,24 +125,17 @@ export const syncGoogleCalendar = async (
       result.eventsUpdated += calendarResult.eventsUpdated;
       result.eventsDeleted += calendarResult.eventsDeleted;
 
-      // Save sync cursor if we got one
+      // Save sync cursor for this calendar if we got one
       if (calendarResult.syncCursor) {
-        await db
-          .update(googleCalendarConnections)
-          .set({
-            syncCursor: calendarResult.syncCursor,
-            lastSyncAt: new Date(),
-            lastSyncError: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(googleCalendarConnections.userId, userId));
+        syncCursors[calendarId] = calendarResult.syncCursor;
       }
     }
 
-    // Update last sync time
+    // Persist all updated sync cursors and update last sync time
     await db
       .update(googleCalendarConnections)
       .set({
+        syncCursor: serializeSyncCursors(syncCursors),
         lastSyncAt: new Date(),
         lastSyncError: null,
         updatedAt: new Date(),

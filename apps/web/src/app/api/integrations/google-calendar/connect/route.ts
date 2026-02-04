@@ -43,7 +43,12 @@ export async function POST(req: Request) {
       return Response.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const body = await req.json();
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
     const validation = connectSchema.safeParse(body);
 
     if (!validation.success) {

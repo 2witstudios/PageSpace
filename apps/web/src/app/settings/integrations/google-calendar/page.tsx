@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,21 +53,21 @@ export default function GoogleCalendarSettingsPage() {
   const error = searchParams.get("error");
   const justConnected = searchParams.get("connected") === "true";
 
-  useEffect(() => {
-    fetchStatus();
-  }, []);
-
-  useEffect(() => {
-    if (justConnected) {
-      toast.success("Google Calendar connected successfully!");
-      // Trigger initial sync
-      handleSync(true);
-      // Clean up URL
-      router.replace("/settings/integrations/google-calendar");
+  const fetchStatus = async () => {
+    try {
+      const response = await fetchWithAuth("/api/integrations/google-calendar/status");
+      if (response.ok) {
+        const data = await response.json();
+        setStatus(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch status:", err);
+    } finally {
+      setLoading(false);
     }
-  }, [justConnected, router]);
+  };
 
-  const handleSync = async (silent = false) => {
+  const handleSync = useCallback(async (silent = false) => {
     if (!csrfToken) {
       if (!silent) toast.error("Please wait for the page to load completely");
       return;
@@ -108,21 +108,21 @@ export default function GoogleCalendarSettingsPage() {
     } finally {
       setSyncing(false);
     }
-  };
+  }, [csrfToken]);
 
-  const fetchStatus = async () => {
-    try {
-      const response = await fetchWithAuth("/api/integrations/google-calendar/status");
-      if (response.ok) {
-        const data = await response.json();
-        setStatus(data);
-      }
-    } catch (err) {
-      console.error("Failed to fetch status:", err);
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    fetchStatus();
+  }, []);
+
+  useEffect(() => {
+    if (justConnected) {
+      toast.success("Google Calendar connected successfully!");
+      // Trigger initial sync
+      handleSync(true);
+      // Clean up URL
+      router.replace("/settings/integrations/google-calendar");
     }
-  };
+  }, [justConnected, router, handleSync]);
 
   const handleConnect = async () => {
     if (!csrfToken) {

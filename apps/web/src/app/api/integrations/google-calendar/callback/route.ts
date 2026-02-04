@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, eq } from '@pagespace/db';
+import { db, googleCalendarConnections } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { encrypt } from '@pagespace/lib';
 import { OAuth2Client } from 'google-auth-library';
@@ -180,7 +180,6 @@ export async function GET(req: Request) {
 
     loggers.auth.info('Google Calendar connected successfully', {
       userId,
-      googleEmail,
     });
 
     // Redirect back to settings with success
