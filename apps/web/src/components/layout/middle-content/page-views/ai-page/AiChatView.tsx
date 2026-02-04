@@ -16,12 +16,14 @@ import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-re
 import { UIMessage, DefaultChatTransport } from 'ai';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { VoiceModeOverlay } from '@/components/ai/voice';
 
 import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -67,6 +69,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+
+  // Voice mode state
+  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
+  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -271,6 +281,36 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (error) setShowError(true);
   }, [error]);
 
+  // Check if OpenAI is configured (required for voice mode)
+  useEffect(() => {
+    const checkOpenAI = async () => {
+      try {
+        const response = await fetchWithAuth('/api/ai/settings');
+        if (response.ok) {
+          const data = await response.json();
+          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
+        }
+      } catch {
+        setIsOpenAIConfigured(false);
+      }
+    };
+    checkOpenAI();
+  }, []);
+
+  // Track last AI response for voice mode TTS
+  useEffect(() => {
+    if (!isVoiceModeEnabled || isStreaming) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastAssistantMsg) {
+      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
+      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+      if (text && text !== lastAIResponse) {
+        setLastAIResponse(text);
+      }
+    }
+  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+
   // ============================================
   // HANDLERS
   // ============================================
@@ -327,6 +367,65 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     mcpToolSchemas,
     webSearchEnabled,
   ]);
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (isReadOnly) {
+      toast.error('You do not have permission to send messages in this AI chat');
+      return;
+    }
+    if (!text.trim()) return;
+
+    const currentDrive = drives.find((d) => d.id === driveId);
+    const pagePathInfo = buildPagePath(tree, page.id, driveId);
+
+    sendMessage(
+      { text },
+      {
+        body: {
+          chatId: page.id,
+          conversationId: currentConversationId,
+          selectedProvider,
+          selectedModel,
+          isReadOnly,
+          webSearchEnabled,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+          pageContext: {
+            pageId: page.id,
+            pageTitle: page.title,
+            pageType: page.type,
+            pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
+            parentPath: pagePathInfo?.parentPath || `/${driveId}`,
+            breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
+            driveId: currentDrive?.id,
+            driveName: currentDrive?.name || driveId,
+            driveSlug: currentDrive?.slug,
+          },
+        },
+      }
+    );
+  }, [
+    isReadOnly,
+    drives,
+    driveId,
+    tree,
+    page,
+    sendMessage,
+    currentConversationId,
+    selectedProvider,
+    selectedModel,
+    mcpToolSchemas,
+    webSearchEnabled,
+  ]);
+
+  // Voice mode toggle handler
+  const handleVoiceModeToggle = useCallback(() => {
+    if (isVoiceModeEnabled) {
+      disableVoiceMode();
+    } else {
+      enableVoiceMode();
+    }
+  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -409,6 +508,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Voice Mode Overlay */}
+      {isVoiceModeEnabled && (
+        <VoiceModeOverlay
+          onClose={disableVoiceMode}
+          onSend={handleVoiceSend}
+          aiResponse={lastAIResponse}
+          isAIStreaming={isStreaming}
+          showSettings={showVoiceSettings}
+          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+        />
+      )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
         <div className="p-4 border-b border-[var(--separator)] space-y-3">
           <div className="flex items-center justify-between">
@@ -531,6 +642,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   setSelectedProvider(provider);
                   setSelectedModel(model);
                 }}
+                onVoiceModeClick={handleVoiceModeToggle}
+                isVoiceModeActive={isVoiceModeEnabled}
+                isVoiceModeAvailable={isOpenAIConfigured}
               />
             )}
           />
