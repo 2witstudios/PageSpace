@@ -8,8 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
-import { fetchWithAuth } from "@/lib/api/fetchWithAuth";
-import { useCSRF } from "@/hooks/useCSRF";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { toast } from "sonner";
 
 interface ConnectionStatus {
@@ -42,7 +41,6 @@ const ERROR_MESSAGES: Record<string, string> = {
 export default function GoogleCalendarSettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { csrfToken } = useCSRF();
 
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,18 +66,12 @@ export default function GoogleCalendarSettingsPage() {
   };
 
   const handleSync = useCallback(async (silent = false) => {
-    if (!csrfToken) {
-      if (!silent) toast.error("Please wait for the page to load completely");
-      return;
-    }
-
     setSyncing(true);
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/sync", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
         },
       });
 
@@ -108,7 +100,7 @@ export default function GoogleCalendarSettingsPage() {
     } finally {
       setSyncing(false);
     }
-  }, [csrfToken]);
+  }, []);
 
   useEffect(() => {
     fetchStatus();
@@ -125,18 +117,12 @@ export default function GoogleCalendarSettingsPage() {
   }, [justConnected, router, handleSync]);
 
   const handleConnect = async () => {
-    if (!csrfToken) {
-      toast.error("Please wait for the page to load completely");
-      return;
-    }
-
     setConnecting(true);
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/connect", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
         },
         body: JSON.stringify({
           returnUrl: "/settings/integrations/google-calendar",
@@ -161,18 +147,12 @@ export default function GoogleCalendarSettingsPage() {
   };
 
   const handleDisconnect = async () => {
-    if (!csrfToken) {
-      toast.error("Please wait for the page to load completely");
-      return;
-    }
-
     setDisconnecting(true);
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/disconnect", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
         },
       });
 
