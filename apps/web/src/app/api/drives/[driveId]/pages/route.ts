@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pagePermissions, driveMembers, taskItems, userPageViews, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
+import { pages, drives, pagePermissions, driveMembers, taskItems, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -133,44 +133,46 @@ export async function GET(
       .where(isNotNull(taskItems.pageId));
     const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
 
-    // Get user's page view timestamps to determine which pages have changes
+    // Query activity logs to find pages with changes by OTHER users or AI since last view
+    // This is more accurate than comparing updatedAt because:
+    // 1. It excludes the current user's own edits (you don't need to be notified about your own changes)
+    // 2. It properly tracks AI edits via isAiGenerated flag
     const pageIds = pageResults.map(p => p.id);
-    const pageViewsResult = pageIds.length > 0
-      ? await db
-          .select({ pageId: userPageViews.pageId, viewedAt: userPageViews.viewedAt })
-          .from(userPageViews)
-          .where(and(
-            eq(userPageViews.userId, userId),
-            inArray(userPageViews.pageId, pageIds)
-          ))
-      : [];
-    const pageViewsMap = new Map(pageViewsResult.map(pv => [pv.pageId, pv.viewedAt]));
+    const pagesWithActivityChanges = new Set<string>();
+
+    if (pageIds.length > 0) {
+      // Single efficient query using a CTE to find pages with unread changes
+      // For viewed pages: check for activity after viewedAt by others/AI
+      // For never-viewed pages: check for activity after cutoff date by others/AI
+      const unreadPagesResult = await db.execute(sql`
+        WITH page_cutoffs AS (
+          -- Get the cutoff timestamp for each page (viewedAt if viewed, cutoff date if not)
+          SELECT
+            p.id as page_id,
+            COALESCE(upv."viewedAt", ${UNREAD_INDICATOR_CUTOFF_DATE}::timestamp) as cutoff_time
+          FROM unnest(${pageIds}::text[]) as p(id)
+          LEFT JOIN user_page_views upv ON upv."pageId" = p.id AND upv."userId" = ${userId}
+        )
+        SELECT DISTINCT pc.page_id
+        FROM page_cutoffs pc
+        JOIN activity_logs al ON al."pageId" = pc.page_id
+        WHERE al."resourceType" = 'page'
+          AND al.operation IN ('create', 'update')
+          AND al.timestamp > pc.cutoff_time
+          AND (al."userId" != ${userId} OR al."isAiGenerated" = true)
+      `);
+
+      for (const row of unreadPagesResult.rows as { page_id: string }[]) {
+        pagesWithActivityChanges.add(row.page_id);
+      }
+    }
 
     // Add isTaskLinked and hasChanges flags to each page
     const pagesWithFlags = pageResults.map(page => {
-      const viewedAt = pageViewsMap.get(page.id);
-
-      // Determine if page has unread changes:
-      // 1. If user has viewed the page before: show dot if page was updated after last view
-      // 2. If user has never viewed the page: show dot if page was created after cutoff date
-      //    (to avoid overwhelming users with old content they've never seen)
-      let hasChanges = false;
-      if (viewedAt) {
-        // User has viewed this page before - check if it's been updated since
-        // Use getTime() for robust timestamp comparison (handles Date objects and date strings)
-        const updatedAtTime = page.updatedAt instanceof Date ? page.updatedAt.getTime() : new Date(page.updatedAt).getTime();
-        const viewedAtTime = viewedAt instanceof Date ? viewedAt.getTime() : new Date(viewedAt).getTime();
-        hasChanges = updatedAtTime > viewedAtTime;
-      } else {
-        // User has never viewed this page - show as unread only if created after cutoff
-        const createdAtTime = page.createdAt instanceof Date ? page.createdAt.getTime() : new Date(page.createdAt).getTime();
-        hasChanges = createdAtTime > UNREAD_INDICATOR_CUTOFF_DATE.getTime();
-      }
-
       return {
         ...page,
         isTaskLinked: taskLinkedSet.has(page.id),
-        hasChanges,
+        hasChanges: pagesWithActivityChanges.has(page.id),
       };
     });
 
