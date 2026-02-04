@@ -4,13 +4,12 @@ import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
 import { Placeholder, CharacterCount } from '@tiptap/extensions';
 import { TextStyleKit } from '@tiptap/extension-text-style';
 import { TableKit } from '@tiptap/extension-table';
-import { formatHtml } from '@/lib/editor/prettier';
 import { PageMention } from '@/lib/editor/tiptap-mention-config';
 import { PaginationPlus } from '@/lib/editor/pagination';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
@@ -18,13 +17,12 @@ import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 interface RichEditorProps {
   value: string;
   onChange: (value: string) => void;
-  onFormatChange?: (value: string) => void;
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
 }
 
-const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly = false, isPaginated = false }: RichEditorProps) => {
+const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPaginated = false }: RichEditorProps) => {
   const router = useRouter();
 
   // Subscribe to navigation events from TipTap mentions
@@ -35,39 +33,6 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
     });
     return unsubscribe;
   }, [router]);
-
-  // Formatting timer - CRITICAL for AI editability (2500ms)
-  // Prettier formats HTML so AI can reliably edit structured content
-  // Uses silent update via onFormatChange to avoid marking as dirty
-  const formatTimeout = useRef<NodeJS.Timeout | null>(null);
-  const formatVersion = useRef(0);
-
-  const debouncedFormat = useCallback(
-    (editor: Editor) => {
-      if (formatTimeout.current) {
-        clearTimeout(formatTimeout.current);
-      }
-      // Increment version - invalidates any in-flight formatting
-      formatVersion.current++;
-
-      formatTimeout.current = setTimeout(async () => {
-        const currentVersion = formatVersion.current;
-        const html = editor.getHTML();
-        const formattedHtml = await formatHtml(html);
-
-        // Only update editor if no new typing and formatting actually changed content
-        if (currentVersion === formatVersion.current && formattedHtml !== html) {
-          // Use silent update to avoid marking as dirty and triggering save
-          if (onFormatChange) {
-            onFormatChange(formattedHtml);
-          } else {
-            onChange(formattedHtml); // Fallback for backward compatibility
-          }
-        }
-      }, 2500); // Give Prettier time to format without disrupting typing
-    },
-    [onChange, onFormatChange]
-  );
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -117,12 +82,8 @@ const RichEditor = ({ value, onChange, onFormatChange, onEditorChange, readOnly 
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
-        // Immediate update - just report the change
         const html = editor.getHTML();
         onChange(html);
-
-        // Debounced formatting (optional, cosmetic only)
-        debouncedFormat(editor);
       }
     },
     editorProps: {

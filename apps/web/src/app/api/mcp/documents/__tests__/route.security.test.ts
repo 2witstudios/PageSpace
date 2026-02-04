@@ -88,12 +88,6 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   },
 }));
 
-vi.mock('prettier', () => ({
-  default: {
-    format: vi.fn((content: string) => Promise.resolve(content)),
-  },
-}));
-
 describe('MCP Documents API - Security Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();

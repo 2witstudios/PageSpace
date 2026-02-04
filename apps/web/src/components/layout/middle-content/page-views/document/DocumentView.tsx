@@ -43,7 +43,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     initializeAndActivate,
     updateContent,
     updateContentFromServer,
-    updateContentSilently,
     saveWithDebounce,
     forceSave,
   } = useDocument(pageId);
@@ -219,12 +218,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     saveWithDebounce(content);
   }, [updateContent, saveWithDebounce, isReadOnly]);
 
-  // Handle formatting changes (Prettier) - silent update without marking dirty
-  const handleFormatChange = useCallback((newContent: string | undefined) => {
-    const content = newContent || '';
-    updateContentSilently(content);
-  }, [updateContentSilently]);
-
   // Track isDirty in ref without causing effect recreation
   useEffect(() => {
     isDirtyRef.current = documentState?.isDirty || false;
@@ -356,7 +349,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                     <RichEditor
                       value={documentState?.content || ''}
                       onChange={handleContentChange}
-                      onFormatChange={handleFormatChange}
                       onEditorChange={setEditor}
                       readOnly={isReadOnly}
                       isPaginated={isPaginated}
