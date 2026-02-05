@@ -62,7 +62,7 @@ export class RateLimitCache {
    * Check if Redis is available (uses shared state)
    */
   private get isRedisAvailable(): boolean {
-    return isSharedRedisAvailable() && this.redis !== null;
+    return this.config.enableRedis && isSharedRedisAvailable() && this.redis !== null;
   }
 
   /**

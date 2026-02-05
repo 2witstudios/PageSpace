@@ -5,9 +5,10 @@ import type { ProviderType } from '../rate-limit-cache';
 describe('rate-limit-cache', () => {
   let cache: RateLimitCache;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Create new instance for each test
     cache = RateLimitCache.getInstance({ enableRedis: !!process.env.REDIS_URL });
+    await cache.waitForReady();
   });
 
   afterEach(async () => {
@@ -331,6 +332,10 @@ describe('rate-limit-cache', () => {
     });
 
     it('falls back to memory when Redis unavailable', async () => {
+      // Shut down the beforeEach singleton so we can create one with enableRedis: false
+      await cache.clearAll();
+      await cache.shutdown();
+
       const memoryCache = RateLimitCache.getInstance({ enableRedis: false });
 
       await memoryCache.incrementUsage(testUserId, testProvider, testLimit);
