@@ -19,11 +19,12 @@ import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
-import { memo, useState, useEffect } from 'react';
+import { memo, useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
+import { post } from '@/lib/auth/auth-fetch';
 
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
@@ -137,6 +138,7 @@ OptimizedViewHeader.displayName = 'OptimizedViewHeader';
 export default function CenterPanel() {
   const params = useParams();
   const pathname = usePathname();
+  const activeDriveId = params.driveId as string | undefined;
   const activePageId = params.pageId as string || null;
 
   // Determine visibility states
@@ -145,14 +147,43 @@ export default function CenterPanel() {
   const showPageContent = activePageId || isSettingsRoute;
 
   const setPageId = usePageStore(state => state.setPageId);
+  const { updateNode } = usePageTree(activeDriveId);
+  const updateNodeRef = useRef(updateNode);
 
   // Get page refresh configuration for pull-to-refresh
   const pageRefresh = usePageRefresh();
+
+  useEffect(() => {
+    updateNodeRef.current = updateNode;
+  }, [updateNode]);
 
   // Sync activePageId to store for components that rely on usePageStore
   useEffect(() => {
     setPageId(activePageId);
   }, [activePageId, setPageId]);
+
+  // Track page views for recents and clear "has changes" once viewed.
+  // This lives in CenterPanel because dashboard route pages intentionally return null.
+  useEffect(() => {
+    if (!activePageId) {
+      return;
+    }
+
+    let cancelled = false;
+    void post(`/api/pages/${activePageId}/view`)
+      .then(() => {
+        if (!cancelled) {
+          updateNodeRef.current(activePageId, { hasChanges: false });
+        }
+      })
+      .catch(() => {
+        // Silently fail - page view tracking is non-critical.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePageId]);
 
   // Initialize global drive socket listener for real-time updates
   useGlobalDriveSocket();
