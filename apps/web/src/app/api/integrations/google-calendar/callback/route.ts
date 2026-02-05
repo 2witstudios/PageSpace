@@ -61,13 +61,15 @@ export async function GET(req: Request) {
         throw new Error('Invalid state structure');
       }
 
-      // Verify signature
+      // Verify signature using timing-safe comparison to prevent timing attacks
       const expectedSignature = crypto
         .createHmac('sha256', process.env.OAUTH_STATE_SECRET!)
         .update(JSON.stringify(stateWithSignature.data))
         .digest('hex');
 
-      if (stateWithSignature.sig !== expectedSignature) {
+      const sigBuffer = Buffer.from(stateWithSignature.sig, 'utf-8');
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
+      if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
         loggers.auth.warn('Google Calendar OAuth state signature mismatch');
         return NextResponse.redirect(
           new URL('/settings/integrations/google-calendar?error=invalid_state', baseUrl)
@@ -132,11 +134,19 @@ export async function GET(req: Request) {
     const userInfo = await userInfoResponse.json();
     const googleEmail = userInfo.email;
     const googleAccountId = userInfo.id;
+    const emailVerified = userInfo.verified_email;
 
     if (!googleEmail || !googleAccountId) {
       loggers.auth.error('Missing email or ID from Google user info');
       return NextResponse.redirect(
         new URL('/settings/integrations/google-calendar?error=user_info_incomplete', baseUrl)
+      );
+    }
+
+    if (!emailVerified) {
+      loggers.auth.warn('Google account email is not verified', { googleEmail });
+      return NextResponse.redirect(
+        new URL('/settings/integrations/google-calendar?error=email_not_verified', baseUrl)
       );
     }
 

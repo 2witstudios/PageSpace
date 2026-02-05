@@ -39,6 +39,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing_tokens: "Google did not return the required permissions. Please try again.",
   user_info_failed: "Could not verify your Google account. Please try again.",
   user_info_incomplete: "Google account details were incomplete. Please try again.",
+  email_not_verified: "Your Google account email is not verified. Please verify your email in Google and try again.",
   unexpected: "An unexpected error occurred. Please try again.",
 };
 
@@ -420,9 +421,10 @@ export default function GoogleCalendarSettingsPage() {
               <div className="text-sm text-muted-foreground">
                 <p className="font-medium mb-1">Privacy & Data</p>
                 <p>
-                  PageSpace only imports event titles, times, and locations from your calendar.
-                  Your calendar data is never shared with third parties or used for advertising.
-                  You can disconnect at any time.
+                  PageSpace imports event details (titles, times, locations, descriptions, and
+                  recurrence rules) from your calendar using read-only access. Your calendar data
+                  is stored encrypted, never shared with third parties, and never used for
+                  advertising. You can disconnect at any time.
                 </p>
               </div>
             </div>

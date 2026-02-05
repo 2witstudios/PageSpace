@@ -194,6 +194,9 @@ const makeGoogleApiRequest = async <T>(
  * Handles pagination automatically. For large calendars, consider using
  * incremental sync with syncToken instead.
  */
+// Safety limit to prevent unbounded pagination from consuming excessive memory
+const MAX_PAGES = 20; // ~5000 events at 250 per page
+
 export const listEvents = async (
   accessToken: string,
   calendarId: string,
@@ -207,6 +210,7 @@ export const listEvents = async (
   const events: GoogleCalendarEvent[] = [];
   let pageToken: string | undefined;
   let nextSyncToken: string | undefined;
+  let pageCount = 0;
 
   // If using syncToken, don't set time range (Google API requirement)
   const listOptions = options.syncToken
@@ -238,6 +242,16 @@ export const listEvents = async (
     events.push(...result.data.items);
     pageToken = result.data.nextPageToken;
     nextSyncToken = result.data.nextSyncToken;
+    pageCount++;
+
+    if (pageCount >= MAX_PAGES && pageToken) {
+      loggers.api.warn('Google Calendar pagination safety limit reached', {
+        calendarId,
+        pageCount,
+        eventsCollected: events.length,
+      });
+      break;
+    }
   } while (pageToken);
 
   return { success: true, data: { events, nextSyncToken } };

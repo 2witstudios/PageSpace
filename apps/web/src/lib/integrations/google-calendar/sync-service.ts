@@ -204,8 +204,8 @@ const syncCalendar = async (
   });
 
   if (!listResult.success) {
-    // If sync token is invalid, fall back to full sync
-    if (listResult.statusCode === 410) {
+    // If sync token is invalid, fall back to full sync (only if we were using a sync token)
+    if (listResult.statusCode === 410 && syncToken) {
       loggers.api.info('Sync token expired, performing full sync', { userId, calendarId });
       return syncCalendar(
         userId,
@@ -213,7 +213,7 @@ const syncCalendar = async (
         calendarId,
         targetDriveId,
         markAsReadOnly,
-        undefined, // No sync token
+        undefined, // No sync token - this guarantees no further 410 fallback
         timeMin,
         timeMax
       );
