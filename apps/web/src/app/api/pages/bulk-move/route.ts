@@ -172,7 +172,7 @@ export async function POST(request: Request) {
 
     // Invalidate caches and broadcast events
     for (const driveId of affectedDriveIds) {
-      await pageTreeCache.invalidateDriveTree(driveId);
+      pageTreeCache.invalidateDriveTree(driveId).catch(() => {});
       await broadcastPageEvent(
         createPageEventPayload(driveId, '', 'moved')
       );

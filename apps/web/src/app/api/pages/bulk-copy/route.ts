@@ -195,7 +195,7 @@ export async function POST(request: Request) {
     });
 
     // Invalidate cache and broadcast event
-    await pageTreeCache.invalidateDriveTree(targetDriveId);
+    pageTreeCache.invalidateDriveTree(targetDriveId).catch(() => {});
     await broadcastPageEvent(
       createPageEventPayload(targetDriveId, '', 'created')
     );

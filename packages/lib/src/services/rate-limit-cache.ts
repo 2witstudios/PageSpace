@@ -1,6 +1,7 @@
-import Redis from 'ioredis';
+import type Redis from 'ioredis';
 import { loggers } from '../logging/logger-config';
 import { getTodayUTC, getSecondsUntilMidnightUTC } from './date-utils';
+import { getSharedRedisClient, isSharedRedisAvailable } from './shared-redis';
 
 // Types for rate limiting
 export type ProviderType = 'standard' | 'pro';
@@ -34,7 +35,6 @@ export class RateLimitCache {
   private redis: Redis | null = null;
   private memoryCache = new Map<string, { count: number; expiresAt: number }>();
   private config: RateLimitConfig;
-  private isRedisAvailable = false;
   private initializationPromise: Promise<void> | null = null;
 
   private constructor(config: Partial<RateLimitConfig> = {}) {
@@ -59,50 +59,25 @@ export class RateLimitCache {
   }
 
   /**
-   * Initialize Redis connection with graceful fallback
+   * Check if Redis is available (uses shared state)
+   */
+  private get isRedisAvailable(): boolean {
+    return isSharedRedisAvailable() && this.redis !== null;
+  }
+
+  /**
+   * Initialize Redis connection using shared client
    */
   private async initializeRedis(): Promise<void> {
     if (!this.config.enableRedis) return;
 
     try {
-      const redisUrl = process.env.REDIS_URL;
-      if (!redisUrl) {
-        loggers.api.warn('REDIS_URL not configured for rate limiting, using memory-only cache');
-        return;
-      }
-
-      this.redis = new Redis(redisUrl, {
-        maxRetriesPerRequest: 3,
-        lazyConnect: true,
-        connectTimeout: 5000,
-        commandTimeout: 3000,
-      });
-
-      this.redis.on('connect', () => {
-        this.isRedisAvailable = true;
-        loggers.api.info('Redis connected for rate limiting');
-      });
-
-      this.redis.on('error', (error: Error) => {
-        this.isRedisAvailable = false;
-        loggers.api.warn('Redis connection error for rate limiting, falling back to memory cache', error);
-      });
-
-      this.redis.on('close', () => {
-        this.isRedisAvailable = false;
-        loggers.api.warn('Redis connection closed for rate limiting, using memory cache only');
-      });
-
-      // Test connection
-      await this.redis.ping();
-      this.isRedisAvailable = true;
-
+      this.redis = await getSharedRedisClient();
     } catch (error) {
-      loggers.api.warn('Failed to initialize Redis for rate limiting, using memory-only cache', {
+      loggers.api.warn('Failed to get shared Redis client for rate limiting', {
         error: error instanceof Error ? error.message : String(error)
       });
       this.redis = null;
-      this.isRedisAvailable = false;
     }
   }
 
@@ -379,12 +354,10 @@ export class RateLimitCache {
 
   /**
    * Graceful shutdown
+   * Note: Does not close the shared Redis connection - that's managed by shared-redis.ts
    */
   async shutdown(): Promise<void> {
-    if (this.redis) {
-      await this.redis.quit();
-      this.redis = null;
-    }
+    this.redis = null;
     this.memoryCache.clear();
     RateLimitCache.instance = null;
   }

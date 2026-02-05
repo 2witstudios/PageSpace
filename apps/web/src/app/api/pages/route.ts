@@ -76,11 +76,11 @@ export async function POST(request: Request) {
 
     // Invalidate agent awareness cache when an AI_CHAT page is created
     if (result.isAIChatPage) {
-      await agentAwarenessCache.invalidateDriveAgents(result.driveId);
+      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(() => {});
     }
 
     // Invalidate page tree cache when structure changes
-    await pageTreeCache.invalidateDriveTree(result.driveId);
+    pageTreeCache.invalidateDriveTree(result.driveId).catch(() => {});
 
     // Track page creation using result values
     trackPageOperation(userId, 'create', result.page.id, {
