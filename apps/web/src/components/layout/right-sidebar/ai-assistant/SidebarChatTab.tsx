@@ -17,6 +17,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
@@ -25,6 +26,7 @@ import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { VoiceModeOverlay } from '@/components/ai/voice';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -240,6 +242,14 @@ const SidebarChatTab: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+
+  // Voice mode state
+  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
+  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -441,6 +451,36 @@ const SidebarChatTab: React.FC = () => {
     if (error) setShowError(true);
   }, [error]);
 
+  // Check if OpenAI is configured (required for voice mode)
+  useEffect(() => {
+    const checkOpenAI = async () => {
+      try {
+        const response = await fetchWithAuth('/api/ai/settings');
+        if (response.ok) {
+          const data = await response.json();
+          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
+        }
+      } catch {
+        setIsOpenAIConfigured(false);
+      }
+    };
+    checkOpenAI();
+  }, []);
+
+  // Track last AI response for voice mode TTS
+  useEffect(() => {
+    if (!isVoiceModeEnabled || isStreaming) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastAssistantMsg) {
+      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
+      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+      if (text && text !== lastAIResponse) {
+        setLastAIResponse(text);
+      }
+    }
+  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+
   // App state recovery - refresh messages when returning from background
   // This catches completed AI responses that finished while the app was backgrounded
   const handleAppResume = useCallback(async () => {
@@ -541,6 +581,56 @@ const SidebarChatTab: React.FC = () => {
     currentModel,
     sendMessage,
   ]);
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    const isReadOnly = !writeMode;
+
+    const body = selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: agentConversationId,
+          isReadOnly,
+          webSearchEnabled,
+          provider: selectedAgent.aiProvider,
+          model: selectedAgent.aiModel,
+          systemPrompt: selectedAgent.systemPrompt,
+          locationContext: locationContext || undefined,
+          enabledTools: selectedAgent.enabledTools,
+        }
+      : {
+          isReadOnly,
+          webSearchEnabled,
+          showPageTree,
+          locationContext: locationContext || undefined,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
+        };
+
+    sendMessage({ text }, { body });
+  }, [
+    currentConversationId,
+    selectedAgent,
+    agentConversationId,
+    writeMode,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    sendMessage,
+  ]);
+
+  // Voice mode toggle handler
+  const handleVoiceModeToggle = useCallback(() => {
+    if (isVoiceModeEnabled) {
+      disableVoiceMode();
+    } else {
+      enableVoiceMode();
+    }
+  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {
     if (!currentConversationId) return;
@@ -718,6 +808,18 @@ const SidebarChatTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Voice Mode Overlay */}
+      {isVoiceModeEnabled && (
+        <VoiceModeOverlay
+          onClose={disableVoiceMode}
+          onSend={handleVoiceSend}
+          aiResponse={lastAIResponse}
+          isAIStreaming={displayIsStreaming}
+          showSettings={showVoiceSettings}
+          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+        />
+      )}
+
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <div className="flex items-center justify-between p-2">
@@ -822,6 +924,9 @@ const SidebarChatTab: React.FC = () => {
           crossDrive={true}
           hideModelSelector={true}
           variant="sidebar"
+          onVoiceModeClick={handleVoiceModeToggle}
+          isVoiceModeActive={isVoiceModeEnabled}
+          isVoiceModeAvailable={isOpenAIConfigured}
         />
       </div>
 

@@ -56,6 +56,12 @@ export interface ChatInputProps {
   selectedModel?: string | null;
   /** Handler when provider/model changes (for page-level settings) */
   onProviderModelChange?: (provider: string, model: string) => void;
+  /** Callback when voice mode button is clicked */
+  onVoiceModeClick?: () => void;
+  /** Whether voice mode is currently active */
+  isVoiceModeActive?: boolean;
+  /** Whether voice mode is available (user has OpenAI key) */
+  isVoiceModeAvailable?: boolean;
 }
 
 export interface ChatInputRef {
@@ -102,6 +108,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       selectedProvider: propProvider,
       selectedModel: propModel,
       onProviderModelChange,
+      onVoiceModeClick,
+      isVoiceModeActive = false,
+      isVoiceModeAvailable = false,
     },
     ref
   ) => {
@@ -209,6 +218,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onMicClick={toggleListening}
           isListening={isListening}
           isMicSupported={isSupported}
+          onVoiceModeClick={onVoiceModeClick}
+          isVoiceModeActive={isVoiceModeActive}
+          isVoiceModeAvailable={isVoiceModeAvailable}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}
