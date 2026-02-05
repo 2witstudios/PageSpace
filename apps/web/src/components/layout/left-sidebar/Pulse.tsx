@@ -89,15 +89,15 @@ export default function Pulse() {
     <Collapsible
       open={!pulseCollapsed}
       onOpenChange={(open) => setPulseCollapsed(!open)}
-      className="border-t border-[var(--separator)]"
+      className="border-t border-[var(--sidebar-divider)]"
     >
       <div className="flex items-center">
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="flex-1 justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
+            className="flex-1 justify-between px-2 py-2.5 h-auto font-normal text-muted-foreground hover:text-foreground bg-[var(--sidebar-section-bg)]"
           >
-            <span className="text-xs font-medium">Pulse</span>
+            <span className="text-[11px] font-semibold tracking-wide">Pulse</span>
             <ChevronDown
               className={cn(
                 "h-3.5 w-3.5 transition-transform duration-200",
@@ -145,8 +145,8 @@ export default function Pulse() {
 
 function PulseSkeleton() {
   return (
-    <div className="border-t border-[var(--separator)]">
-      <div className="flex items-center justify-between px-2 py-2">
+    <div className="border-t border-[var(--sidebar-divider)]">
+      <div className="flex items-center justify-between px-2 py-2.5 bg-[var(--sidebar-section-bg)]">
         <Skeleton className="h-4 w-12" />
         <Skeleton className="h-3.5 w-3.5" />
       </div>

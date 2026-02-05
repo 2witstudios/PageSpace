@@ -51,7 +51,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     };
 
     return (
-        <nav className="flex flex-col gap-0.5 mb-3">
+        <nav className="flex flex-col gap-0.5 mb-2">
             {navigation.map((item) => {
                 const isActive = item.exact
                     ? pathname === item.href

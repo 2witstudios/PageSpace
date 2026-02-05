@@ -115,6 +115,10 @@
 
   /* Separators (hairline) */
   --separator: oklch(0.90 0.005 230 / 0.08);
+
+  /* Sidebar section dividers - visible but soft */
+  --sidebar-divider: oklch(0.87 0.006 230);
+  --sidebar-section-bg: oklch(0 0 0 / 0.02);
 }
 
 .dark {
@@ -165,6 +169,10 @@
 
   /* Separators (Dark Mode) */
   --separator: oklch(0.94 0 0 / 0.08);
+
+  /* Sidebar section dividers - visible but soft */
+  --sidebar-divider: oklch(0.26 0 0);
+  --sidebar-section-bg: oklch(1 0 0 / 0.035);
 }
 
 @layer base {
