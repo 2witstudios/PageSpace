@@ -23,9 +23,15 @@ export async function POST(req: Request) {
     if (
       !process.env.GOOGLE_OAUTH_CLIENT_ID ||
       !process.env.GOOGLE_OAUTH_CLIENT_SECRET ||
-      !process.env.OAUTH_STATE_SECRET
+      !process.env.OAUTH_STATE_SECRET ||
+      !process.env.GOOGLE_CALENDAR_REDIRECT_URI
     ) {
-      loggers.auth.error('Missing required OAuth environment variables for Calendar connect');
+      loggers.auth.error('Missing required OAuth environment variables for Calendar connect', {
+        hasClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
+        hasClientSecret: !!process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+        hasStateSecret: !!process.env.OAUTH_STATE_SECRET,
+        hasCalendarRedirectUri: !!process.env.GOOGLE_CALENDAR_REDIRECT_URI,
+      });
       return Response.json({ error: 'OAuth not configured' }, { status: 500 });
     }
 
@@ -72,9 +78,8 @@ export async function POST(req: Request) {
       );
     }
 
-    // Build callback URL for calendar-specific OAuth
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
-    const callbackUrl = `${baseUrl}/api/integrations/google-calendar/callback`;
+    // Use explicit redirect URI (must match Google Cloud Console configuration)
+    const callbackUrl = process.env.GOOGLE_CALENDAR_REDIRECT_URI!;
 
     // Create signed state to prevent CSRF and preserve context
     const stateData = {

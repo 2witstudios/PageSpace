@@ -39,8 +39,9 @@ PageSpace supports Google OAuth alongside traditional email/password authenticat
    - Developer contact information: Your email
 4. Add scopes:
    - `openid`
-   - `email` 
+   - `email`
    - `profile`
+   - `https://www.googleapis.com/auth/calendar.readonly` (for Google Calendar integration)
 5. Add test users (your development email addresses)
 
 ### 1.4 Create OAuth Credentials
@@ -53,8 +54,10 @@ PageSpace supports Google OAuth alongside traditional email/password authenticat
    - `http://localhost:3000` (development)
    - Your production domain (when ready)
 6. Add authorized redirect URIs:
-   - `http://localhost:3000/api/auth/google/callback` (development)
-   - `https://yourdomain.com/api/auth/google/callback` (production)
+   - `http://localhost:3000/api/auth/google/callback` (development - auth)
+   - `http://localhost:3000/api/integrations/google-calendar/callback` (development - calendar)
+   - `https://yourdomain.com/api/auth/google/callback` (production - auth)
+   - `https://yourdomain.com/api/integrations/google-calendar/callback` (production - calendar)
 7. Save and note the Client ID and Client Secret
 
 ## Step 2: Environment Configuration
@@ -68,14 +71,16 @@ Add the following to your `.env` file:
 GOOGLE_OAUTH_CLIENT_ID=your_client_id_here
 GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret_here
 GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
+GOOGLE_CALENDAR_REDIRECT_URI=http://localhost:3000/api/integrations/google-calendar/callback
 ```
 
 ### 2.2 Production Configuration
 
-For production, update the redirect URI:
+For production, update the redirect URIs:
 
 ```env
 GOOGLE_OAUTH_REDIRECT_URI=https://yourdomain.com/api/auth/google/callback
+GOOGLE_CALENDAR_REDIRECT_URI=https://yourdomain.com/api/integrations/google-calendar/callback
 ```
 
 ## Step 3: Database Schema
@@ -174,21 +179,27 @@ The sign-up page includes:
 
 ### 9.1 Update Google Cloud Console
 1. Add production domain to authorized origins
-2. Add production callback URL to authorized redirect URIs
+2. Add production callback URLs to authorized redirect URIs:
+   - `https://yourdomain.com/api/auth/google/callback`
+   - `https://yourdomain.com/api/integrations/google-calendar/callback`
 3. Update OAuth consent screen for production use
 
 ### 9.2 Environment Variables
 1. Update `GOOGLE_OAUTH_REDIRECT_URI` for production
-2. Ensure all OAuth environment variables are set in production
+2. Update `GOOGLE_CALENDAR_REDIRECT_URI` for production
+3. Ensure all OAuth environment variables are set in production
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **"redirect_uri_mismatch" error**
-   - Verify redirect URI in Google Cloud Console matches exactly
+   - Verify **both** redirect URIs are registered in Google Cloud Console:
+     - `/api/auth/google/callback` (for sign-in)
+     - `/api/integrations/google-calendar/callback` (for calendar integration)
    - Check for http vs https mismatch
    - Ensure no trailing slashes
+   - Verify `GOOGLE_OAUTH_REDIRECT_URI` and `GOOGLE_CALENDAR_REDIRECT_URI` env vars match exactly
 
 2. **"invalid_client" error**
    - Verify client ID and secret are correct

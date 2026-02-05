@@ -24,7 +24,8 @@ export async function GET(req: Request) {
     if (
       !process.env.GOOGLE_OAUTH_CLIENT_ID ||
       !process.env.GOOGLE_OAUTH_CLIENT_SECRET ||
-      !process.env.OAUTH_STATE_SECRET
+      !process.env.OAUTH_STATE_SECRET ||
+      !process.env.GOOGLE_CALENDAR_REDIRECT_URI
     ) {
       loggers.auth.error('Missing required OAuth environment variables for Calendar callback');
       return NextResponse.redirect(new URL('/settings?error=oauth_config', baseUrl));
@@ -94,8 +95,8 @@ export async function GET(req: Request) {
 
     const { userId, returnUrl } = stateData;
 
-    // Build callback URL (must match what was used in connect)
-    const callbackUrl = `${baseUrl}/api/integrations/google-calendar/callback`;
+    // Use explicit redirect URI (must match what was used in connect and Google Cloud Console)
+    const callbackUrl = process.env.GOOGLE_CALENDAR_REDIRECT_URI!;
 
     // Exchange authorization code for tokens
     const client = new OAuth2Client(
