@@ -53,7 +53,7 @@ export const buildCSPPolicy = (nonce: string): string => {
       'https://accounts.google.com', // Google One Tap authentication
       'https://cdn.jsdelivr.net', // Monaco editor CDN
     ],
-    'style-src': ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+    'style-src': ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net', 'https://accounts.google.com'],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
     'font-src': ["'self'", 'data:', 'https://cdn.jsdelivr.net'],
