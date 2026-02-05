@@ -622,7 +622,7 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ parts: [{ type: 'text', text }] }, { body: requestBody });
+    sendMessage({ text }, { body: requestBody });
   }, [
     currentConversationId,
     selectedAgent,
