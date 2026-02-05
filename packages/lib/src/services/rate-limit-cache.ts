@@ -32,6 +32,7 @@ export class RateLimitCache {
   private static instance: RateLimitCache | null = null;
 
   private memoryCache = new Map<string, { count: number; expiresAt: number }>();
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private config: RateLimitConfig;
 
   private constructor(config: Partial<RateLimitConfig> = {}) {
@@ -66,7 +67,7 @@ export class RateLimitCache {
    * Cleanup expired entries from memory cache
    */
   private startMemoryCacheCleanup(): void {
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       let cleanedCount = 0;
 
@@ -332,6 +333,10 @@ export class RateLimitCache {
    * Note: Does not close the shared Redis connection - that's managed by shared-redis.ts
    */
   async shutdown(): Promise<void> {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
     this.memoryCache.clear();
     RateLimitCache.instance = null;
   }
