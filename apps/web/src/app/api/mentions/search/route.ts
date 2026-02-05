@@ -345,19 +345,19 @@ export async function GET(request: Request) {
     }
 
 
-    // Sort suggestions by relevance score (higher = better match)
-    suggestions.sort((a, b) => {
-      const aScore = calculateRelevanceScore(a.label, query);
-      const bScore = calculateRelevanceScore(b.label, query);
+    // Sort by relevance when there's a query; preserve DB order (updatedAt) when empty
+    if (query.trim()) {
+      suggestions.sort((a, b) => {
+        const aScore = calculateRelevanceScore(a.label, query);
+        const bScore = calculateRelevanceScore(b.label, query);
 
-      // Higher score first
-      if (aScore !== bScore) {
-        return bScore - aScore;
-      }
+        if (aScore !== bScore) {
+          return bScore - aScore;
+        }
 
-      // Fallback to alphabetical
-      return a.label.localeCompare(b.label);
-    });
+        return a.label.localeCompare(b.label);
+      });
+    }
 
     const finalSuggestions = suggestions.slice(0, 10);
     loggers.api.debug('[API] Returning suggestions', { count: finalSuggestions.length, suggestions: finalSuggestions });
