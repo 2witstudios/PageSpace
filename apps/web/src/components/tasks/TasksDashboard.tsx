@@ -17,8 +17,6 @@ import {
   Pencil,
   Trash2,
   FileText,
-  User,
-  Users,
 } from 'lucide-react';
 import {
   DndContext,
@@ -73,6 +71,8 @@ import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useMobile } from '@/hooks/useMobile';
+import { useCapacitor } from '@/hooks/useCapacitor';
 import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
@@ -83,6 +83,8 @@ import {
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Task, TaskFilters, Drive, Pagination } from './types';
+import { TaskMobileCard } from './TaskMobileCard';
+import { FilterControls } from './FilterControls';
 
 interface TasksDashboardProps {
   context: 'user' | 'drive';
@@ -114,6 +116,9 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   // View mode
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
+  const isMobile = useMobile();
+  const { isNative } = useCapacitor();
+  const isMobileTaskLayout = isMobile || isNative;
 
   // Editing state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -527,6 +532,32 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       ? `Your tasks in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
       : 'Your tasks across all drives';
 
+  // Note: assigneeFilter === 'all' is included because the default is 'mine',
+  // so viewing all tasks is a deviation from the default state that users may want to clear
+  const hasActiveFilters = Boolean(
+    filters.search ||
+    filters.status ||
+    filters.priority ||
+    (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
+    (context === 'user' && filters.driveId) ||
+    filters.assigneeFilter === 'all'
+  );
+
+  const clearFilters = () => {
+    const nextFilters: ExtendedFilters = {
+      assigneeFilter: 'mine',
+    };
+
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
+
+    setSearchValue('');
+    setFilters(nextFilters);
+    updateUrl(nextFilters, context === 'drive' ? selectedDriveId : undefined);
+  };
+
   return (
     <div className="h-full flex flex-col">
       <PullToRefresh
@@ -534,7 +565,14 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
         onRefresh={handleRefresh}
       >
         <CustomScrollArea className="h-full">
-          <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-6xl">
+          <div
+            className={cn(
+              'mx-auto w-full',
+              isMobileTaskLayout
+                ? 'max-w-none px-3 py-4'
+                : 'container max-w-6xl px-4 py-10 sm:px-6 lg:px-10'
+            )}
+          >
             {/* Header */}
             <div className="mb-6">
               <Button
@@ -544,54 +582,60 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                   ? `/dashboard/${selectedDriveId}`
                   : '/dashboard'
                 )}
-                className="mb-4"
+                className="mb-3 sm:mb-4"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back
               </Button>
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className={cn(
+                'flex flex-col gap-3',
+                !isMobileTaskLayout && 'sm:flex-row sm:items-center sm:justify-between'
+              )}>
                 <div>
                   <h1 className="text-2xl font-bold">{title}</h1>
                   <p className="text-sm text-muted-foreground">{description}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   {/* View toggle */}
-                  <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
-                    <button
-                      onClick={() => setViewMode('table')}
-                      className={cn(
-                        'p-1.5 rounded transition-colors',
-                        viewMode === 'table'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                      title="Table view"
-                      aria-label="Table view"
-                    >
-                      <LayoutList className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => setViewMode('kanban')}
-                      className={cn(
-                        'p-1.5 rounded transition-colors',
-                        viewMode === 'kanban'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                      title="Kanban view"
-                      aria-label="Kanban view"
-                    >
-                      <Kanban className="h-4 w-4" />
-                    </button>
-                  </div>
+                  {!isMobileTaskLayout && (
+                    <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+                      <button
+                        onClick={() => setViewMode('table')}
+                        className={cn(
+                          'p-1.5 rounded transition-colors',
+                          viewMode === 'table'
+                            ? 'bg-background text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                        )}
+                        title="Table view"
+                        aria-label="Table view"
+                      >
+                        <LayoutList className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setViewMode('kanban')}
+                        className={cn(
+                          'p-1.5 rounded transition-colors',
+                          viewMode === 'kanban'
+                            ? 'bg-background text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                        )}
+                        title="Kanban view"
+                        aria-label="Kanban view"
+                      >
+                        <Kanban className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                   <Button
                     onClick={handleRefresh}
                     variant="outline"
                     size="sm"
                     disabled={loading}
+                    className={cn(isMobileTaskLayout && 'h-10 px-3')}
                   >
                     <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-                    Refresh
+                    <span>{isMobileTaskLayout ? 'Sync' : 'Refresh'}</span>
                   </Button>
                 </div>
               </div>
@@ -607,117 +651,30 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
             )}
 
             {/* Filter Bar */}
-            <div className="mb-6 flex flex-wrap gap-3">
+            <div className={cn('mb-6', isMobileTaskLayout ? 'space-y-3' : 'flex flex-wrap gap-3')}>
               {/* Search */}
-              <div className="relative flex-1 min-w-[200px] max-w-sm">
+              <div className={cn('relative', isMobileTaskLayout ? 'w-full' : 'flex-1 min-w-[200px] max-w-sm')}>
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   ref={searchInputRef}
                   placeholder="Search tasks..."
                   value={searchValue}
                   onChange={(e) => handleSearchChange(e.target.value)}
-                  className="pl-9"
+                  className={cn('pl-9', isMobileTaskLayout && 'h-10 text-base')}
                 />
               </div>
 
-              {/* Drive Selector */}
-              <Select
-                value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-                onValueChange={(value) => handleDriveChange(value === 'all' ? '' : value)}
-              >
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="All drives" />
-                </SelectTrigger>
-                <SelectContent>
-                  {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-                  {drives.map((drive) => (
-                    <SelectItem key={drive.id} value={drive.id}>
-                      {drive.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* Status Filter */}
-              <Select
-                value={filters.status || 'all'}
-                onValueChange={(value) => handleFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-              >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="All statuses" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  {STATUS_ORDER.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {STATUS_CONFIG[status].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* Priority Filter */}
-              <Select
-                value={filters.priority || 'all'}
-                onValueChange={(value) => handleFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-              >
-                <SelectTrigger className="w-[130px]">
-                  <SelectValue placeholder="All priorities" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All priorities</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {/* Due Date Filter */}
-              <Select
-                value={filters.dueDateFilter || 'all'}
-                onValueChange={(value) => handleFiltersChange({ dueDateFilter: value as DueDateFilter })}
-              >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="Any date" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Any date</SelectItem>
-                  <SelectItem value="overdue">Overdue</SelectItem>
-                  <SelectItem value="today">Due today</SelectItem>
-                  <SelectItem value="this_week">This week</SelectItem>
-                  <SelectItem value="upcoming">Upcoming</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {/* Assignee Filter */}
-              <div className="flex items-center bg-muted rounded-md p-0.5">
-                <button
-                  onClick={() => handleFiltersChange({ assigneeFilter: 'mine' })}
-                  className={cn(
-                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-                    filters.assigneeFilter !== 'all'
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  title="My tasks"
-                >
-                  <User className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">My tasks</span>
-                </button>
-                <button
-                  onClick={() => handleFiltersChange({ assigneeFilter: 'all' })}
-                  className={cn(
-                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-                    filters.assigneeFilter === 'all'
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  title="All tasks"
-                >
-                  <Users className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">All tasks</span>
-                </button>
-              </div>
+              <FilterControls
+                layout={isMobileTaskLayout ? 'mobile' : 'desktop'}
+                context={context}
+                drives={drives}
+                selectedDriveId={selectedDriveId}
+                filters={filters}
+                hasActiveFilters={hasActiveFilters}
+                onDriveChange={handleDriveChange}
+                onFiltersChange={handleFiltersChange}
+                onClearFilters={clearFilters}
+              />
             </div>
 
             {/* Tasks View */}
@@ -732,10 +689,42 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                 <p className="text-sm text-muted-foreground">
                   {context === 'drive' && !selectedDriveId
                     ? 'Choose a drive from the dropdown above'
-                    : filters.search || filters.status || filters.priority || filters.dueDateFilter
+                    : hasActiveFilters
                       ? 'Try adjusting your filters'
                       : 'Tasks assigned to you will appear here'}
                 </p>
+                {hasActiveFilters && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={clearFilters}
+                    className="mt-4"
+                  >
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            ) : isMobileTaskLayout ? (
+              <div className="space-y-3">
+                {tasks.map((task) => (
+                  <TaskMobileCard
+                    key={task.id}
+                    task={task}
+                    onStatusChange={handleStatusChange}
+                    onPriorityChange={handlePriorityChange}
+                    onToggleComplete={handleToggleComplete}
+                    onAssigneeChange={handleAssigneeChange}
+                    onDueDateChange={handleDueDateChange}
+                    onStartEdit={handleStartEdit}
+                    onSaveTitle={handleSaveTitle}
+                    onDelete={handleDeleteTask}
+                    onNavigate={handleNavigate}
+                    isEditing={editingTaskId === task.id}
+                    editingTitle={editingTitle}
+                    onEditingTitleChange={setEditingTitle}
+                    onCancelEdit={() => setEditingTaskId(null)}
+                  />
+                ))}
               </div>
             ) : viewMode === 'kanban' ? (
               /* Kanban View */
@@ -829,6 +818,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                   onClick={handleLoadMore}
                   variant="outline"
                   disabled={loadingMore}
+                  className={cn(isMobileTaskLayout && 'h-10 w-full')}
                 >
                   {loadingMore ? 'Loading...' : 'Load more'}
                 </Button>
