@@ -98,7 +98,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
       // Invalidate agent awareness cache when an AI_CHAT page's title changes
       if (result.isAIChatPage) {
-        await agentAwarenessCache.invalidateDriveAgents(driveId);
+        agentAwarenessCache.invalidateDriveAgents(driveId).catch(() => {});
       }
     }
 
@@ -115,7 +115,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     // Invalidate page tree cache when structure changes (title or parent)
     if (safeBody.title || safeBody.parentId !== undefined) {
-      await pageTreeCache.invalidateDriveTree(driveId);
+      pageTreeCache.invalidateDriveTree(driveId).catch(() => {});
     }
 
     // Track page update
@@ -180,11 +180,11 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
     // Invalidate agent awareness cache when an AI_CHAT page is trashed
     if (result.isAIChatPage) {
-      await agentAwarenessCache.invalidateDriveAgents(result.driveId);
+      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(() => {});
     }
 
     // Invalidate page tree cache when structure changes
-    await pageTreeCache.invalidateDriveTree(result.driveId);
+    pageTreeCache.invalidateDriveTree(result.driveId).catch(() => {});
 
     // Track page deletion/trash
     trackPageOperation(userId, 'trash', pageId, {

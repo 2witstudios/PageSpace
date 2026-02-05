@@ -52,7 +52,7 @@ export async function PATCH(request: Request) {
       }),
     );
 
-    await pageTreeCache.invalidateDriveTree(result.driveId);
+    pageTreeCache.invalidateDriveTree(result.driveId).catch(() => {});
 
     return NextResponse.json({ message: 'Page reordered successfully' });
   } catch (error) {

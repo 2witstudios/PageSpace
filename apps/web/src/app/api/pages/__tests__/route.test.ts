@@ -39,10 +39,10 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn(),
+    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
   },
   pageTreeCache: {
-    invalidateDriveTree: vi.fn(),
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
   },
   loggers: {
     api: {

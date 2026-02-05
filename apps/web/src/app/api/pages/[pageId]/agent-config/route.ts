@@ -232,7 +232,7 @@ export async function PATCH(
       // visibility or definition changed
       if (page.type === 'AI_CHAT' &&
           (agentDefinition !== undefined || visibleToGlobalAssistant !== undefined)) {
-        await agentAwarenessCache.invalidateDriveAgents(page.driveId);
+        agentAwarenessCache.invalidateDriveAgents(page.driveId).catch(() => {});
       }
 
       loggers.api.info('Page agent configuration updated', {
