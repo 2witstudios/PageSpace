@@ -78,16 +78,17 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     setChildLoadingMap(prev => ({ ...prev, [pageId]: true }));
     try {
       const children: TreePage[] = await fetcher(`/api/pages/${pageId}/children`);
-      const currentTree = data || [];
-      const updatedTree = mergeChildren(currentTree, pageId, children);
-      mutate(updatedTree, false); // Optimistic update
+      mutate((currentData) => {
+        const currentTree = currentData || [];
+        return mergeChildren(currentTree, pageId, children);
+      }, { revalidate: false }); // Optimistic update
     } catch (e) {
       console.error("Failed to fetch and merge children", e);
       // Optionally handle error, e.g., revert optimistic update or show a toast
     } finally {
       setChildLoadingMap(prev => ({ ...prev, [pageId]: false }));
     }
-  }, [data, mutate]);
+  }, [mutate]);
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {

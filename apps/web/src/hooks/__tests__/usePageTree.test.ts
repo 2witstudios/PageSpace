@@ -235,13 +235,14 @@ describe('usePageTree', () => {
       // Observable: API was called to fetch children
       expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/pages/parent/children');
 
-      // Observable: tree was updated with merged children
-      const updatedTree = mockMutate.mock.calls[0][0];
+      /** @boundary-contract Optimistic merge: update tree without refetch */
+      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
+
+      // Observable: verify updater merges children using current cache data
+      const updaterFn = mockMutate.mock.calls[0][0];
+      const updatedTree = updaterFn(mockSWRState.data);
       expect(updatedTree[0].children).toHaveLength(1);
       expect(updatedTree[0].children[0].id).toBe('child-1');
-
-      /** @boundary-contract Optimistic merge: update tree without refetch */
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Array), false);
     });
 
     it('given API error, should log error and not throw', async () => {
