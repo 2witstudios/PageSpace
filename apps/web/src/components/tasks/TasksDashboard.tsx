@@ -17,8 +17,6 @@ import {
   Pencil,
   Trash2,
   FileText,
-  User,
-  Users,
 } from 'lucide-react';
 import {
   DndContext,
@@ -85,6 +83,8 @@ import {
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Task, TaskFilters, Drive, Pagination } from './types';
+import { TaskMobileCard } from './TaskMobileCard';
+import { FilterControls } from './FilterControls';
 
 interface TasksDashboardProps {
   context: 'user' | 'drive';
@@ -532,6 +532,8 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       ? `Your tasks in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
       : 'Your tasks across all drives';
 
+  // Note: assigneeFilter === 'all' is included because the default is 'mine',
+  // so viewing all tasks is a deviation from the default state that users may want to clear
   const hasActiveFilters = Boolean(
     filters.search ||
     filters.status ||
@@ -662,224 +664,17 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                 />
               </div>
 
-              {isMobileTaskLayout ? (
-                <>
-                  <div className="-mx-3 overflow-x-auto px-3 pb-1">
-                    <div className="flex w-max min-w-full gap-2">
-                      {/* Drive Selector */}
-                      <Select
-                        value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-                        onValueChange={(value) => handleDriveChange(value === 'all' ? '' : value)}
-                      >
-                        <SelectTrigger className="h-10 min-w-[170px]">
-                          <SelectValue placeholder="All drives" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-                          {drives.map((drive) => (
-                            <SelectItem key={drive.id} value={drive.id}>
-                              {drive.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-
-                      {/* Status Filter */}
-                      <Select
-                        value={filters.status || 'all'}
-                        onValueChange={(value) => handleFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-                      >
-                        <SelectTrigger className="h-10 min-w-[145px]">
-                          <SelectValue placeholder="All statuses" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All statuses</SelectItem>
-                          {STATUS_ORDER.map((status) => (
-                            <SelectItem key={status} value={status}>
-                              {STATUS_CONFIG[status].label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-
-                      {/* Priority Filter */}
-                      <Select
-                        value={filters.priority || 'all'}
-                        onValueChange={(value) => handleFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-                      >
-                        <SelectTrigger className="h-10 min-w-[140px]">
-                          <SelectValue placeholder="All priorities" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All priorities</SelectItem>
-                          <SelectItem value="high">High</SelectItem>
-                          <SelectItem value="medium">Medium</SelectItem>
-                          <SelectItem value="low">Low</SelectItem>
-                        </SelectContent>
-                      </Select>
-
-                      {/* Due Date Filter */}
-                      <Select
-                        value={filters.dueDateFilter || 'all'}
-                        onValueChange={(value) => handleFiltersChange({ dueDateFilter: value as DueDateFilter })}
-                      >
-                        <SelectTrigger className="h-10 min-w-[140px]">
-                          <SelectValue placeholder="Any date" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Any date</SelectItem>
-                          <SelectItem value="overdue">Overdue</SelectItem>
-                          <SelectItem value="today">Due today</SelectItem>
-                          <SelectItem value="this_week">This week</SelectItem>
-                          <SelectItem value="upcoming">Upcoming</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  {/* Assignee Filter */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => handleFiltersChange({ assigneeFilter: 'mine' })}
-                      className={cn(
-                        'flex h-10 items-center justify-center gap-1.5 rounded-md border text-sm transition-colors',
-                        filters.assigneeFilter !== 'all'
-                          ? 'border-border bg-background text-foreground shadow-sm'
-                          : 'border-transparent bg-muted text-muted-foreground'
-                      )}
-                      title="My tasks"
-                    >
-                      <User className="h-4 w-4" />
-                      <span>My tasks</span>
-                    </button>
-                    <button
-                      onClick={() => handleFiltersChange({ assigneeFilter: 'all' })}
-                      className={cn(
-                        'flex h-10 items-center justify-center gap-1.5 rounded-md border text-sm transition-colors',
-                        filters.assigneeFilter === 'all'
-                          ? 'border-border bg-background text-foreground shadow-sm'
-                          : 'border-transparent bg-muted text-muted-foreground'
-                      )}
-                      title="All tasks"
-                    >
-                      <Users className="h-4 w-4" />
-                      <span>All tasks</span>
-                    </button>
-                  </div>
-
-                  {hasActiveFilters && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-9 w-full"
-                      onClick={clearFilters}
-                    >
-                      Clear filters
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <>
-                  {/* Drive Selector */}
-                  <Select
-                    value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-                    onValueChange={(value) => handleDriveChange(value === 'all' ? '' : value)}
-                  >
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="All drives" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-                      {drives.map((drive) => (
-                        <SelectItem key={drive.id} value={drive.id}>
-                          {drive.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  {/* Status Filter */}
-                  <Select
-                    value={filters.status || 'all'}
-                    onValueChange={(value) => handleFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-                  >
-                    <SelectTrigger className="w-[140px]">
-                      <SelectValue placeholder="All statuses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All statuses</SelectItem>
-                      {STATUS_ORDER.map((status) => (
-                        <SelectItem key={status} value={status}>
-                          {STATUS_CONFIG[status].label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  {/* Priority Filter */}
-                  <Select
-                    value={filters.priority || 'all'}
-                    onValueChange={(value) => handleFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-                  >
-                    <SelectTrigger className="w-[130px]">
-                      <SelectValue placeholder="All priorities" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All priorities</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {/* Due Date Filter */}
-                  <Select
-                    value={filters.dueDateFilter || 'all'}
-                    onValueChange={(value) => handleFiltersChange({ dueDateFilter: value as DueDateFilter })}
-                  >
-                    <SelectTrigger className="w-[140px]">
-                      <SelectValue placeholder="Any date" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Any date</SelectItem>
-                      <SelectItem value="overdue">Overdue</SelectItem>
-                      <SelectItem value="today">Due today</SelectItem>
-                      <SelectItem value="this_week">This week</SelectItem>
-                      <SelectItem value="upcoming">Upcoming</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {/* Assignee Filter */}
-                  <div className="flex items-center bg-muted rounded-md p-0.5">
-                    <button
-                      onClick={() => handleFiltersChange({ assigneeFilter: 'mine' })}
-                      className={cn(
-                        'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-                        filters.assigneeFilter !== 'all'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                      title="My tasks"
-                    >
-                      <User className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">My tasks</span>
-                    </button>
-                    <button
-                      onClick={() => handleFiltersChange({ assigneeFilter: 'all' })}
-                      className={cn(
-                        'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-                        filters.assigneeFilter === 'all'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                      title="All tasks"
-                    >
-                      <Users className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">All tasks</span>
-                    </button>
-                  </div>
-                </>
-              )}
+              <FilterControls
+                layout={isMobileTaskLayout ? 'mobile' : 'desktop'}
+                context={context}
+                drives={drives}
+                selectedDriveId={selectedDriveId}
+                filters={filters}
+                hasActiveFilters={hasActiveFilters}
+                onDriveChange={handleDriveChange}
+                onFiltersChange={handleFiltersChange}
+                onClearFilters={clearFilters}
+              />
             </div>
 
             {/* Tasks View */}
@@ -1041,227 +836,6 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
         </span>
       </div>
     </div>
-  );
-}
-
-interface TaskMobileCardProps {
-  task: Task;
-  onStatusChange: (task: Task, status: string) => void;
-  onPriorityChange: (task: Task, priority: string) => void;
-  onToggleComplete: (task: Task) => void;
-  onAssigneeChange: (task: Task, assigneeId: string | null, agentId: string | null) => void;
-  onDueDateChange: (task: Task, date: Date | null) => void;
-  onStartEdit: (task: Task) => void;
-  onSaveTitle: (task: Task, title: string) => void;
-  onDelete: (task: Task) => void;
-  onNavigate: (task: Task) => void;
-  isEditing: boolean;
-  editingTitle: string;
-  onEditingTitleChange: (title: string) => void;
-  onCancelEdit: () => void;
-}
-
-function TaskMobileCard({
-  task,
-  onStatusChange,
-  onPriorityChange,
-  onToggleComplete,
-  onAssigneeChange,
-  onDueDateChange,
-  onStartEdit,
-  onSaveTitle,
-  onDelete,
-  onNavigate,
-  isEditing,
-  editingTitle,
-  onEditingTitleChange,
-  onCancelEdit,
-}: TaskMobileCardProps) {
-  const isCompleted = task.status === 'completed';
-  const cancelTriggeredRef = useRef(false);
-  const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-  const hasLinkedPage = Boolean(task.pageId && task.driveId);
-
-  return (
-    <Card className={cn(isCompleted && 'opacity-60')}>
-      <CardContent className="p-3.5">
-        <div className="flex items-start gap-3">
-          <Checkbox
-            checked={isCompleted}
-            onCheckedChange={() => onToggleComplete(task)}
-            className="mt-0.5"
-          />
-
-          <div className="min-w-0 flex-1">
-            {isEditing ? (
-              <Input
-                value={editingTitle}
-                onChange={(e) => onEditingTitleChange(e.target.value)}
-                onBlur={() => {
-                  if (cancelTriggeredRef.current) {
-                    cancelTriggeredRef.current = false;
-                    return;
-                  }
-                  if (editingTitle.trim()) {
-                    onSaveTitle(task, editingTitle.trim());
-                  }
-                  onCancelEdit();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur();
-                  }
-                  if (e.key === 'Escape') {
-                    cancelTriggeredRef.current = true;
-                    onCancelEdit();
-                  }
-                }}
-                autoFocus
-                className="h-9"
-              />
-            ) : (
-              <button
-                type="button"
-                className={cn(
-                  'w-full bg-transparent border-0 p-0 text-left text-sm font-medium',
-                  hasLinkedPage
-                    ? 'cursor-pointer hover:text-primary'
-                    : 'cursor-default',
-                  isCompleted && 'line-through text-muted-foreground'
-                )}
-                onClick={hasLinkedPage ? () => onNavigate(task) : undefined}
-                disabled={!hasLinkedPage}
-                title={!hasLinkedPage ? 'No linked page' : undefined}
-              >
-                {task.title}
-              </button>
-            )}
-
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-              {(task.assignee || task.assigneeAgent) && (
-                <span>{task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}</span>
-              )}
-              {dueDate && (
-                <span
-                  className={cn(
-                    isPast(dueDate) && task.status !== 'completed'
-                      ? 'text-red-500 font-medium'
-                      : isToday(dueDate)
-                        ? 'text-amber-500'
-                        : 'text-muted-foreground'
-                  )}
-                >
-                  {format(dueDate, 'MMM d')}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {hasLinkedPage && (
-                <DropdownMenuItem onClick={() => onNavigate(task)}>
-                  <FileText className="h-4 w-4 mr-2" />
-                  Open
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => onStartEdit(task)}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDelete(task)}
-                className="text-destructive"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-2 pl-7">
-          <Select
-            value={task.status}
-            onValueChange={(value) => onStatusChange(task, value)}
-          >
-            <SelectTrigger className="h-9 w-full justify-start">
-              <SelectValue>
-                <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                  {STATUS_CONFIG[task.status].label}
-                </Badge>
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_ORDER.map((status) => (
-                <SelectItem key={status} value={status}>
-                  <Badge className={cn('text-xs', STATUS_CONFIG[status].color)}>
-                    {STATUS_CONFIG[status].label}
-                  </Badge>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={task.priority}
-            onValueChange={(value) => onPriorityChange(task, value)}
-          >
-            <SelectTrigger className="h-9 w-full justify-start">
-              <SelectValue>
-                <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                  {PRIORITY_CONFIG[task.priority].label}
-                </Badge>
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {(['high', 'medium', 'low'] as TaskPriority[]).map((priority) => (
-                <SelectItem key={priority} value={priority}>
-                  <Badge className={cn('text-xs', PRIORITY_CONFIG[priority].color)}>
-                    {PRIORITY_CONFIG[priority].label}
-                  </Badge>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {task.driveId && (
-            <div className="col-span-2 rounded-md border bg-muted/20 px-1 py-1">
-              <AssigneeSelect
-                driveId={task.driveId}
-                currentAssignee={task.assignee}
-                currentAssigneeAgent={task.assigneeAgent}
-                onSelect={(assigneeId, agentId) => onAssigneeChange(task, assigneeId, agentId)}
-              />
-            </div>
-          )}
-
-          <div className="col-span-2 rounded-md border bg-muted/20 px-1 py-1">
-            <DueDatePicker
-              currentDate={task.dueDate}
-              onSelect={(date) => onDueDateChange(task, date)}
-            />
-          </div>
-        </div>
-
-        {task.taskListPageTitle && task.driveId && task.taskListPageId && (
-          <div className="mt-3 pl-7">
-            <Link
-              href={`/dashboard/${task.driveId}/${task.taskListPageId}`}
-              className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            >
-              <span className="truncate">{task.taskListPageTitle}</span>
-              <ExternalLink className="h-3 w-3 flex-shrink-0" />
-            </Link>
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
