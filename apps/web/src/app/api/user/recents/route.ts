@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, userPageViews, eq, desc } from '@pagespace/db';
+import type { PageType } from '@pagespace/lib/client-safe';
 import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
@@ -8,7 +9,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const };
 export type RecentPage = {
   id: string;
   title: string;
-  type: string;
+  type: PageType;
   driveId: string;
   driveName: string;
   viewedAt: string;

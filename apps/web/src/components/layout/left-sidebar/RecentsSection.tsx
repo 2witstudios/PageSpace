@@ -19,7 +19,6 @@ import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { cn } from "@/lib/utils";
-import type { PageType } from "@pagespace/lib/client-safe";
 import type { RecentPage } from "@/app/api/user/recents/route";
 
 const fetcher = async (url: string) => {
@@ -132,7 +131,7 @@ function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemPr
       )}
     >
       <PageTypeIcon
-        type={page.type as PageType}
+        type={page.type}
         className="h-4 w-4 shrink-0 text-muted-foreground"
       />
       <span className="flex-1 truncate">{page.title}</span>

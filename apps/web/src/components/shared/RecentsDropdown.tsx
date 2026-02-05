@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { PageType } from '@pagespace/lib/client-safe';
 import { cn } from '@/lib/utils';
 import type { RecentPage } from '@/app/api/user/recents/route';
 
@@ -49,7 +48,7 @@ function formatRelativeTime(dateString: string): string {
 
 export default function RecentsDropdown({ className }: RecentsDropdownProps) {
   const router = useRouter();
-  const { data, isLoading, error } = useSWR<{ recents: RecentPage[] }>(
+  const { data, isLoading, error, mutate } = useSWR<{ recents: RecentPage[] }>(
     '/api/user/recents?limit=8',
     fetcher,
     {
@@ -81,7 +80,19 @@ export default function RecentsDropdown({ className }: RecentsDropdownProps) {
           <div className="px-2 py-4 text-sm text-muted-foreground text-center">
             Loading...
           </div>
-        ) : error || !data?.recents || data.recents.length === 0 ? (
+        ) : error ? (
+          <div className="px-2 py-4 text-sm text-center">
+            <p className="text-destructive">Failed to load recent pages</p>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 mt-1 text-xs"
+              onClick={() => void mutate()}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : !data?.recents || data.recents.length === 0 ? (
           <div className="px-2 py-4 text-sm text-muted-foreground text-center">
             No recent pages
           </div>
@@ -94,7 +105,7 @@ export default function RecentsDropdown({ className }: RecentsDropdownProps) {
                 className="cursor-pointer"
               >
                 <PageTypeIcon
-                  type={page.type as PageType}
+                  type={page.type}
                   className="mr-2 h-4 w-4 flex-shrink-0 text-muted-foreground"
                 />
                 <span className="min-w-0 flex-1 truncate">{page.title}</span>
