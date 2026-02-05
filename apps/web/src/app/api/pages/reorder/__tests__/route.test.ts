@@ -39,7 +39,7 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   pageTreeCache: {
-    invalidateDriveTree: vi.fn(),
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
   },
   loggers: {
     api: {
