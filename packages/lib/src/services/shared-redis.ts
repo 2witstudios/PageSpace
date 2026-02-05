@@ -83,7 +83,10 @@ async function initializeRedis(): Promise<Redis | null> {
       loggers.api.debug('Shared Redis reconnecting...');
     });
 
-    // Test connection
+    // Explicitly connect first (uses connectTimeout), then ping (uses commandTimeout)
+    // This fixes a timing bug where lazyConnect + commandTimeout race:
+    // https://github.com/redis/ioredis/issues/1431
+    await redis.connect();
     await redis.ping();
     sharedRedisClient = redis;
     redisAvailable = true;
