@@ -200,12 +200,15 @@ export class RateLimitCache {
     if (redis) {
       const redisResult = await this.incrementRedis(redis, key, limit);
       if (redisResult !== null) {
-        // Update memory cache for fast reads
+        // Update memory cache for fast reads (monotonic: never regress count)
         const ttl = this.getTTL() * 1000;
-        this.memoryCache.set(key, {
-          count: redisResult.currentCount,
-          expiresAt: Date.now() + ttl
-        });
+        const existing = this.memoryCache.get(key);
+        if (!existing || redisResult.currentCount >= existing.count) {
+          this.memoryCache.set(key, {
+            count: redisResult.currentCount,
+            expiresAt: Date.now() + ttl
+          });
+        }
         return redisResult;
       }
     }
@@ -223,20 +226,9 @@ export class RateLimitCache {
     limit: number
   ): Promise<UsageTrackingResult> {
     const key = this.getRateLimitKey(userId, providerType);
-
-    // Try memory cache first (L1)
     const now = Date.now();
-    const memoryEntry = this.memoryCache.get(key);
-    if (memoryEntry && now <= memoryEntry.expiresAt) {
-      return {
-        success: memoryEntry.count < limit,
-        currentCount: memoryEntry.count,
-        limit,
-        remainingCalls: Math.max(0, limit - memoryEntry.count)
-      };
-    }
 
-    // Try Redis (L2)
+    // Try Redis first (source of truth when available)
     const redis = await this.getRedis();
     if (redis) {
       try {
@@ -261,6 +253,17 @@ export class RateLimitCache {
       } catch (error) {
         loggers.api.warn('Redis get error for rate limiting', { key, error });
       }
+    }
+
+    // Fallback to memory cache (L1)
+    const memoryEntry = this.memoryCache.get(key);
+    if (memoryEntry && now <= memoryEntry.expiresAt) {
+      return {
+        success: memoryEntry.count < limit,
+        currentCount: memoryEntry.count,
+        limit,
+        remainingCalls: Math.max(0, limit - memoryEntry.count)
+      };
     }
 
     // No data found, return zero usage
