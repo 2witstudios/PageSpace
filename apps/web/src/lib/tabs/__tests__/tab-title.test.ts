@@ -235,10 +235,10 @@ describe('tab-title', () => {
       expect(result.type).toBe('notifications');
     });
 
-    it('given friends path, should return friends type', () => {
+    it('given friends path (removed route), should return unknown type', () => {
       const result = parseTabPath('/friends');
 
-      expect(result.type).toBe('friends');
+      expect(result.type).toBe('unknown');
     });
 
     // Empty path edge case
@@ -328,7 +328,7 @@ describe('tab-title', () => {
     it('given settings type with subpage, should return formatted title', () => {
       const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'mcp' });
 
-      expect(meta!.title).toBe('Settings - MCP');
+      expect(meta!.title).toBe('MCP');
     });
 
     it('given page type, should return null (requires async lookup)', () => {
@@ -481,30 +481,23 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Bell');
     });
 
-    it('given friends type, should return Friends title', () => {
-      const meta = getStaticTabMeta({ type: 'friends' });
-
-      expect(meta!.title).toBe('Friends');
-      expect(meta!.iconName).toBe('Users');
-    });
-
     // Settings with hyphenated subpages
     it('given settings type with ai-api subpage, should return correctly formatted title', () => {
       const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'ai-api' });
 
-      expect(meta!.title).toBe('Settings - AI API');
+      expect(meta!.title).toBe('AI API');
     });
 
     it('given settings type with local-mcp subpage, should return correctly formatted title', () => {
       const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'local-mcp' });
 
-      expect(meta!.title).toBe('Settings - Local MCP');
+      expect(meta!.title).toBe('Local MCP');
     });
 
     it('given settings type with personalization subpage, should return correctly formatted title', () => {
       const meta = getStaticTabMeta({ type: 'settings', settingsPage: 'personalization' });
 
-      expect(meta!.title).toBe('Settings - Personalization');
+      expect(meta!.title).toBe('Personalization');
     });
   });
 });

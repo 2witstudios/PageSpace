@@ -4,6 +4,9 @@ import {
   createAIProvider,
   isProviderError,
   buildTimestampSystemPrompt,
+  getUserTimeOfDay,
+  getStartOfTodayInTimezone,
+  normalizeTimezone,
 } from '@/lib/ai/core';
 import {
   db,
@@ -194,11 +197,13 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   if (!user) throw new Error('User not found');
 
   const userName = user.name || user.email?.split('@')[0] || 'there';
+  // Use stored timezone or default to UTC
+  const userTimezone = normalizeTimezone(user.timezone);
 
-  // Time windows
+  // Time windows - use user's timezone for "today" calculations
   const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfToday = getStartOfTodayInTimezone(userTimezone);
 
   // Get user's drives
   const userDrives = await db
@@ -280,6 +285,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   // ========================================
   const pageActivities = rawActivity.filter(
     a => a.pageId &&
+         a.driveId &&
          a.resourceType === 'page' &&
          (a.operation === 'update' || a.operation === 'create') &&
          (a.contentRef || a.contentSnapshot)
@@ -289,6 +295,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   const activityContentRefs = new Map<string, string>();
 
   for (const activity of pageActivities) {
+    if (!activity.driveId) continue;
+
     if (activity.contentRef) {
       activityContentRefs.set(activity.id, activity.contentRef);
     }
@@ -304,7 +312,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       actorEmail: activity.actorEmail,
       actorDisplayName: activity.actorName,
       content: activity.contentSnapshot ?? null,
-      driveId: activity.driveId!,
+      driveId: activity.driveId,
     });
   }
 
@@ -734,12 +742,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     })),
   };
 
-  // Determine time of day
-  const hour = now.getHours();
-  let timeOfDay = 'day';
-  if (hour < 12) timeOfDay = 'morning';
-  else if (hour < 17) timeOfDay = 'afternoon';
-  else timeOfDay = 'evening';
+  // Determine time of day in user's timezone
+  const { timeOfDay } = getUserTimeOfDay(userTimezone);
 
   // Build prompt
   const userPrompt = `You're checking in with ${userName}. It's ${timeOfDay}.
@@ -764,7 +768,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   // Generate summary
   const result = await generateText({
     model: providerResult.model,
-    system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt()}`,
+    system: `${PULSE_SYSTEM_PROMPT}\n\n${buildTimestampSystemPrompt(userTimezone)}`,
     messages: [{ role: 'user', content: userPrompt }],
     temperature: 0.7,
     maxRetries: 3,
