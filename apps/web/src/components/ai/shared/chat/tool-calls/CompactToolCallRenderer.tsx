@@ -314,11 +314,11 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       );
     }
 
-    if (toolName === 'read_page' && (result.rawContent || result.content)) {
+    if (toolName === 'read_page' && (result.rawContent != null || result.content != null)) {
       return (
         <RichContentRenderer
           title={(result.title as string) || 'Document'}
-          content={(result.rawContent as string) || (result.content as string)}
+          content={(result.rawContent ?? result.content) as string}
           pageId={result.pageId as string | undefined}
           pageType={result.type as string | undefined}
           maxHeight={200}
@@ -326,7 +326,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       );
     }
 
-    if (toolName === 'list_conversations' && result.conversations) {
+    if (toolName === 'list_conversations' && result.conversations != null) {
       const conversations = result.conversations as Array<{ id: string; title?: string }>;
       return (
         <PageTreeRenderer
@@ -343,7 +343,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       );
     }
 
-    if (toolName === 'read_conversation' && result.content) {
+    if (toolName === 'read_conversation' && result.content != null) {
       return (
         <RichContentRenderer
           title={(result.title as string | undefined) || 'Conversation'}
@@ -357,7 +357,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
 
     // === PAGE WRITE TOOLS ===
     if (toolName === 'replace_lines') {
-      if (result.success && result.oldContent && result.newContent) {
+      if (result.success && result.oldContent != null && result.newContent != null) {
         return (
           <RichDiffRenderer
             title={(result.title as string) || 'Modified Document'}
@@ -369,7 +369,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
           />
         );
       }
-      if (result.success && result.newContent) {
+      if (result.success && result.newContent != null) {
         return (
           <RichContentRenderer
             title={(result.title as string) || 'Modified Document'}
