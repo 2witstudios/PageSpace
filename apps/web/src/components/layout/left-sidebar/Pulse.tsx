@@ -41,8 +41,14 @@ export default function Pulse() {
 
     setIsGenerating(true);
     try {
+      // Send browser timezone for accurate time-of-day context
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const response = await fetchWithAuth("/api/pulse/generate", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ timezone }),
       });
 
       if (response.ok) {

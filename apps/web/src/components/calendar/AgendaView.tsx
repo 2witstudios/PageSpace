@@ -11,7 +11,8 @@ import {
   isYesterday,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { MapPin, Clock, Users, ExternalLink } from 'lucide-react';
+import { MapPin, Clock, Users, ExternalLink, Calendar } from 'lucide-react';
+import Link from 'next/link';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -30,9 +31,10 @@ interface AgendaViewProps {
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
+  showGoogleCalendarHint?: boolean;
 }
 
-export function AgendaView({ currentDate, events, tasks, handlers }: AgendaViewProps) {
+export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCalendarHint = true }: AgendaViewProps) {
   // Get all days in the current month
   const monthDays = useMemo(() => {
     const monthStart = startOfMonth(currentDate);
@@ -66,6 +68,15 @@ export function AgendaView({ currentDate, events, tasks, handlers }: AgendaViewP
         <div className="text-sm mt-1">
           Click &quot;New Event&quot; to add one
         </div>
+        {showGoogleCalendarHint && (
+          <Link
+            href="/settings/integrations/google-calendar"
+            className="flex items-center gap-1.5 text-sm mt-4 text-muted-foreground/70 hover:text-primary transition-colors"
+          >
+            <Calendar className="h-4 w-4" />
+            Import from Google Calendar
+          </Link>
+        )}
       </div>
     );
   }

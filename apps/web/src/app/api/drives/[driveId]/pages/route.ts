@@ -144,13 +144,16 @@ export async function GET(
       // Single efficient query using a CTE to find pages with unread changes
       // For viewed pages: check for activity after viewedAt by others/AI
       // For never-viewed pages: check for activity after cutoff date by others/AI
+      // Build PostgreSQL array literal - Drizzle's sql template interpolates arrays as records,
+      // so we need to construct the array explicitly with sql.join
+      const pageIdsArrayLiteral = sql`ARRAY[${sql.join(pageIds.map(id => sql`${id}::text`), sql`, `)}]`;
       const unreadPagesResult = await db.execute(sql`
         WITH page_cutoffs AS (
           -- Get the cutoff timestamp for each page (viewedAt if viewed, cutoff date if not)
           SELECT
             p.id as page_id,
             COALESCE(upv."viewedAt", ${UNREAD_INDICATOR_CUTOFF_DATE}::timestamp) as cutoff_time
-          FROM unnest(${pageIds}::text[]) as p(id)
+          FROM unnest(${pageIdsArrayLiteral}) as p(id)
           LEFT JOIN user_page_views upv ON upv."pageId" = p.id AND upv."userId" = ${userId}
         )
         SELECT DISTINCT pc.page_id

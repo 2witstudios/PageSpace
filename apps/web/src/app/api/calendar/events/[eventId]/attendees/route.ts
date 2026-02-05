@@ -14,6 +14,8 @@ import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const GOOGLE_READ_ONLY_ERROR =
+  'This event is synced from Google Calendar and is read-only. Manage attendee changes in Google Calendar.';
 
 // Schema for adding attendees
 const addAttendeesSchema = z.object({
@@ -184,6 +186,10 @@ export async function POST(
       );
     }
 
+    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
+    }
+
     // PRIVATE events cannot have additional attendees
     if (event.visibility === 'PRIVATE') {
       return NextResponse.json(
@@ -322,6 +328,10 @@ export async function PATCH(
       );
     }
 
+    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
+    }
+
     const body = await request.json();
     const parseResult = updateRsvpSchema.safeParse(body);
 
@@ -413,6 +423,10 @@ export async function DELETE(
         { error: 'Only the event creator can remove other attendees' },
         { status: 403 }
       );
+    }
+
+    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     // Cannot remove the organizer/creator

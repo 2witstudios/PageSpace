@@ -14,7 +14,8 @@ import {
   isYesterday,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { ChevronDown, ListTodo, CalendarDays } from 'lucide-react';
+import { ChevronDown, ListTodo, CalendarDays, Calendar } from 'lucide-react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 import {
@@ -43,6 +44,7 @@ interface MobileCalendarViewProps {
   handlers: CalendarHandlers;
   showTasks: boolean;
   onShowTasksChange: (show: boolean) => void;
+  showGoogleCalendarHint?: boolean;
   isLoading?: boolean;
   currentDate?: Date;
 }
@@ -55,6 +57,7 @@ export function MobileCalendarView({
   handlers,
   showTasks,
   onShowTasksChange,
+  showGoogleCalendarHint = true,
   isLoading,
   currentDate: parentDate,
 }: MobileCalendarViewProps) {
@@ -65,10 +68,22 @@ export function MobileCalendarView({
 
   // Sync with parent date when it changes externally
   useEffect(() => {
-    if (parentDate && !isSameDay(parentDate, selectedDate)) {
-      setSelectedDate(parentDate);
-      setCurrentWeekStart(startOfWeek(parentDate));
-    }
+    if (!parentDate) return;
+
+    setSelectedDate((previousDate) => {
+      if (isSameDay(parentDate, previousDate)) {
+        return previousDate;
+      }
+      return parentDate;
+    });
+
+    const parentWeekStart = startOfWeek(parentDate);
+    setCurrentWeekStart((previousWeekStart) => {
+      if (isSameDay(parentWeekStart, previousWeekStart)) {
+        return previousWeekStart;
+      }
+      return parentWeekStart;
+    });
   }, [parentDate]);
   const [mobileView, setMobileView] = useState<MobileViewMode>('day');
   const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false);
@@ -267,6 +282,7 @@ export function MobileCalendarView({
             tasks={tasks}
             handlers={handlers}
             showTasks={showTasks}
+            showGoogleCalendarHint={showGoogleCalendarHint}
             onDateSelect={handleDateSelect}
           />
         )}
@@ -290,6 +306,7 @@ function MobileMonthAgenda({
   tasks,
   handlers,
   showTasks,
+  showGoogleCalendarHint,
   onDateSelect,
 }: {
   selectedDate: Date;
@@ -297,6 +314,7 @@ function MobileMonthAgenda({
   tasks: TaskWithDueDate[];
   handlers: CalendarHandlers;
   showTasks: boolean;
+  showGoogleCalendarHint: boolean;
   onDateSelect: (date: Date) => void;
 }) {
   // Get all days in the current month with events/tasks
@@ -330,6 +348,15 @@ function MobileMonthAgenda({
         <p className="text-sm text-muted-foreground mt-1">
           Tap a day to add an event
         </p>
+        {showGoogleCalendarHint && (
+          <Link
+            href="/settings/integrations/google-calendar"
+            className="flex items-center gap-1.5 text-sm mt-4 text-muted-foreground/70 hover:text-primary transition-colors"
+          >
+            <Calendar className="h-4 w-4" />
+            Import from Google Calendar
+          </Link>
+        )}
       </div>
     );
   }

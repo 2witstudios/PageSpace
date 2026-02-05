@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -80,6 +81,7 @@ export function EventModal({
   context: _context,
 }: EventModalProps) {
   const isEditing = !!event;
+  const isReadOnlyGoogleEvent = Boolean(event?.syncedFromGoogle && event?.googleSyncReadOnly);
 
   // Form state
   const [title, setTitle] = useState('');
@@ -153,6 +155,11 @@ export function EventModal({
 
   // Handle save
   const handleSave = async () => {
+    if (isReadOnlyGoogleEvent) {
+      toast.error('This event is synced from Google Calendar and is read-only.');
+      return;
+    }
+
     if (!title.trim()) {
       toast.error('Please enter a title');
       return;
@@ -195,6 +202,10 @@ export function EventModal({
   // Handle delete
   const handleDelete = async () => {
     if (!onDelete) return;
+    if (isReadOnlyGoogleEvent) {
+      toast.error('This event is synced from Google Calendar and is read-only.');
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -217,18 +228,27 @@ export function EventModal({
           <DialogTitle>{isEditing ? 'Edit Event' : 'New Event'}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
-          {/* Title */}
-          <div className="space-y-2">
-            <Label htmlFor="title">Title</Label>
-            <Input
-              id="title"
-              placeholder="Event title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              autoFocus
-            />
-          </div>
+        <fieldset disabled={isReadOnlyGoogleEvent || isSaving}>
+          <div className="space-y-4 py-4">
+            {isReadOnlyGoogleEvent && (
+              <Alert>
+                <AlertDescription>
+                  This event is synced from Google Calendar and is read-only. Manage changes in Google Calendar.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* Title */}
+            <div className="space-y-2">
+              <Label htmlFor="title">Title</Label>
+              <Input
+                id="title"
+                placeholder="Event title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                autoFocus
+              />
+            </div>
 
           {/* All-day toggle */}
           <div className="flex items-center justify-between">
@@ -380,14 +400,15 @@ export function EventModal({
               rows={3}
             />
           </div>
-        </div>
+          </div>
+        </fieldset>
 
         <DialogFooter className="flex-col sm:flex-row gap-2">
           {isEditing && onDelete && (
             <Button
               variant="destructive"
               onClick={handleDelete}
-              disabled={isSaving}
+              disabled={isSaving || isReadOnlyGoogleEvent}
               className="w-full sm:w-auto sm:mr-auto"
             >
               <Trash2 className="h-4 w-4 mr-2" />
@@ -397,7 +418,7 @@ export function EventModal({
           <Button variant="outline" onClick={onClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button onClick={handleSave} disabled={isSaving || isReadOnlyGoogleEvent}>
             {isSaving ? 'Saving...' : isEditing ? 'Update' : 'Create'}
           </Button>
         </DialogFooter>

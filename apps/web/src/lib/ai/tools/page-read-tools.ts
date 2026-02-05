@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db, pages, taskItems, taskLists, chatMessages, eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
+import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 
 export const pageReadTools = {
   /**
@@ -300,8 +301,10 @@ export const pageReadTools = {
           };
         }
 
-        // Split content into lines
-        const allLines = page.content.split('\n');
+        // Format content for AI line-based editing, then split into lines
+        // addLineBreaksForAI adds newlines between block tags without removing any content
+        const formattedContent = addLineBreaksForAI(page.content || '');
+        const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 
         // Calculate effective range (1-indexed, inclusive)

@@ -57,15 +57,13 @@ export default function InboxDMPage() {
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
 
-  // Fetch conversation details
-  const { data: conversationData } = useSWR<{ conversations: Conversation[] }>(
-    '/api/messages/conversations',
+  // Fetch conversation details (single conversation, not the full list)
+  const { data: conversationData } = useSWR<{ conversation: Conversation }>(
+    conversationId ? `/api/messages/conversations/${conversationId}` : null,
     fetcher
   );
 
-  const conversation = conversationData?.conversations?.find(
-    (c) => c.id === conversationId
-  );
+  const conversation = conversationData?.conversation;
 
   // Fetch messages
   const { data: messagesData } = useSWR<{ messages: Message[] }>(

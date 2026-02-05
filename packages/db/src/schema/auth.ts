@@ -36,6 +36,8 @@ export const users = pgTable('users', {
   // Account suspension (administrative action)
   suspendedAt: timestamp('suspendedAt', { mode: 'date' }),
   suspendedReason: text('suspendedReason'),
+  // User timezone for correct time-of-day calculations (IANA timezone, e.g., "America/New_York")
+  timezone: text('timezone'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, userPageViews, eq, desc } from '@pagespace/db';
+import { PageType } from '@pagespace/lib/client-safe';
 import { loggers } from '@pagespace/lib/server';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
@@ -8,11 +9,34 @@ const AUTH_OPTIONS = { allow: ['session'] as const };
 export type RecentPage = {
   id: string;
   title: string;
-  type: string;
+  type: PageType;
   driveId: string;
   driveName: string;
   viewedAt: string;
 };
+
+function toPageType(type: string): PageType | null {
+  switch (type) {
+    case 'FOLDER':
+      return PageType.FOLDER;
+    case 'DOCUMENT':
+      return PageType.DOCUMENT;
+    case 'CHANNEL':
+      return PageType.CHANNEL;
+    case 'AI_CHAT':
+      return PageType.AI_CHAT;
+    case 'CANVAS':
+      return PageType.CANVAS;
+    case 'FILE':
+      return PageType.FILE;
+    case 'SHEET':
+      return PageType.SHEET;
+    case 'TASK_LIST':
+      return PageType.TASK_LIST;
+    default:
+      return null;
+  }
+}
 
 export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
@@ -21,7 +45,9 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const limitParam = searchParams.get('limit');
-  const limit = Math.min(Math.max(parseInt(limitParam || '8', 10), 1), 50);
+  const parsedLimit = Number.parseInt(limitParam ?? '8', 10);
+  const safeLimit = Number.isNaN(parsedLimit) ? 8 : parsedLimit;
+  const limit = Math.min(Math.max(safeLimit, 1), 50);
 
   try {
     const recentViews = await db.query.userPageViews.findMany({
@@ -57,13 +83,14 @@ export async function GET(req: Request) {
         if (view.page.isTrashed) return false;
         if (!view.page.drive) return false;
         if (view.page.drive.isTrashed) return false;
+        if (!toPageType(view.page.type)) return false;
         return true;
       })
       .slice(0, limit)
       .map(view => ({
         id: view.page!.id,
         title: view.page!.title,
-        type: view.page!.type,
+        type: toPageType(view.page!.type)!,
         driveId: view.page!.driveId,
         driveName: view.page!.drive!.name,
         viewedAt: view.viewedAt.toISOString(),

@@ -16,6 +16,8 @@ import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
+const GOOGLE_READ_ONLY_ERROR =
+  'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
 
 /**
  * Parse a date string that can be either ISO 8601 or natural language
@@ -38,13 +40,30 @@ function parseDateTime(input: string, referenceDate?: Date): Date {
 }
 
 /**
- * Check if user can edit an event (only creator)
+ * Check if user can edit an event
+ * Returns { canEdit: boolean, reason?: string }
  */
 async function canEditEvent(
   userId: string,
   event: typeof calendarEvents.$inferSelect
-): Promise<boolean> {
-  return event.createdById === userId;
+): Promise<{ canEdit: boolean; reason?: string }> {
+  // Check if event is synced from Google and marked read-only
+  if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+    return {
+      canEdit: false,
+      reason: 'This event is synced from Google Calendar and is read-only. You can manage it in Google Calendar.',
+    };
+  }
+
+  // Check if user is the creator
+  if (event.createdById !== userId) {
+    return {
+      canEdit: false,
+      reason: 'Only the event creator can edit this event.',
+    };
+  }
+
+  return { canEdit: true };
 }
 
 /**
@@ -338,11 +357,11 @@ export const calendarWriteTools = {
         }
 
         // Check edit permission
-        const canEdit = await canEditEvent(userId, event);
-        if (!canEdit) {
+        const editCheck = await canEditEvent(userId, event);
+        if (!editCheck.canEdit) {
           return {
             success: false,
-            error: 'Only the event creator can edit this event.',
+            error: editCheck.reason || 'You cannot edit this event.',
           };
         }
 
@@ -488,11 +507,11 @@ export const calendarWriteTools = {
         }
 
         // Check edit permission
-        const canEdit = await canEditEvent(userId, event);
-        if (!canEdit) {
+        const editCheck = await canEditEvent(userId, event);
+        if (!editCheck.canEdit) {
           return {
             success: false,
-            error: 'Only the event creator can delete this event.',
+            error: editCheck.reason || 'You cannot delete this event.',
           };
         }
 
@@ -582,6 +601,13 @@ export const calendarWriteTools = {
           return {
             success: false,
             error: 'Event not found.',
+          };
+        }
+
+        if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+          return {
+            success: false,
+            error: GOOGLE_READ_ONLY_ERROR,
           };
         }
 
@@ -682,6 +708,13 @@ export const calendarWriteTools = {
           return {
             success: false,
             error: 'Event not found.',
+          };
+        }
+
+        if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+          return {
+            success: false,
+            error: GOOGLE_READ_ONLY_ERROR,
           };
         }
 
@@ -824,6 +857,13 @@ export const calendarWriteTools = {
           return {
             success: false,
             error: 'Event not found.',
+          };
+        }
+
+        if (event.syncedFromGoogle && event.googleSyncReadOnly) {
+          return {
+            success: false,
+            error: GOOGLE_READ_ONLY_ERROR,
           };
         }
 
