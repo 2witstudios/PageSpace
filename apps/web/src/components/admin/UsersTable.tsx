@@ -83,7 +83,9 @@ function formatDateTime(dateString: string | null) {
   return new Date(dateString).toLocaleString();
 }
 
-function getUserInitials(name: string) {
+function getUserInitials(name: string | null | undefined) {
+  if (!name) return "U";
+
   return name
     .split(" ")
     .map(part => part.charAt(0))
@@ -99,11 +101,18 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
   const [recentlyUpdated, setRecentlyUpdated] = useState<Record<string, boolean>>({});
   const [selectedTiers, setSelectedTiers] = useState<Record<string, string>>({});
 
-  const filteredUsers = users.filter(user =>
-    user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.currentAiProvider.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredUsers = users.filter((user) => {
+    const normalizedSearchTerm = searchTerm.toLowerCase();
+    const name = (user.name ?? "").toLowerCase();
+    const email = (user.email ?? "").toLowerCase();
+    const currentAiProvider = (user.currentAiProvider ?? "").toLowerCase();
+
+    return (
+      name.includes(normalizedSearchTerm) ||
+      email.includes(normalizedSearchTerm) ||
+      currentAiProvider.includes(normalizedSearchTerm)
+    );
+  });
 
   const toggleUser = (userId: string) => {
     setExpandedUsers(prev => ({
@@ -469,14 +478,14 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                       </div>
 
                       {/* AI Settings */}
-                      {user.aiSettings.length > 0 && (
+                      {(user.aiSettings?.length ?? 0) > 0 && (
                         <div>
                           <h4 className="text-sm font-medium mb-3 flex items-center">
                             <Settings className="h-4 w-4 mr-2" />
-                            AI Configurations ({user.aiSettings.length})
+                            AI Configurations ({user.aiSettings?.length ?? 0})
                           </h4>
                           <div className="space-y-2">
-                            {user.aiSettings.map((setting, index) => (
+                            {(user.aiSettings ?? []).map((setting, index) => (
                               <div key={index} className="p-2 border rounded text-xs">
                                 <div className="flex justify-between items-center">
                                   <Badge variant="outline">{setting.provider}</Badge>
@@ -496,11 +505,11 @@ export function UsersTable({ users, onUserUpdate }: UsersTableProps) {
                       )}
 
                       {/* Recent Sessions */}
-                      {user.recentTokens.length > 0 && (
+                      {(user.recentTokens?.length ?? 0) > 0 && (
                         <div>
                           <h4 className="text-sm font-medium mb-3">Recent Sessions</h4>
                           <div className="space-y-2">
-                            {user.recentTokens.map((token, index) => (
+                            {(user.recentTokens ?? []).map((token, index) => (
                               <div key={index} className="p-2 border rounded text-xs">
                                 <div className="flex justify-between">
                                   <span>{token.device || "Unknown Device"}</span>
