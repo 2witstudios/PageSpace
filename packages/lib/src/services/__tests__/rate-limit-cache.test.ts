@@ -5,10 +5,9 @@ import type { ProviderType } from '../rate-limit-cache';
 describe('rate-limit-cache', () => {
   let cache: RateLimitCache;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     // Create new instance for each test
     cache = RateLimitCache.getInstance({ enableRedis: !!process.env.REDIS_URL });
-    await cache.waitForReady();
   });
 
   afterEach(async () => {

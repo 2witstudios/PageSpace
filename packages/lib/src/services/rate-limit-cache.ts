@@ -33,6 +33,7 @@ export class RateLimitCache {
   private static instance: RateLimitCache | null = null;
 
   private redis: Redis | null = null;
+  private redisInitialized = false;
   private memoryCache = new Map<string, { count: number; expiresAt: number }>();
   private config: RateLimitConfig;
   private initializationPromise: Promise<void> | null = null;
@@ -62,7 +63,7 @@ export class RateLimitCache {
    * Check if Redis is available (uses shared state)
    */
   private get isRedisAvailable(): boolean {
-    return this.config.enableRedis && isSharedRedisAvailable() && this.redis !== null;
+    return this.config.enableRedis && this.redisInitialized && isSharedRedisAvailable() && this.redis !== null;
   }
 
   /**
@@ -73,6 +74,7 @@ export class RateLimitCache {
 
     try {
       this.redis = await getSharedRedisClient();
+      this.redisInitialized = true;
     } catch (error) {
       loggers.api.warn('Failed to get shared Redis client for rate limiting', {
         error: error instanceof Error ? error.message : String(error)
