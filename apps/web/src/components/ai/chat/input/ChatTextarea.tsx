@@ -1,6 +1,6 @@
 'use client';
 
-import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
@@ -9,6 +9,7 @@ import {
   useSuggestionContext,
 } from '@/components/providers/SuggestionProvider';
 import { cn } from '@/lib/utils';
+import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
 
 export interface ChatTextareaProps {
   /** Current input value */
@@ -61,9 +62,20 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     ref
   ) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const overlayRef = useRef<HTMLDivElement>(null);
     const context = useSuggestionContext();
     // Track IME composition state to prevent accidental sends during predictive text
     const [isComposing, setIsComposing] = useState(false);
+
+    // Check if there are any mentions to render in the overlay
+    const hasMentions = /@\[[^\]]+\]\([^:]+:[^)]+\)/.test(value);
+
+    // Sync overlay scroll with textarea scroll
+    const handleScroll = useCallback(() => {
+      if (textareaRef.current && overlayRef.current) {
+        overlayRef.current.scrollTop = textareaRef.current.scrollTop;
+      }
+    }, []);
 
     const suggestion = useSuggestion({
       inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
@@ -106,6 +118,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           value={value}
           onChange={(e) => suggestion.handleValueChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onScroll={handleScroll}
           onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={() => setIsComposing(false)}
           placeholder={placeholder}
@@ -121,10 +134,25 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',
+            // When mentions are present, make text transparent so the overlay shows through
+            hasMentions && 'text-transparent caret-foreground',
             className
           )}
           rows={1}
         />
+
+        {/* Overlay that renders formatted mentions on top of the transparent textarea text */}
+        {hasMentions && (
+          <MentionHighlightOverlay
+            ref={overlayRef}
+            value={value}
+            className={cn(
+              'px-3 py-2 text-base md:text-sm',
+              'text-foreground',
+              'min-h-[36px] max-h-48'
+            )}
+          />
+        )}
 
         <SuggestionPopup
           isOpen={context.isOpen}
