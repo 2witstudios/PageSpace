@@ -96,6 +96,11 @@ export const applySecurityHeaders = (
     'Permissions-Policy',
     'geolocation=(), microphone=(), camera=()'
   );
+  // Allow cross-origin resources (e.g. Google profile images) without requiring
+  // CORP headers, while still stripping credentials on no-cors requests.
+  if (!isAPIRoute) {
+    response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
+  }
 
   if (isProduction) {
     response.headers.set(
