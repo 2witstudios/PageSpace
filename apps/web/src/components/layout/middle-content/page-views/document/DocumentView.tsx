@@ -333,7 +333,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                       onChange={handleContentChange}
                       onEditorChange={setEditor}
                       readOnly={isReadOnly}
-                      isPaginated={false}
+                      isPaginated={true}
                     />
                   </div>
                 </motion.div>
