@@ -27,6 +27,7 @@ import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } fro
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceModeOverlay } from '@/components/ai/voice';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -250,6 +251,9 @@ const SidebarChatTab: React.FC = () => {
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+
+  // Display preferences
+  const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -841,11 +845,13 @@ const SidebarChatTab: React.FC = () => {
 
         {(currentConversationId || selectedAgent) && (
           <div className="flex items-center justify-between px-2 pb-2">
-            <AiUsageMonitor
-              conversationId={selectedAgent ? undefined : currentConversationId}
-              pageId={selectedAgent ? selectedAgent.id : undefined}
-              compact
-            />
+            {displayPreferences.showTokenCounts && (
+              <AiUsageMonitor
+                conversationId={selectedAgent ? undefined : currentConversationId}
+                pageId={selectedAgent ? selectedAgent.id : undefined}
+                compact
+              />
+            )}
             <TasksDropdown messages={displayMessages} driveId={locationContext?.currentDrive?.id} />
           </div>
         )}

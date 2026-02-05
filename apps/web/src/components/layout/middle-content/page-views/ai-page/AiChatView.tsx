@@ -40,6 +40,7 @@ import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
 import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import {
   ChatLayout,
   type ChatLayoutRef,
@@ -77,6 +78,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+
+  // Display preferences
+  const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -541,7 +545,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             {/* Chat tab actions */}
             {activeTab === 'chat' && (
               <div className="flex items-center gap-3">
-                <AiUsageMonitor pageId={page.id} compact />
+                {displayPreferences.showTokenCounts && (
+                  <AiUsageMonitor pageId={page.id} compact />
+                )}
 
                 <TasksDropdown messages={messages} driveId={driveId} />
 

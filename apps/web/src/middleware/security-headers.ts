@@ -51,6 +51,7 @@ export const buildCSPPolicy = (nonce: string): string => {
       "'strict-dynamic'",
       "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
       'https://accounts.google.com', // Google One Tap authentication
+      'https://cdn.jsdelivr.net', // Monaco editor CDN
     ],
     'style-src': ["'self'", "'unsafe-inline'"],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],

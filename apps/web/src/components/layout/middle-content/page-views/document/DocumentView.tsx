@@ -28,7 +28,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const { activeView } = useDocumentStore();
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
-  const [isPaginated, setIsPaginated] = useState(false);
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
@@ -99,23 +98,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   // Reset initialization flag when pageId changes
   useEffect(() => {
     hasInitializedRef.current = false;
-  }, [pageId]);
-
-  // Fetch pagination setting from page data
-  useEffect(() => {
-    const fetchPageSettings = async () => {
-      try {
-        const response = await fetchWithAuth(`/api/pages/${pageId}`);
-        if (response.ok) {
-          const page = await response.json();
-          setIsPaginated(page.isPaginated || false);
-        }
-      } catch (error) {
-        console.error('Failed to fetch page settings:', error);
-      }
-    };
-
-    fetchPageSettings();
   }, [pageId]);
 
   // Register editing state when document is dirty
@@ -351,7 +333,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                       onChange={handleContentChange}
                       onEditorChange={setEditor}
                       readOnly={isReadOnly}
-                      isPaginated={isPaginated}
+                      isPaginated={false}
                     />
                   </div>
                 </motion.div>

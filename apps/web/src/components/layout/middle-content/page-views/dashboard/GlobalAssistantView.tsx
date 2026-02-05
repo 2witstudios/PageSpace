@@ -55,6 +55,7 @@ import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { VoiceModeOverlay } from '@/components/ai/voice';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
 import {
@@ -139,6 +140,9 @@ const GlobalAssistantView: React.FC = () => {
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+
+  // Display preferences
+  const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -745,15 +749,17 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Usage Monitor */}
-      <div className="flex items-center justify-end px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
-        {selectedAgent ? (
-          <AiUsageMonitor pageId={selectedAgent.id} compact />
-        ) : (
-          currentConversationId && (
-            <AiUsageMonitor conversationId={currentConversationId} compact />
-          )
-        )}
-      </div>
+      {displayPreferences.showTokenCounts && (
+        <div className="flex items-center justify-end px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
+          {selectedAgent ? (
+            <AiUsageMonitor pageId={selectedAgent.id} compact />
+          ) : (
+            currentConversationId && (
+              <AiUsageMonitor conversationId={currentConversationId} compact />
+            )
+          )}
+        </div>
+      )}
 
       {/* Chat Interface - unified for both modes with floating input */}
       <ChatLayout
