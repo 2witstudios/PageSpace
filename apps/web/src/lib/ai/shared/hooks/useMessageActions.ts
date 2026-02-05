@@ -68,9 +68,21 @@ export function useMessageActions({
     async (messageId: string, newContent: string) => {
       if (!conversationId) return;
 
+      // Optimistically update the message in local state first
+      // This ensures the UI reflects the edit immediately, even if the API call fails
+      const updatedMessages = messages.map((m) => {
+        if (m.id !== messageId) return m;
+        return {
+          ...m,
+          parts: m.parts.map((part) =>
+            part.type === 'text' ? { ...part, text: newContent } : part
+          ),
+        };
+      });
+      setMessages(updatedMessages);
+
       try {
         if (isAgentMode) {
-          // Agent mode: Use agent API
           await patch(
             `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
             { content: newContent }
@@ -85,7 +97,6 @@ export function useMessageActions({
             setMessages(data.messages || []);
           }
         } else {
-          // Global mode: Use global API
           await patch(
             `/api/ai/global/${conversationId}/messages/${messageId}`,
             { content: newContent }
@@ -106,17 +117,23 @@ export function useMessageActions({
         toast.success('Message updated successfully');
       } catch (error) {
         console.error('Failed to edit message:', error);
-        toast.error('Failed to edit message');
-        throw error;
+        // Keep the optimistic update - the user's edit is preserved locally
+        // even if server save failed. Show a warning instead of reverting.
+        toast.error('Edit saved locally but failed to sync to server. Your changes are visible but may not persist after refresh.');
       }
     },
-    [isAgentMode, agentId, conversationId, setMessages, onEditVersionChange]
+    [isAgentMode, agentId, conversationId, messages, setMessages, onEditVersionChange]
   );
 
   // Delete a message
   const handleDelete = useCallback(
     async (messageId: string) => {
       if (!conversationId) return;
+
+      // Optimistically update local state first
+      const previousMessages = [...messages];
+      const filtered = messages.filter((m) => m.id !== messageId);
+      setMessages(filtered);
 
       try {
         if (isAgentMode) {
@@ -127,13 +144,11 @@ export function useMessageActions({
           await del(`/api/ai/global/${conversationId}/messages/${messageId}`);
         }
 
-        // Optimistically update local state
-        const filtered = messages.filter((m) => m.id !== messageId);
-        setMessages(filtered);
-
         toast.success('Message deleted');
       } catch (error) {
         console.error('Failed to delete message:', error);
+        // Revert optimistic update on failure
+        setMessages(previousMessages);
         toast.error('Failed to delete message');
         throw error;
       }

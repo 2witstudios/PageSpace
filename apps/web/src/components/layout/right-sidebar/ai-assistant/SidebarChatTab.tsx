@@ -173,18 +173,28 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Agent Chat Configuration
   // ============================================
+  // Use a ref for the transport to prevent unnecessary recreations.
+  // Creating a new DefaultChatTransport causes useChat to reset its entire state.
+  const sidebarTransportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
+  const sidebarTransportConversationIdRef = useRef<string | null>(null);
+
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId) return null;
+
+    // Only create a new transport when the conversation ID changes
+    if (sidebarTransportConversationIdRef.current !== agentConversationId || !sidebarTransportRef.current) {
+      sidebarTransportRef.current = new DefaultChatTransport({
+        api: '/api/ai/chat',
+        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
+      });
+      sidebarTransportConversationIdRef.current = agentConversationId;
+    }
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: sidebarTransportRef.current,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Sidebar Agent Chat error:', error);
         toast.error('Chat error. Please try again.');

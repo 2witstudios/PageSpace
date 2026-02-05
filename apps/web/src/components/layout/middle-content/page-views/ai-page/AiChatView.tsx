@@ -148,22 +148,33 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // Use conversation ID for stream tracking (falls back to page.id before conversation is created)
   const streamTrackingId = currentConversationId || page.id;
+
+  // Use a ref for the transport to prevent unnecessary recreations.
+  // Creating a new DefaultChatTransport causes useChat to reset its entire state.
+  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
+  const transportTrackingIdRef = useRef<string | null>(null);
+
   const chatConfig = useMemo(
-    () => ({
-      id: page.id,
-      messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: streamTrackingId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
-      onError: (error: Error) => {
-        console.error('AiChatView: Chat error:', error);
-      },
-    }),
-    // Re-create transport when conversation changes for proper stream tracking
+    () => {
+      // Only create a new transport when the tracking ID changes
+      if (transportTrackingIdRef.current !== streamTrackingId || !transportRef.current) {
+        transportRef.current = new DefaultChatTransport({
+          api: '/api/ai/chat',
+          fetch: createStreamTrackingFetch({ chatId: streamTrackingId }),
+        });
+        transportTrackingIdRef.current = streamTrackingId;
+      }
+
+      return {
+        id: page.id,
+        messages: initialMessages,
+        transport: transportRef.current,
+        experimental_throttle: 100,
+        onError: (error: Error) => {
+          console.error('AiChatView: Chat error:', error);
+        },
+      };
+    },
     [page.id, streamTrackingId, initialMessages]
   );
 

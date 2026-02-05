@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, UIMessage } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
@@ -733,70 +733,93 @@ MENTION PROCESSING:
     // This is separate from request.signal which fires on any client disconnect
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
 
-    const result = streamText({
-      model,
-      system: finalSystemPrompt,
-      messages: modelMessages,
-      tools: finalTools,
-      stopWhen: stepCountIs(100),
-      abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
-      experimental_context: {
-        userId,
-        aiProvider: currentProvider,
-        aiModel: currentModel,
-        conversationId,
-        locationContext,
-        modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-      },
-      maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
-      onAbort: () => {
-        loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
-          userId: maskIdentifier(userId),
-          conversationId,
-          streamId,
-          model: currentModel,
-          provider: currentProvider,
-        });
-      },
-    });
-
-    loggers.api.debug('📡 Global Assistant Chat API: Returning stream response', {});
-
     // Generate server-side message ID for the AI response
     // This ensures client and server use the same ID, fixing the undo-after-streaming issue
-    // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
     const serverAssistantMessageId = createId();
 
-    return result.toUIMessageStreamResponse({
-      // Provide the server-generated ID to the stream response
-      // The client's useChat will use this ID instead of generating its own
-      generateMessageId: () => serverAssistantMessageId,
-      // Pass streamId via headers so client can call /api/ai/abort for explicit stop
-      headers: {
-        [STREAM_ID_HEADER]: streamId,
+    // Track usage promise for token counting
+    let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
+
+    // Use createUIMessageStream to wrap the streaming response
+    // This ensures server-side processing continues even if the client disconnects
+    const stream = createUIMessageStream({
+      originalMessages: processedMessages,
+      execute: async ({ writer }) => {
+        // Send the server-generated message ID to the client at stream start
+        try {
+          writer.write({
+            type: 'start',
+            messageId: serverAssistantMessageId,
+          });
+        } catch {
+          // Client disconnected before first write - continue processing
+        }
+
+        const aiResult = streamText({
+          model,
+          system: finalSystemPrompt,
+          messages: modelMessages,
+          tools: finalTools,
+          stopWhen: stepCountIs(100),
+          abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
+          experimental_context: {
+            userId,
+            aiProvider: currentProvider,
+            aiModel: currentModel,
+            conversationId,
+            locationContext,
+            modelCapabilities: getModelCapabilities(currentModel, currentProvider)
+          },
+          maxRetries: 20,
+          onAbort: () => {
+            loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
+              userId: maskIdentifier(userId),
+              conversationId,
+              streamId,
+              model: currentModel,
+              provider: currentProvider,
+            });
+          },
+        });
+
+        usagePromise = aiResult.totalUsage
+          .then((usage) => usage)
+          .catch((error) => {
+            loggers.api.debug('Global Assistant: Failed to retrieve token usage from stream', {
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
+            return undefined;
+          });
+
+        // Stream all chunks to client, continuing server-side even if client disconnects
+        for await (const chunk of aiResult.toUIMessageStream()) {
+          try {
+            writer.write(chunk);
+          } catch {
+            // Client disconnected - continue processing to ensure onFinish fires
+          }
+        }
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry
         removeStream({ streamId });
 
-        loggers.api.debug('🏁 Global Assistant Chat API: onFinish callback triggered for AI response', {});
+        loggers.api.debug('Global Assistant Chat API: onFinish callback triggered for AI response', {});
 
         if (responseMessage) {
           try {
-            // Use the server-generated ID that was sent to the client
-            // This ensures the saved message ID matches what the client has
             const messageId = serverAssistantMessageId;
             const messageContent = extractMessageContent(responseMessage);
             const extractedToolCalls = extractToolCalls(responseMessage);
             const extractedToolResults = extractToolResults(responseMessage);
-            
-            loggers.api.debug('💾 Global Assistant Chat API: Saving AI response message:', { 
-              id: messageId, 
+
+            loggers.api.debug('Global Assistant Chat API: Saving AI response message', {
+              id: messageId,
               contentLength: messageContent.length,
               toolCallsCount: extractedToolCalls.length,
               toolResultsCount: extractedToolResults.length,
             });
-            
+
             await saveGlobalAssistantMessageToDatabase({
               messageId,
               conversationId,
@@ -805,7 +828,7 @@ MENTION PROCESSING:
               content: messageContent,
               toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
               toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-              uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
+              uiMessage: responseMessage,
             });
 
             // Update conversation lastMessageAt
@@ -817,14 +840,12 @@ MENTION PROCESSING:
               })
               .where(eq(conversations.id, conversationId));
 
-            loggers.api.debug('✅ Global Assistant Chat API: AI response message saved to database', {});
+            loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
 
             // Track detailed AI usage (tokens, cost, etc.)
             try {
-              // Only attempt to get usage if the stream completed successfully
-              const usage = await result.usage;
+              const usage = usagePromise ? await usagePromise : undefined;
 
-              // Only track if we actually have usage data
               if (usage && usage.totalTokens && usage.totalTokens > 0) {
                 const duration = Date.now() - startTime;
 
@@ -839,8 +860,6 @@ MENTION PROCESSING:
                   conversationId,
                   messageId,
                   success: true,
-
-                  // Context tracking - actual conversation context vs billing tokens
                   contextMessages: contextCalculation.messageIds,
                   contextSize: contextCalculation.totalTokens,
                   systemPromptTokens: contextCalculation.systemPromptTokens,
@@ -849,72 +868,37 @@ MENTION PROCESSING:
                   messageCount: contextCalculation.messageCount,
                   wasTruncated: contextCalculation.wasTruncated,
                   truncationStrategy: contextCalculation.truncationStrategy,
-
                   metadata: {
                     toolCallsCount: extractedToolCalls.length,
                     toolResultsCount: extractedToolResults.length,
                     isReadOnly: readOnlyMode,
                   }
                 });
-
-                loggers.api.debug('✅ Global Assistant: AI usage tracked', {
-                  conversationId: maskIdentifier(conversationId),
-                  messageId: maskIdentifier(messageId),
-                  tokens: usage.totalTokens,
-                });
-              } else {
-                loggers.api.debug('ℹ️ Global Assistant: No usage data available (stream may have been aborted)', {
-                  conversationId: maskIdentifier(conversationId),
-                  messageId: maskIdentifier(messageId),
-                });
               }
             } catch (trackingError) {
-              // Log as debug, not error - this is expected when stream is aborted
-              loggers.api.debug('ℹ️ Global Assistant: Could not track AI usage (stream aborted or failed)', {
+              loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
                 conversationId: maskIdentifier(conversationId),
                 messageId: maskIdentifier(messageId),
                 error: trackingError instanceof Error ? trackingError.message : 'Unknown error',
               });
-              // Don't fail the request if tracking fails
             }
 
             // Track usage for PageSpace providers only (rate limiting/quota tracking)
             const isPageSpaceProvider = currentProvider === 'pagespace';
 
-            const maskedUserId = maskIdentifier(userId);
-            const maskedConversationId = maskIdentifier(conversationId);
-            const maskedMessageId = maskIdentifier(messageId);
-
-            usageLogger.info('Global Assistant usage tracking decision', {
-              userId: maskedUserId,
-              provider: currentProvider,
-              isPageSpaceProvider,
-              messageId: maskedMessageId,
-              conversationId: maskedConversationId,
-            });
-
             if (isPageSpaceProvider) {
               try {
-                // Determine if this is pro model based on model name
                 const isProModel = currentModel === 'glm-4.7';
                 const providerType = isProModel ? 'pro' : 'standard';
-
-                usageLogger.debug('Incrementing usage for Global Assistant response', {
-                  userId: maskedUserId,
-                  provider: currentProvider,
-                  providerType,
-                  messageId: maskedMessageId,
-                  conversationId: maskedConversationId,
-                });
 
                 const usageResult = await incrementUsage(userId, providerType);
 
                 usageLogger.info('Global Assistant usage incremented', {
-                  userId: maskedUserId,
+                  userId: maskIdentifier(userId),
                   provider: currentProvider,
                   providerType,
-                  messageId: maskedMessageId,
-                  conversationId: maskedConversationId,
+                  messageId: maskIdentifier(messageId),
+                  conversationId: maskIdentifier(conversationId),
                   currentCount: usageResult.currentCount,
                   limit: usageResult.limit,
                   remaining: usageResult.remainingCalls,
@@ -924,7 +908,6 @@ MENTION PROCESSING:
                 // Broadcast usage event for real-time updates
                 try {
                   const currentUsageSummary = await getUserUsageSummary(userId);
-
                   await broadcastUsageEvent({
                     userId,
                     operation: 'updated',
@@ -932,41 +915,33 @@ MENTION PROCESSING:
                     standard: currentUsageSummary.standard,
                     pro: currentUsageSummary.pro
                   });
-
-                  usageLogger.debug('Global Assistant usage broadcast sent', {
-                    userId: maskedUserId,
-                    conversationId: maskedConversationId,
-                  });
                 } catch (broadcastError) {
                   usageLogger.error('Global Assistant usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                    userId: maskedUserId,
-                    conversationId: maskedConversationId,
+                    userId: maskIdentifier(userId),
+                    conversationId: maskIdentifier(conversationId),
                   });
                 }
-
               } catch (usageError) {
                 usageLogger.error('Global Assistant usage tracking failed', usageError as Error, {
-                  userId: maskedUserId,
+                  userId: maskIdentifier(userId),
                   provider: currentProvider,
-                  messageId: maskedMessageId,
-                  conversationId: maskedConversationId,
+                  messageId: maskIdentifier(messageId),
+                  conversationId: maskIdentifier(conversationId),
                 });
-
-                // Don't fail the request - usage tracking errors shouldn't break the chat
               }
-            } else {
-              usageLogger.debug('Skipping usage tracking for non-PageSpace provider', {
-                provider: currentProvider,
-                userId: maskedUserId,
-                messageId: maskedMessageId,
-                conversationId: maskedConversationId,
-              });
             }
           } catch (error) {
-            loggers.api.error('❌ Global Assistant Chat API: Failed to save AI response message:', error as Error);
+            loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }
         }
       },
+    });
+
+    loggers.api.debug('Global Assistant Chat API: Returning stream response', {});
+
+    return createUIMessageStreamResponse({
+      stream,
+      headers: { [STREAM_ID_HEADER]: streamId },
     });
 
   } catch (error) {

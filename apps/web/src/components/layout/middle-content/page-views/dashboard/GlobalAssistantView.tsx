@@ -257,19 +257,29 @@ const GlobalAssistantView: React.FC = () => {
   // CHAT CONFIGURATION
   // ============================================
 
+  // Use a ref for the agent transport to prevent unnecessary recreations
+  // Creating a new DefaultChatTransport causes useChat to reset its state
+  const agentTransportRef = useRef<DefaultChatTransport<import('ai').UIMessage> | null>(null);
+  const agentTransportConversationIdRef = useRef<string | null>(null);
+
   // Agent mode chat config
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId) return null;
+
+    // Only create a new transport when the conversation ID changes
+    if (agentTransportConversationIdRef.current !== agentConversationId || !agentTransportRef.current) {
+      agentTransportRef.current = new DefaultChatTransport({
+        api: '/api/ai/chat',
+        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
+      });
+      agentTransportConversationIdRef.current = agentConversationId;
+    }
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: agentTransportRef.current,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },

@@ -203,31 +203,39 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }
   }, [currentConversationId]);
 
+  // Use a ref for the transport to prevent unnecessary recreations during streaming.
+  // Creating a new DefaultChatTransport causes useChat to reset its state entirely.
+  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
+  const transportConversationIdRef = useRef<string | null>(null);
+
   // Create stable chat config
   // IMPORTANT: Uses initialMessages which is set by loadConversation when switching conversations.
   // The chatConfig only changes when:
   // 1. currentConversationId changes (switching conversations)
   // 2. initialMessages changes (set during loadConversation)
-  // This keeps the config stable during normal messaging to avoid confusing useChat.
+  // The transport is reused via ref to prevent useChat resets.
   const chatConfig = useMemo(() => {
     if (!currentConversationId) return null;
 
-    const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
+    // Only create a new transport when the conversation ID actually changes
+    if (transportConversationIdRef.current !== currentConversationId || !transportRef.current) {
+      const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
+      transportRef.current = new DefaultChatTransport({
+        api: apiEndpoint,
+        fetch: createStreamTrackingFetch({ chatId: currentConversationId }),
+      });
+      transportConversationIdRef.current = currentConversationId;
+    }
 
     return {
       id: currentConversationId,
       messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: apiEndpoint,
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: currentConversationId }),
-      }),
-      experimental_throttle: 100, // Match agent mode throttle for consistent streaming feel
+      transport: transportRef.current,
+      experimental_throttle: 100,
       onError: (error: Error) => {
-        console.error('❌ Global Chat Error:', error);
+        console.error('Global Chat Error:', error);
         if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('🔒 Authentication failed - user may need to log in again');
+          console.error('Authentication failed - user may need to log in again');
         }
       },
     };
