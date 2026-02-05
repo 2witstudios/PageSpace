@@ -255,6 +255,26 @@ describe('Security Headers', () => {
       expect(csp).toContain("default-src 'none'");
       expect(csp).not.toContain('nonce-');
     });
+
+    it('sets Cross-Origin-Embedder-Policy to credentialless for page routes', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false });
+
+      expect(response.headers.get('Cross-Origin-Embedder-Policy')).toBe('credentialless');
+    });
+
+    it('does not set Cross-Origin-Embedder-Policy for API routes', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, {
+        nonce: 'test',
+        isProduction: false,
+        isAPIRoute: true,
+      });
+
+      expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
+    });
   });
 
   describe('createSecureResponse', () => {
