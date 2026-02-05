@@ -89,20 +89,18 @@ export default function Pulse() {
     <Collapsible
       open={!pulseCollapsed}
       onOpenChange={(open) => setPulseCollapsed(!open)}
-      className="rounded-lg border border-[var(--separator)] bg-card/50"
+      className="border-t border-[var(--separator)]"
     >
-      <div className="flex items-center justify-between px-3 py-2">
+      <div className="flex items-center">
         <CollapsibleTrigger asChild>
           <Button
             variant="ghost"
-            className="flex-1 justify-start gap-2 px-0 h-auto font-normal hover:bg-transparent"
+            className="flex-1 justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
           >
-            <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium">
-              Pulse
-            </h4>
+            <span className="text-xs font-medium">Pulse</span>
             <ChevronDown
               className={cn(
-                "h-4 w-4 text-muted-foreground/60 transition-transform duration-200",
+                "h-3.5 w-3.5 transition-transform duration-200",
                 !pulseCollapsed && "rotate-180"
               )}
             />
@@ -111,7 +109,7 @@ export default function Pulse() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-5 w-5 shrink-0"
+          className="h-6 w-6 shrink-0 mr-1 text-muted-foreground hover:text-foreground"
           onClick={handleRefresh}
           disabled={isGenerating}
           title="Refresh summary"
@@ -120,7 +118,7 @@ export default function Pulse() {
           <RefreshCw className={cn("h-3 w-3", isGenerating && "animate-spin")} />
         </Button>
       </div>
-      <CollapsibleContent className="px-3 pb-3">
+      <CollapsibleContent className="px-2 pb-2">
         <div className="space-y-2">
           {isGenerating ? (
             <div className="space-y-1.5">
@@ -147,15 +145,12 @@ export default function Pulse() {
 
 function PulseSkeleton() {
   return (
-    <div className="rounded-lg border border-[var(--separator)] bg-card/50">
-      <div className="flex items-center justify-between px-3 py-2">
-        <Skeleton className="h-3 w-12" />
-        <div className="flex items-center gap-1">
-          <Skeleton className="h-5 w-5 rounded" />
-          <Skeleton className="h-4 w-4 rounded" />
-        </div>
+    <div className="border-t border-[var(--separator)]">
+      <div className="flex items-center justify-between px-2 py-2">
+        <Skeleton className="h-4 w-12" />
+        <Skeleton className="h-3.5 w-3.5" />
       </div>
-      <div className="px-3 pb-3 space-y-1.5">
+      <div className="px-2 pb-2 space-y-1.5">
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-4/5" />
         <Skeleton className="h-4 w-3/5" />
