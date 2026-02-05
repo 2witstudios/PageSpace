@@ -418,10 +418,12 @@ export default function InboxChannelPage() {
                           rel="noopener noreferrer"
                           className="block max-w-sm"
                         >
+                          {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
                           <img
                             src={`/api/files/${m.fileId}/view`}
                             alt={m.attachmentMeta.originalName}
                             className="rounded-lg max-h-64 object-contain border border-border/50"
+                            loading="lazy"
                           />
                         </a>
                       ) : (

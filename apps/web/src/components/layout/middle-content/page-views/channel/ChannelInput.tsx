@@ -253,6 +253,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
                 ) : attachment ? (
                   <>
                     {attachment.mimeType.startsWith('image/') ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- 32px thumbnail preview; auth-gated API route
                       <img
                         src={`/api/files/${attachment.id}/view`}
                         alt={attachment.originalName}
