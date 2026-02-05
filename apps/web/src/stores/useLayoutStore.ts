@@ -11,6 +11,8 @@ interface LayoutState {
   driveFooterCollapsed: boolean;
   dashboardFooterCollapsed: boolean;
   pulseCollapsed: boolean;
+  favoritesCollapsed: boolean;
+  recentsCollapsed: boolean;
 
   // Mobile sheet state (NOT persisted - sheets start closed on page load)
   leftSheetOpen: boolean;
@@ -31,6 +33,8 @@ interface LayoutState {
   setDriveFooterCollapsed: (collapsed: boolean) => void;
   setDashboardFooterCollapsed: (collapsed: boolean) => void;
   setPulseCollapsed: (collapsed: boolean) => void;
+  setFavoritesCollapsed: (collapsed: boolean) => void;
+  setRecentsCollapsed: (collapsed: boolean) => void;
 }
 
 export const useLayoutStore = create<LayoutState>()(
@@ -43,6 +47,8 @@ export const useLayoutStore = create<LayoutState>()(
       driveFooterCollapsed: true,
       dashboardFooterCollapsed: true,
       pulseCollapsed: false,
+      favoritesCollapsed: false,
+      recentsCollapsed: false,
       rehydrated: false,
 
       // Mobile sheet state (NOT persisted)
@@ -92,6 +98,14 @@ export const useLayoutStore = create<LayoutState>()(
       setPulseCollapsed: (collapsed: boolean) => {
         set({ pulseCollapsed: collapsed });
       },
+
+      setFavoritesCollapsed: (collapsed: boolean) => {
+        set({ favoritesCollapsed: collapsed });
+      },
+
+      setRecentsCollapsed: (collapsed: boolean) => {
+        set({ recentsCollapsed: collapsed });
+      },
     }),
     {
       name: 'layout-storage',
@@ -102,6 +116,8 @@ export const useLayoutStore = create<LayoutState>()(
         driveFooterCollapsed: state.driveFooterCollapsed,
         dashboardFooterCollapsed: state.dashboardFooterCollapsed,
         pulseCollapsed: state.pulseCollapsed,
+        favoritesCollapsed: state.favoritesCollapsed,
+        recentsCollapsed: state.recentsCollapsed,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setRehydrated();

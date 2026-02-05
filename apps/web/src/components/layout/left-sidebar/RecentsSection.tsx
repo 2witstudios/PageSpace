@@ -3,7 +3,13 @@
 import { useCallback, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Clock, ExternalLink } from "lucide-react";
+import { ChevronDown, Clock, ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
@@ -47,6 +53,8 @@ export default function RecentsSection() {
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
+  const recentsCollapsed = useLayoutStore((state) => state.recentsCollapsed);
+  const setRecentsCollapsed = useLayoutStore((state) => state.setRecentsCollapsed);
   const createTab = useTabsStore((state) => state.createTab);
   const { isNative } = useCapacitor();
 
@@ -83,39 +91,52 @@ export default function RecentsSection() {
   }
 
   if (error) {
-    return null; // Hide on error
+    return null;
   }
 
-  if (!data?.recents || data.recents.length === 0) {
-    return (
-      <div className="space-y-1">
-        <h3 className="px-2 text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium flex items-center gap-1.5">
-          <Clock className="h-3 w-3" />
-          Recents
-        </h3>
-        <p className="px-2 text-xs text-muted-foreground">No recent pages</p>
-      </div>
-    );
-  }
+  const recents = data?.recents ?? [];
 
   return (
-    <div className="space-y-1">
-      <h3 className="px-2 text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium flex items-center gap-1.5">
-        <Clock className="h-3 w-3" />
-        Recents
-      </h3>
-      <div className="space-y-0.5">
-        {data.recents.map((page) => (
-          <RecentItem
-            key={page.id}
-            page={page}
-            onNavigate={(e) => handleNavigate(page, e)}
-            onOpenInNewTab={() => handleOpenInNewTab(page)}
-            isNative={isNative}
+    <Collapsible
+      open={!recentsCollapsed}
+      onOpenChange={(open) => setRecentsCollapsed(!open)}
+      className="border-t border-[var(--separator)]"
+    >
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="w-full justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
+        >
+          <span className="text-xs font-medium flex items-center gap-1.5">
+            <Clock className="h-3.5 w-3.5" />
+            Recents
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 transition-transform duration-200",
+              !recentsCollapsed && "rotate-180"
+            )}
           />
-        ))}
-      </div>
-    </div>
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pb-1">
+        {recents.length === 0 ? (
+          <p className="px-2 py-1 text-xs text-muted-foreground/50">No recent pages</p>
+        ) : (
+          <div className="space-y-0.5">
+            {recents.map((page) => (
+              <RecentItem
+                key={page.id}
+                page={page}
+                onNavigate={(e) => handleNavigate(page, e)}
+                onOpenInNewTab={() => handleOpenInNewTab(page)}
+                isNative={isNative}
+              />
+            ))}
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -175,9 +196,12 @@ function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemPr
 
 function RecentsSkeleton() {
   return (
-    <div className="space-y-1">
-      <Skeleton className="h-3 w-14 mx-2" />
-      <div className="space-y-0.5">
+    <div className="border-t border-[var(--separator)]">
+      <div className="flex items-center justify-between px-2 py-2">
+        <Skeleton className="h-4 w-16" />
+        <Skeleton className="h-3.5 w-3.5" />
+      </div>
+      <div className="space-y-0.5 pb-1">
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-3/4" />

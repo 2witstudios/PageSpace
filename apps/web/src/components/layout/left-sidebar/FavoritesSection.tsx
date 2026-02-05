@@ -2,9 +2,14 @@
 
 import { useEffect, useState, useCallback, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
-import { ExternalLink, Folder, MoreHorizontal, Star } from "lucide-react";
+import { ChevronDown, ExternalLink, Folder, MoreHorizontal, Star } from "lucide-react";
 import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +32,8 @@ export default function FavoritesSection() {
   const { favorites, isLoading, isSynced, fetchFavorites, removeFavoriteById } = useFavorites();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
+  const favoritesCollapsed = useLayoutStore((state) => state.favoritesCollapsed);
+  const setFavoritesCollapsed = useLayoutStore((state) => state.setFavoritesCollapsed);
   const createTab = useTabsStore((state) => state.createTab);
   const { isNative } = useCapacitor();
 
@@ -67,37 +74,56 @@ export default function FavoritesSection() {
     return <FavoritesSkeleton />;
   }
 
-  if (favorites.length === 0) {
-    return null;
-  }
-
   return (
-    <div className="space-y-1">
-      <h3 className="px-2 text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium flex items-center gap-1.5">
-        <Star className="h-3 w-3" />
-        Favorites
-      </h3>
-      <div className="space-y-0.5">
-        {favorites.map((favorite) => {
-          const href =
-            favorite.itemType === "drive" && favorite.drive
-              ? `/dashboard/${favorite.drive.id}`
-              : favorite.itemType === "page" && favorite.page
-                ? `/dashboard/${favorite.page.driveId}/${favorite.page.id}`
-                : "#";
-          return (
-            <FavoriteItem
-              key={favorite.id}
-              favorite={favorite}
-              onNavigate={(e) => handleNavigate(href, e)}
-              onOpenInNewTab={() => handleOpenInNewTab(href)}
-              onRemove={() => handleRemoveFavorite(favorite.id)}
-              isNative={isNative}
-            />
-          );
-        })}
-      </div>
-    </div>
+    <Collapsible
+      open={!favoritesCollapsed}
+      onOpenChange={(open) => setFavoritesCollapsed(!open)}
+      className="border-t border-[var(--separator)]"
+    >
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="w-full justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
+        >
+          <span className="text-xs font-medium flex items-center gap-1.5">
+            <Star className="h-3.5 w-3.5" />
+            Favorites
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 transition-transform duration-200",
+              !favoritesCollapsed && "rotate-180"
+            )}
+          />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pb-1">
+        {favorites.length === 0 ? (
+          <p className="px-2 py-1 text-xs text-muted-foreground/50">No favorites yet</p>
+        ) : (
+          <div className="space-y-0.5">
+            {favorites.map((favorite) => {
+              const href =
+                favorite.itemType === "drive" && favorite.drive
+                  ? `/dashboard/${favorite.drive.id}`
+                  : favorite.itemType === "page" && favorite.page
+                    ? `/dashboard/${favorite.page.driveId}/${favorite.page.id}`
+                    : "#";
+              return (
+                <FavoriteItem
+                  key={favorite.id}
+                  favorite={favorite}
+                  onNavigate={(e) => handleNavigate(href, e)}
+                  onOpenInNewTab={() => handleOpenInNewTab(href)}
+                  onRemove={() => handleRemoveFavorite(favorite.id)}
+                  isNative={isNative}
+                />
+              );
+            })}
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -208,9 +234,12 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative
 
 function FavoritesSkeleton() {
   return (
-    <div className="space-y-1">
-      <Skeleton className="h-3 w-16 mx-2" />
-      <div className="space-y-0.5">
+    <div className="border-t border-[var(--separator)]">
+      <div className="flex items-center justify-between px-2 py-2">
+        <Skeleton className="h-4 w-20" />
+        <Skeleton className="h-3.5 w-3.5" />
+      </div>
+      <div className="space-y-0.5 pb-1">
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-8 w-3/4" />
