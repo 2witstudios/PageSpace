@@ -945,21 +945,18 @@ body.keyboard-open {
     overflow: visible !important;
   }
 
-  /* Show ONLY the document content */
+  /* Show ONLY the document content - reset to fill @page content area */
   .ProseMirror,
   .tiptap,
-  .tiptap-editor,
-  [class*="RichEditor"],
   [contenteditable="true"],
   [contenteditable="false"] {
     display: block !important;
     visibility: visible !important;
-    max-width: none !important;
     width: 100% !important;
+    padding: 0 !important;
     margin: 0 !important;
-    padding: 20mm !important;
-    box-shadow: none !important;
     border: none !important;
+    box-shadow: none !important;
     background: white !important;
     color: black !important;
     height: auto !important;
@@ -986,69 +983,57 @@ body.keyboard-open {
     overflow: visible !important;
   }
 
-  /* Ensure text content is visible */
-  .ProseMirror * {
-    color: black !important;
-    background: white !important;
-  }
-
-  /* Page setup - NO MARGIN to disable browser headers/footers */
+  /* Match editor dimensions: US Letter at 96 DPI */
+  /* @page margin = marginTop + pageHeaderHeight + contentMarginTop = 96+30+10 = 136px top/bottom */
+  /* @page margin = marginLeft = 96px left/right */
+  /* Result: 624px × 784px content area per page = same as editor */
   @page {
-    margin: 0;
-    size: A4 portrait;
+    size: letter portrait;
+    margin: 136px 96px;
   }
 
-  /* Enhanced page break handling - like Google Drive */
-
-  /* Keep headings with following content */
-  h1, h2, h3, h4, h5, h6 {
-    page-break-after: avoid;
-    break-after: avoid-page;
-    page-break-inside: avoid;
-    break-inside: avoid;
-    margin-top: 1.5em;
-    margin-bottom: 0.5em;
+  /* Remove ALL semantic page break rules - PaginationPlus breaks at exact pixel
+     positions without smart element-boundary logic. The browser must do the same
+     for 1:1 matching. */
+  .ProseMirror * {
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+    page-break-after: auto !important;
+    break-after: auto !important;
+    page-break-before: auto !important;
+    break-before: auto !important;
+    orphans: 1 !important;
+    widows: 1 !important;
   }
 
-  /* Keep list items together when possible */
-  li {
-    page-break-inside: avoid;
-    break-inside: avoid;
+  /* Reset pagination scroll constraints - these clip content in print */
+  .rm-with-pagination .image-plus-wrapper,
+  .rm-with-pagination .table-plus td,
+  .rm-with-pagination .table-plus th,
+  .rm-with-pagination .table-row-group,
+  .rm-with-pagination table tbody {
+    max-height: none !important;
+    overflow-y: visible !important;
+  }
+  .rm-with-pagination table {
+    display: table !important;
   }
 
-  /* Keep blockquotes together */
-  blockquote {
-    page-break-inside: avoid;
-    break-inside: avoid;
+  /* Hide pagination decorations - they have large margins that create blank pages */
+  [data-rm-pagination],
+  .rm-first-page-header,
+  .rm-page-break,
+  .rm-pagination-gap,
+  .rm-page-header,
+  .rm-page-footer {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
   }
 
-  /* Keep tables together if possible */
-  table {
-    page-break-inside: avoid;
-    break-inside: avoid;
-  }
-
-  /* Keep code blocks together */
-  pre, code {
-    page-break-inside: avoid;
-    break-inside: avoid;
-  }
-
-  /* Better paragraph handling */
-  p {
-    orphans: 3;
-    widows: 3;
-    page-break-inside: avoid;
-    break-inside: avoid-page;
-  }
-
-  /* Allow page breaks between paragraphs */
-  p + p {
-    page-break-before: auto;
-    break-before: auto;
-  }
-
-  /* Remove link URLs in print (cleaner output) */
+  /* Remove link URLs in print */
   a[href]::after {
     content: none !important;
   }
@@ -1057,5 +1042,19 @@ body.keyboard-open {
   * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+  }
+
+  /* Page numbers via CSS counter */
+  .print-page-number {
+    display: block !important;
+    visibility: visible !important;
+    position: fixed;
+    bottom: 60px;
+    right: 0;
+    font-size: 11px;
+    color: #666;
+  }
+  .print-page-number::after {
+    content: "Page " counter(page);
   }
 }
