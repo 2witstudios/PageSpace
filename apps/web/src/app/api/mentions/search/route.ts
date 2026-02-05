@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser, loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { pages, users, db, and, eq, ilike, drives, inArray, SQL } from '@pagespace/db';
+import { pages, users, db, and, eq, ilike, drives, inArray, desc, SQL } from '@pagespace/db';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
 
@@ -42,7 +42,11 @@ function buildMultiWordSearchCondition(query: string): SQL | undefined {
 function calculateRelevanceScore(title: string, query: string): number {
   const lowerTitle = title.toLowerCase();
   const lowerQuery = query.toLowerCase().trim();
+
+  if (!lowerQuery) return 0;
+
   const queryWords = lowerQuery.split(/\s+/).filter(Boolean);
+  const titleWords = lowerTitle.split(/\s+/);
 
   let score = 0;
 
@@ -51,31 +55,60 @@ function calculateRelevanceScore(title: string, query: string): number {
     score += 1000;
   }
 
-  // Title starts with query
+  // Title starts with full query string (strong signal)
   if (lowerTitle.startsWith(lowerQuery)) {
     score += 500;
   }
 
-  // Title contains exact query as substring
+  // Title contains full query as contiguous substring
   if (lowerTitle.includes(lowerQuery)) {
     score += 200;
   }
 
-  // Count how many query words appear at word boundaries in title
-  const titleWords = lowerTitle.split(/\s+/);
+  // Word-level matching
+  let wordStartMatches = 0;
+  let substringMatches = 0;
+  let exactWordMatches = 0;
+
   for (const queryWord of queryWords) {
-    // Word starts with query word (prefix match)
+    let bestMatchForThisWord = 0;
     for (const titleWord of titleWords) {
-      if (titleWord.startsWith(queryWord)) {
-        score += 100;
+      if (titleWord === queryWord) {
+        // Exact word match
+        bestMatchForThisWord = Math.max(bestMatchForThisWord, 3);
+      } else if (titleWord.startsWith(queryWord)) {
+        // Word-start prefix match (e.g., "proj" matches "project")
+        bestMatchForThisWord = Math.max(bestMatchForThisWord, 2);
       } else if (titleWord.includes(queryWord)) {
-        score += 50;
+        // Substring match within a word
+        bestMatchForThisWord = Math.max(bestMatchForThisWord, 1);
       }
+    }
+    if (bestMatchForThisWord === 3) exactWordMatches++;
+    else if (bestMatchForThisWord === 2) wordStartMatches++;
+    else if (bestMatchForThisWord === 1) substringMatches++;
+  }
+
+  score += exactWordMatches * 150;
+  score += wordStartMatches * 100;
+  score += substringMatches * 30;
+
+  // Bonus when ALL query words match at word boundaries (strong multi-word match)
+  if (queryWords.length > 1 && (exactWordMatches + wordStartMatches) === queryWords.length) {
+    score += 300;
+  }
+
+  // Bonus for consecutive word matches in order (e.g., "project alpha" matches title "Project Alpha Budget")
+  if (queryWords.length > 1) {
+    const titleJoined = titleWords.join(' ');
+    const queryJoined = queryWords.join(' ');
+    if (titleJoined.includes(queryJoined)) {
+      score += 250;
     }
   }
 
-  // Prefer shorter titles (more specific matches)
-  score -= Math.min(title.length, 50);
+  // Prefer shorter titles (more specific matches) - normalized to avoid dominating
+  score -= Math.min(title.length, 100) * 0.5;
 
   return score;
 }
@@ -182,7 +215,10 @@ export async function GET(request: Request) {
 
     // Search pages (all page types)
     if (requestedTypes.includes('page')) {
-      const pageResults = await db.select({
+      const searchCondition = buildMultiWordSearchCondition(query);
+
+      // Build query - when no search query, return recent pages ordered by updatedAt
+      const pageQuery = db.select({
         id: pages.id,
         title: pages.title,
         type: pages.type,
@@ -191,12 +227,16 @@ export async function GET(request: Request) {
       .from(pages)
       .where(
         and(
-          inArray(pages.driveId, targetDriveIds), // Search across target drives
-          buildMultiWordSearchCondition(query), // Multi-word search: all words must be present
+          inArray(pages.driveId, targetDriveIds),
+          searchCondition, // undefined when empty query = no filter = all pages
           eq(pages.isTrashed, false)
         )
-      )
-      .limit(30); // Increased limit to allow for better sorting
+      );
+
+      // When query is empty, order by recently updated so user sees relevant pages
+      const pageResults = query.trim()
+        ? await pageQuery.limit(50)
+        : await pageQuery.orderBy(desc(pages.updatedAt)).limit(20);
 
       // Filter by permissions and requested types
       for (const page of pageResults) {
