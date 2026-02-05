@@ -83,8 +83,20 @@ export default function RecentsSection() {
     return <RecentsSkeleton />;
   }
 
-  if (error || !data?.recents || data.recents.length === 0) {
-    return null;
+  if (error) {
+    return null; // Hide on error
+  }
+
+  if (!data?.recents || data.recents.length === 0) {
+    return (
+      <div className="space-y-1">
+        <h3 className="px-2 text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium flex items-center gap-1.5">
+          <Clock className="h-3 w-3" />
+          Recents
+        </h3>
+        <p className="px-2 text-xs text-muted-foreground">No recent pages</p>
+      </div>
+    );
   }
 
   return (
