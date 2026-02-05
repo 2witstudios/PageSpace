@@ -609,7 +609,7 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ parts: [{ type: 'text', text }] }, { body });
+    sendMessage({ text }, { body });
   }, [
     currentConversationId,
     selectedAgent,
