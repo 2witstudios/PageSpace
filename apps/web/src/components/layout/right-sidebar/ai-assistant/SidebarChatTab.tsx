@@ -266,7 +266,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Drive Loading
   // ============================================
-  const { fetchDrives } = useDriveStore();
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   useEffect(() => {
     fetchDrives();
@@ -946,4 +946,4 @@ const SidebarChatTab: React.FC = () => {
   );
 };
 
-export default SidebarChatTab;
+export default React.memo(SidebarChatTab);

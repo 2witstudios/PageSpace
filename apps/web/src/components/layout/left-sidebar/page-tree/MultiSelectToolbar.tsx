@@ -30,21 +30,16 @@ interface MultiSelectToolbarProps {
 }
 
 export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProps) {
-  const {
-    isMultiSelectMode,
-    activeDriveId,
-    getSelectedPages,
-    getSelectedCount,
-    exitMultiSelectMode,
-  } = useMultiSelectStore();
+  const isMultiSelectMode = useMultiSelectStore((state) => state.isMultiSelectMode);
+  const activeDriveId = useMultiSelectStore((state) => state.activeDriveId);
+  const selectedPages = useMultiSelectStore((state) => Array.from(state.selectedPages.values()));
+  const selectedCount = useMultiSelectStore((state) => state.selectedPages.size);
+  const exitMultiSelectMode = useMultiSelectStore((state) => state.exitMultiSelectMode);
 
   const [isMoveOpen, setMoveOpen] = useState(false);
   const [isCopyOpen, setCopyOpen] = useState(false);
   const [isDeleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const selectedPages = getSelectedPages();
-  const selectedCount = getSelectedCount();
 
   // Must define all hooks before any conditional returns
   const handleSuccess = useCallback(() => {

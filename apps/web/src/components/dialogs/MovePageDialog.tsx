@@ -45,7 +45,9 @@ export function MovePageDialog({
   pages,
   onSuccess,
 }: MovePageDialogProps) {
-  const { drives, fetchDrives, isLoading: drivesLoading } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const drivesLoading = useDriveStore((state) => state.isLoading);
   const [selectedDriveId, setSelectedDriveId] = useState<string>("");
   const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [pageTree, setPageTree] = useState<TreeNode[]>([]);

@@ -25,7 +25,7 @@ const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ss
 
 
 const DocumentView = ({ pageId }: DocumentViewProps) => {
-  const { activeView } = useDocumentStore();
+  const activeView = useDocumentStore((state) => state.activeView);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [isEditorFocused, setIsEditorFocused] = useState(false);
@@ -363,4 +363,4 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   );
 };
 
-export default DocumentView;
+export default React.memo(DocumentView, (prevProps, nextProps) => prevProps.pageId === nextProps.pageId);

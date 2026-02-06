@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -40,7 +40,7 @@ interface MessageWithReactions extends MessageWithUser {
   } | null;
 }
 
-export default function ChannelView({ page }: ChannelViewProps) {
+function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -48,7 +48,9 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
-  const { socket, connectionStatus, connect } = useSocketStore();
+  const socket = useSocketStore((state) => state.socket);
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
+  const connect = useSocketStore((state) => state.connect);
 
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
@@ -431,3 +433,10 @@ export default function ChannelView({ page }: ChannelViewProps) {
     </div>
   );
 }
+
+export default memo(
+  ChannelView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.driveId === nextProps.page.driveId
+);

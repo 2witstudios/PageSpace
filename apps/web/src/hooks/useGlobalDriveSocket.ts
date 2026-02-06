@@ -11,7 +11,7 @@ import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/websocket';
 export function useGlobalDriveSocket() {
   const socket = useSocket();
   const { user } = useAuth();
-  const { fetchDrives } = useDriveStore();
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
   
   // Track if we've joined the global drives channel
   const hasJoinedRef = useRef(false);

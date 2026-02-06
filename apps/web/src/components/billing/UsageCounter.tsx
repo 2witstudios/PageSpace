@@ -41,7 +41,8 @@ const fetcher = async (url: string) => {
 
 export function UsageCounter() {
   const router = useRouter();
-  const { connect, getSocket } = useSocketStore();
+  const connect = useSocketStore((state) => state.connect);
+  const getSocket = useSocketStore((state) => state.getSocket);
   const { showBilling } = useBillingVisibility();
 
   // Check if any editing or streaming is active (state-based)

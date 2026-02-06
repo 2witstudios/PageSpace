@@ -77,7 +77,8 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
-  const { setRightSidebarOpen, setRightSheetOpen } = useLayoutStore();
+  const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
+  const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -95,19 +96,18 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // AGENT STORE - for agent selection and conversation management
   // ============================================
-  const {
-    selectedAgent,
-    selectAgent,
-    initializeFromUrlOrCookie,
-    conversationId: agentConversationId,
-    conversationMessages: agentInitialMessages,
-    isConversationLoading: agentIsLoading,
-    setConversationMessages: setAgentStoreMessages,
-    createNewConversation: createAgentConversation,
-    loadMostRecentConversation,
-    setAgentStreaming,
-    setAgentStopStreaming,
-  } = usePageAgentDashboardStore();
+  const selectedAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
+  const selectAgent = usePageAgentDashboardStore((state) => state.selectAgent);
+  const initializeFromUrlOrCookie = usePageAgentDashboardStore((state) => state.initializeFromUrlOrCookie);
+  const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
+  const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
+  const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
+  const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
+  const loadMostRecentConversation = usePageAgentDashboardStore((state) => state.loadMostRecentConversation);
+  const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
+  const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
+  const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
@@ -171,7 +171,8 @@ const GlobalAssistantView: React.FC = () => {
   } = useMCPTools({ conversationId: currentConversationId });
 
   // Get drives from store
-  const { drives, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -549,9 +550,6 @@ const GlobalAssistantView: React.FC = () => {
   // HANDLERS
   // ============================================
 
-  // Get setActiveTab from store for sidebar tab control
-  const { setActiveTab } = usePageAgentDashboardStore();
-
   const handleNewConversation = async () => {
     if (selectedAgent) {
       await createAgentConversation();
@@ -834,4 +832,4 @@ const GlobalAssistantView: React.FC = () => {
   );
 };
 
-export default GlobalAssistantView;
+export default React.memo(GlobalAssistantView);
