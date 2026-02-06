@@ -1,3 +1,22 @@
+## 2026-02-06
+
+### Security Audit - Dependency Updates
+
+Addressed vulnerabilities identified in `pnpm audit` (38 total, ~4 worth addressing, ~34 false positives or not exploitable in context).
+
+#### Updated Dependencies
+- **Next.js** 15.3.7 → 15.3.9 in `apps/web` and `apps/marketing` — fixes DoS via Server Components, HTTP request deserialization DoS, cache key confusion, content injection, and PPR memory consumption CVEs
+- **shiki** 3.20.0 → 3.22.0 in `apps/web` — pulls in patched `mdast-util-to-hast` for unsanitized class attribute CVE
+- **mdast-util-to-hast** override to ^13.2.1 — ensures all transitive consumers (shiki, streamdown) use the patched version
+
+#### Not Fixed (No Upstream Fix Available)
+- **express/qs** arrayLimit bypass in `apps/processor` — express 5.2.1 is still the latest. Low risk: processor is internal-only (port 3003)
+
+#### Reviewed and Accepted (False Positives / Not Exploitable)
+- xlsx (write-only usage), jws (transitive, not invoked), glob (CLI-only vuln), next in react-email (dev tool), tar in @capacitor/cli and @tailwindcss/oxide (build-only), esbuild/vite (dev-only), electron ASAR bypass (local app), lodash-es in mermaid (trusted input), and others — see audit analysis for full rationale
+
+---
+
 ## 2026-02-05
 
 ### Custom Task Categories & Multiple Assignees
