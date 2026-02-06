@@ -6,9 +6,9 @@
 # Discovers patterns from user conversations and updates personalization
 0 6 * * * curl -s -X POST http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
 
-# Pulse summaries - Every 2 hours
+# Pulse summaries - Every 6 hours
 # Generates workspace activity summaries for active users
-0 */2 * * * curl -s -X POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
+0 */6 * * * curl -s -X POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
 
 # Token cleanup - Hourly
 # Removes expired device tokens from database

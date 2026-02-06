@@ -658,8 +658,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     }
 
     // Save to database
-    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-    const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    const expiresAt = new Date(now.getTime() + 6 * 60 * 60 * 1000);
 
     const [savedSummary] = await db.insert(pulseSummaries).values({
       userId,
@@ -707,7 +707,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       },
       aiProvider: providerResult.provider,
       aiModel: providerResult.modelName,
-      periodStart: twoHoursAgo,
+      periodStart: sixHoursAgo,
       periodEnd: now,
       generatedAt: now,
       expiresAt,
