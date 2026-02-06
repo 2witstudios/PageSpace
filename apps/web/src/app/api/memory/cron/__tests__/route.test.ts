@@ -11,7 +11,7 @@ import { assert } from '@/lib/memory/__tests__/riteway';
  * 4. Compacts fields if needed
  *
  * Key behaviors to test:
- * 1. Only accessible from localhost (zero trust - no secret comparison)
+ * 1. Only accessible from internal network (CRON_SECRET + network origin check)
  * 2. Only processes paying users (pro, founder, business)
  * 3. Skips users with personalization disabled
  * 4. Handles errors for individual users without failing entire job
@@ -110,8 +110,8 @@ describe('memory cron route', () => {
 
       assert({
         given: 'request from external host',
-        should: 'return forbidden error mentioning localhost',
-        actual: data.error.includes('localhost'),
+        should: 'return forbidden error mentioning internal network',
+        actual: data.error.includes('internal network'),
         expected: true,
       });
     });
