@@ -160,6 +160,7 @@ export function InputFooter({
                 disabled={disabled}
                 className={cn(
                   'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
+                  'hidden sm:inline-flex',
                   isVoiceModeActive
                     ? 'text-primary'
                     : 'text-muted-foreground hover:text-foreground'
@@ -187,6 +188,7 @@ export function InputFooter({
               disabled={disabled || !isMicSupported}
               className={cn(
                 'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
+                'hidden sm:inline-flex',
                 micError
                   ? 'text-destructive hover:text-destructive/80'
                   : isListening
