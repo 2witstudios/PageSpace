@@ -7,7 +7,7 @@
 
 import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { getValidAccessToken } from './token-refresh';
+import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, type GoogleCalendarEvent } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
 
@@ -154,18 +154,31 @@ export const syncGoogleCalendar = async (
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const requiresReauth = error instanceof Error && (error as Error & { requiresReauth?: boolean }).requiresReauth === true;
     result.error = errorMessage;
 
     loggers.api.error('Google Calendar sync failed', error as Error, { userId });
 
-    // Update connection with error
-    await db
-      .update(googleCalendarConnections)
-      .set({
-        lastSyncError: errorMessage,
-        updatedAt: new Date(),
-      })
-      .where(eq(googleCalendarConnections.userId, userId));
+    if (requiresReauth) {
+      // Permission or auth error — mark connection so UI can prompt reconnection
+      await updateConnectionStatus(userId, 'error', 'Calendar permissions may have been revoked - please reconnect');
+      await db
+        .update(googleCalendarConnections)
+        .set({
+          lastSyncError: errorMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(googleCalendarConnections.userId, userId));
+    } else {
+      // Transient or unknown error — keep connection active
+      await db
+        .update(googleCalendarConnections)
+        .set({
+          lastSyncError: errorMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(googleCalendarConnections.userId, userId));
+    }
 
     return result;
   }
@@ -217,6 +230,13 @@ const syncCalendar = async (
         timeMin,
         timeMax
       );
+    }
+
+    // Propagate permission/auth errors so the caller can update connection status
+    if (listResult.requiresReauth) {
+      const error = new Error(listResult.error);
+      (error as Error & { requiresReauth: boolean }).requiresReauth = true;
+      throw error;
     }
 
     throw new Error(listResult.error);
