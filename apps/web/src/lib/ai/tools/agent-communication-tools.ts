@@ -490,8 +490,8 @@ export const agentCommunicationTools = {
         // 7. Build system prompt with agent configuration
         let systemPrompt = targetAgent.systemPrompt || '';
 
-        // Add timestamp context
-        systemPrompt += '\n\n' + buildTimestampSystemPrompt();
+        // Add timestamp context (using user's timezone from execution context)
+        systemPrompt += '\n\n' + buildTimestampSystemPrompt(executionContext?.timezone);
 
         // Add location context if available (drive and page awareness)
         if (executionContext?.locationContext) {

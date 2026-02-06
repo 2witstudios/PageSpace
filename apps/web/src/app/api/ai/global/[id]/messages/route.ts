@@ -31,6 +31,7 @@ import {
   parseMCPToolName,
   sanitizeToolNamesForProvider,
   getUserPersonalization,
+  getUserTimezone,
 } from '@/lib/ai/core';
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -511,8 +512,11 @@ export async function POST(
     
     const modelMessages = convertToModelMessages(processedMessages);
 
-    // Fetch user personalization for AI system prompt injection
-    const personalization = await getUserPersonalization(userId);
+    // Fetch user personalization and timezone for AI system prompt injection
+    const [personalization, userTimezone] = await Promise.all([
+      getUserPersonalization(userId),
+      getUserTimezone(userId),
+    ]);
     if (personalization) {
       loggers.api.debug('Global Assistant: User personalization loaded', {
         hasPersonalization: true,
@@ -541,8 +545,8 @@ export async function POST(
       personalization ?? undefined
     );
 
-    // Build timestamp system prompt for temporal awareness
-    const timestampSystemPrompt = buildTimestampSystemPrompt();
+    // Build timestamp system prompt for temporal awareness (using user's timezone)
+    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
 
     // Fetch drive prompt if user is within a drive
     let drivePromptSection = '';
@@ -797,6 +801,7 @@ MENTION PROCESSING:
           abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
           experimental_context: {
             userId,
+            timezone: userTimezone,
             aiProvider: currentProvider,
             aiModel: currentModel,
             conversationId,

@@ -11,6 +11,7 @@ import {
   type ProviderRequest,
   pageSpaceTools,
   buildTimestampSystemPrompt,
+  getUserTimezone,
   type ToolExecutionContext,
 } from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
@@ -239,9 +240,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // Fetch user timezone for timezone-aware tool execution
+    const userTimezone = await getUserTimezone(userId);
+
     // Build execution context for tool execution
     const executionContext: ToolExecutionContext = {
       userId,
+      timezone: userTimezone,
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId: `agent-consult-${agentId}-${Date.now()}`,
@@ -273,7 +278,7 @@ export async function POST(request: Request) {
     let responseText = '';
     try {
       // Build enhanced system prompt with drive context awareness
-      let enhancedSystemPrompt = `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`;
+      let enhancedSystemPrompt = `${systemPrompt}\n\n${buildTimestampSystemPrompt(userTimezone)}`;
 
       if (drive) {
         enhancedSystemPrompt += `\n\nCONTEXT AWARENESS:\n`;
