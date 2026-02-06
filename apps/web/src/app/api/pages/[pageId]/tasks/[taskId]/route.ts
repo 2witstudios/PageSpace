@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, taskItems, taskLists, pages, eq, and } from '@pagespace/db';
+import { db, taskItems, taskLists, taskStatusConfigs, taskAssignees, pages, eq, and } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -11,7 +11,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/[taskId]
- * Update a task
+ * Update a task - supports custom statuses and multiple assignees
  */
 export async function PATCH(
   req: Request,
@@ -52,7 +52,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, assigneeAgentId, dueDate, position } = body;
+  const { title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -69,15 +69,36 @@ export async function PATCH(
   }
 
   if (status !== undefined) {
-    if (!['pending', 'in_progress', 'completed', 'blocked'].includes(status)) {
-      return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
-    }
-    updates.status = status;
-    // Set completedAt when marking as completed
-    if (status === 'completed') {
-      updates.completedAt = new Date();
-    } else if (existingTask.status === 'completed' && status !== 'completed') {
-      updates.completedAt = null;
+    // Validate against task list's custom status configs
+    const validStatuses = await db.query.taskStatusConfigs.findMany({
+      where: eq(taskStatusConfigs.taskListId, taskList.id),
+      columns: { slug: true, group: true },
+    });
+
+    if (validStatuses.length > 0) {
+      const validConfig = validStatuses.find(s => s.slug === status);
+      if (!validConfig) {
+        const validSlugs = validStatuses.map(s => s.slug);
+        return NextResponse.json({ error: `Invalid status "${status}". Valid statuses: ${validSlugs.join(', ')}` }, { status: 400 });
+      }
+      updates.status = status;
+      // Set completedAt based on status group
+      if (validConfig.group === 'done') {
+        updates.completedAt = new Date();
+      } else if (existingTask.completedAt) {
+        updates.completedAt = null;
+      }
+    } else {
+      // Fallback for task lists without custom configs
+      if (!['pending', 'in_progress', 'completed', 'blocked'].includes(status)) {
+        return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
+      }
+      updates.status = status;
+      if (status === 'completed') {
+        updates.completedAt = new Date();
+      } else if (existingTask.status === 'completed' && status !== 'completed') {
+        updates.completedAt = null;
+      }
     }
   }
 
@@ -88,6 +109,7 @@ export async function PATCH(
     updates.priority = priority;
   }
 
+  // Handle legacy single-assignee fields
   if (assigneeId !== undefined) {
     updates.assigneeId = assigneeId || null;
   }
@@ -98,9 +120,32 @@ export async function PATCH(
     columns: { driveId: true },
   });
 
+  // Validate agent entries in assigneeIds
+  if (Array.isArray(assigneeIds)) {
+    for (const entry of assigneeIds) {
+      if (entry.type === 'agent' && entry.id) {
+        const agentPage = await db.query.pages.findFirst({
+          where: and(
+            eq(pages.id, entry.id),
+            eq(pages.type, 'AI_CHAT'),
+            eq(pages.isTrashed, false)
+          ),
+          columns: { id: true, driveId: true },
+        });
+
+        if (!agentPage) {
+          return NextResponse.json({ error: `Invalid agent ID "${entry.id}" - must be an AI agent page` }, { status: 400 });
+        }
+
+        if (taskListPage && agentPage.driveId !== taskListPage.driveId) {
+          return NextResponse.json({ error: 'Agent must be in the same drive as the task list' }, { status: 400 });
+        }
+      }
+    }
+  }
+
   if (assigneeAgentId !== undefined) {
     if (assigneeAgentId) {
-      // Validate that assigneeAgentId is a valid AI_CHAT page in the same drive
       const agentPage = await db.query.pages.findFirst({
         where: and(
           eq(pages.id, assigneeAgentId),
@@ -131,6 +176,14 @@ export async function PATCH(
 
   const actorInfo = await getActorInfo(userId);
   let linkedPageUpdated = false;
+
+  // Fetch existing assignees before the transaction (for notification comparison)
+  const existingAssignees = Array.isArray(assigneeIds)
+    ? await db.query.taskAssignees.findMany({
+        where: eq(taskAssignees.taskId, taskId),
+        columns: { userId: true, agentPageId: true },
+      })
+    : [];
 
   // Update task and sync title to linked page if needed
   let updatedTask;
@@ -173,6 +226,52 @@ export async function PATCH(
         }
       }
 
+      // Handle multiple assignees update
+      if (Array.isArray(assigneeIds)) {
+        // Delete existing assignees
+        await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+
+        // Insert new assignees
+        const assigneeRows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+        for (const entry of assigneeIds) {
+          if (entry.type === 'user' && entry.id) {
+            assigneeRows.push({ taskId, userId: entry.id });
+          } else if (entry.type === 'agent' && entry.id) {
+            assigneeRows.push({ taskId, agentPageId: entry.id });
+          }
+        }
+
+        if (assigneeRows.length > 0) {
+          await tx.insert(taskAssignees).values(assigneeRows);
+        }
+
+        // Update legacy fields to first user/agent for backward compat
+        const firstUser = assigneeIds.find((a: { type: string }) => a.type === 'user');
+        const firstAgent = assigneeIds.find((a: { type: string }) => a.type === 'agent');
+        await tx.update(taskItems).set({
+          assigneeId: firstUser?.id || null,
+          assigneeAgentId: firstAgent?.id || null,
+        }).where(eq(taskItems.id, taskId));
+      } else if (assigneeId !== undefined || assigneeAgentId !== undefined) {
+        // Legacy single-assignee update: sync to junction table
+        await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+
+        const assigneeRows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+        const newAssigneeId = assigneeId !== undefined ? (assigneeId || null) : existingTask.assigneeId;
+        const newAgentId = assigneeAgentId !== undefined ? (assigneeAgentId || null) : existingTask.assigneeAgentId;
+
+        if (newAssigneeId) {
+          assigneeRows.push({ taskId, userId: newAssigneeId });
+        }
+        if (newAgentId) {
+          assigneeRows.push({ taskId, agentPageId: newAgentId });
+        }
+
+        if (assigneeRows.length > 0) {
+          await tx.insert(taskAssignees).values(assigneeRows);
+        }
+      }
+
       return [task];
     });
   } catch (error) {
@@ -189,29 +288,27 @@ export async function PATCH(
     throw error;
   }
 
-  // Fetch with relations
+  // Fetch with relations (including assignees)
   const taskWithRelations = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, updatedTask.id),
     with: {
       assignee: {
-        columns: {
-          id: true,
-          name: true,
-          image: true,
-        },
+        columns: { id: true, name: true, image: true },
       },
       assigneeAgent: {
-        columns: {
-          id: true,
-          title: true,
-          type: true,
-        },
+        columns: { id: true, title: true, type: true },
       },
       user: {
-        columns: {
-          id: true,
-          name: true,
-          image: true,
+        columns: { id: true, name: true, image: true },
+      },
+      assignees: {
+        with: {
+          user: {
+            columns: { id: true, name: true, image: true },
+          },
+          agentPage: {
+            columns: { id: true, title: true, type: true },
+          },
         },
       },
     },
@@ -223,7 +320,6 @@ export async function PATCH(
 
   // Send notification if assignee was changed to a new user
   if (assigneeId !== undefined && assigneeId !== existingTask.assigneeId && assigneeId !== null) {
-    // Fire-and-forget notification - don't block the response
     void createTaskAssignedNotification(
       assigneeId,
       taskId,
@@ -231,6 +327,23 @@ export async function PATCH(
       pageId,
       userId
     );
+  }
+
+  // Send notifications for newly added user assignees (multi-assignee path)
+  if (Array.isArray(assigneeIds)) {
+    const previousUserIds = new Set(existingAssignees.map(a => a.userId).filter(Boolean));
+    const newUserIds = assigneeIds
+      .filter((a: { type: string; id: string }) => a.type === 'user' && a.id !== userId && !previousUserIds.has(a.id))
+      .map((a: { id: string }) => a.id);
+    for (const newUserId of newUserIds) {
+      void createTaskAssignedNotification(
+        newUserId,
+        taskId,
+        taskWithRelations.title,
+        pageId,
+        userId
+      );
+    }
   }
 
   // Broadcast events
@@ -245,7 +358,6 @@ export async function PATCH(
     }),
   ];
 
-  // If title changed and task has a linked page, broadcast page update
   if (linkedPageUpdated && taskListPage && existingTask.pageId) {
     broadcasts.push(
       broadcastPageEvent(
@@ -264,8 +376,6 @@ export async function PATCH(
 /**
  * DELETE /api/pages/[pageId]/tasks/[taskId]
  * "Delete" a task by trashing its linked page
- * The task record remains but is filtered out in queries (page.isTrashed = true)
- * Restoring the page will restore the task to the list
  */
 export async function DELETE(
   req: Request,
@@ -285,7 +395,7 @@ export async function DELETE(
     }, { status: 403 });
   }
 
-  // Get task list page for driveId (needed for page broadcasts)
+  // Get task list page for driveId
   const taskListPage = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
     columns: { driveId: true },
@@ -326,11 +436,10 @@ export async function DELETE(
       data: { id: taskId },
     });
 
-    // Log task deletion for compliance (fire-and-forget)
     if (taskListPage) {
       const actorInfo = await getActorInfo(userId);
       logPageActivity(userId, 'delete', {
-        id: pageId, // Use task list page as reference since task has no page
+        id: pageId,
         title: existingTask.title,
         driveId: taskListPage.driveId,
       }, {
@@ -347,7 +456,7 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   }
 
-  // Task has a linked page - trash the page (task remains but is filtered out)
+  // Task has a linked page - trash the page
   const actorInfo = await getActorInfo(userId);
   const [linkedPage] = await db
     .select({ revision: pages.revision })
@@ -401,7 +510,6 @@ export async function DELETE(
     }),
   ];
 
-  // Broadcast page trashed event for sidebar update
   if (linkedPage && taskListPage) {
     broadcasts.push(
       broadcastPageEvent(

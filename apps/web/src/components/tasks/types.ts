@@ -3,10 +3,11 @@
  */
 
 // Re-export shared types from task-list-types
-import type { TaskStatus as SharedTaskStatus, TaskPriority as SharedTaskPriority } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import type { TaskPriority as SharedTaskPriority, TaskAssigneeData } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 
-export type TaskStatus = SharedTaskStatus;
+export type TaskStatus = string;
 export type TaskPriority = SharedTaskPriority;
+export type { TaskAssigneeData };
 
 export interface TaskUser {
   id: string;
@@ -51,6 +52,7 @@ export interface Task {
   // Relations
   assignee: TaskUser | null;
   assigneeAgent: TaskAgent | null;
+  assignees?: TaskAssigneeData[];
   user: TaskUser | null;
   page: TaskPage | null;
   taskList: TaskList | null;

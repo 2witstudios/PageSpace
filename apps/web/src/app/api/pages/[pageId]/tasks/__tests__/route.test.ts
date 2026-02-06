@@ -30,6 +30,11 @@ vi.mock('@pagespace/lib', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@test.com' }),
+  logPageActivity: vi.fn(),
+}));
+
 // Track mock values for transaction
 let transactionPageResult = [{ id: 'mock-page-id', title: 'Mock Page' }];
 let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
@@ -50,6 +55,9 @@ vi.mock('@pagespace/db', () => {
         taskItems: {
           findFirst: vi.fn(),
           findMany: vi.fn(),
+        },
+        taskStatusConfigs: {
+          findMany: vi.fn().mockResolvedValue([]),
         },
         pages: {
           findFirst: vi.fn(),
@@ -75,7 +83,15 @@ vi.mock('@pagespace/db', () => {
     },
     taskLists: {},
     taskItems: {},
+    taskStatusConfigs: {},
+    taskAssignees: {},
     pages: {},
+    DEFAULT_TASK_STATUSES: [
+      { slug: 'pending', name: 'To Do', color: 'bg-slate-100 text-slate-700', group: 'todo', position: 0 },
+      { slug: 'in_progress', name: 'In Progress', color: 'bg-amber-100 text-amber-700', group: 'in_progress', position: 1 },
+      { slug: 'blocked', name: 'Blocked', color: 'bg-red-100 text-red-700', group: 'in_progress', position: 2 },
+      { slug: 'completed', name: 'Done', color: 'bg-green-100 text-green-700', group: 'done', position: 3 },
+    ],
     eq: vi.fn((field, value) => ({ field, value })),
     and: vi.fn((...conditions) => conditions),
     asc: vi.fn((col) => ({ type: 'asc', col })),
@@ -101,6 +117,8 @@ describe('Task API Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset default mock for taskStatusConfigs.findMany
+    (db.query.taskStatusConfigs.findMany as Mock).mockResolvedValue([]);
   });
 
   describe('GET /api/pages/[pageId]/tasks', () => {
@@ -158,16 +176,23 @@ describe('Task API Routes', () => {
       (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
       (canUserViewPage as Mock).mockResolvedValue(true);
       (db.query.taskLists.findFirst as Mock).mockResolvedValue(null);
-      (db.insert as Mock).mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([mockInsertedTaskList]),
-        }),
+      // When task list doesn't exist, getOrCreateTaskListForPage uses db.transaction
+      // The transaction mock creates it and returns the result
+      (db.transaction as Mock).mockImplementationOnce(async (callback) => {
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn(() => ({
+              returning: vi.fn().mockResolvedValue([mockInsertedTaskList]),
+            })),
+          })),
+        };
+        return callback(tx);
       });
       (db.query.taskItems.findMany as Mock).mockResolvedValue([]);
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalled();
       expect(response.status).toBe(200);
     });
 
@@ -268,10 +293,18 @@ describe('Task API Routes', () => {
       (canUserEditPage as Mock).mockResolvedValue(true);
       (db.query.pages.findFirst as Mock).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
       (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
-      (db.query.taskItems.findFirst as Mock).mockResolvedValue(null);
+      // taskStatusConfigs.findMany returns empty (no status validation needed for default 'pending')
+      (db.query.taskStatusConfigs.findMany as Mock).mockResolvedValue([]);
       (db.query.taskItems.findFirst as Mock)
-        .mockResolvedValueOnce(null) // For position calculation
-        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null }); // For returning with relations
+        .mockResolvedValueOnce(null) // For position calculation (lastTask)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] }); // For returning with relations
+
+      // pages.findFirst is also called for lastChildPage via Promise.all - set up correct mock chain
+      // First call: taskListPage lookup, Second call: (from query) finding task with relations
+      // Actually pages.findFirst is called once for taskListPage, then db.query.pages.findFirst for lastChildPage
+      (db.query.pages.findFirst as Mock)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' }) // taskListPage
+        .mockResolvedValueOnce(null); // lastChildPage (no existing children)
 
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
 
@@ -307,11 +340,19 @@ describe('Task API Routes', () => {
 
       (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
       (canUserEditPage as Mock).mockResolvedValue(true);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
+      // Status validation: return configs with in_progress as valid
+      (db.query.taskStatusConfigs.findMany as Mock).mockResolvedValue([
+        { slug: 'pending' },
+        { slug: 'in_progress' },
+        { slug: 'completed' },
+      ]);
+      (db.query.pages.findFirst as Mock)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' }) // taskListPage
+        .mockResolvedValueOnce(null); // lastChildPage
       (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
       (db.query.taskItems.findFirst as Mock)
-        .mockResolvedValueOnce({ position: 0 }) // For position calculation
-        .mockResolvedValueOnce({ ...mockNewTask, assignee: { id: 'user-456', name: 'Assignee' }, user: null });
+        .mockResolvedValueOnce({ position: 0 }) // lastTask for position calculation
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: { id: 'user-456', name: 'Assignee' }, user: null, assignees: [] });
 
       const response = await POST(createRequest({
         title: 'Complete Task',

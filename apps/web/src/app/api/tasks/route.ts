@@ -11,8 +11,8 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const querySchema = z.object({
   context: z.enum(['user', 'drive']),
   driveId: z.string().optional(),
-  // Filter parameters
-  status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional(),
+  // Filter parameters - status accepts any string for custom statuses
+  status: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
@@ -191,7 +191,7 @@ export async function GET(request: Request) {
     // This ensures pagination counts match the actual filtered results
     const trashedPages = await db.select({ id: pages.id })
       .from(pages)
-      .where(eq(pages.isTrashed, true));
+      .where(and(eq(pages.isTrashed, true), inArray(pages.driveId, driveIds)));
     const trashedPageIds = trashedPages.map(p => p.id);
 
     // Build assignee filter condition
@@ -260,7 +260,7 @@ export async function GET(request: Request) {
             and(
               not(isNull(taskItems.dueDate)),
               lt(taskItems.dueDate, today),
-              not(eq(taskItems.status, 'completed'))
+              isNull(taskItems.completedAt)
             )
           );
           break;
