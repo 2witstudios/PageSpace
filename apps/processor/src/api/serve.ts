@@ -29,7 +29,9 @@ router.get('/:contentHash/original', async (req, res) => {
 
     let accessInfo;
     try {
-      accessInfo = await checkFileAccess(userId, contentHash, 'view');
+      accessInfo = await checkFileAccess(userId, contentHash, 'view', {
+        authDriveId: auth.driveId,
+      });
       if (!accessInfo.allowed) {
         throw new Error('Access denied');
       }
@@ -146,7 +148,9 @@ router.get('/:contentHash/:preset', async (req, res) => {
     }
 
     try {
-      await assertFileAccess(userId, contentHash, 'view');
+      await assertFileAccess(userId, contentHash, 'view', {
+        authDriveId: auth.driveId,
+      });
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
@@ -222,7 +226,9 @@ router.get('/:contentHash/metadata', async (req, res) => {
     }
 
     try {
-      await assertFileAccess(userId, contentHash, 'view');
+      await assertFileAccess(userId, contentHash, 'view', {
+        authDriveId: auth.driveId,
+      });
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
