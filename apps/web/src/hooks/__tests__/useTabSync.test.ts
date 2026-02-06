@@ -145,6 +145,31 @@ describe('useTabSync', () => {
       expect(mockRouterReplace).toHaveBeenCalledTimes(1);
     });
 
+    it('given desktop first run with no tabs, later navigating to /dashboard should not bounce', async () => {
+      window.electron = { isDesktop: true } as unknown as ElectronAPI;
+
+      // First run: no tabs, start at /dashboard
+      mockPathname.mockReturnValue('/dashboard');
+      const { rerender } = renderHook(() => useTabSync());
+
+      await waitFor(() => {
+        expect(useTabsStore.getState().tabs).toHaveLength(1);
+      });
+
+      // Simulate user navigating to a page (tab path updates)
+      act(() => {
+        useTabsStore.getState().navigateInActiveTab('/dashboard/drive-1/page-1');
+      });
+      mockPathname.mockReturnValue('/dashboard/drive-1/page-1');
+      rerender();
+
+      // Now user navigates back to /dashboard — should NOT bounce
+      mockPathname.mockReturnValue('/dashboard');
+      rerender();
+
+      expect(mockRouterReplace).not.toHaveBeenCalled();
+    });
+
     it('given desktop starts on a deep-link path (not /dashboard), should skip restore', async () => {
       window.electron = { isDesktop: true } as unknown as ElectronAPI;
 

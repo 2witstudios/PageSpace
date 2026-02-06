@@ -34,17 +34,20 @@ export function useTabSync() {
 
     // Desktop bootstrap: app starts at /dashboard, so restore the active tab route once
     // to ensure page hooks mount immediately without requiring user interaction.
+    // Mark the attempt on first hydrated pass so it cannot trigger mid-session.
     const isDesktop = !!window.electron?.isDesktop;
-    if (isDesktop && !didAttemptDesktopRestore.current && pathname === '/dashboard' && hasTabs) {
-      const activeTab = selectActiveTab(useTabsStore.getState());
-      const restorePath = activeTab?.path;
-
+    if (isDesktop && !didAttemptDesktopRestore.current) {
       didAttemptDesktopRestore.current = true;
 
-      if (restorePath && restorePath !== '/dashboard') {
-        lastSyncedPath.current = restorePath;
-        router.replace(restorePath);
-        return;
+      if (pathname === '/dashboard' && hasTabs) {
+        const activeTab = selectActiveTab(useTabsStore.getState());
+        const restorePath = activeTab?.path;
+
+        if (restorePath && restorePath !== '/dashboard') {
+          lastSyncedPath.current = restorePath;
+          router.replace(restorePath);
+          return;
+        }
       }
     }
 
