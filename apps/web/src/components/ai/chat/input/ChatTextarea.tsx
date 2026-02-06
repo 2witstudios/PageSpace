@@ -9,6 +9,8 @@ import {
   useSuggestionContext,
 } from '@/components/providers/SuggestionProvider';
 import { cn } from '@/lib/utils';
+import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
+import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 
 export interface ChatTextareaProps {
   /** Current input value */
@@ -61,6 +63,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     ref
   ) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const { overlayRef, hasMentions, handleScroll } = useMentionOverlay(textareaRef, value);
     const context = useSuggestionContext();
     // Track IME composition state to prevent accidental sends during predictive text
     const [isComposing, setIsComposing] = useState(false);
@@ -106,6 +109,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           value={value}
           onChange={(e) => suggestion.handleValueChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onScroll={handleScroll}
           onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={() => setIsComposing(false)}
           placeholder={placeholder}
@@ -121,10 +125,25 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',
+            // When mentions are present, make text transparent so the overlay shows through
+            hasMentions && 'text-transparent caret-foreground',
             className
           )}
           rows={1}
         />
+
+        {/* Overlay that renders formatted mentions on top of the transparent textarea text */}
+        {hasMentions && (
+          <MentionHighlightOverlay
+            ref={overlayRef}
+            value={value}
+            className={cn(
+              'px-3 py-2 text-base md:text-sm',
+              'text-foreground',
+              'min-h-[36px] max-h-48'
+            )}
+          />
+        )}
 
         <SuggestionPopup
           isOpen={context.isOpen}
