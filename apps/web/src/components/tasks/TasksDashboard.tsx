@@ -82,7 +82,7 @@ import {
   type TaskPriority,
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import { type TaskStatusGroup } from '@/lib/task-status-config';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
 import { getStatusDisplay, getAssigneeText } from './task-helpers';
 import { FilterControls } from './FilterControls';
@@ -383,14 +383,15 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       const configs = getConfigsForTask(task);
       const configMap = buildStatusConfig(configs);
       const matched = configMap[newStatus];
+      const fallback = DEFAULT_STATUS_CONFIG[newStatus];
       setTasks(prev => prev.map(t =>
         t.id === task.id
           ? {
               ...t,
               status: newStatus,
-              statusGroup: matched?.group,
-              statusLabel: matched?.label,
-              statusColor: matched?.color,
+              statusGroup: matched?.group ?? fallback?.group ?? t.statusGroup,
+              statusLabel: matched?.label ?? fallback?.label ?? t.statusLabel,
+              statusColor: matched?.color ?? fallback?.color ?? t.statusColor,
             }
           : t
       ));

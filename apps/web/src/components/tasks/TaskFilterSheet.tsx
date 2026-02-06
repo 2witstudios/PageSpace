@@ -19,12 +19,11 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
-  DEFAULT_STATUS_CONFIG,
-  STATUS_ORDER,
   type TaskStatus,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Drive, StatusConfigsByTaskList } from './types';
+import { aggregateStatuses } from './task-helpers';
 
 type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 type AssigneeFilter = 'mine' | 'all';
@@ -67,32 +66,10 @@ export function TaskFilterSheet({
   onFiltersChange,
   onClearFilters,
 }: TaskFilterSheetProps) {
-  // Aggregate all statuses across task lists (dedup by slug, first-seen label/color)
-  const aggregatedStatuses = useMemo(() => {
-    if (!statusConfigsByTaskList || Object.keys(statusConfigsByTaskList).length === 0) {
-      return STATUS_ORDER.map(slug => ({
-        slug,
-        label: DEFAULT_STATUS_CONFIG[slug]?.label || slug,
-        position: STATUS_ORDER.indexOf(slug),
-      }));
-    }
-    const seen = new Map<string, { slug: string; label: string; position: number }>();
-    for (const configs of Object.values(statusConfigsByTaskList)) {
-      for (const c of configs) {
-        if (!seen.has(c.slug)) {
-          seen.set(c.slug, { slug: c.slug, label: c.name, position: c.position });
-        }
-      }
-    }
-    if (seen.size === 0) {
-      return STATUS_ORDER.map(slug => ({
-        slug,
-        label: DEFAULT_STATUS_CONFIG[slug]?.label || slug,
-        position: STATUS_ORDER.indexOf(slug),
-      }));
-    }
-    return [...seen.values()].sort((a, b) => a.position - b.position);
-  }, [statusConfigsByTaskList]);
+  const aggregatedStatuses = useMemo(
+    () => aggregateStatuses(statusConfigsByTaskList),
+    [statusConfigsByTaskList],
+  );
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

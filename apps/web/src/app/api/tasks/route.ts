@@ -382,9 +382,10 @@ export async function GET(request: Request) {
     const total = countResult?.total ?? 0;
 
     // Serialize status configs so the frontend can build per-task dropdowns
+    type StatusGroup = 'todo' | 'in_progress' | 'done';
     const statusConfigsByTaskList: Record<string, Array<{
       id: string; taskListId: string; name: string;
-      slug: string; color: string; group: string; position: number;
+      slug: string; color: string; group: StatusGroup; position: number;
     }>> = {};
     for (const [taskListId, configs] of taskListStatusMap) {
       statusConfigsByTaskList[taskListId] = configs.map(c => ({

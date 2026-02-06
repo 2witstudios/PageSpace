@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import {
   ExternalLink,
@@ -77,14 +77,15 @@ export function TaskDetailSheet({
     setEditingTitle('');
   }, [task?.id]);
 
+  const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
+  const taskStatusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
+
   if (!task) return null;
 
   const statusDisplay = getStatusDisplay(task);
   const isCompleted = statusDisplay.group === 'done';
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
-  const statusConfigMap = buildStatusConfig(statusConfigs);
-  const taskStatusOrder = getStatusOrder(statusConfigs);
 
   const startEditTitle = () => {
     setEditingTitle(task.title);
