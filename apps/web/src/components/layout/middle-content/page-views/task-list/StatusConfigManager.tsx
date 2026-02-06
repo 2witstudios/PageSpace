@@ -228,6 +228,7 @@ export function StatusConfigManager({
                           {PRESET_COLORS.map((color, i) => (
                             <button
                               key={color}
+                              aria-label={SWATCH_COLORS[i].replace('bg-', '').replace('-500', '')}
                               className={cn(
                                 'w-5 h-5 rounded border-2 transition-colors',
                                 SWATCH_COLORS[i],
@@ -311,6 +312,7 @@ export function StatusConfigManager({
                 {PRESET_COLORS.map((color, i) => (
                   <button
                     key={color}
+                    aria-label={SWATCH_COLORS[i].replace('bg-', '').replace('-500', '')}
                     className={cn(
                       'w-6 h-6 rounded border-2 transition-colors',
                       SWATCH_COLORS[i],
