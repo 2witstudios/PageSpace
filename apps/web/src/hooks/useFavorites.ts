@@ -94,44 +94,50 @@ export const useFavorites = create<FavoritesState>()(
       },
 
       removeFavorite: async (id: string, itemType: 'page' | 'drive' = 'page') => {
-        // Find the favorite ID from current state
+        // Find the favorite from current state
         const favorite = get().favorites.find(f => {
           if (itemType === 'page' && f.page?.id === id) return true;
           if (itemType === 'drive' && f.drive?.id === id) return true;
           return false;
         });
 
-        // Optimistic update using functional set to prevent race conditions
-        if (itemType === 'page') {
-          set(state => {
-            const newPageIds = new Set(state.pageIds);
+        // Optimistic update: remove from both the favorites array and the lookup Sets
+        set(state => {
+          const newPageIds = new Set(state.pageIds);
+          const newDriveIds = new Set(state.driveIds);
+          if (itemType === 'page') {
             newPageIds.delete(id);
-            return { pageIds: newPageIds };
-          });
-        } else {
-          set(state => {
-            const newDriveIds = new Set(state.driveIds);
+          } else {
             newDriveIds.delete(id);
-            return { driveIds: newDriveIds };
-          });
-        }
+          }
+          const newFavorites = favorite
+            ? state.favorites.filter(f => f.id !== favorite.id)
+            : state.favorites;
+          return { favorites: newFavorites, pageIds: newPageIds, driveIds: newDriveIds };
+        });
 
         if (!favorite) {
-          // Not found in synced data - local set already updated above
           return;
         }
 
         try {
           await del(`/api/user/favorites/${favorite.id}`);
-          // Refetch to sync state
-          await get().fetchFavorites();
         } catch (error) {
-          // Rollback on error using functional set
-          if (itemType === 'page') {
-            set(state => ({ pageIds: new Set(state.pageIds).add(id) }));
-          } else {
-            set(state => ({ driveIds: new Set(state.driveIds).add(id) }));
-          }
+          // Rollback on error: restore both the favorites array and the lookup Sets
+          set(state => {
+            const restoredPageIds = new Set(state.pageIds);
+            const restoredDriveIds = new Set(state.driveIds);
+            if (itemType === 'page') {
+              restoredPageIds.add(id);
+            } else {
+              restoredDriveIds.add(id);
+            }
+            return {
+              favorites: [...state.favorites, favorite],
+              pageIds: restoredPageIds,
+              driveIds: restoredDriveIds,
+            };
+          });
           throw error;
         }
       },
