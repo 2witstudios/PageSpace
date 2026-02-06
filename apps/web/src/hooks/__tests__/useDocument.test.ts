@@ -123,7 +123,7 @@ describe('useDocument dirty flag integration', () => {
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(true);
     });
 
-    it('given a 409 conflict response, should show conflict toast and not throw', async () => {
+    it('given a 409 conflict response, should show conflict toast, refetch, and not throw', async () => {
       const pageId = 'page-123';
       const { toast } = await import('sonner');
 
@@ -131,10 +131,16 @@ describe('useDocument dirty flag integration', () => {
       useDocumentManagerStore.getState().createDocument(pageId, 'content');
       useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true, revision: 3 });
 
+      // First call: PATCH returns 409
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         ok: false,
         status: 409,
         json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4, expectedRevision: 3 }),
+      } as Response);
+      // Second call: GET refetch returns latest page
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ content: 'newer content', revision: 4 }),
       } as Response);
 
       const { result } = renderHook(() => useDocumentSaving(pageId));
@@ -148,9 +154,14 @@ describe('useDocument dirty flag integration', () => {
       expect(saveResult).toBe(false);
       // Assert: Conflict toast shown
       expect(toast.error).toHaveBeenCalledWith(
-        'Document was modified elsewhere. Refresh to see the latest version.',
+        'Document was modified elsewhere. Your local copy has been updated.',
         { id: `conflict-${pageId}` },
       );
+      // Assert: Document updated with latest server state
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      expect(doc?.content).toBe('newer content');
+      expect(doc?.revision).toBe(4);
+      expect(doc?.isDirty).toBe(false);
     });
 
     it('given a save with revision, should send expectedRevision in request body', async () => {

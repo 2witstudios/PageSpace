@@ -98,9 +98,26 @@ export const useDocumentSaving = (pageId: string) => {
         if (!response.ok) {
           if (response.status === 409) {
             // Revision conflict - another tab/user modified the page
-            toast.error('Document was modified elsewhere. Refresh to see the latest version.', {
+            toast.error('Document was modified elsewhere. Your local copy has been updated.', {
               id: `conflict-${pageId}`,
             });
+            // Refetch latest to update revision and content, stopping the retry loop
+            try {
+              const freshResponse = await fetchWithAuth(`/api/pages/${pageId}`);
+              if (freshResponse.ok) {
+                const freshPage = await freshResponse.json();
+                useDocumentManagerStore.getState().updateDocument(pageId, {
+                  content: freshPage.content ?? '',
+                  revision: freshPage.revision,
+                  isDirty: false,
+                  lastSaved: Date.now(),
+                  lastUpdateTime: Date.now(),
+                });
+                useDirtyStore.getState().clearDirty(pageId);
+              }
+            } catch {
+              // Refetch failed - user can still manually refresh
+            }
             const state = useDocumentManagerStore.getState();
             const newSaving = new Set(state.savingDocuments);
             newSaving.delete(pageId);
