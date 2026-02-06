@@ -348,6 +348,9 @@ export const useAuthStore = create<AuthState>()(
                   const newSessionToken = await window.electron.auth.getSessionToken();
                   if (newSessionToken) {
                     headers['Authorization'] = `Bearer ${newSessionToken}`;
+                    // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip IPC
+                    const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
+                    warmSessionCache(newSessionToken);
                   }
                 } else {
                   // No device token either - not logged in
@@ -361,6 +364,9 @@ export const useAuthStore = create<AuthState>()(
                 }
               } else {
                 headers['Authorization'] = `Bearer ${sessionToken}`;
+                // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip IPC
+                const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
+                warmSessionCache(sessionToken);
               }
             } else if (isIOS) {
               // iOS: Get session token from Keychain
