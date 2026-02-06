@@ -502,8 +502,15 @@
     {
       "idx": 71,
       "version": "7",
-      "when": 1770335694808,
-      "tag": "0071_colossal_blue_marvel",
+      "when": 1770341060598,
+      "tag": "0071_hesitant_starhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1770344316364,
+      "tag": "0072_cool_scourge",
       "breakpoints": true
     }
   ]

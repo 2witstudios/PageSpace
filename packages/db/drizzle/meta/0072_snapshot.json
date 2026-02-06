@@ -1,6 +1,6 @@
 {
-  "id": "9aec76c0-5581-47d6-93b3-9a699300fb6b",
-  "prevId": "79abb4b5-c66f-4917-b1f5-698cdedd9e9b",
+  "id": "2e9a8e2d-5cfc-4fca-b5b8-4438b51c7962",
+  "prevId": "9aec76c0-5581-47d6-93b3-9a699300fb6b",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -8673,6 +8673,150 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
+    "public.task_assignees": {
+      "name": "task_assignees",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "taskId": {
+          "name": "taskId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agentPageId": {
+          "name": "agentPageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "task_assignees_task_id_idx": {
+          "name": "task_assignees_task_id_idx",
+          "columns": [
+            {
+              "expression": "taskId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "task_assignees_user_id_idx": {
+          "name": "task_assignees_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "task_assignees_agent_page_id_idx": {
+          "name": "task_assignees_agent_page_id_idx",
+          "columns": [
+            {
+              "expression": "agentPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "task_assignees_taskId_task_items_id_fk": {
+          "name": "task_assignees_taskId_task_items_id_fk",
+          "tableFrom": "task_assignees",
+          "tableTo": "task_items",
+          "columnsFrom": [
+            "taskId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "task_assignees_userId_users_id_fk": {
+          "name": "task_assignees_userId_users_id_fk",
+          "tableFrom": "task_assignees",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "task_assignees_agentPageId_pages_id_fk": {
+          "name": "task_assignees_agentPageId_pages_id_fk",
+          "tableFrom": "task_assignees",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "agentPageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "task_assignees_task_user": {
+          "name": "task_assignees_task_user",
+          "nullsNotDistinct": false,
+          "columns": [
+            "taskId",
+            "userId"
+          ]
+        },
+        "task_assignees_task_agent": {
+          "name": "task_assignees_task_agent",
+          "nullsNotDistinct": false,
+          "columns": [
+            "taskId",
+            "agentPageId"
+          ]
+        }
+      }
+    },
     "public.task_items": {
       "name": "task_items",
       "schema": "",
@@ -9077,6 +9221,112 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
+    },
+    "public.task_status_configs": {
+      "name": "task_status_configs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "taskListId": {
+          "name": "taskListId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "color": {
+          "name": "color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "group": {
+          "name": "group",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "task_status_configs_task_list_id_idx": {
+          "name": "task_status_configs_task_list_id_idx",
+          "columns": [
+            {
+              "expression": "taskListId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "task_status_configs_taskListId_task_lists_id_fk": {
+          "name": "task_status_configs_taskListId_task_lists_id_fk",
+          "tableFrom": "task_status_configs",
+          "tableTo": "task_lists",
+          "columnsFrom": [
+            "taskListId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "task_status_configs_task_list_slug": {
+          "name": "task_status_configs_task_list_slug",
+          "nullsNotDistinct": false,
+          "columns": [
+            "taskListId",
+            "slug"
+          ]
+        }
+      }
     },
     "public.security_audit_log": {
       "name": "security_audit_log",

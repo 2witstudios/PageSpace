@@ -5,8 +5,7 @@ CREATE TABLE IF NOT EXISTS "task_assignees" (
 	"agentPageId" text,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "task_assignees_task_user" UNIQUE("taskId","userId"),
-	CONSTRAINT "task_assignees_task_agent" UNIQUE("taskId","agentPageId"),
-	CONSTRAINT "task_assignees_has_assignee" CHECK ("userId" IS NOT NULL OR "agentPageId" IS NOT NULL)
+	CONSTRAINT "task_assignees_task_agent" UNIQUE("taskId","agentPageId")
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "task_status_configs" (
@@ -46,6 +45,7 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
+ALTER TABLE "task_assignees" ADD CONSTRAINT "task_assignees_has_assignee" CHECK ("userId" IS NOT NULL OR "agentPageId" IS NOT NULL);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "task_assignees_task_id_idx" ON "task_assignees" USING btree ("taskId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "task_assignees_user_id_idx" ON "task_assignees" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "task_assignees_agent_page_id_idx" ON "task_assignees" USING btree ("agentPageId");--> statement-breakpoint
