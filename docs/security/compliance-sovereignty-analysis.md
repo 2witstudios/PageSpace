@@ -11,12 +11,62 @@
 
 ## Table of Contents
 
+0. [Architectural History & Context](#0-architectural-history--context)
 1. [Hard Incompatibilities](#1-hard-incompatibilities)
 2. [Features Requiring Modification Under Scrutiny](#2-features-requiring-modification-under-scrutiny)
 3. [What Already Works Well](#3-what-already-works-well)
 4. [Compliance Regime Quick Reference](#4-compliance-regime-quick-reference)
 5. [External Data Flow Inventory](#5-external-data-flow-inventory)
 6. [Recommendations by Priority](#6-recommendations-by-priority)
+7. [White-Label / Local Deployment Considerations](#7-white-label--local-deployment-considerations)
+
+---
+
+## 0. Architectural History & Context
+
+**This section is critical for understanding why certain patterns exist.**
+
+PageSpace was originally designed as a **local-first, self-hosted application**.
+The original architecture assumed all data stayed on the user's own hardware:
+
+- **Authentication** started as custom JWT-based auth with local user management
+- **AI processing** was designed around Ollama (fully local inference)
+- **Database content stored as plaintext** was a deliberate design decision — it
+  enables regex search for the AI system. When everything runs locally, plaintext
+  in your own PostgreSQL instance is not a sovereignty concern
+- **File storage** on local disk with content-addressed hashing was designed for
+  a single-owner deployment, not multi-tenant cloud
+
+Over time, cloud-oriented features were layered on top of this local foundation:
+
+- **Stripe** for subscription billing
+- **Resend** for transactional email delivery
+- **Google OAuth** and Google Calendar integration
+- **Cloud AI providers** (Google AI, Anthropic, OpenAI, xAI, OpenRouter)
+- **Google One Tap** authentication
+
+This evolutionary path explains several patterns that might otherwise appear
+inconsistent:
+
+| Pattern | Why It Exists | Compliance Implication |
+|---------|--------------|----------------------|
+| Plaintext page content in DB | Enables AI regex search across all user content — designed for local-only deployment | Not a concern locally; becomes one when DB is cloud-hosted or when third parties access the instance |
+| No file deletion on disk | Content-addressed storage assumed single owner on local hardware — orphaned files are the owner's own data | Breaks right-to-erasure when the deployment serves multiple users or tenants |
+| JWT remnants alongside session tokens | Auth evolved from local JWT to cloud-ready opaque sessions | Session system is now strong; JWT vestiges are dead code, not a risk |
+| Cloud services bolted onto local core | Each was added independently as the product grew | Creates a clear **feature boundary** for white-label: strip cloud layer, local core is sovereignty-clean |
+
+**Key takeaway for meetings**: PageSpace has two distinct operational modes that
+should be discussed separately in compliance conversations:
+
+1. **Cloud mode** (current default) — includes Stripe, Resend, cloud AI, Google
+   OAuth. This is where all sovereignty and compliance friction lives.
+2. **Local mode** (original architecture) — Ollama AI, local auth, local
+   storage, no external calls. This mode is inherently sovereignty-compliant
+   but lacks billing, email verification, and cloud AI capabilities.
+
+Any white-label or on-premise deployment conversation should start by
+identifying which cloud features the customer actually needs, because the
+compliant path is often "don't include them" rather than "make them compliant."
 
 ---
 
@@ -234,11 +284,24 @@ audit.
 conversation messages, file metadata, and user profiles are stored as plaintext
 in PostgreSQL.
 
+**Why it's this way**: This is a deliberate architectural decision from
+PageSpace's local-first origins. Plaintext content enables the AI system's
+regex search across all user content — a core feature. When the database lives
+on your own hardware, plaintext in your own PostgreSQL is not a sovereignty
+concern. This only becomes a compliance issue when the database is cloud-hosted,
+when third parties can access the instance, or when regulations like HIPAA
+mandate encryption at rest regardless of hosting.
+
 **What's needed for HIPAA/high-security**: PostgreSQL TDE (Transparent Data
 Encryption) or application-layer encryption for sensitive content fields.
 
 **Effort**: High. TDE is infrastructure-level. Application-layer encryption
-requires schema changes and breaks search/indexing.
+requires schema changes and **breaks the AI regex search feature** — which is
+the reason plaintext exists. Any encryption-at-rest solution must either
+preserve search capability (e.g., TDE at the volume/tablespace level, which is
+transparent to queries) or accept that AI search over encrypted content requires
+a fundamentally different approach (searchable encryption, separate search
+index, etc.).
 
 ---
 
@@ -300,11 +363,12 @@ device fingerprint for session fixation resistance beyond current protections.
 
 ## 3. What Already Works Well
 
-These are compliance-positive features that are already implemented correctly.
+The local-first architecture means the core of PageSpace is already
+sovereignty-clean. These features are compliance-positive as-is:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Opaque session tokens (not JWTs) | Strong | Server-controlled, instantly revocable |
+| Opaque session tokens (not JWTs) | Strong | Server-controlled, instantly revocable (evolved from original JWT system) |
 | Tamper-evident audit logging | Strong | SHA-256 hash chain with transaction locking |
 | API key encryption (AES-256-GCM) | Strong | Per-field encryption with scrypt key derivation |
 | CSRF protection (dual-layer) | Strong | SameSite=strict + HMAC-SHA256 tokens |
@@ -387,7 +451,77 @@ Every path where data leaves the PageSpace deployment boundary.
 
 ### P3 — Required for HIPAA / FedRAMP / air-gapped
 
-12. **Implement database encryption at rest (TDE)** — Content stored plaintext.
+12. **Implement database encryption at rest (TDE)** — Content stored plaintext
+    (by design for AI search; TDE preserves search while encrypting at volume
+    level).
 13. **Self-host all external assets** — Full air-gap capability.
 14. **Replace Resend with self-hosted SMTP** — Email must stay on-premise.
 15. **Replace Stripe with on-premise billing** — If required by regime.
+
+---
+
+## 7. White-Label / Local Deployment Considerations
+
+PageSpace's local-first origins mean a sovereignty-clean white-label deployment
+is achievable by **removing the cloud layer** rather than re-engineering the
+core. This section maps what to strip vs. what to keep.
+
+### 7.1. Cloud Features to Remove for Local White-Label
+
+These features were added after the original local architecture and would need
+to be stripped or replaced for a compliance-clean on-premise deployment:
+
+| Cloud Feature | Replacement for Local | Effort | Notes |
+|---------------|----------------------|--------|-------|
+| Stripe billing | Remove entirely, or license-key model | Low-medium | No billing needed for single-tenant on-prem |
+| Resend email | Self-hosted SMTP (Postfix, etc.) | Medium | Only needed if email verification is required |
+| Google OAuth | Remove; use local email+password auth only | Low | Original auth system already exists |
+| Google One Tap | Remove | Trivial | UI-only removal |
+| Google Calendar | Remove | Low | Optional integration |
+| Cloud AI providers | Remove from config; Ollama/LM Studio only | Low | Provider factory already supports this |
+| CDN scripts (Monaco, PDF.js) | Bundle locally | Medium | Self-host static assets |
+
+### 7.2. What Stays as-Is for Local White-Label
+
+The original local core requires no changes for sovereignty compliance:
+
+- Local PostgreSQL (plaintext content is fine — it's the customer's own DB)
+- Local file storage (content-addressed, on customer hardware)
+- Local AI via Ollama/LM Studio
+- Socket.IO real-time (internal Docker network)
+- File processing (Sharp, Tesseract, Mammoth — all local)
+- All analytics and telemetry (already local-only, stored in PostgreSQL)
+- Session-based auth (opaque tokens, server-controlled)
+- CSRF, rate limiting, security headers
+
+### 7.3. Meeting Talking Points
+
+When entering compliance or white-label conversations, use this framing:
+
+**Safe to promise**:
+- "All user content (pages, files, conversations) is stored locally and never
+  leaves the deployment boundary"
+- "AI processing can run entirely on-premise via local models"
+- "No telemetry or analytics data is sent to external vendors"
+- "Real-time collaboration runs entirely within the local network"
+- "Authentication and session management are fully self-contained"
+
+**Must qualify**:
+- "AI features" — always specify "with local models" or name the specific
+  provider and its data handling terms
+- "Email notifications" — currently requires Resend; self-hosted SMTP is a
+  known replacement path
+- "Payment processing" — only relevant for SaaS mode, not on-prem
+
+**Do not promise without engineering work**:
+- GDPR right-to-erasure compliance (file deletion gap)
+- Data subject export / portability
+- Configurable data retention policies
+- Formal audit log integrity verification
+- Database encryption at rest (TDE needed for regulated industries)
+
+**Never promise** (without fundamental changes):
+- Cloud AI provider compliance with data residency laws
+- HIPAA compliance with cloud AI or Resend email
+- FedRAMP authorization (requires authorized infrastructure stack)
+- Air-gapped deployment (external CDN scripts block this today)
