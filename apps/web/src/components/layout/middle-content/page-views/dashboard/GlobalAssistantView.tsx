@@ -148,7 +148,7 @@ const GlobalAssistantView: React.FC = () => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend, hasAttachments } = useImageAttachments();
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);

@@ -88,8 +88,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend, hasAttachments } = useImageAttachments();
-  const hasVision = hasVisionCapability(selectedModel || '');
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -110,6 +109,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setSelectedModel,
     isProviderConfigured,
   } = useProviderSettings({ pageId: page.id });
+
+  const hasVision = hasVisionCapability(selectedModel || '');
 
   const {
     isDesktop,
@@ -395,7 +396,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
     }
-    if (!input.trim() && !hasAttachments) return;
+    if (!input.trim() && attachments.length === 0) return;
 
     void sendMessageWithContext(input);
     setInput('');
@@ -405,7 +406,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [
     isReadOnly,
     input,
-    hasAttachments,
+    attachments.length,
     sendMessageWithContext,
     clearFiles,
   ]);
