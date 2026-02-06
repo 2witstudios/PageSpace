@@ -3,6 +3,7 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { ArrowUp, X, FileIcon, ImageIcon, FileText } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
@@ -120,8 +121,19 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         });
 
         if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || 'Upload failed');
+          const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+          if (response.status === 413) {
+            toast.error(errorData.error || 'File too large');
+          } else if (response.status === 429) {
+            toast.error('Too many uploads in progress. Please wait.');
+          } else if (response.status === 503) {
+            toast.error('Server is busy. Please try again later.');
+          } else if (response.status === 403) {
+            toast.error(errorData.error || 'You do not have permission to upload files here.');
+          } else {
+            toast.error(errorData.error || 'Upload failed');
+          }
+          return;
         }
 
         const result = await response.json();
@@ -135,6 +147,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
         textareaRef.current?.focus();
       } catch (error) {
         console.error('Failed to upload file:', error);
+        toast.error('Failed to upload file. Please try again.');
       } finally {
         setIsUploading(false);
         // Reset file input

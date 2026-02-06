@@ -38,6 +38,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     with: {
       user: {
         columns: {
+          id: true,
           name: true,
           image: true,
         },
@@ -122,6 +123,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       with: {
           user: {
               columns: {
+                  id: true,
                   name: true,
                   image: true,
               }
@@ -132,7 +134,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
                   mimeType: true,
                   sizeBytes: true,
               }
-          }
+          },
+          reactions: {
+              with: {
+                  user: {
+                      columns: {
+                          id: true,
+                          name: true,
+                      },
+                  },
+              },
+          },
       }
   });
 

@@ -5,6 +5,9 @@ import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
+import { cn } from '@/lib/utils';
+import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
+import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 
 interface ChatInputProps {
   value: string;
@@ -29,6 +32,7 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
   crossDrive = false
 }, ref) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { overlayRef, hasMentions, handleScroll } = useMentionOverlay(textareaRef, value);
   const context = useSuggestionContext();
   // Track IME composition state to prevent accidental sends during predictive text
   const [isComposing, setIsComposing] = useState(false);
@@ -75,12 +79,24 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
         value={value}
         onChange={(e) => suggestion.handleValueChange(e.target.value)}
         onKeyDown={handleKeyDown}
+        onScroll={handleScroll}
         onCompositionStart={() => setIsComposing(true)}
         onCompositionEnd={() => setIsComposing(false)}
         placeholder={placeholder}
-        className="min-h-[40px] max-h-[120px] w-full"
+        className={cn(
+          'min-h-[40px] max-h-[120px] w-full',
+          hasMentions && 'text-transparent caret-foreground'
+        )}
       />
-      
+
+      {hasMentions && (
+        <MentionHighlightOverlay
+          ref={overlayRef}
+          value={value}
+          className="px-3 py-2 text-base md:text-sm text-foreground min-h-[40px] max-h-[120px]"
+        />
+      )}
+
       <SuggestionPopup
         isOpen={context.isOpen}
         items={context.items}

@@ -31,6 +31,16 @@ Task lists now support custom status categories and multiple assignees per task,
 - New table: `task_assignees` (id, taskId, userId, agentPageId)
 - `task_items.status` changed from enum to plain text for custom status support
 - Migration: `0071_colossal_blue_marvel.sql`
+### Added - Back/Forward Navigation Buttons
+
+Added browser-style back/forward navigation buttons to the main header navbar, integrated with the per-tab history system.
+
+- **NavButtons component**: `apps/web/src/components/layout/main-header/NavButtons.tsx`
+  - Reads target path before store mutation for reliable navigation
+  - Uses `canGoBack`/`canGoForward` pure functions from `tab-navigation.ts`
+  - Hidden on small screens (`hidden sm:flex`) for mobile responsiveness
+- **Component tests**: `apps/web/src/components/layout/main-header/__tests__/NavButtons.test.tsx`
+  - Rendering, disabled states, navigation clicks, and store integration
 
 ---
 
