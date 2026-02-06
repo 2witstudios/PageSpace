@@ -24,6 +24,12 @@ vi.mock('@pagespace/lib/permissions', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/logger-config', () => ({
+  loggers: {
+    security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+  },
+}));
+
 describe('AUTH_REQUIRED security behavior', () => {
   const originalEnv = process.env;
 
