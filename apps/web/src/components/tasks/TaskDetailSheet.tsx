@@ -30,15 +30,17 @@ import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-vie
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
   PRIORITY_CONFIG,
-  STATUS_ORDER,
+  buildStatusConfig,
+  getStatusOrder,
   type TaskPriority,
+  type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import type { Task } from './types';
 import { getStatusDisplay } from './task-helpers';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
+  statusConfigs: TaskStatusConfig[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onStatusChange: (task: Task, status: string) => void;
@@ -53,6 +55,7 @@ export interface TaskDetailSheetProps {
 
 export function TaskDetailSheet({
   task,
+  statusConfigs,
   open,
   onOpenChange,
   onStatusChange,
@@ -80,6 +83,8 @@ export function TaskDetailSheet({
   const isCompleted = statusDisplay.group === 'done';
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
   const { label: statusLabel, color: statusColor } = statusDisplay;
+  const statusConfigMap = buildStatusConfig(statusConfigs);
+  const taskStatusOrder = getStatusOrder(statusConfigs);
 
   const startEditTitle = () => {
     setEditingTitle(task.title);
@@ -185,12 +190,12 @@ export function TaskDetailSheet({
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {STATUS_ORDER.map((status) => {
-                    const config = DEFAULT_STATUS_CONFIG[status];
+                  {taskStatusOrder.map((slug) => {
+                    const config = statusConfigMap[slug];
                     return (
-                      <SelectItem key={status} value={status}>
+                      <SelectItem key={slug} value={slug}>
                         <Badge className={cn('text-xs', config?.color || '')}>
-                          {config?.label || status}
+                          {config?.label || slug}
                         </Badge>
                       </SelectItem>
                     );

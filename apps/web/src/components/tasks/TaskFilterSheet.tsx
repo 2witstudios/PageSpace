@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { User, Users, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -23,7 +24,7 @@ import {
   type TaskStatus,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Drive } from './types';
+import type { Drive, StatusConfigsByTaskList } from './types';
 
 type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 type AssigneeFilter = 'mine' | 'all';
@@ -42,6 +43,7 @@ export interface TaskFilterSheetProps {
     assigneeFilter?: AssigneeFilter;
   };
   activeFilterCount: number;
+  statusConfigsByTaskList?: StatusConfigsByTaskList;
   onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<{
     status?: TaskStatus;
@@ -60,10 +62,38 @@ export function TaskFilterSheet({
   selectedDriveId,
   filters,
   activeFilterCount,
+  statusConfigsByTaskList,
   onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: TaskFilterSheetProps) {
+  // Aggregate all statuses across task lists (dedup by slug, first-seen label/color)
+  const aggregatedStatuses = useMemo(() => {
+    if (!statusConfigsByTaskList || Object.keys(statusConfigsByTaskList).length === 0) {
+      return STATUS_ORDER.map(slug => ({
+        slug,
+        label: DEFAULT_STATUS_CONFIG[slug]?.label || slug,
+        position: STATUS_ORDER.indexOf(slug),
+      }));
+    }
+    const seen = new Map<string, { slug: string; label: string; position: number }>();
+    for (const configs of Object.values(statusConfigsByTaskList)) {
+      for (const c of configs) {
+        if (!seen.has(c.slug)) {
+          seen.set(c.slug, { slug: c.slug, label: c.name, position: c.position });
+        }
+      }
+    }
+    if (seen.size === 0) {
+      return STATUS_ORDER.map(slug => ({
+        slug,
+        label: DEFAULT_STATUS_CONFIG[slug]?.label || slug,
+        position: STATUS_ORDER.indexOf(slug),
+      }));
+    }
+    return [...seen.values()].sort((a, b) => a.position - b.position);
+  }, [statusConfigsByTaskList]);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -159,9 +189,9 @@ export function TaskFilterSheet({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                {STATUS_ORDER.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {DEFAULT_STATUS_CONFIG[status]?.label || status}
+                {aggregatedStatuses.map((s) => (
+                  <SelectItem key={s.slug} value={s.slug}>
+                    {s.label}
                   </SelectItem>
                 ))}
               </SelectContent>

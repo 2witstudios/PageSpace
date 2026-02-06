@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { User, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,7 +17,7 @@ import {
   type TaskStatus,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Drive } from './types';
+import type { Drive, StatusConfigsByTaskList } from './types';
 
 type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 type AssigneeFilter = 'mine' | 'all';
@@ -34,6 +35,7 @@ export interface FilterControlsProps {
     assigneeFilter?: AssigneeFilter;
   };
   hasActiveFilters: boolean;
+  statusConfigsByTaskList?: StatusConfigsByTaskList;
   onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<{
     status?: TaskStatus;
@@ -51,11 +53,41 @@ export function FilterControls({
   selectedDriveId,
   filters,
   hasActiveFilters,
+  statusConfigsByTaskList,
   onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: FilterControlsProps) {
   const isMobile = layout === 'mobile';
+
+  // Aggregate all statuses across task lists (dedup by slug, first-seen label/color)
+  const aggregatedStatuses = useMemo(() => {
+    if (!statusConfigsByTaskList || Object.keys(statusConfigsByTaskList).length === 0) {
+      return STATUS_ORDER.map(slug => ({
+        slug,
+        label: DEFAULT_STATUS_CONFIG[slug]?.label || slug,
+        color: DEFAULT_STATUS_CONFIG[slug]?.color || '',
+        position: STATUS_ORDER.indexOf(slug),
+      }));
+    }
+    const seen = new Map<string, { slug: string; label: string; color: string; position: number }>();
+    for (const configs of Object.values(statusConfigsByTaskList)) {
+      for (const c of configs) {
+        if (!seen.has(c.slug)) {
+          seen.set(c.slug, { slug: c.slug, label: c.name, color: c.color, position: c.position });
+        }
+      }
+    }
+    if (seen.size === 0) {
+      return STATUS_ORDER.map(slug => ({
+        slug,
+        label: DEFAULT_STATUS_CONFIG[slug]?.label || slug,
+        color: DEFAULT_STATUS_CONFIG[slug]?.color || '',
+        position: STATUS_ORDER.indexOf(slug),
+      }));
+    }
+    return [...seen.values()].sort((a, b) => a.position - b.position);
+  }, [statusConfigsByTaskList]);
 
   // Drive selector
   const DriveSelector = (
@@ -88,9 +120,9 @@ export function FilterControls({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="all">All statuses</SelectItem>
-        {STATUS_ORDER.map((status) => (
-          <SelectItem key={status} value={status}>
-            {DEFAULT_STATUS_CONFIG[status]?.label || status}
+        {aggregatedStatuses.map((s) => (
+          <SelectItem key={s.slug} value={s.slug}>
+            {s.label}
           </SelectItem>
         ))}
       </SelectContent>
