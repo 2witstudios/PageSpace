@@ -16,10 +16,14 @@ export interface UseSpeechRecognitionReturn {
   isListening: boolean;
   /** Whether the browser supports speech recognition */
   isSupported: boolean;
+  /** Current error message (null if no error) */
+  error: string | null;
   /** Toggle listening on/off */
   toggleListening: () => void;
   /** Stop listening */
   stopListening: () => void;
+  /** Clear the current error */
+  clearError: () => void;
 }
 
 /**
@@ -37,7 +41,9 @@ export function useSpeechRecognition({
 }: UseSpeechRecognitionOptions): UseSpeechRecognitionReturn {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onTranscriptRef = useRef(onTranscript);
 
   // Keep callback ref updated
@@ -87,25 +93,53 @@ export function useSpeechRecognition({
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
       setIsListening(false);
+
+      const errorMessages: Record<string, string> = {
+        'not-allowed': 'Microphone access denied. Check your browser permissions.',
+        'audio-capture': 'No microphone found. Please connect a microphone.',
+        'network': 'Network error during speech recognition.',
+        'no-speech': 'No speech detected. Try again.',
+        'service-not-available': 'Speech recognition service is unavailable.',
+        'language-not-supported': 'Language not supported for speech recognition.',
+      };
+
+      const message = errorMessages[event.error] || `Speech recognition error: ${event.error}`;
+      setError(message);
+
+      // Auto-clear after 6 seconds
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = setTimeout(() => setError(null), 6000);
     };
 
     recognitionRef.current = recognition;
 
     return () => {
       recognition.stop();
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
   }, [lang, continuous]);
+
+  const clearError = useCallback(() => {
+    setError(null);
+    if (errorTimerRef.current) {
+      clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = null;
+    }
+  }, []);
 
   const toggleListening = useCallback(() => {
     const recognition = recognitionRef.current;
     if (!recognition) return;
+
+    // Clear any previous error when user tries again
+    clearError();
 
     if (isListening) {
       recognition.stop();
     } else {
       recognition.start();
     }
-  }, [isListening]);
+  }, [isListening, clearError]);
 
   const stopListening = useCallback(() => {
     recognitionRef.current?.stop();
@@ -114,8 +148,10 @@ export function useSpeechRecognition({
   return {
     isListening,
     isSupported,
+    error,
     toggleListening,
     stopListening,
+    clearError,
   };
 }
 
