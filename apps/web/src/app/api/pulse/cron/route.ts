@@ -44,6 +44,7 @@ import {
   type StackedDiff,
 } from '@pagespace/lib/content';
 import { readPageContent, loggers } from '@pagespace/lib/server';
+import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { validateCronRequest } from '@/lib/auth/cron-auth';
 
 // System prompt for generating pulse summaries
@@ -775,6 +776,18 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   });
 
   const summary = result.text.trim();
+
+  // Track AI usage
+  const usage = result.usage;
+  AIMonitoring.trackUsage({
+    userId,
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+    success: true,
+  });
 
   // Extract greeting
   let greeting: string | null = null;
