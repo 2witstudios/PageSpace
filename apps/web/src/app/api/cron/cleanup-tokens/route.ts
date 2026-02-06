@@ -11,14 +11,13 @@ import { validateCronRequest } from '@/lib/auth/cron-auth';
  * the database tidy and prevents unbounded growth.
  *
  * Authentication:
- * - Zero-trust: only accessible from localhost (no secret comparison)
- * - Must be called from within the same machine (docker network)
+ * - Primary: CRON_SECRET Bearer token (timing-safe comparison)
+ * - Defense-in-depth: internal network origin check
  *
  * Trigger via:
- * curl http://localhost:3000/api/cron/cleanup-tokens
+ * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/cleanup-tokens
  */
 export async function GET(request: Request) {
-  // Zero trust: only allow requests from localhost (no secret comparison)
   const authError = validateCronRequest(request);
   if (authError) {
     return authError;

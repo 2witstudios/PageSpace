@@ -1,15 +1,16 @@
 # PageSpace Cron Jobs
 # All times are in UTC
 # Jobs run inside Docker network, hitting internal web service
+# CRON_SECRET is injected by entrypoint.sh at container startup
 
 # Memory processing - Daily at 6am UTC
 # Discovers patterns from user conversations and updates personalization
-0 6 * * * curl -s -X POST http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
+0 6 * * * curl -s -X POST -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
 
 # Pulse summaries - Every 6 hours
 # Generates workspace activity summaries for active users
-0 */6 * * * curl -s -X POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
+0 */6 * * * curl -s -X POST -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
 
 # Token cleanup - Hourly
 # Removes expired device tokens from database
-0 * * * * curl -s http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
+0 * * * * curl -s -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
