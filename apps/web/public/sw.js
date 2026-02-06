@@ -5,8 +5,8 @@
  * Uses network-first strategy for API data, cache-first for static assets.
  */
 
-const CACHE_NAME = 'pagespace-v1';
-const STATIC_CACHE_NAME = 'pagespace-static-v1';
+const CACHE_NAME = 'pagespace-v2';
+const STATIC_CACHE_NAME = 'pagespace-static-v2';
 
 // Core pages to cache for offline access
 const OFFLINE_URLS = ['/', '/offline'];
@@ -55,6 +55,10 @@ self.addEventListener('fetch', (event) => {
 
   // Skip cross-origin requests
   if (url.origin !== self.location.origin) return;
+
+  // Let the browser handle Next.js build assets directly.
+  // Avoid SW-managed cache for runtime chunks to prevent stale bundle mismatches.
+  if (url.pathname.startsWith('/_next/')) return;
 
   // API requests: network-first with cache fallback
   if (url.pathname.startsWith('/api/')) {
@@ -156,8 +160,6 @@ async function networkFirstWithOfflineFallback(request) {
  */
 function isStaticAsset(pathname) {
   const staticExtensions = [
-    '.js',
-    '.css',
     '.png',
     '.jpg',
     '.jpeg',

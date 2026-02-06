@@ -96,13 +96,56 @@ export default async function RootLayout({
           nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
+              (function() {
+                if (!('serviceWorker' in navigator)) {
+                  return;
+                }
+
+                async function unregisterServiceWorkersForDesktop() {
+                  try {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(
+                      registrations.map(function(registration) {
+                        return registration.unregister();
+                      })
+                    );
+
+                    if ('caches' in window) {
+                      const cacheNames = await caches.keys();
+                      const pagespaceCaches = cacheNames.filter(function(name) {
+                        return name.startsWith('pagespace-');
+                      });
+                      await Promise.all(
+                        pagespaceCaches.map(function(name) {
+                          return caches.delete(name);
+                        })
+                      );
+                    }
+                  } catch (err) {
+                    console.log('Desktop mode: failed to clean service workers:', err);
+                  }
+                }
+
+                function setupServiceWorker() {
+                  var isDesktop = !!(window.electron && window.electron.isDesktop);
+
+                  if (isDesktop) {
+                    unregisterServiceWorkersForDesktop();
+                    return;
+                  }
+
                   navigator.serviceWorker.register('/sw.js').catch(function(err) {
                     console.log('ServiceWorker registration failed:', err);
                   });
-                });
-              }
+                }
+
+                if (document.readyState === 'complete') {
+                  setupServiceWorker();
+                  return;
+                }
+
+                window.addEventListener('load', setupServiceWorker, { once: true });
+              })();
             `,
           }}
         />
