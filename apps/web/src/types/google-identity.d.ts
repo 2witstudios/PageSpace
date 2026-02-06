@@ -135,6 +135,7 @@ declare global {
     google?: {
       accounts: GoogleAccounts;
     };
+    __webpack_nonce__?: string;
   }
 }
 

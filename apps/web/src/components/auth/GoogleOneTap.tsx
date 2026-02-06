@@ -224,9 +224,8 @@ export function GoogleOneTap({
         script.src = GOOGLE_GSI_SCRIPT_URL;
         script.async = true;
         script.defer = true;
-        const wpNonce = (window as Record<string, unknown>).__webpack_nonce__;
-        if (typeof wpNonce === 'string') {
-          script.nonce = wpNonce;
+        if (window.__webpack_nonce__) {
+          script.nonce = window.__webpack_nonce__;
         }
         script.onload = initializeGoogleOneTap;
         script.onerror = () => {
