@@ -81,7 +81,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets (fonts, images, content-hashed JS/CSS): cache-first
+  // Static assets (fonts, images): cache-first
   if (isStaticAsset(url.pathname)) {
     event.respondWith(cacheFirstWithNetwork(request));
     return;
