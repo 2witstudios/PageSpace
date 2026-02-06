@@ -68,7 +68,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     const isMCP = isMCPAuthResult(auth);
     const mcpMeta = isMCP ? { source: 'mcp' as const } : undefined;
-    const context = changeGroupId || mcpMeta
+    const context = (changeGroupId || mcpMeta)
       ? { changeGroupId, metadata: mcpMeta }
       : undefined;
 
@@ -170,10 +170,10 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const parsedBody = deleteSchema.parse(body);
     const trashChildren = parsedBody?.trash_children ?? false;
 
-    const isMCPAuth = isMCPAuthResult(auth);
+    const isMCP = isMCPAuthResult(auth);
     const result = await pageService.trashPage(pageId, userId, {
       trashChildren,
-      metadata: isMCPAuth ? { source: 'mcp' } : undefined,
+      metadata: isMCP ? { source: 'mcp' } : undefined,
     });
 
     if (!result.success) {

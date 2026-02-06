@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -278,7 +279,8 @@ describe('POST /api/pages', () => {
           driveId: mockDriveId,
           parentId: 'parent_123',
           content: '<p>Custom content</p>',
-        })
+        }),
+        undefined,
       );
     });
 
@@ -306,7 +308,8 @@ describe('POST /api/pages', () => {
           enabledTools: ['read_page'],
           aiProvider: 'anthropic',
           aiModel: 'claude-3',
-        })
+        }),
+        undefined,
       );
     });
   });

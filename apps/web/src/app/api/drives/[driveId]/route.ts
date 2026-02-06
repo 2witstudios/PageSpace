@@ -221,13 +221,13 @@ export async function DELETE(
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
-    const isMCPAuth = isMCPAuthResult(auth);
+    const isMCP = isMCPAuthResult(auth);
     logDriveActivity(userId, 'trash', {
       id: driveId,
       name: drive.name,
     }, {
       ...actorInfo,
-      metadata: isMCPAuth ? { source: 'mcp' } : undefined,
+      metadata: isMCP ? { source: 'mcp' } : undefined,
       previousValues: { isTrashed: drive.isTrashed },
       newValues: { isTrashed: true },
     });
