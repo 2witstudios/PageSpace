@@ -143,10 +143,10 @@ describe('Security Headers', () => {
       expect(csp).toContain('https://accounts.google.com');
     });
 
-    it('allows Google accounts iframe via frame-src', () => {
+    it('allows Google accounts and Stripe iframes via frame-src', () => {
       const csp = buildCSPPolicy('test-nonce');
 
-      expect(csp).toContain('frame-src https://accounts.google.com');
+      expect(csp).toContain('frame-src https://accounts.google.com https://js.stripe.com');
     });
 
     it('blocks plugins via object-src none', () => {
@@ -256,22 +256,10 @@ describe('Security Headers', () => {
       expect(csp).not.toContain('nonce-');
     });
 
-    it('sets Cross-Origin-Embedder-Policy to credentialless for page routes', () => {
+    it('does not set Cross-Origin-Embedder-Policy (removed for Stripe.js compatibility)', () => {
       const response = NextResponse.next();
 
       applySecurityHeaders(response, { nonce: 'test', isProduction: false });
-
-      expect(response.headers.get('Cross-Origin-Embedder-Policy')).toBe('credentialless');
-    });
-
-    it('does not set Cross-Origin-Embedder-Policy for API routes', () => {
-      const response = NextResponse.next();
-
-      applySecurityHeaders(response, {
-        nonce: 'test',
-        isProduction: false,
-        isAPIRoute: true,
-      });
 
       expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
     });

@@ -57,7 +57,7 @@ export const buildCSPPolicy = (nonce: string): string => {
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
     'font-src': ["'self'", 'data:', 'https://cdn.jsdelivr.net'],
-    'frame-src': ['https://accounts.google.com'], // Google One Tap iframe
+    'frame-src': ['https://accounts.google.com', 'https://js.stripe.com'], // Google One Tap + Stripe Elements iframes
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
@@ -96,11 +96,10 @@ export const applySecurityHeaders = (
     'Permissions-Policy',
     'geolocation=(), microphone=(), camera=()'
   );
-  // Allow cross-origin resources (e.g. Google profile images) without requiring
-  // CORP headers, while still stripping credentials on no-cors requests.
-  if (!isAPIRoute) {
-    response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
-  }
+  // COEP removed: 'credentialless' blocked third-party scripts (Stripe.js)
+  // that load via no-cors without Cross-Origin-Resource-Policy headers.
+  // Without COOP: same-origin, COEP alone doesn't enable crossOriginIsolated,
+  // so the security benefit was negligible while breaking payment flows.
 
   if (isProduction) {
     response.headers.set(
