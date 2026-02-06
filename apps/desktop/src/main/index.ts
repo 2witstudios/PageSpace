@@ -1023,7 +1023,7 @@ async function handleAuthExchange(url: string): Promise<boolean> {
         value: tokens.sessionToken,
         path: '/',
         httpOnly: true,
-        secure: !appUrl.origin.includes('localhost'),
+        secure: !appUrl.origin.includes('localhost') && !appUrl.origin.includes('127.0.0.1'),
         sameSite: 'strict' as const,
         expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
       });

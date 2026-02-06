@@ -37,13 +37,19 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const driveId = params.driveId as string;
   const { tree, isLoading, isError, isValidating, retry } = usePageTree(driveId);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
+  const retryCount = useRef(0);
+  const [timerKey, setTimerKey] = useState(0);
 
   const handleRetry = useCallback(() => {
     setLoadingTimedOut(false);
+    retryCount.current += 1;
+    setTimerKey(retryCount.current); // Force timer effect to re-run
     retry();
   }, [retry]);
 
-  // Track loading duration - show retry hint if loading takes too long
+  // Track loading duration - show retry hint if loading takes too long.
+  // timerKey forces the timer to restart after a retry even when isLoading
+  // stays true throughout (the dependency doesn't change otherwise).
   useEffect(() => {
     if (!isLoading) {
       setLoadingTimedOut(false);
@@ -51,7 +57,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     }
     const timer = setTimeout(() => setLoadingTimedOut(true), LOADING_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [isLoading]);
+  }, [isLoading, timerKey]);
 
   // Handle special routes
   if (pathname.endsWith('/settings')) {
