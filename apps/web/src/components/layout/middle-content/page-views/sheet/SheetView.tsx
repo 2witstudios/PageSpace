@@ -362,7 +362,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       const response = await fetchWithAuth(`/api/pages/${page.id}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content);
+        updateContentFromServer(updatedPage.content, updatedPage.revision);
       }
     } catch (error) {
       console.error('Failed to refresh sheet:', error);
@@ -1573,7 +1573,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         if (!response.ok) return;
         const updatedPage = await response.json();
         if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-          updateContentFromServer(updatedPage.content);
+          updateContentFromServer(updatedPage.content, updatedPage.revision);
         }
       } catch (error) {
         console.error('Failed to fetch updated sheet content:', error);
