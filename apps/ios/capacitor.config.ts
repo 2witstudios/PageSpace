@@ -14,7 +14,7 @@ const config: CapacitorConfig = {
     scheme: 'PageSpace',
     contentInset: 'never',
     backgroundColor: '#000000',
-    preferredContentMode: 'mobile',
+    preferredContentMode: 'desktop',
     allowsLinkPreview: false,
     scrollEnabled: true,
   },
