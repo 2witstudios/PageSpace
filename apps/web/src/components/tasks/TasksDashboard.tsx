@@ -76,26 +76,17 @@ import { useCapacitor } from '@/hooks/useCapacitor';
 import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  DEFAULT_STATUS_CONFIG,
   PRIORITY_CONFIG,
   STATUS_ORDER,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Task, TaskFilters, TaskStatusGroup, Drive, Pagination } from './types';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+import type { Task, TaskFilters, Drive, Pagination } from './types';
+import { getStatusDisplay, getAssigneeText } from './task-helpers';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
 import { TaskFilterSheet, TaskFilterButton } from './TaskFilterSheet';
-
-// Safe status config lookup: uses task's enriched status metadata with fallback to defaults
-function getStatusDisplay(task: Task): { label: string; color: string; group: TaskStatusGroup } {
-  if (task.statusLabel && task.statusColor && task.statusGroup) {
-    return { label: task.statusLabel, color: task.statusColor, group: task.statusGroup };
-  }
-  const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];
-  if (defaultConfig) return defaultConfig;
-  return { label: task.status, color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400', group: 'todo' };
-}
 
 // Status group labels and colors for kanban columns
 const STATUS_GROUP_CONFIG: Record<TaskStatusGroup, { label: string; color: string }> = {
@@ -373,9 +364,11 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
     try {
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { status: newStatus });
-      // Update local state optimistically
+      // Clear enriched status metadata so getStatusDisplay() recomputes from DEFAULT_STATUS_CONFIG
       setTasks(prev => prev.map(t =>
-        t.id === task.id ? { ...t, status: newStatus } : t
+        t.id === task.id
+          ? { ...t, status: newStatus, statusGroup: undefined, statusLabel: undefined, statusColor: undefined }
+          : t
       ));
     } catch {
       toast.error('Failed to update status');
@@ -1472,15 +1465,10 @@ function KanbanCard({
           </Badge>
 
           {/* Assignees */}
-          {(task.assignees && task.assignees.length > 0) ? (
-            <span className="text-xs text-muted-foreground">
-              {task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ') || 'Assigned'}
-            </span>
-          ) : (task.assignee || task.assigneeAgent) ? (
-            <span className="text-xs text-muted-foreground">
-              {task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}
-            </span>
-          ) : null}
+          {(() => {
+            const text = getAssigneeText(task);
+            return text ? <span className="text-xs text-muted-foreground">{text}</span> : null;
+          })()}
 
           {/* Due date */}
           {task.dueDate && (

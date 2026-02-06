@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
-import { DEFAULT_STATUS_CONFIG } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -351,7 +351,8 @@ export async function GET(request: Request) {
           return null;
         }
 
-        // Compute status metadata from custom configs or defaults
+        // Compute status metadata from custom configs or defaults.
+        // Note: DB configs use `.name` while DEFAULT_STATUS_CONFIG uses `.label` — both map to statusLabel.
         const configs = taskListStatusMap.get(task.taskListId) || [];
         const matchingConfig = configs.find(c => c.slug === task.status);
         const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];

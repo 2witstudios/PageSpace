@@ -44,7 +44,7 @@ vi.mock('@pagespace/db', () => ({
   sql: vi.fn(),
 }));
 
-vi.mock('@/components/layout/middle-content/page-views/task-list/task-list-types', () => ({
+vi.mock('@/lib/task-status-config', () => ({
   DEFAULT_STATUS_CONFIG: {
     pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700', group: 'todo' },
     in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700', group: 'in_progress' },

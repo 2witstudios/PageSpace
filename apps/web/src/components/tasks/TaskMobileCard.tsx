@@ -32,12 +32,13 @@ import { cn } from '@/lib/utils';
 import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  DEFAULT_STATUS_CONFIG,
   PRIORITY_CONFIG,
   STATUS_ORDER,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import type { Task } from './types';
+import { getStatusDisplay, getAssigneeText } from './task-helpers';
 
 export interface TaskMobileCardProps {
   task: Task;
@@ -72,19 +73,13 @@ export const TaskMobileCard = memo(function TaskMobileCard({
   onEditingTitleChange,
   onCancelEdit,
 }: TaskMobileCardProps) {
-  const isCompleted = task.statusGroup ? task.statusGroup === 'done' : task.status === 'completed';
+  const statusDisplay = getStatusDisplay(task);
+  const isCompleted = statusDisplay.group === 'done';
   const cancelTriggeredRef = useRef(false);
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
-
-  // Safe status display
-  const statusLabel = task.statusLabel || DEFAULT_STATUS_CONFIG[task.status]?.label || task.status;
-  const statusColor = task.statusColor || DEFAULT_STATUS_CONFIG[task.status]?.color || 'bg-slate-100 text-slate-600';
-
-  // Assignee display text
-  const assigneeText = (task.assignees && task.assignees.length > 0)
-    ? task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ')
-    : (task.assignee?.name || task.assigneeAgent?.title || null);
+  const { label: statusLabel, color: statusColor } = statusDisplay;
+  const assigneeText = getAssigneeText(task);
 
   return (
     <Card className={cn(isCompleted && 'opacity-60')}>

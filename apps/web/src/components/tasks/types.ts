@@ -2,12 +2,14 @@
  * Types for the Tasks Dashboard components
  */
 
-// Re-export shared types from task-list-types
+// Re-export shared types
 import type { TaskPriority as SharedTaskPriority, TaskAssigneeData } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import type { TaskStatusGroup } from '@/lib/task-status-config';
 
 export type TaskStatus = string;
 export type TaskPriority = SharedTaskPriority;
 export type { TaskAssigneeData };
+export type { TaskStatusGroup };
 
 export interface TaskUser {
   id: string;
@@ -32,8 +34,6 @@ export interface TaskList {
   pageId: string | null;
   title: string;
 }
-
-export type TaskStatusGroup = 'todo' | 'in_progress' | 'done';
 
 export interface Task {
   id: string;
