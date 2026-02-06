@@ -166,6 +166,7 @@ export async function GET(
             al."userId" IS NULL                    -- system/unknown actor
             OR al."userId" != ${userId}            -- different user
             OR al."isAiGenerated" = true           -- AI edit (even if triggered by current user - should review)
+            OR al.metadata->>'source' = 'mcp'     -- MCP-created (external tool, user hasn't viewed it)
           )
       `);
 

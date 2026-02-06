@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
 import { pageService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -49,6 +49,12 @@ export async function POST(request: Request) {
       return scopeError;
     }
 
+    // Track MCP source so the unread indicator (blue dot) shows for MCP-created pages.
+    // Without this, MCP-created pages are filtered out as "the user's own changes" since
+    // MCP tokens authenticate as the owning user.
+    const isMCP = isMCPAuthResult(auth);
+    const createOptions = isMCP ? { context: { metadata: { source: 'mcp' } } } : undefined;
+
     const result = await pageService.createPage(userId, {
       title: validatedData.title,
       type: validatedData.type,
@@ -59,7 +65,7 @@ export async function POST(request: Request) {
       enabledTools: validatedData.enabledTools,
       aiProvider: validatedData.aiProvider,
       aiModel: validatedData.aiModel,
-    });
+    }, createOptions);
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });
