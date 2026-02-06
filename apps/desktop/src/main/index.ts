@@ -1010,6 +1010,29 @@ async function handleAuthExchange(url: string): Promise<boolean> {
       deviceToken: tokens.deviceToken,
     });
 
+    // Propagate the session cookie into the BrowserWindow's cookie jar.
+    // The exchange endpoint returns Set-Cookie, but main-process fetch doesn't
+    // share cookies with the renderer session. Without this, the Next.js
+    // middleware (which checks for a session cookie on page routes) would
+    // redirect /dashboard to /auth/signin after OAuth exchange.
+    const appUrl = new URL(getAppUrl());
+    try {
+      await session.defaultSession.cookies.set({
+        url: appUrl.origin,
+        name: 'session',
+        value: tokens.sessionToken,
+        path: '/',
+        httpOnly: true,
+        secure: !appUrl.origin.includes('localhost'),
+        sameSite: 'strict' as const,
+        expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
+      });
+    } catch (cookieError) {
+      // Non-fatal: the auth hook will recover via device refresh, but the
+      // initial page load may flash the signin page briefly.
+      logger.warn('[Auth Exchange] Failed to set session cookie in BrowserWindow', { cookieError });
+    }
+
     logger.info('[Auth Exchange] OAuth exchange successful', { provider });
 
     // Navigate to dashboard with auth=success query param
