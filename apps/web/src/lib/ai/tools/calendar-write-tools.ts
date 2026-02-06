@@ -176,7 +176,7 @@ export const calendarWriteTools = {
 
         // Default end time to 1 hour after start if they're the same
         if (parsedEndAt.getTime() === parsedStartAt.getTime()) {
-          parsedEndAt.setHours(parsedEndAt.getHours() + 1);
+          parsedEndAt.setTime(parsedEndAt.getTime() + 60 * 60 * 1000);
         }
 
         if (parsedEndAt <= parsedStartAt) {
