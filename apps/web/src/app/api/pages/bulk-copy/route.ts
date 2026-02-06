@@ -3,9 +3,11 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { createId } from '@paralleldrive/cuid2';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { createChangeGroupId } from '@pagespace/lib/monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -132,11 +134,13 @@ export async function POST(request: Request) {
 
     let nextPosition = (lastPage?.position || 0) + 1;
     let copiedCount = 0;
+    const copiedPages: Array<{ newId: string; sourceTitle: string | null; sourceId: string }> = [];
 
     // Copy pages in transaction
     await db.transaction(async (tx) => {
       for (const page of sourcePages) {
         const newPageId = createId();
+        copiedPages.push({ newId: newPageId, sourceTitle: page.title, sourceId: page.id });
 
         // Copy the page
         await tx.insert(pages).values({
@@ -193,6 +197,29 @@ export async function POST(request: Request) {
         }
       }
     });
+
+    // Log activity for each copied page
+    const actorInfo = await getActorInfo(userId);
+    const isMCP = isMCPAuthResult(auth);
+    const changeGroupId = createChangeGroupId();
+    for (const copied of copiedPages) {
+      logPageActivity(userId, 'create', {
+        id: copied.newId,
+        title: copied.sourceTitle ? `${copied.sourceTitle} (Copy)` : 'Untitled (Copy)',
+        driveId: targetDriveId,
+      }, {
+        ...actorInfo,
+        changeGroupId,
+        changeGroupType: 'user',
+        metadata: {
+          bulkOperation: 'copy',
+          sourcePageId: copied.sourceId,
+          totalPages: copiedPages.length,
+          includeChildren,
+          ...(isMCP && { source: 'mcp' }),
+        },
+      });
+    }
 
     // Invalidate cache and broadcast event
     pageTreeCache.invalidateDriveTree(targetDriveId).catch(() => {});

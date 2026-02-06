@@ -25,6 +25,7 @@ export interface ReorderParams {
   newParentId: string | null;
   newPosition: number;
   userId: string;
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -127,6 +128,7 @@ export const pageReorderService = {
           userId,
           actorEmail: actorInfo.actorEmail,
           actorDisplayName: actorInfo.actorDisplayName,
+          metadata: params.metadata,
         },
       });
 

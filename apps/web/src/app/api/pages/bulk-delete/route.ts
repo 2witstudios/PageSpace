@@ -3,8 +3,10 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache, agentAwarenessCache } from '@pagespace/lib/server';
 import { pages, db, eq, inArray } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserDeletePage } from '@pagespace/lib/server';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { createChangeGroupId } from '@pagespace/lib/monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -104,6 +106,31 @@ export async function DELETE(request: Request) {
         }
       }
     });
+
+    // Log activity for each trashed page
+    const actorInfo = await getActorInfo(userId);
+    const isMCP = isMCPAuthResult(auth);
+    const changeGroupId = createChangeGroupId();
+    for (const page of sourcePages) {
+      logPageActivity(userId, 'trash', {
+        id: page.id,
+        title: page.title ?? undefined,
+        driveId: page.driveId,
+      }, {
+        ...actorInfo,
+        changeGroupId,
+        changeGroupType: 'user',
+        updatedFields: ['isTrashed', 'trashedAt'],
+        previousValues: { isTrashed: false },
+        newValues: { isTrashed: true },
+        metadata: {
+          bulkOperation: 'delete',
+          trashChildren,
+          totalPages: pageIds.length,
+          ...(isMCP && { source: 'mcp' }),
+        },
+      });
+    }
 
     // Invalidate caches and broadcast events
     for (const driveId of affectedDriveIds) {

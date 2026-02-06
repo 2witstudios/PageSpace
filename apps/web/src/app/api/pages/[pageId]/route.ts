@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { pageService } from '@/services/api';
 
@@ -66,9 +66,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     const safeBody = patchSchema.parse(body);
     const { expectedRevision, changeGroupId, ...updates } = safeBody;
 
+    const isMCP = isMCPAuthResult(auth);
+    const mcpMeta = isMCP ? { source: 'mcp' as const } : undefined;
+    const context = changeGroupId || mcpMeta
+      ? { changeGroupId, metadata: mcpMeta }
+      : undefined;
+
     const result = await pageService.updatePage(pageId, userId, updates, {
       expectedRevision,
-      context: changeGroupId ? { changeGroupId } : undefined,
+      context,
     });
 
     if (!result.success) {
@@ -164,7 +170,11 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const parsedBody = deleteSchema.parse(body);
     const trashChildren = parsedBody?.trash_children ?? false;
 
-    const result = await pageService.trashPage(pageId, userId, { trashChildren });
+    const isMCPAuth = isMCPAuthResult(auth);
+    const result = await pageService.trashPage(pageId, userId, {
+      trashChildren,
+      metadata: isMCPAuth ? { source: 'mcp' } : undefined,
+    });
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });
