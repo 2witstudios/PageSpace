@@ -75,6 +75,8 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -144,6 +146,9 @@ const GlobalAssistantView: React.FC = () => {
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
+
+  // Image attachments for vision support
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend, hasAttachments } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -577,7 +582,8 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !currentConversationId) return;
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
     const requestBody = selectedAgent
       ? {
@@ -599,8 +605,9 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text: input }, { body: requestBody });
+    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
     setInput('');
+    clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
@@ -829,6 +836,12 @@ const GlobalAssistantView: React.FC = () => {
             onVoiceModeClick={handleVoiceModeToggle}
             isVoiceModeActive={isVoiceModeEnabled}
             isVoiceModeAvailable={isOpenAIConfigured}
+            attachments={attachments}
+            onAddFiles={addFiles}
+            onRemoveFile={removeFile}
+            hasVision={hasVisionCapability(
+              (selectedAgent ? agentSelectedModel : currentModel) || ''
+            )}
           />
         )}
       />
