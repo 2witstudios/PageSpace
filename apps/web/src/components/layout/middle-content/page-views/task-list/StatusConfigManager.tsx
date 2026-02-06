@@ -67,6 +67,22 @@ const PRESET_COLORS = [
   'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
 ];
 
+// Vibrant swatch colors for the color picker (maps 1:1 with PRESET_COLORS)
+const SWATCH_COLORS = [
+  'bg-slate-500',
+  'bg-blue-500',
+  'bg-cyan-500',
+  'bg-teal-500',
+  'bg-green-500',
+  'bg-amber-500',
+  'bg-orange-500',
+  'bg-red-500',
+  'bg-pink-500',
+  'bg-purple-500',
+  'bg-violet-500',
+  'bg-indigo-500',
+];
+
 interface StatusConfigManagerProps {
   pageId: string;
   statusConfigs: TaskStatusConfig[];
@@ -209,12 +225,12 @@ export function StatusConfigManager({
                           </Select>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
-                          {PRESET_COLORS.map(color => (
+                          {PRESET_COLORS.map((color, i) => (
                             <button
                               key={color}
                               className={cn(
                                 'w-5 h-5 rounded border-2 transition-colors',
-                                color.split(' ').find(c => c.startsWith('bg-')),
+                                SWATCH_COLORS[i],
                                 editColor === color ? 'border-primary' : 'border-transparent'
                               )}
                               onClick={() => setEditColor(color)}
@@ -292,12 +308,12 @@ export function StatusConfigManager({
                 </Select>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {PRESET_COLORS.map(color => (
+                {PRESET_COLORS.map((color, i) => (
                   <button
                     key={color}
                     className={cn(
                       'w-6 h-6 rounded border-2 transition-colors',
-                      color.split(' ').find(c => c.startsWith('bg-')),
+                      SWATCH_COLORS[i],
                       newColor === color ? 'border-primary' : 'border-transparent'
                     )}
                     onClick={() => setNewColor(color)}
