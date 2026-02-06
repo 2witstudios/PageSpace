@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
-  STATUS_CONFIG,
+  DEFAULT_STATUS_CONFIG,
   STATUS_ORDER,
   type TaskStatus,
   type TaskPriority,
@@ -90,7 +90,7 @@ export function FilterControls({
         <SelectItem value="all">All statuses</SelectItem>
         {STATUS_ORDER.map((status) => (
           <SelectItem key={status} value={status}>
-            {STATUS_CONFIG[status].label}
+            {DEFAULT_STATUS_CONFIG[status]?.label || status}
           </SelectItem>
         ))}
       </SelectContent>

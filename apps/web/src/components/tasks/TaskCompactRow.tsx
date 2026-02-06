@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { PRIORITY_CONFIG } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Task } from './types';
+import { getStatusDisplay, getAssigneeText } from './task-helpers';
 
 export interface TaskCompactRowProps {
   task: Task;
@@ -25,7 +26,7 @@ export const TaskCompactRow = memo(function TaskCompactRow({
   onToggleComplete,
   onTap,
 }: TaskCompactRowProps) {
-  const isCompleted = task.status === 'completed';
+  const isCompleted = getStatusDisplay(task).group === 'done';
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
   const isOverdue = dueDate && isPast(dueDate) && !isCompleted;
   const isDueToday = dueDate && isToday(dueDate);
@@ -91,12 +92,11 @@ export const TaskCompactRow = memo(function TaskCompactRow({
             </span>
           )}
 
-          {/* Assignee name */}
-          {(task.assignee || task.assigneeAgent) && (
-            <span className="truncate max-w-[100px]">
-              {task.assignee?.name || task.assigneeAgent?.title}
-            </span>
-          )}
+          {/* Assignee names */}
+          {(() => {
+            const text = getAssigneeText(task);
+            return text ? <span className="truncate max-w-[100px]">{text}</span> : null;
+          })()}
 
           {/* Source task list name */}
           {task.taskListPageTitle && (
