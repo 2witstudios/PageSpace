@@ -646,6 +646,27 @@ MENTION PROCESSING:
       totalTools: Object.keys(finalTools).length
     });
 
+    // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
+    try {
+      const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const currentDriveId = locationContext?.currentDrive?.id || null;
+      const integrationTools = await resolveGlobalAssistantIntegrationTools({
+        userId,
+        driveId: currentDriveId,
+        userDriveRole: null, // Role resolved inside the function based on drive access
+      });
+      if (Object.keys(integrationTools).length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        finalTools = { ...finalTools, ...integrationTools } as any;
+        loggers.api.info('Global Assistant: Merged integration tools', {
+          integrationToolCount: Object.keys(integrationTools).length,
+          totalTools: Object.keys(finalTools).length,
+        });
+      }
+    } catch (error) {
+      loggers.api.error('Global Assistant: Failed to resolve integration tools', error as Error);
+    }
+
     // Merge MCP tools if provided
     if (mcpTools && mcpTools.length > 0) {
       try {
