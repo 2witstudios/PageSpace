@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { createStreamTrackingFetch } from '@/lib/ai/core/client';
+import { useChatTransport } from '@/lib/ai/shared';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -203,35 +203,31 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }
   }, [currentConversationId]);
 
+  // Stable transport that only recreates when conversation ID changes
+  const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
+  const transport = useChatTransport(currentConversationId, apiEndpoint);
+
   // Create stable chat config
   // IMPORTANT: Uses initialMessages which is set by loadConversation when switching conversations.
   // The chatConfig only changes when:
   // 1. currentConversationId changes (switching conversations)
   // 2. initialMessages changes (set during loadConversation)
-  // This keeps the config stable during normal messaging to avoid confusing useChat.
   const chatConfig = useMemo(() => {
-    if (!currentConversationId) return null;
-
-    const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
+    if (!currentConversationId || !transport) return null;
 
     return {
       id: currentConversationId,
       messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: apiEndpoint,
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: currentConversationId }),
-      }),
-      experimental_throttle: 100, // Match agent mode throttle for consistent streaming feel
+      transport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
-        console.error('❌ Global Chat Error:', error);
+        console.error('Global Chat Error:', error);
         if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('🔒 Authentication failed - user may need to log in again');
+          console.error('Authentication failed - user may need to log in again');
         }
       },
     };
-  }, [currentConversationId, initialMessages]);
+  }, [currentConversationId, transport, initialMessages]);
 
   // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({

@@ -68,55 +68,68 @@ export function useMessageActions({
     async (messageId: string, newContent: string) => {
       if (!conversationId) return;
 
+      // Optimistically update the message in local state first
+      // This ensures the UI reflects the edit immediately, even if the API call fails
+      const updatedMessages = messages.map((m) => {
+        if (m.id !== messageId) return m;
+        return {
+          ...m,
+          parts: m.parts.map((part) =>
+            part.type === 'text' ? { ...part, text: newContent } : part
+          ),
+        };
+      });
+      setMessages(updatedMessages);
+
       try {
         if (isAgentMode) {
-          // Agent mode: Use agent API
           await patch(
             `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
-
-          // Refetch agent messages
-          const response = await fetchWithAuth(
-            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            setMessages(data.messages || []);
-          }
         } else {
-          // Global mode: Use global API
           await patch(
             `/api/ai/global/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
-
-          // Refetch messages
-          const response = await fetchWithAuth(
-            `/api/ai/global/${conversationId}/messages`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            const loadedMessages = Array.isArray(data) ? data : data.messages || [];
-            setMessages(loadedMessages);
-          }
         }
 
         onEditVersionChange?.();
         toast.success('Message updated successfully');
+
+        // Refetch to reconcile with server state (non-critical)
+        try {
+          const url = isAgentMode
+            ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
+            : `/api/ai/global/${conversationId}/messages`;
+          const response = await fetchWithAuth(url);
+          if (response.ok) {
+            const data = await response.json();
+            const loaded = isAgentMode
+              ? data.messages || []
+              : Array.isArray(data) ? data : data.messages || [];
+            setMessages(loaded);
+          }
+        } catch {
+          // Refetch failed — optimistic update already applied, server has the edit
+        }
       } catch (error) {
         console.error('Failed to edit message:', error);
-        toast.error('Failed to edit message');
-        throw error;
+        toast.error('Failed to save edit. Your local changes may not persist.');
       }
     },
-    [isAgentMode, agentId, conversationId, setMessages, onEditVersionChange]
+    [isAgentMode, agentId, conversationId, messages, setMessages, onEditVersionChange]
   );
 
   // Delete a message
   const handleDelete = useCallback(
     async (messageId: string) => {
       if (!conversationId) return;
+
+      // Optimistically update local state first
+      const previousMessages = [...messages];
+      const filtered = messages.filter((m) => m.id !== messageId);
+      setMessages(filtered);
 
       try {
         if (isAgentMode) {
@@ -127,13 +140,11 @@ export function useMessageActions({
           await del(`/api/ai/global/${conversationId}/messages/${messageId}`);
         }
 
-        // Optimistically update local state
-        const filtered = messages.filter((m) => m.id !== messageId);
-        setMessages(filtered);
-
         toast.success('Message deleted');
       } catch (error) {
         console.error('Failed to delete message:', error);
+        // Revert optimistic update on failure
+        setMessages(previousMessages);
         toast.error('Failed to delete message');
         throw error;
       }
