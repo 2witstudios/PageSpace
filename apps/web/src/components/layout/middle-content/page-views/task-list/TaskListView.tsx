@@ -64,7 +64,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
-import { AssigneeSelect } from './AssigneeSelect';
 import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
@@ -97,7 +96,6 @@ interface MobileTaskCardProps {
   onToggleComplete: (task: TaskItem) => void;
   onStatusChange: (taskId: string, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
-  onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
   onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
   onSaveTitle: (taskId: string, title: string) => void;
@@ -120,7 +118,6 @@ function MobileTaskCard({
   onToggleComplete,
   onStatusChange,
   onPriorityChange,
-  onAssigneeChange,
   onMultiAssigneeChange,
   onDueDateChange,
   onSaveTitle,
@@ -796,7 +793,6 @@ export default function TaskListView({ page }: TaskListViewProps) {
             onToggleComplete={handleToggleComplete}
             onStatusChange={handleStatusChange}
             onPriorityChange={handlePriorityChange}
-            onAssigneeChange={handleAssigneeChange}
             onMultiAssigneeChange={handleMultiAssigneeChange}
             onDueDateChange={handleDueDateChange}
             onSaveTitle={handleSaveTaskTitle}

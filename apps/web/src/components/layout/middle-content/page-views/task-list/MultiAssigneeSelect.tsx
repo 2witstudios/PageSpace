@@ -19,7 +19,7 @@ import {
   CommandSeparator,
 } from '@/components/ui/command';
 import { Button } from '@/components/ui/button';
-import { User, Check, Bot, Plus } from 'lucide-react';
+import { User, Check, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TaskAssigneeData } from './task-list-types';
 

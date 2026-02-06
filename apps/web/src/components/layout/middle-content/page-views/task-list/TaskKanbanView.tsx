@@ -76,6 +76,7 @@ interface SortableTaskCardProps {
   editingTitle: string;
   onEditingTitleChange: (title: string) => void;
   onCancelEdit: () => void;
+  statusConfigs: TaskStatusConfig[];
 }
 
 function SortableTaskCard({
@@ -87,6 +88,7 @@ function SortableTaskCard({
   editingTitle,
   onEditingTitleChange,
   onCancelEdit,
+  statusConfigs,
 }: SortableTaskCardProps) {
   const {
     attributes,
@@ -115,6 +117,7 @@ function SortableTaskCard({
         onCancelEdit={onCancelEdit}
         isDragging={isDragging}
         dragHandleProps={{ attributes, listeners }}
+        statusConfigs={statusConfigs}
       />
     </div>
   );
@@ -135,6 +138,7 @@ interface TaskCardProps {
     attributes: DraggableAttributes;
     listeners: SyntheticListenerMap | undefined;
   };
+  statusConfigs?: TaskStatusConfig[];
 }
 
 function TaskCard({
@@ -148,8 +152,9 @@ function TaskCard({
   onCancelEdit,
   isDragging,
   dragHandleProps,
+  statusConfigs,
 }: TaskCardProps) {
-  const isCompleted = task.status === 'completed' || task.completedAt !== null;
+  const isCompleted = isCompletedStatus(task.status, statusConfigs || []);
 
   return (
     <Card
@@ -279,7 +284,7 @@ interface ColumnHeaderProps {
   onAddTask: () => void;
 }
 
-function ColumnHeader({ status, statusLabel, statusColor, count, canEdit, onAddTask }: ColumnHeaderProps) {
+function ColumnHeader({ status: _status, statusLabel, statusColor, count, canEdit, onAddTask }: ColumnHeaderProps) {
   return (
     <div className="flex items-center justify-between mb-3 px-1">
       <div className="flex items-center gap-2">
@@ -375,9 +380,9 @@ export function TaskKanbanView({
   const [activeTask, setActiveTask] = useState<TaskItem | null>(null);
   const [addingToColumn, setAddingToColumn] = useState<string | null>(null);
 
-  // Derive dynamic status config
-  const statusConfigMap = buildStatusConfig(statusConfigs);
-  const statusOrder = getStatusOrder(statusConfigs);
+  // Derive dynamic status config (memoized to avoid recomputing on every render)
+  const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
+  const statusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
 
   // Group tasks by status
   const tasksByStatus = useMemo(() => {
@@ -517,6 +522,7 @@ export function TaskKanbanView({
                       editingTitle={editingTitle}
                       onEditingTitleChange={onEditingTitleChange}
                       onCancelEdit={onCancelEdit}
+                      statusConfigs={statusConfigs}
                     />
                   ))}
 

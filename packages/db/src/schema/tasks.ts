@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, jsonb, integer, index, unique } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, integer, index, unique, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
 import { createId } from '@paralleldrive/cuid2';
@@ -118,6 +118,7 @@ export const taskAssignees = pgTable('task_assignees', {
     agentIdx: index('task_assignees_agent_page_id_idx').on(table.agentPageId),
     uniqueUserAssignment: unique('task_assignees_task_user').on(table.taskId, table.userId),
     uniqueAgentAssignment: unique('task_assignees_task_agent').on(table.taskId, table.agentPageId),
+    hasAssignee: check('task_assignees_has_assignee', sql`("userId" IS NOT NULL OR "agentPageId" IS NOT NULL)`),
   };
 });
 

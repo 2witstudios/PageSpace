@@ -133,6 +133,7 @@ export interface TaskHandlers {
   onStatusChange: (taskId: string, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
   onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange?: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
   onSaveTitle: (taskId: string, title: string) => void;
   onDelete: (taskId: string) => void;

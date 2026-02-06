@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, taskLists, taskStatusConfigs, taskItems, eq, and, asc } from '@pagespace/db';
+import { db, taskLists, taskStatusConfigs, taskItems, eq, and, asc, desc, inArray } from '@pagespace/db';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/server';
@@ -101,21 +101,24 @@ export async function POST(
   });
 
   if (!taskList) {
-    const [created] = await db.insert(taskLists).values({
-      userId,
-      pageId,
-      title: 'Task List',
-      status: 'pending',
-    }).returning();
-    taskList = created;
+    taskList = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(taskLists).values({
+        userId,
+        pageId,
+        title: 'Task List',
+        status: 'pending',
+      }).returning();
 
-    // Create default status configs
-    await db.insert(taskStatusConfigs).values(
-      DEFAULT_TASK_STATUSES.map(s => ({
-        taskListId: taskList!.id,
-        ...s,
-      }))
-    );
+      // Create default status configs
+      await tx.insert(taskStatusConfigs).values(
+        DEFAULT_TASK_STATUSES.map(s => ({
+          taskListId: created.id,
+          ...s,
+        }))
+      );
+
+      return created;
+    });
   }
 
   // Generate slug
@@ -141,7 +144,7 @@ export async function POST(
   if (newPosition === undefined) {
     const lastConfig = await db.query.taskStatusConfigs.findFirst({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
-      orderBy: [asc(taskStatusConfigs.position)],
+      orderBy: [desc(taskStatusConfigs.position)],
     });
     newPosition = (lastConfig?.position ?? -1) + 1;
   }
@@ -347,11 +350,9 @@ export async function DELETE(
     // Migrate tasks to new status
     if (tasksWithStatus.length > 0 && migrateToSlug) {
       const taskIds = tasksWithStatus.map(t => t.id);
-      for (const id of taskIds) {
-        await tx.update(taskItems)
-          .set({ status: migrateToSlug })
-          .where(eq(taskItems.id, id));
-      }
+      await tx.update(taskItems)
+        .set({ status: migrateToSlug })
+        .where(inArray(taskItems.id, taskIds));
     }
 
     // Delete the status config

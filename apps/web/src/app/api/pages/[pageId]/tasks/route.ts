@@ -46,12 +46,20 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     });
 
     if (existingConfigs.length === 0) {
-      await db.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({
-          taskListId: taskList!.id,
-          ...s,
-        }))
-      );
+      try {
+        await db.insert(taskStatusConfigs).values(
+          DEFAULT_TASK_STATUSES.map(s => ({
+            taskListId: taskList!.id,
+            ...s,
+          }))
+        );
+      } catch (error) {
+        // Swallow duplicate key errors from concurrent requests
+        const message = error instanceof Error ? error.message : '';
+        if (!message.includes('unique') && !message.includes('duplicate')) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -298,9 +306,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const nextTaskPosition = (lastTask?.position ?? -1) + 1;
   const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
 
-  // Determine primary assignee for backward compat fields
-  const primaryAssigneeId = assigneeId || null;
-  const primaryAgentId = assigneeAgentId || null;
+  // Determine primary assignee for backward compat fields (derive from assigneeIds if present)
+  const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
+  const primaryAgentId = assigneeAgentId || assigneeIds?.find((a: { type: string }) => a.type === 'agent')?.id || null;
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {

@@ -14,6 +14,16 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -26,7 +36,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Plus, Settings2, GripVertical, MoreHorizontal, Trash2, Pencil } from 'lucide-react';
+import { Plus, Settings2, MoreHorizontal, Trash2, Pencil, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TaskStatusConfig, TaskStatusGroup } from './task-list-types';
 
@@ -79,6 +89,7 @@ export function StatusConfigManager({
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
   const [editGroup, setEditGroup] = useState<TaskStatusGroup>('todo');
+  const [deleteTarget, setDeleteTarget] = useState<TaskStatusConfig | null>(null);
 
   const handleAddStatus = async () => {
     if (!newName.trim()) return;
@@ -133,17 +144,6 @@ export function StatusConfigManager({
     }
   };
 
-  const handleReorder = async (configs: TaskStatusConfig[]) => {
-    try {
-      await put(`/api/pages/${pageId}/tasks/statuses`, {
-        statuses: configs.map((c, i) => ({ ...c, position: i })),
-      });
-      onConfigsChanged();
-    } catch {
-      toast.error('Failed to reorder statuses');
-    }
-  };
-
   const startEditing = (config: TaskStatusConfig) => {
     setEditingId(config.id);
     setEditName(config.name);
@@ -183,31 +183,45 @@ export function StatusConfigManager({
               <div className="space-y-1">
                 {groupedConfigs[group].map(config => (
                   <div key={config.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-muted/50 group">
-                    <GripVertical className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100" />
 
                     {editingId === config.id ? (
-                      <div className="flex-1 flex items-center gap-2">
-                        <Input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          className="h-7 text-sm"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleUpdateStatus(config);
-                            if (e.key === 'Escape') setEditingId(null);
-                          }}
-                        />
-                        <Select value={editGroup} onValueChange={(v) => setEditGroup(v as TaskStatusGroup)}>
-                          <SelectTrigger className="h-7 w-28 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="todo">Not Started</SelectItem>
-                            <SelectItem value="in_progress">In Progress</SelectItem>
-                            <SelectItem value="done">Done</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <div className="flex gap-1">
+                      <div className="flex-1 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="h-7 text-sm"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleUpdateStatus(config);
+                              if (e.key === 'Escape') setEditingId(null);
+                            }}
+                          />
+                          <Select value={editGroup} onValueChange={(v) => setEditGroup(v as TaskStatusGroup)}>
+                            <SelectTrigger className="h-7 w-28 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="todo">Not Started</SelectItem>
+                              <SelectItem value="in_progress">In Progress</SelectItem>
+                              <SelectItem value="done">Done</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {PRESET_COLORS.map(color => (
+                            <button
+                              key={color}
+                              className={cn(
+                                'w-5 h-5 rounded border-2 transition-colors',
+                                color.split(' ').find(c => c.startsWith('bg-')),
+                                editColor === color ? 'border-primary' : 'border-transparent'
+                              )}
+                              onClick={() => setEditColor(color)}
+                            />
+                          ))}
+                        </div>
+                        <div className="flex gap-1 justify-end">
                           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setEditingId(null)}>
                             Cancel
                           </Button>
@@ -234,7 +248,7 @@ export function StatusConfigManager({
                               Edit
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              onClick={() => handleDeleteStatus(config)}
+                              onClick={() => setDeleteTarget(config)}
                               className="text-destructive"
                               disabled={statusConfigs.length <= 1}
                             >
@@ -303,6 +317,36 @@ export function StatusConfigManager({
           )}
         </div>
       </DialogContent>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Delete status &ldquo;{deleteTarget?.name}&rdquo;?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Tasks using this status will be moved to another status in the same group.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteTarget) {
+                  handleDeleteStatus(deleteTarget);
+                  setDeleteTarget(null);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

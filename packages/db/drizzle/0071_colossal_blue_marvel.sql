@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS "task_assignees" (
 	"agentPageId" text,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "task_assignees_task_user" UNIQUE("taskId","userId"),
-	CONSTRAINT "task_assignees_task_agent" UNIQUE("taskId","agentPageId")
+	CONSTRAINT "task_assignees_task_agent" UNIQUE("taskId","agentPageId"),
+	CONSTRAINT "task_assignees_has_assignee" CHECK ("userId" IS NOT NULL OR "agentPageId" IS NOT NULL)
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "task_status_configs" (

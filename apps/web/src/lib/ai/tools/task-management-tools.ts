@@ -1,7 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, not } from '@pagespace/db';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
+import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, isNull, inArray } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
@@ -162,17 +161,17 @@ Assignment:
             }
           }
 
+          // Fetch status configs for rollup and validation
+          const validConfigs = await db.query.taskStatusConfigs.findMany({
+            where: eq(taskStatusConfigs.taskListId, existingTask.taskListId),
+            columns: { slug: true, group: true },
+          });
+
           // Build update object
           const updateData: Record<string, unknown> = {};
           if (title !== undefined) updateData.title = title;
           if (description !== undefined) updateData.description = description;
           if (status !== undefined) {
-            // Validate status against task list's custom configs
-            const validConfigs = await db.query.taskStatusConfigs.findMany({
-              where: eq(taskStatusConfigs.taskListId, existingTask.taskListId),
-              columns: { slug: true, group: true },
-            });
-
             if (validConfigs.length > 0) {
               const matched = validConfigs.find(c => c.slug === status);
               if (!matched) {
@@ -202,53 +201,62 @@ Assignment:
             };
           }
 
-          const [updatedTask] = await db
-            .update(taskItems)
-            .set(updateData)
-            .where(eq(taskItems.id, taskId))
-            .returning();
+          resultTask = await db.transaction(async (tx) => {
+            const [updatedTask] = await tx
+              .update(taskItems)
+              .set(updateData)
+              .where(eq(taskItems.id, taskId))
+              .returning();
 
-          // Handle multiple assignees
-          if (assigneeIds && assigneeIds.length > 0) {
-            await db.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
-            const rows = assigneeIds.map(a => ({
-              taskId,
-              ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
-            }));
-            await db.insert(taskAssignees).values(rows);
+            // Handle multiple assignees
+            if (assigneeIds && assigneeIds.length > 0) {
+              await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+              const rows = assigneeIds.map(a => ({
+                taskId,
+                ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
+              }));
+              await tx.insert(taskAssignees).values(rows);
 
-            // Sync legacy fields
-            const firstUser = assigneeIds.find(a => a.type === 'user');
-            const firstAgent = assigneeIds.find(a => a.type === 'agent');
-            await db.update(taskItems).set({
-              assigneeId: firstUser?.id || null,
-              assigneeAgentId: firstAgent?.id || null,
-            }).where(eq(taskItems.id, taskId));
-          } else if (assigneeId !== undefined || assigneeAgentId !== undefined) {
-            // Legacy single-assignee: sync to junction table
-            await db.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
-            const rows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
-            if (assigneeId) rows.push({ taskId, userId: assigneeId });
-            if (assigneeAgentId) rows.push({ taskId, agentPageId: assigneeAgentId });
-            if (rows.length > 0) await db.insert(taskAssignees).values(rows);
-          }
+              // Sync legacy fields
+              const firstUser = assigneeIds.find(a => a.type === 'user');
+              const firstAgent = assigneeIds.find(a => a.type === 'agent');
+              await tx.update(taskItems).set({
+                assigneeId: firstUser?.id || null,
+                assigneeAgentId: firstAgent?.id || null,
+              }).where(eq(taskItems.id, taskId));
+            } else if (assigneeId !== undefined || assigneeAgentId !== undefined) {
+              // Legacy single-assignee: sync to junction table
+              await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+              const rows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+              if (assigneeId) rows.push({ taskId, userId: assigneeId });
+              if (assigneeAgentId) rows.push({ taskId, agentPageId: assigneeAgentId });
+              if (rows.length > 0) await tx.insert(taskAssignees).values(rows);
+            }
 
-          resultTask = updatedTask;
+            return updatedTask;
+          });
 
           // Update task list status based on task completion
           if (status !== undefined) {
+            const doneStatusSlugs = validConfigs.length > 0
+              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
+              : new Set(['completed']);
+            const inProgressSlugs = validConfigs.length > 0
+              ? new Set(validConfigs.filter(c => c.group === 'in_progress').map(c => c.slug))
+              : new Set(['in_progress']);
+
             const siblingTasks = await db
               .select()
               .from(taskItems)
               .where(eq(taskItems.taskListId, existingTask.taskListId));
 
             const allCompleted = siblingTasks.every(t =>
-              t.id === taskId ? status === 'completed' : t.status === 'completed'
+              t.id === taskId ? doneStatusSlugs.has(status) : doneStatusSlugs.has(t.status)
             );
 
             if (allCompleted) {
               await db.update(taskLists).set({ status: 'completed' }).where(eq(taskLists.id, existingTask.taskListId));
-            } else if (status === 'in_progress') {
+            } else if (inProgressSlugs.has(status)) {
               await db.update(taskLists).set({ status: 'in_progress' }).where(and(
                 eq(taskLists.id, existingTask.taskListId),
                 eq(taskLists.status, 'pending')
@@ -259,13 +267,13 @@ Assignment:
           // Broadcast update event
           await broadcastTaskEvent({
             type: 'task_updated',
-            taskId: updatedTask.id,
+            taskId: resultTask.id,
             userId,
             pageId: taskList.pageId || undefined,
-            data: { title: updatedTask.title, note },
+            data: { title: resultTask.title, note },
           });
 
-          message = `Updated task "${updatedTask.title}"`;
+          message = `Updated task "${resultTask.title}"`;
         } else {
           // CREATE new task - requires pageId of a TASK_LIST page
 
@@ -345,7 +353,7 @@ Assignment:
           }
 
           // Validate custom status if provided
-          let resolvedStatus = status || 'pending';
+          const resolvedStatus = status || 'pending';
           const statusConfigsForList = await db.query.taskStatusConfigs.findMany({
             where: eq(taskStatusConfigs.taskListId, taskList!.id),
             columns: { slug: true, group: true },
@@ -625,8 +633,8 @@ This helps agents understand their responsibilities and coordinate work with oth
         if (status) {
           conditions.push(eq(taskItems.status, status));
         } else if (!includeCompleted) {
-          // Exclude completed by default
-          conditions.push(not(eq(taskItems.status, 'completed')));
+          // Exclude completed by default (use completedAt for custom status support)
+          conditions.push(isNull(taskItems.completedAt));
         }
 
         // Query tasks assigned to the agent
@@ -681,13 +689,23 @@ This helps agents understand their responsibilities and coordinate work with oth
           return true;
         });
 
-        // Group tasks by status for easier consumption
-        const tasksByStatus = {
-          pending: filteredTasks.filter(t => t.status === 'pending'),
-          in_progress: filteredTasks.filter(t => t.status === 'in_progress'),
-          blocked: filteredTasks.filter(t => t.status === 'blocked'),
-          completed: filteredTasks.filter(t => t.status === 'completed'),
-        };
+        // Build group lookup from status configs across all task lists
+        const uniqueTaskListIds = [...new Set(filteredTasks.map(t => t.taskList?.id).filter(Boolean))] as string[];
+        const allConfigs = uniqueTaskListIds.length > 0
+          ? await db.query.taskStatusConfigs.findMany({
+              where: inArray(taskStatusConfigs.taskListId, uniqueTaskListIds),
+            })
+          : [];
+        const slugToGroup = new Map(allConfigs.map(c => [c.slug, c.group]));
+
+        // Group tasks by config group (fall back to completedAt/status heuristic)
+        const byGroup: Record<string, typeof filteredTasks> = { todo: [], in_progress: [], done: [] };
+        for (const t of filteredTasks) {
+          const group = slugToGroup.get(t.status)
+            || (t.completedAt ? 'done' : t.status === 'in_progress' || t.status === 'blocked' ? 'in_progress' : 'todo');
+          if (!byGroup[group]) byGroup[group] = [];
+          byGroup[group].push(t);
+        }
 
         return {
           success: true,
@@ -698,10 +716,11 @@ This helps agents understand their responsibilities and coordinate work with oth
           },
           summary: {
             total: filteredTasks.length,
-            pending: tasksByStatus.pending.length,
-            in_progress: tasksByStatus.in_progress.length,
-            blocked: tasksByStatus.blocked.length,
-            completed: tasksByStatus.completed.length,
+            byGroup: {
+              todo: byGroup.todo?.length || 0,
+              in_progress: byGroup.in_progress?.length || 0,
+              done: byGroup.done?.length || 0,
+            },
           },
           tasks: filteredTasks.map(t => ({
             id: t.id,

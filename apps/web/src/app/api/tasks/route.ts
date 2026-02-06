@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, taskAssignees, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -191,7 +191,7 @@ export async function GET(request: Request) {
     // This ensures pagination counts match the actual filtered results
     const trashedPages = await db.select({ id: pages.id })
       .from(pages)
-      .where(eq(pages.isTrashed, true));
+      .where(and(eq(pages.isTrashed, true), inArray(pages.driveId, driveIds)));
     const trashedPageIds = trashedPages.map(p => p.id);
 
     // Build assignee filter condition
@@ -260,7 +260,7 @@ export async function GET(request: Request) {
             and(
               not(isNull(taskItems.dueDate)),
               lt(taskItems.dueDate, today),
-              not(eq(taskItems.status, 'completed'))
+              isNull(taskItems.completedAt)
             )
           );
           break;

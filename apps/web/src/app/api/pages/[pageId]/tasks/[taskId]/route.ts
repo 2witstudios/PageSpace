@@ -120,6 +120,30 @@ export async function PATCH(
     columns: { driveId: true },
   });
 
+  // Validate agent entries in assigneeIds
+  if (Array.isArray(assigneeIds)) {
+    for (const entry of assigneeIds) {
+      if (entry.type === 'agent' && entry.id) {
+        const agentPage = await db.query.pages.findFirst({
+          where: and(
+            eq(pages.id, entry.id),
+            eq(pages.type, 'AI_CHAT'),
+            eq(pages.isTrashed, false)
+          ),
+          columns: { id: true, driveId: true },
+        });
+
+        if (!agentPage) {
+          return NextResponse.json({ error: `Invalid agent ID "${entry.id}" - must be an AI agent page` }, { status: 400 });
+        }
+
+        if (taskListPage && agentPage.driveId !== taskListPage.driveId) {
+          return NextResponse.json({ error: 'Agent must be in the same drive as the task list' }, { status: 400 });
+        }
+      }
+    }
+  }
+
   if (assigneeAgentId !== undefined) {
     if (assigneeAgentId) {
       const agentPage = await db.query.pages.findFirst({
@@ -152,6 +176,14 @@ export async function PATCH(
 
   const actorInfo = await getActorInfo(userId);
   let linkedPageUpdated = false;
+
+  // Fetch existing assignees before the transaction (for notification comparison)
+  const existingAssignees = Array.isArray(assigneeIds)
+    ? await db.query.taskAssignees.findMany({
+        where: eq(taskAssignees.taskId, taskId),
+        columns: { userId: true, agentPageId: true },
+      })
+    : [];
 
   // Update task and sync title to linked page if needed
   let updatedTask;
@@ -295,6 +327,23 @@ export async function PATCH(
       pageId,
       userId
     );
+  }
+
+  // Send notifications for newly added user assignees (multi-assignee path)
+  if (Array.isArray(assigneeIds)) {
+    const previousUserIds = new Set(existingAssignees.map(a => a.userId).filter(Boolean));
+    const newUserIds = assigneeIds
+      .filter((a: { type: string; id: string }) => a.type === 'user' && a.id !== userId && !previousUserIds.has(a.id))
+      .map((a: { id: string }) => a.id);
+    for (const newUserId of newUserIds) {
+      void createTaskAssignedNotification(
+        newUserId,
+        taskId,
+        taskWithRelations.title,
+        pageId,
+        userId
+      );
+    }
   }
 
   // Broadcast events
