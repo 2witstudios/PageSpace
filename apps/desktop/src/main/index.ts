@@ -191,6 +191,7 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      backgroundThrottling: false, // Prevent Chromium from throttling timers/rAF when window is hidden during startup
     },
     show: false, // Don't show until ready
   };
