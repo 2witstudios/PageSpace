@@ -44,10 +44,11 @@ import {
 import { cn } from '@/lib/utils';
 import {
   TaskItem,
-  TaskStatus,
+  TaskStatusConfig,
   TaskHandlers,
-  STATUS_CONFIG,
-  STATUS_ORDER,
+  buildStatusConfig,
+  getStatusOrder,
+  isCompletedStatus,
   PRIORITY_CONFIG,
 } from './task-list-types';
 
@@ -61,7 +62,8 @@ interface TaskKanbanViewProps {
   editingTitle: string;
   onEditingTitleChange: (title: string) => void;
   onCancelEdit: () => void;
-  onCreateTask: (title: string, status?: TaskStatus) => void;
+  onCreateTask: (title: string, status?: string) => void;
+  statusConfigs: TaskStatusConfig[];
 }
 
 // Sortable card wrapper
@@ -147,7 +149,7 @@ function TaskCard({
   isDragging,
   dragHandleProps,
 }: TaskCardProps) {
-  const isCompleted = task.status === 'completed';
+  const isCompleted = task.status === 'completed' || task.completedAt !== null;
 
   return (
     <Card
@@ -269,19 +271,19 @@ function TaskCard({
 
 // Column header with count
 interface ColumnHeaderProps {
-  status: TaskStatus;
+  status: string;
+  statusLabel: string;
+  statusColor: string;
   count: number;
   canEdit: boolean;
   onAddTask: () => void;
 }
 
-function ColumnHeader({ status, count, canEdit, onAddTask }: ColumnHeaderProps) {
-  const config = STATUS_CONFIG[status];
-
+function ColumnHeader({ status, statusLabel, statusColor, count, canEdit, onAddTask }: ColumnHeaderProps) {
   return (
     <div className="flex items-center justify-between mb-3 px-1">
       <div className="flex items-center gap-2">
-        <Badge className={cn('text-xs', config.color)}>{config.label}</Badge>
+        <Badge className={cn('text-xs', statusColor)}>{statusLabel}</Badge>
         <span className="text-sm text-muted-foreground">{count}</span>
       </div>
       {canEdit && (
@@ -300,7 +302,7 @@ function ColumnHeader({ status, count, canEdit, onAddTask }: ColumnHeaderProps) 
 
 // Droppable column wrapper to allow drops on empty columns
 interface KanbanColumnProps {
-  status: TaskStatus;
+  status: string;
   children: React.ReactNode;
 }
 
@@ -319,8 +321,8 @@ function KanbanColumn({ status, children }: KanbanColumnProps) {
 
 // New task input for column
 interface NewTaskInputProps {
-  status: TaskStatus;
-  onSubmit: (title: string, status: TaskStatus) => void;
+  status: string;
+  onSubmit: (title: string, status: string) => void;
   onCancel: () => void;
 }
 
@@ -368,26 +370,37 @@ export function TaskKanbanView({
   onEditingTitleChange,
   onCancelEdit,
   onCreateTask,
+  statusConfigs,
 }: TaskKanbanViewProps) {
   const [activeTask, setActiveTask] = useState<TaskItem | null>(null);
-  const [addingToColumn, setAddingToColumn] = useState<TaskStatus | null>(null);
+  const [addingToColumn, setAddingToColumn] = useState<string | null>(null);
+
+  // Derive dynamic status config
+  const statusConfigMap = buildStatusConfig(statusConfigs);
+  const statusOrder = getStatusOrder(statusConfigs);
 
   // Group tasks by status
   const tasksByStatus = useMemo(() => {
-    const grouped: Record<TaskStatus, TaskItem[]> = {
-      pending: [],
-      in_progress: [],
-      completed: [],
-      blocked: [],
-    };
+    const grouped: Record<string, TaskItem[]> = {};
+    for (const slug of statusOrder) {
+      grouped[slug] = [];
+    }
 
     for (const task of tasks) {
-      grouped[task.status].push(task);
+      if (grouped[task.status]) {
+        grouped[task.status].push(task);
+      } else {
+        // Unknown status - put in first column
+        const firstStatus = statusOrder[0];
+        if (firstStatus && grouped[firstStatus]) {
+          grouped[firstStatus].push(task);
+        }
+      }
     }
 
     // Sort each column by position
-    for (const status of STATUS_ORDER) {
-      grouped[status].sort((a, b) => {
+    for (const status of statusOrder) {
+      grouped[status]?.sort((a, b) => {
         const posA = a.page?.position ?? a.position;
         const posB = b.page?.position ?? b.position;
         return posA - posB;
@@ -395,7 +408,7 @@ export function TaskKanbanView({
     }
 
     return grouped;
-  }, [tasks]);
+  }, [tasks, statusOrder]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -426,12 +439,12 @@ export function TaskKanbanView({
 
     // Determine the target status
     // The over.id could be either a task id or a column id
-    let targetStatus: TaskStatus | null = null;
+    let targetStatus: string | null = null;
     let _targetTask: TaskItem | null = null;
 
     // Check if dropped over a task
-    for (const status of STATUS_ORDER) {
-      const task = tasksByStatus[status].find((t) => t.id === over.id);
+    for (const status of statusOrder) {
+      const task = tasksByStatus[status]?.find((t) => t.id === over.id);
       if (task) {
         targetStatus = status;
         _targetTask = task;
@@ -440,8 +453,8 @@ export function TaskKanbanView({
     }
 
     // Check if dropped over a column (empty area)
-    if (!targetStatus && STATUS_ORDER.includes(over.id as TaskStatus)) {
-      targetStatus = over.id as TaskStatus;
+    if (!targetStatus && statusOrder.includes(over.id as string)) {
+      targetStatus = over.id as string;
     }
 
     if (!targetStatus) return;
@@ -470,14 +483,18 @@ export function TaskKanbanView({
       onDragCancel={handleDragCancel}
     >
       <div className="flex gap-4 p-4 h-full overflow-x-auto">
-        {STATUS_ORDER.map((status) => (
+        {statusOrder.map((status) => {
+          const cfg = statusConfigMap[status];
+          return (
           <div
             key={status}
             className="flex-shrink-0 w-72 flex flex-col"
           >
             <ColumnHeader
               status={status}
-              count={tasksByStatus[status].length}
+              statusLabel={cfg?.label || status}
+              statusColor={cfg?.color || 'bg-slate-100 text-slate-700'}
+              count={tasksByStatus[status]?.length || 0}
               canEdit={canEdit}
               onAddTask={() => setAddingToColumn(status)}
             />
@@ -485,11 +502,11 @@ export function TaskKanbanView({
             <ScrollArea className="flex-1">
               <SortableContext
                 id={status}
-                items={tasksByStatus[status].map((t) => t.id)}
+                items={(tasksByStatus[status] || []).map((t) => t.id)}
                 strategy={verticalListSortingStrategy}
               >
                 <KanbanColumn status={status}>
-                  {tasksByStatus[status].map((task) => (
+                  {(tasksByStatus[status] || []).map((task) => (
                     <SortableTaskCard
                       key={task.id}
                       task={task}
@@ -503,7 +520,7 @@ export function TaskKanbanView({
                     />
                   ))}
 
-                  {tasksByStatus[status].length === 0 && (
+                  {(tasksByStatus[status]?.length || 0) === 0 && (
                     <div className="text-center py-8 text-muted-foreground text-sm">
                       No tasks
                     </div>
@@ -520,7 +537,8 @@ export function TaskKanbanView({
               )}
             </ScrollArea>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Drag overlay - shows the card being dragged */}

@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, pages, eq, and, desc, asc, not } from '@pagespace/db';
+import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, not } from '@pagespace/db';
+import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
@@ -52,26 +53,35 @@ When creating tasks:
 - The page title stays synced with the task title
 - DO NOT delete these pages directly - use this tool to manage tasks
 
+Status:
+- Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
+- Each status belongs to a group (todo, in_progress, done) that controls completion behavior
+- Use a status slug that exists in the task list's configuration
+
 Assignment:
-- Use assigneeId to assign to a human user
-- Use assigneeAgentId to assign to an AI agent (use the agent's page ID)
-- Agents can assign tasks to themselves or other agents
-- Set both to null to unassign`,
+- Use assigneeIds array to assign multiple users and/or agents
+- Each entry: { type: 'user'|'agent', id: 'string' }
+- Or use legacy assigneeId/assigneeAgentId for single assignment
+- Agents can assign tasks to themselves or other agents`,
     inputSchema: z.object({
       taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
       pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
       title: z.string().optional().describe('Task title (required when creating)'),
       description: z.string().optional().describe('Task description'),
-      status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Task status'),
+      status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
-      assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user)'),
-      assigneeAgentId: z.string().nullable().optional().describe('Agent page ID to assign (null to unassign agent). Use this to assign tasks to AI agents including yourself.'),
+      assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user). Legacy single-assignee field.'),
+      assigneeAgentId: z.string().nullable().optional().describe('Agent page ID to assign (null to unassign agent). Legacy single-assignee field.'),
+      assigneeIds: z.array(z.object({
+        type: z.enum(['user', 'agent']),
+        id: z.string(),
+      })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
       position: z.number().optional().describe('Position in the list (for new tasks, defaults to end)'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, dueDate, note, position } = params;
+      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
@@ -157,8 +167,23 @@ Assignment:
           if (title !== undefined) updateData.title = title;
           if (description !== undefined) updateData.description = description;
           if (status !== undefined) {
-            updateData.status = status;
-            updateData.completedAt = status === 'completed' ? new Date() : null;
+            // Validate status against task list's custom configs
+            const validConfigs = await db.query.taskStatusConfigs.findMany({
+              where: eq(taskStatusConfigs.taskListId, existingTask.taskListId),
+              columns: { slug: true, group: true },
+            });
+
+            if (validConfigs.length > 0) {
+              const matched = validConfigs.find(c => c.slug === status);
+              if (!matched) {
+                throw new Error(`Invalid status "${status}". Valid: ${validConfigs.map(c => c.slug).join(', ')}`);
+              }
+              updateData.status = status;
+              updateData.completedAt = matched.group === 'done' ? new Date() : null;
+            } else {
+              updateData.status = status;
+              updateData.completedAt = status === 'completed' ? new Date() : null;
+            }
           }
           if (priority !== undefined) updateData.priority = priority;
           if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
@@ -182,6 +207,31 @@ Assignment:
             .set(updateData)
             .where(eq(taskItems.id, taskId))
             .returning();
+
+          // Handle multiple assignees
+          if (assigneeIds && assigneeIds.length > 0) {
+            await db.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+            const rows = assigneeIds.map(a => ({
+              taskId,
+              ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
+            }));
+            await db.insert(taskAssignees).values(rows);
+
+            // Sync legacy fields
+            const firstUser = assigneeIds.find(a => a.type === 'user');
+            const firstAgent = assigneeIds.find(a => a.type === 'agent');
+            await db.update(taskItems).set({
+              assigneeId: firstUser?.id || null,
+              assigneeAgentId: firstAgent?.id || null,
+            }).where(eq(taskItems.id, taskId));
+          } else if (assigneeId !== undefined || assigneeAgentId !== undefined) {
+            // Legacy single-assignee: sync to junction table
+            await db.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+            const rows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+            if (assigneeId) rows.push({ taskId, userId: assigneeId });
+            if (assigneeAgentId) rows.push({ taskId, agentPageId: assigneeAgentId });
+            if (rows.length > 0) await db.insert(taskAssignees).values(rows);
+          }
 
           resultTask = updatedTask;
 
@@ -294,6 +344,19 @@ Assignment:
             }
           }
 
+          // Validate custom status if provided
+          let resolvedStatus = status || 'pending';
+          const statusConfigsForList = await db.query.taskStatusConfigs.findMany({
+            where: eq(taskStatusConfigs.taskListId, taskList!.id),
+            columns: { slug: true, group: true },
+          });
+          if (statusConfigsForList.length > 0 && status) {
+            const matched = statusConfigsForList.find(c => c.slug === status);
+            if (!matched) {
+              throw new Error(`Invalid status "${status}". Valid: ${statusConfigsForList.map(c => c.slug).join(', ')}`);
+            }
+          }
+
           // Create document page and task in transaction
           const result = await db.transaction(async (tx) => {
             // Create document page for the task
@@ -308,16 +371,19 @@ Assignment:
             }).returning();
 
             // Create task with link to the page
+            const primaryUserId = assigneeId || (assigneeIds?.find(a => a.type === 'user')?.id) || null;
+            const primaryAgentId = assigneeAgentId || (assigneeIds?.find(a => a.type === 'agent')?.id) || null;
+
             const [newTask] = await tx.insert(taskItems).values({
               taskListId: taskList!.id,
               userId,
               pageId: taskPage.id,
               title: title!,
               description: description || null,
-              status: status || 'pending',
+              status: resolvedStatus,
               priority: priority || 'medium',
-              assigneeId: assigneeId || null,
-              assigneeAgentId: assigneeAgentId || null,
+              assigneeId: primaryUserId,
+              assigneeAgentId: primaryAgentId,
               dueDate: dueDate ? new Date(dueDate) : null,
               position: nextTaskPosition,
               metadata: {
@@ -325,6 +391,21 @@ Assignment:
                 note,
               },
             }).returning();
+
+            // Create multiple assignees in junction table
+            const assigneeRows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+            if (assigneeIds && assigneeIds.length > 0) {
+              for (const a of assigneeIds) {
+                if (a.type === 'user') assigneeRows.push({ taskId: newTask.id, userId: a.id });
+                else if (a.type === 'agent') assigneeRows.push({ taskId: newTask.id, agentPageId: a.id });
+              }
+            } else {
+              if (primaryUserId) assigneeRows.push({ taskId: newTask.id, userId: primaryUserId });
+              if (primaryAgentId) assigneeRows.push({ taskId: newTask.id, agentPageId: primaryAgentId });
+            }
+            if (assigneeRows.length > 0) {
+              await tx.insert(taskAssignees).values(assigneeRows);
+            }
 
             return { task: newTask, page: taskPage };
           });
@@ -386,6 +467,12 @@ Assignment:
                 id: true,
                 title: true,
                 type: true,
+              },
+            },
+            assignees: {
+              with: {
+                user: { columns: { id: true, name: true } },
+                agentPage: { columns: { id: true, title: true } },
               },
             },
           },
@@ -452,6 +539,12 @@ Assignment:
               title: t.assigneeAgent.title,
               type: t.assigneeAgent.type,
             } : null,
+            assignees: t.assignees?.map(a => ({
+              userId: a.userId,
+              agentPageId: a.agentPageId,
+              user: a.user ? { id: a.user.id, name: a.user.name } : null,
+              agentPage: a.agentPage ? { id: a.agentPage.id, title: a.agentPage.title } : null,
+            })) || [],
           })),
           message,
         };
@@ -472,13 +565,13 @@ Assignment:
 By default, returns tasks assigned to YOU (the current agent).
 Optionally filter by:
 - agentId: See tasks assigned to a specific agent
-- status: Filter by task status (pending, in_progress, completed, blocked)
+- status: Filter by task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)
 - driveId: Only show tasks from a specific drive
 
 This helps agents understand their responsibilities and coordinate work with other agents.`,
     inputSchema: z.object({
       agentId: z.string().optional().describe('Agent page ID to query (defaults to current agent if in agent context)'),
-      status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Filter by task status'),
+      status: z.string().optional().describe('Filter by task status slug (e.g. pending, in_progress, completed, blocked)'),
       driveId: z.string().optional().describe('Filter by drive ID'),
       includeCompleted: z.boolean().default(false).describe('Include completed tasks (default: false)'),
     }),

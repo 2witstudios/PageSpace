@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db, taskLists, taskItems, pages, eq, and, desc } from '@pagespace/db';
+import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc } from '@pagespace/db';
+import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
@@ -10,7 +11,7 @@ const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
- * Get or create task list for a page
+ * Get or create task list for a page, ensuring default status configs exist
  */
 async function getOrCreateTaskListForPage(pageId: string, userId: string) {
   // Check if task list exists for this page
@@ -18,15 +19,40 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     where: eq(taskLists.pageId, pageId),
   });
 
-  // If not, create one
+  // If not, create one with default status configs
   if (!taskList) {
-    const [created] = await db.insert(taskLists).values({
-      userId,
-      pageId,
-      title: 'Task List',
-      status: 'pending',
-    }).returning();
-    taskList = created;
+    taskList = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(taskLists).values({
+        userId,
+        pageId,
+        title: 'Task List',
+        status: 'pending',
+      }).returning();
+
+      // Create default status configs
+      await tx.insert(taskStatusConfigs).values(
+        DEFAULT_TASK_STATUSES.map(s => ({
+          taskListId: created.id,
+          ...s,
+        }))
+      );
+
+      return created;
+    });
+  } else {
+    // Ensure status configs exist for existing task lists (migration path)
+    const existingConfigs = await db.query.taskStatusConfigs.findMany({
+      where: eq(taskStatusConfigs.taskListId, taskList.id),
+    });
+
+    if (existingConfigs.length === 0) {
+      await db.insert(taskStatusConfigs).values(
+        DEFAULT_TASK_STATUSES.map(s => ({
+          taskListId: taskList!.id,
+          ...s,
+        }))
+      );
+    }
   }
 
   return taskList;
@@ -34,7 +60,7 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
 
 /**
  * GET /api/pages/[pageId]/tasks
- * Fetch all tasks for a TASK_LIST page
+ * Fetch all tasks for a TASK_LIST page, including status configs and assignees
  */
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -51,7 +77,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }, { status: 403 });
   }
 
-  // Get or create task list
+  // Get or create task list (also ensures default status configs)
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
   // Parse query params for filtering
@@ -61,13 +87,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const search = url.searchParams.get('search');
   const sortOrder = url.searchParams.get('sortOrder') || 'asc';
 
-  // Build query - always sort by position for consistent ordering
-  // Include pageId for navigation to task pages
-  // Include page relation to filter out tasks with trashed pages
+  // Fetch status configs for this task list
+  const statusConfigs = await db.query.taskStatusConfigs.findMany({
+    where: eq(taskStatusConfigs.taskListId, taskList.id),
+    orderBy: [asc(taskStatusConfigs.position)],
+  });
+
+  // Build query - include assignees relation
   const query = db.query.taskItems.findMany({
     where: and(
       eq(taskItems.taskListId, taskList.id),
-      status ? eq(taskItems.status, status as 'pending' | 'in_progress' | 'completed' | 'blocked') : undefined,
+      status ? eq(taskItems.status, status) : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
     ),
     columns: {
@@ -117,24 +147,40 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           position: true,
         },
       },
+      assignees: {
+        with: {
+          user: {
+            columns: {
+              id: true,
+              name: true,
+              image: true,
+            },
+          },
+          agentPage: {
+            columns: {
+              id: true,
+              title: true,
+              type: true,
+            },
+          },
+        },
+      },
     },
-    // Note: We sort in memory below to handle page.position as source of truth
   });
 
   let tasks = await query;
 
   // Filter out tasks whose pages are trashed
-  // Tasks without a pageId (conversation-based) are always included
   tasks = tasks.filter(task => !task.page?.isTrashed);
 
-  // Sort by page.position (source of truth), fallback to task.position for conversation-based tasks
+  // Sort by page.position (source of truth), fallback to task.position
   tasks.sort((a, b) => {
     const posA = a.page?.position ?? a.position;
     const posB = b.page?.position ?? b.position;
     return sortOrder === 'desc' ? posB - posA : posA - posB;
   });
 
-  // Apply search filter in memory (for title/description)
+  // Apply search filter in memory
   if (search) {
     const searchLower = search.toLowerCase();
     tasks = tasks.filter(task =>
@@ -152,12 +198,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       updatedAt: taskList.updatedAt,
     },
     tasks,
+    statusConfigs,
   });
 }
 
 /**
  * POST /api/pages/[pageId]/tasks
  * Create a new task with an auto-created document page
+ * Supports multiple assignees via assigneeIds array
  */
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -175,7 +223,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   const body = await req.json();
-  const { title, description, status, priority, assigneeId, assigneeAgentId, dueDate } = body;
+  const {
+    title,
+    description,
+    status,
+    priority,
+    assigneeId,
+    assigneeAgentId,
+    assigneeIds,
+    dueDate,
+  } = body;
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
@@ -191,7 +248,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     return NextResponse.json({ error: 'Task list page not found' }, { status: 404 });
   }
 
-  // Validate assigneeAgentId if provided
+  // Validate assigneeAgentId if provided (legacy single agent)
   if (assigneeAgentId) {
     const agentPage = await db.query.pages.findFirst({
       where: and(
@@ -214,6 +271,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Get or create task list
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
+  // Validate status against task list's status configs
+  if (status) {
+    const validStatuses = await db.query.taskStatusConfigs.findMany({
+      where: eq(taskStatusConfigs.taskListId, taskList.id),
+      columns: { slug: true },
+    });
+    const validSlugs = validStatuses.map(s => s.slug);
+    if (validSlugs.length > 0 && !validSlugs.includes(status)) {
+      return NextResponse.json({ error: `Invalid status "${status}". Valid statuses: ${validSlugs.join(', ')}` }, { status: 400 });
+    }
+  }
+
   // Get highest position for new task and new page
   const [lastTask, lastChildPage] = await Promise.all([
     db.query.taskItems.findFirst({
@@ -229,13 +298,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const nextTaskPosition = (lastTask?.position ?? -1) + 1;
   const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
 
+  // Determine primary assignee for backward compat fields
+  const primaryAssigneeId = assigneeId || null;
+  const primaryAgentId = assigneeAgentId || null;
+
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
     // Create document page for the task
     const [taskPage] = await tx.insert(pages).values({
       title: title.trim(),
       type: 'DOCUMENT',
-      parentId: pageId, // Child of the task list page
+      parentId: pageId,
       driveId: taskListPage.driveId,
       content: getDefaultContent(PageType.DOCUMENT),
       position: nextPagePosition,
@@ -246,43 +319,67 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const [newTask] = await tx.insert(taskItems).values({
       taskListId: taskList.id,
       userId,
-      pageId: taskPage.id, // Link to the document page
+      pageId: taskPage.id,
       title: title.trim(),
       description: description?.trim() || null,
       status: status || 'pending',
       priority: priority || 'medium',
-      assigneeId: assigneeId || null,
-      assigneeAgentId: assigneeAgentId || null,
+      assigneeId: primaryAssigneeId,
+      assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
       position: nextTaskPosition,
     }).returning();
 
+    // Create assignees in junction table
+    const assigneeRows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+
+    // Handle new assigneeIds array (format: [{ type: 'user'|'agent', id: string }])
+    if (Array.isArray(assigneeIds) && assigneeIds.length > 0) {
+      for (const entry of assigneeIds) {
+        if (entry.type === 'user' && entry.id) {
+          assigneeRows.push({ taskId: newTask.id, userId: entry.id });
+        } else if (entry.type === 'agent' && entry.id) {
+          assigneeRows.push({ taskId: newTask.id, agentPageId: entry.id });
+        }
+      }
+    } else {
+      // Backward compat: populate junction table from legacy single-assignee fields
+      if (primaryAssigneeId) {
+        assigneeRows.push({ taskId: newTask.id, userId: primaryAssigneeId });
+      }
+      if (primaryAgentId) {
+        assigneeRows.push({ taskId: newTask.id, agentPageId: primaryAgentId });
+      }
+    }
+
+    if (assigneeRows.length > 0) {
+      await tx.insert(taskAssignees).values(assigneeRows);
+    }
+
     return { task: newTask, page: taskPage };
   });
 
-  // Fetch task with relations
+  // Fetch task with relations (including assignees)
   const taskWithRelations = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, result.task.id),
     with: {
       assignee: {
-        columns: {
-          id: true,
-          name: true,
-          image: true,
-        },
+        columns: { id: true, name: true, image: true },
       },
       assigneeAgent: {
-        columns: {
-          id: true,
-          title: true,
-          type: true,
-        },
+        columns: { id: true, title: true, type: true },
       },
       user: {
-        columns: {
-          id: true,
-          name: true,
-          image: true,
+        columns: { id: true, name: true, image: true },
+      },
+      assignees: {
+        with: {
+          user: {
+            columns: { id: true, name: true, image: true },
+          },
+          agentPage: {
+            columns: { id: true, title: true, type: true },
+          },
         },
       },
     },
@@ -290,7 +387,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Broadcast events
   await Promise.all([
-    // Broadcast task creation
     broadcastTaskEvent({
       type: 'task_added',
       taskId: result.task.id,
@@ -303,7 +399,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         pageId: result.page.id,
       },
     }),
-    // Broadcast page creation for sidebar tree update
     broadcastPageEvent(
       createPageEventPayload(taskListPage.driveId, result.page.id, 'created', {
         parentId: pageId,

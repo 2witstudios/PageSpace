@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { db, taskItems, taskLists, taskAssignees, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -11,8 +11,8 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const querySchema = z.object({
   context: z.enum(['user', 'drive']),
   driveId: z.string().optional(),
-  // Filter parameters
-  status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional(),
+  // Filter parameters - status accepts any string for custom statuses
+  status: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),

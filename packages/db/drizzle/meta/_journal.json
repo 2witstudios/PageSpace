@@ -498,6 +498,13 @@
       "when": 1770312048515,
       "tag": "0070_remarkable_thaddeus_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1770335694808,
+      "tag": "0071_colossal_blue_marvel",
+      "breakpoints": true
     }
   ]
 }
