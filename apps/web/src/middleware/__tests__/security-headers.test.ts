@@ -256,10 +256,26 @@ describe('Security Headers', () => {
       expect(csp).not.toContain('nonce-');
     });
 
-    it('does not set Cross-Origin-Embedder-Policy (removed for Stripe.js compatibility)', () => {
+    it('sets Cross-Origin-Embedder-Policy for standard page routes', () => {
       const response = NextResponse.next();
 
       applySecurityHeaders(response, { nonce: 'test', isProduction: false });
+
+      expect(response.headers.get('Cross-Origin-Embedder-Policy')).toBe('credentialless');
+    });
+
+    it('omits Cross-Origin-Embedder-Policy for Stripe routes (disableCOEP)', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, disableCOEP: true });
+
+      expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
+    });
+
+    it('omits Cross-Origin-Embedder-Policy for API routes', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, isAPIRoute: true });
 
       expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
     });

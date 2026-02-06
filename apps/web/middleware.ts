@@ -22,6 +22,7 @@ export async function middleware(req: NextRequest) {
     const { pathname } = req.nextUrl;
     const isProduction = process.env.NODE_ENV === 'production';
     const isAPIRoute = pathname.startsWith('/api');
+    const isStripeRoute = pathname.startsWith('/settings/plan') || pathname.startsWith('/settings/billing');
     const ip =
       req.headers.get('x-forwarded-for')?.split(',')[0] ||
       req.headers.get('x-real-ip') ||
@@ -103,7 +104,7 @@ export async function middleware(req: NextRequest) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response } = createSecureResponse(isProduction, req, isAPIRoute);
+    const { response } = createSecureResponse(isProduction, req, isAPIRoute, isStripeRoute);
 
     return response;
   });

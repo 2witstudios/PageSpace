@@ -80,11 +80,12 @@ type SecurityHeadersOptions = {
   nonce: string;
   isProduction: boolean;
   isAPIRoute?: boolean;
+  disableCOEP?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isAPIRoute = false }: SecurityHeadersOptions
+  { nonce, isProduction, isAPIRoute = false, disableCOEP = false }: SecurityHeadersOptions
 ): NextResponse => {
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
@@ -96,10 +97,12 @@ export const applySecurityHeaders = (
     'Permissions-Policy',
     'geolocation=(), microphone=(), camera=()'
   );
-  // COEP removed: 'credentialless' blocked third-party scripts (Stripe.js)
-  // that load via no-cors without Cross-Origin-Resource-Policy headers.
-  // Without COOP: same-origin, COEP alone doesn't enable crossOriginIsolated,
-  // so the security benefit was negligible while breaking payment flows.
+  // COEP 'credentialless' is set for all page routes except Stripe-dependent
+  // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
+  // via no-cors without Cross-Origin-Resource-Policy headers.
+  if (!isAPIRoute && !disableCOEP) {
+    response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
+  }
 
   if (isProduction) {
     response.headers.set(
@@ -114,7 +117,8 @@ export const applySecurityHeaders = (
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  isAPIRoute: boolean = false
+  isAPIRoute: boolean = false,
+  disableCOEP: boolean = false
 ): { response: NextResponse; nonce: string } => {
   const nonce = generateNonce();
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
@@ -135,7 +139,7 @@ export const createSecureResponse = (
   });
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute });
+  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute, disableCOEP });
 
   return { response, nonce };
 };
