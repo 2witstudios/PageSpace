@@ -245,7 +245,7 @@ services:
       - internal
 
   # Cron service for scheduled background jobs
-  # Runs inside Docker network, hits internal URLs (localhost-only auth)
+  # Runs inside Docker network, authenticates with CRON_SECRET
   cron:
     build:
       context: ./docker/cron
@@ -253,6 +253,8 @@ services:
     depends_on:
       web:
         condition: service_started
+    environment:
+      - CRON_SECRET=${CRON_SECRET}
     volumes:
       - cron_logs:/var/log/cron
     deploy:
