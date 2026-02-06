@@ -3,7 +3,7 @@
  * Used by both Agent engine and Global Assistant engine
  */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
@@ -65,12 +65,15 @@ export function useMessageActions({
 }: UseMessageActionsOptions): UseMessageActionsResult {
   const isAgentMode = Boolean(agentId);
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
   // Edit a message
   const handleEdit = useCallback(
     async (messageId: string, newContent: string) => {
       if (!conversationId) return;
 
-      const originalMessage = messages.find((message) => message.id === messageId);
+      const originalMessage = messagesRef.current.find((message) => message.id === messageId);
       if (!originalMessage) {
         return;
       }
@@ -133,7 +136,7 @@ export function useMessageActions({
         throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, messages, setMessages, onEditVersionChange]
+    [isAgentMode, agentId, conversationId, setMessages, onEditVersionChange]
   );
 
   // Delete a message
@@ -141,12 +144,12 @@ export function useMessageActions({
     async (messageId: string) => {
       if (!conversationId) return;
 
-      const deletedMessage = messages.find((message) => message.id === messageId);
+      const deletedMessage = messagesRef.current.find((message) => message.id === messageId);
       if (!deletedMessage) {
         return;
       }
 
-      const previousIndex = messages.findIndex((message) => message.id === messageId);
+      const previousIndex = messagesRef.current.findIndex((message) => message.id === messageId);
 
       // Optimistically remove the message for fast UI feedback.
       setMessages((previousMessages) =>
@@ -186,42 +189,42 @@ export function useMessageActions({
         throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, messages, setMessages]
+    [isAgentMode, agentId, conversationId, setMessages]
   );
 
   // Retry/regenerate the last response
   const handleRetry = useCallback(async () => {
     if (!conversationId) return;
 
+    const currentMessages = messagesRef.current;
+
     // Before regenerating, clean up old assistant responses after the last user message
-    const lastUserMsgIndex = messages.map((m) => m.role).lastIndexOf('user');
+    const lastUserMsgIndex = currentMessages.map((m) => m.role).lastIndexOf('user');
 
     if (lastUserMsgIndex !== -1) {
       // Get all assistant messages after the last user message
-      const assistantMessagesToDelete = messages
+      const assistantMessagesToDelete = currentMessages
         .slice(lastUserMsgIndex + 1)
         .filter((m) => m.role === 'assistant');
 
-      // Delete them from the database
-      for (const msg of assistantMessagesToDelete) {
-        try {
-          if (isAgentMode) {
-            await del(
-              `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
-            );
-          } else {
-            await del(`/api/ai/global/${conversationId}/messages/${msg.id}`);
-          }
-        } catch (error) {
-          console.error('Failed to delete old assistant message:', error);
-        }
-      }
-
-      // Remove them from state
-      const filteredMessages = messages.filter(
-        (m) => !assistantMessagesToDelete.some((toDelete) => toDelete.id === m.id)
+      // Delete them from the database in parallel — calls are independent
+      await Promise.allSettled(
+        assistantMessagesToDelete.map((msg) => {
+          const url = isAgentMode
+            ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
+            : `/api/ai/global/${conversationId}/messages/${msg.id}`;
+          return del(url).catch((error) => {
+            console.error('Failed to delete old assistant message:', error);
+          });
+        })
       );
-      setMessages(filteredMessages);
+
+      // Remove them from state using functional updater to avoid stale snapshot
+      setMessages((previousMessages) =>
+        previousMessages.filter(
+          (m) => !assistantMessagesToDelete.some((toDelete) => toDelete.id === m.id)
+        )
+      );
     }
 
     // Now regenerate with a clean slate
@@ -233,7 +236,7 @@ export function useMessageActions({
           }
         : undefined,
     });
-  }, [isAgentMode, agentId, conversationId, messages, setMessages, regenerate]);
+  }, [isAgentMode, agentId, conversationId, setMessages, regenerate]);
 
   // Compute last message IDs for UI
   const lastAssistantMessageId = messages

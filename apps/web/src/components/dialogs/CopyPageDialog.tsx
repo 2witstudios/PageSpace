@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -68,8 +68,11 @@ export function CopyPageDialog({
   }, [isOpen, fetchDrives]);
 
   // Filter drives to only show ones where user has edit access
-  const availableDrives = drives.filter(
-    (d: Drive) => d.isOwned || d.role === "OWNER" || d.role === "ADMIN"
+  const availableDrives = useMemo(
+    () => drives.filter(
+      (d: Drive) => d.isOwned || d.role === "OWNER" || d.role === "ADMIN"
+    ),
+    [drives]
   );
 
   // Fetch page tree when drive changes

@@ -234,14 +234,14 @@ function ChannelView({ page }: ChannelViewProps) {
   const handleRemoveReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!user) return;
 
-    // Optimistic update
-    const removedReaction = messages
-      .find((m) => m.id === messageId)
-      ?.reactions?.find((r) => r.emoji === emoji && r.userId === user.id);
-
+    // Capture removedReaction inside the updater so messages isn't a dependency
+    let removedReaction: Reaction | undefined;
     setMessages((prev) =>
       prev.map((m) => {
         if (m.id !== messageId) return m;
+        removedReaction ??= m.reactions?.find(
+          (r) => r.emoji === emoji && r.userId === user.id
+        );
         return {
           ...m,
           reactions: (m.reactions || []).filter(
@@ -256,19 +256,20 @@ function ChannelView({ page }: ChannelViewProps) {
     } catch {
       // Revert optimistic update on error
       if (removedReaction) {
+        const reactionToRestore = removedReaction;
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id !== messageId) return m;
             return {
               ...m,
-              reactions: [...(m.reactions || []), removedReaction],
+              reactions: [...(m.reactions || []), reactionToRestore],
             };
           })
         );
       }
       toast.error('Failed to remove reaction');
     }
-  }, [page.id, user, messages]);
+  }, [page.id, user]);
 
   // Handle real-time reaction updates
   useEffect(() => {
@@ -435,6 +436,8 @@ function ChannelView({ page }: ChannelViewProps) {
   );
 }
 
+// Only re-render when the channel identity changes.
+// Update this comparator if additional page fields are consumed.
 export default memo(
   ChannelView,
   (prevProps, nextProps) =>

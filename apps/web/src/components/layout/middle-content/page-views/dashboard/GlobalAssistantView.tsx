@@ -328,30 +328,36 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // MESSAGE ACTIONS (shared hook)
   // ============================================
+  const agentSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestAgentMessagesRef.current)
+          : nextOrUpdater;
+      setAgentMessages(nextMessages);
+      setAgentStoreMessages(nextMessages);
+    },
+    [setAgentMessages, setAgentStoreMessages]
+  );
+
+  const globalSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestGlobalMessagesRef.current)
+          : nextOrUpdater;
+      setGlobalMessages(nextMessages);
+      setGlobalLocalMessages(nextMessages);
+    },
+    [setGlobalMessages, setGlobalLocalMessages]
+  );
+
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
     useMessageActions({
       agentId: selectedAgent?.id || null,
       conversationId: currentConversationId,
       messages,
-      setMessages: selectedAgent
-        ? (nextOrUpdater) => {
-            const nextMessages =
-              typeof nextOrUpdater === 'function'
-                ? nextOrUpdater(latestAgentMessagesRef.current)
-                : nextOrUpdater;
-
-            setAgentMessages(nextMessages);
-            setAgentStoreMessages(nextMessages); // Sync to store
-          }
-        : (nextOrUpdater) => {
-            const nextMessages =
-              typeof nextOrUpdater === 'function'
-                ? nextOrUpdater(latestGlobalMessagesRef.current)
-                : nextOrUpdater;
-
-            setGlobalMessages(nextMessages);
-            setGlobalLocalMessages(nextMessages);
-          },
+      setMessages: selectedAgent ? agentSetMessages : globalSetMessages,
       regenerate,
     });
 

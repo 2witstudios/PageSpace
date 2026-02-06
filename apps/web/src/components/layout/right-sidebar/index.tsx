@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, memo } from "react";
+import { useState, useEffect, useRef, memo, useCallback } from "react";
 import { History, MessageSquare, Activity } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -82,14 +82,14 @@ function RightPanel({ className, variant }: RightPanelProps) {
   // Use appropriate tab state based on context
   const activeTab = isDashboardContext ? dashboardActiveTab : localActiveTab;
 
-  const handleTabChange = (tab: string) => {
+  const handleTabChange = useCallback((tab: string) => {
     const validTab = tab as SidebarTab;
     if (isDashboardContext) {
       setDashboardActiveTab(validTab);
     } else {
       setLocalActiveTab(validTab);
     }
-  };
+  }, [isDashboardContext, setDashboardActiveTab]);
 
   // Shared trigger styles matching original visual design
   const triggerBaseStyles = cn(

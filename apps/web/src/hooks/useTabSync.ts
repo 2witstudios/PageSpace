@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
-import { useTabsStore } from '@/stores/useTabsStore';
+import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
 
 /**
  * Syncs URL navigation with the browser-style tabs store.
@@ -35,7 +35,7 @@ export function useTabSync() {
     }
 
     // Get active tab's current path
-    const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+    const activeTab = selectActiveTab(state);
 
     // If active tab already at this path, just update sync ref
     if (activeTab?.path === pathname) {
