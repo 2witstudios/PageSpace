@@ -76,7 +76,7 @@ import {
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
