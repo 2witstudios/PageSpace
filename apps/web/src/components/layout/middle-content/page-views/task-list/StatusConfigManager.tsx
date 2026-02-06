@@ -52,19 +52,19 @@ const GROUP_COLORS: Record<TaskStatusGroup, string> = {
   done: 'text-green-600',
 };
 
-const PRESET_COLORS = [
-  'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-  'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300',
-  'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300',
-  'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-  'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-  'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
-  'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300',
-  'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-  'bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300',
-  'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
+const COLOR_PRESETS = [
+  { name: 'slate',  classes: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',   swatch: 'bg-slate-500' },
+  { name: 'blue',   classes: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',       swatch: 'bg-blue-500' },
+  { name: 'cyan',   classes: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300',       swatch: 'bg-cyan-500' },
+  { name: 'teal',   classes: 'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300',       swatch: 'bg-teal-500' },
+  { name: 'green',  classes: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',    swatch: 'bg-green-500' },
+  { name: 'amber',  classes: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',    swatch: 'bg-amber-500' },
+  { name: 'orange', classes: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300', swatch: 'bg-orange-500' },
+  { name: 'red',    classes: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',            swatch: 'bg-red-500' },
+  { name: 'pink',   classes: 'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300',        swatch: 'bg-pink-500' },
+  { name: 'purple', classes: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300', swatch: 'bg-purple-500' },
+  { name: 'violet', classes: 'bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300', swatch: 'bg-violet-500' },
+  { name: 'indigo', classes: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300', swatch: 'bg-indigo-500' },
 ];
 
 interface StatusConfigManagerProps {
@@ -84,7 +84,7 @@ export function StatusConfigManager({
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
-  const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
+  const [newColor, setNewColor] = useState(COLOR_PRESETS[0].classes);
   const [newGroup, setNewGroup] = useState<TaskStatusGroup>('todo');
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
@@ -209,15 +209,16 @@ export function StatusConfigManager({
                           </Select>
                         </div>
                         <div className="flex flex-wrap gap-1.5">
-                          {PRESET_COLORS.map(color => (
+                          {COLOR_PRESETS.map((preset) => (
                             <button
-                              key={color}
+                              key={preset.name}
+                              aria-label={preset.name}
                               className={cn(
                                 'w-5 h-5 rounded border-2 transition-colors',
-                                color.split(' ').find(c => c.startsWith('bg-')),
-                                editColor === color ? 'border-primary' : 'border-transparent'
+                                preset.swatch,
+                                editColor === preset.classes ? 'border-primary' : 'border-transparent'
                               )}
-                              onClick={() => setEditColor(color)}
+                              onClick={() => setEditColor(preset.classes)}
                             />
                           ))}
                         </div>
@@ -292,15 +293,16 @@ export function StatusConfigManager({
                 </Select>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {PRESET_COLORS.map(color => (
+                {COLOR_PRESETS.map((preset) => (
                   <button
-                    key={color}
+                    key={preset.name}
+                    aria-label={preset.name}
                     className={cn(
                       'w-6 h-6 rounded border-2 transition-colors',
-                      color.split(' ').find(c => c.startsWith('bg-')),
-                      newColor === color ? 'border-primary' : 'border-transparent'
+                      preset.swatch,
+                      newColor === preset.classes ? 'border-primary' : 'border-transparent'
                     )}
-                    onClick={() => setNewColor(color)}
+                    onClick={() => setNewColor(preset.classes)}
                   />
                 ))}
               </div>
