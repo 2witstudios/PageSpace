@@ -15,7 +15,7 @@ export interface ResizeResult {
   height: number;
   originalWidth: number;
   originalHeight: number;
-  resizedBytes: number;
+  dataUrlLength: number;
   mediaType: string;
 }
 
@@ -82,7 +82,7 @@ export const resizeImageForVision = (
             height: img.naturalHeight,
             originalWidth: img.naturalWidth,
             originalHeight: img.naturalHeight,
-            resizedBytes: dataUrl.length,
+            dataUrlLength: dataUrl.length,
             mediaType: file.type || 'image/jpeg',
           });
         };
@@ -113,7 +113,7 @@ export const resizeImageForVision = (
         height,
         originalWidth: img.naturalWidth,
         originalHeight: img.naturalHeight,
-        resizedBytes: dataUrl.length,
+        dataUrlLength: dataUrl.length,
         mediaType: outputType,
       });
     };
@@ -127,14 +127,3 @@ export const resizeImageForVision = (
   });
 };
 
-/**
- * Convert a File to a data URL without resizing.
- */
-export const fileToDataUrl = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
-  });
-};

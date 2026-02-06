@@ -36,7 +36,8 @@ export function AttachmentPreviewStrip({
             'flex items-center gap-1.5 h-8 pl-1 pr-1.5 rounded-md shrink-0',
             'bg-muted/50 border border-border/50',
             'text-xs text-muted-foreground',
-            'transition-colors hover:bg-muted'
+            'transition-colors hover:bg-muted',
+            'animate-in fade-in duration-200'
           )}
         >
           {/* Thumbnail */}

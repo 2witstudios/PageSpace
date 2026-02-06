@@ -256,7 +256,7 @@ const SidebarChatTab: React.FC = () => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend, hasAttachments } = useImageAttachments();
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -578,6 +578,8 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
+    getFilesForSend,
+    clearFiles,
   ]);
 
   // Voice mode: Send message from voice transcript

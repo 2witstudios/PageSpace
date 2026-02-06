@@ -343,7 +343,6 @@ export async function saveMessageToDatabase({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map(p => (p as any).text || '');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const filePartsData = uiMessage.parts
         .filter(p => p.type === 'file')
         .map(p => {
@@ -570,7 +569,6 @@ export async function saveGlobalAssistantMessageToDatabase({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map(p => (p as any).text || '');
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const filePartsData = uiMessage.parts
         .filter(p => p.type === 'file')
         .map(p => {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { resizeImageForVision, MAX_IMAGES_PER_MESSAGE } from '../utils/image-resize';
 
 export interface ImageAttachment {
@@ -38,9 +39,16 @@ export function useImageAttachments() {
     // Enforce max count
     setAttachments((prev) => {
       const remaining = MAX_IMAGES_PER_MESSAGE - prev.length;
-      if (remaining <= 0) return prev;
+      if (remaining <= 0) {
+        toast.info(`Maximum ${MAX_IMAGES_PER_MESSAGE} images per message`);
+        return prev;
+      }
 
       const toAdd = imageFiles.slice(0, remaining);
+      if (toAdd.length < imageFiles.length) {
+        toast.info(`Added ${toAdd.length} of ${imageFiles.length} images (max ${MAX_IMAGES_PER_MESSAGE})`);
+      }
+
       const newAttachments: ImageAttachment[] = toAdd.map((file) => {
         const previewUrl = URL.createObjectURL(file);
         blobUrlsRef.current.add(previewUrl);

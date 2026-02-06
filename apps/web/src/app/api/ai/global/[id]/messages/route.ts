@@ -46,6 +46,8 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
+import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -216,6 +218,13 @@ export async function POST(
       }, { status: 404 });
     }
 
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
+
     // Parse request body
     const requestBody = await request.json();
     loggers.api.debug('📦 Global Assistant Chat API: Request body received:', {
@@ -251,6 +260,25 @@ export async function POST(
     }
     
     loggers.api.debug('✅ Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+
+    // Image security validation — validate file parts in the user message
+    const userMessageForValidation = requestMessages[requestMessages.length - 1];
+    if (userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation)) {
+      const imageValidation = validateUserMessageFileParts(userMessageForValidation);
+      if (!imageValidation.valid) {
+        loggers.api.warn('Global Assistant Chat API: Image validation failed', { error: imageValidation.error });
+        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+      }
+
+      // Vision capability gate — reject images sent to non-vision models
+      if (selectedModel && !hasVisionCapability(selectedModel)) {
+        loggers.api.warn('Global Assistant Chat API: Images sent to non-vision model', { model: selectedModel });
+        return NextResponse.json(
+          { error: `The selected model "${selectedModel}" does not support image attachments. Please choose a vision-capable model.` },
+          { status: 400 }
+        );
+      }
+    }
 
     // Parse read-only mode early (needed for message saving)
     const readOnlyMode = isReadOnly === true;
