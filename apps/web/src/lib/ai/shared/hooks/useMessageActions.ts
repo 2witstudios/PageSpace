@@ -87,39 +87,35 @@ export function useMessageActions({
             `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
-
-          // Refetch agent messages
-          const response = await fetchWithAuth(
-            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            setMessages(data.messages || []);
-          }
         } else {
           await patch(
             `/api/ai/global/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
-
-          // Refetch messages
-          const response = await fetchWithAuth(
-            `/api/ai/global/${conversationId}/messages`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            const loadedMessages = Array.isArray(data) ? data : data.messages || [];
-            setMessages(loadedMessages);
-          }
         }
 
         onEditVersionChange?.();
         toast.success('Message updated successfully');
+
+        // Refetch to reconcile with server state (non-critical)
+        try {
+          const url = isAgentMode
+            ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
+            : `/api/ai/global/${conversationId}/messages`;
+          const response = await fetchWithAuth(url);
+          if (response.ok) {
+            const data = await response.json();
+            const loaded = isAgentMode
+              ? data.messages || []
+              : Array.isArray(data) ? data : data.messages || [];
+            setMessages(loaded);
+          }
+        } catch {
+          // Refetch failed — optimistic update already applied, server has the edit
+        }
       } catch (error) {
         console.error('Failed to edit message:', error);
-        // Keep the optimistic update - the user's edit is preserved locally
-        // even if server save failed. Show a warning instead of reverting.
-        toast.error('Edit saved locally but failed to sync to server. Your changes are visible but may not persist after refresh.');
+        toast.error('Failed to save edit. Your local changes may not persist.');
       }
     },
     [isAgentMode, agentId, conversationId, messages, setMessages, onEditVersionChange]

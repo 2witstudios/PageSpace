@@ -154,10 +154,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const transport = useChatTransport(streamTrackingId, '/api/ai/chat');
 
   const chatConfig = useMemo(
-    () => ({
+    () => !transport ? null : ({
       id: page.id,
       messages: initialMessages,
-      transport: transport!,
+      transport,
       experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('AiChatView: Chat error:', error);
@@ -167,7 +167,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   );
 
   const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
-    useChat(chatConfig);
+    useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
   const stop = useChatStop(streamTrackingId, chatStop);

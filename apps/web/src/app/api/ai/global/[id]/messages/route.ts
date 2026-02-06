@@ -783,7 +783,6 @@ MENTION PROCESSING:
         });
 
         usagePromise = aiResult.totalUsage
-          .then((usage) => usage)
           .catch((error) => {
             loggers.api.debug('Global Assistant: Failed to retrieve token usage from stream', {
               error: error instanceof Error ? error.message : 'Unknown error',

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
+import { canUserEditPage, loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
   chatMessageRepository,
@@ -49,9 +48,9 @@ export async function PATCH(
       );
     }
 
-    // Get the message to verify it exists and belongs to this conversation
+    // Get the message to verify it exists, is active, and belongs to this conversation
     const message = await chatMessageRepository.getMessageById(messageId);
-    if (!message) {
+    if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
@@ -69,7 +68,7 @@ export async function PATCH(
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
 
-    // Log activity for audit trail (non-blocking)
+    // Log activity for audit trail
     try {
       const actorInfo = await getActorInfo(userId);
       logMessageActivity(userId, 'message_update', {
@@ -138,9 +137,9 @@ export async function DELETE(
       );
     }
 
-    // Get the message to verify it exists and belongs to this conversation
+    // Get the message to verify it exists, is active, and belongs to this conversation
     const message = await chatMessageRepository.getMessageById(messageId);
-    if (!message) {
+    if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
@@ -155,7 +154,7 @@ export async function DELETE(
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
 
-    // Log activity for audit trail (non-blocking)
+    // Log activity for audit trail
     try {
       const actorInfo = await getActorInfo(userId);
       logMessageActivity(userId, 'message_delete', {
