@@ -12,6 +12,7 @@ import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import {
   SheetData,
   SheetExternalReferenceToken,
+  adjustFormulaReferences,
   collectExternalReferences,
   encodeCellAddress,
   decodeCellAddress,
@@ -124,34 +125,6 @@ const getSelectionAddress = (selection: SelectionState): string => {
   const startAddr = encodeCellAddress(start.row, start.column);
   const endAddr = encodeCellAddress(end.row, end.column);
   return `${startAddr}:${endAddr}`;
-};
-
-// Adjust formula references when pasting
-const adjustFormulaReferences = (formula: string, rowOffset: number, colOffset: number): string => {
-  if (!formula.startsWith('=')) {
-    return formula;
-  }
-
-  // Simple regex to find cell references like A1, B2, etc.
-  const cellRefRegex = /([A-Z]+)(\d+)/g;
-
-  return formula.replace(cellRefRegex, (match, colLetters, rowNum) => {
-    try {
-      // Parse the original reference
-      const originalRef = `${colLetters}${rowNum}`;
-      const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
-
-      // Apply offset
-      const newRow = Math.max(0, origRow + rowOffset);
-      const newCol = Math.max(0, origCol + colOffset);
-
-      // Return the adjusted reference
-      return encodeCellAddress(newRow, newCol);
-    } catch {
-      // If parsing fails, return original
-      return match;
-    }
-  });
 };
 
 const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');

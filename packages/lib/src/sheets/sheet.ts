@@ -2586,6 +2586,38 @@ export function isValidCellAddress(address: string): boolean {
  * Update multiple cells in a SheetData object
  * Returns a new SheetData with the updated cells
  */
+export function adjustFormulaReferences(
+  formula: string,
+  rowOffset: number,
+  colOffset: number
+): string {
+  if (!formula.startsWith('=')) {
+    return formula;
+  }
+
+  // Match optional $ before column letters and optional $ before row digits
+  const cellRefRegex = /(\$?)([A-Z]+)(\$?)(\d+)/g;
+
+  return formula.replace(cellRefRegex, (match, colDollar, colLetters, rowDollar, rowNum) => {
+    try {
+      const originalRef = `${colLetters}${rowNum}`;
+      const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
+
+      const newRow = rowDollar === '$' ? origRow : Math.max(0, origRow + rowOffset);
+      const newCol = colDollar === '$' ? origCol : Math.max(0, origCol + colOffset);
+
+      const adjusted = encodeCellAddress(newRow, newCol);
+      // Re-extract column/row parts to reattach $ markers
+      const adjColLetters = adjusted.replace(/\d+/g, '');
+      const adjRowNum = adjusted.replace(/[A-Z]+/g, '');
+
+      return `${colDollar}${adjColLetters}${rowDollar}${adjRowNum}`;
+    } catch {
+      return match;
+    }
+  });
+}
+
 export function updateSheetCells(
   sheet: SheetData,
   updates: SheetCellUpdate[]
