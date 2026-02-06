@@ -58,12 +58,13 @@ function Layout({ children }: LayoutProps) {
 
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
-  const { isIOS: isCapacitorIOS } = useCapacitor();
+  const { isIPad: isCapacitorIPad } = useCapacitor();
 
-  // On iPad (Capacitor iOS), the left sidebar becomes persistent at 1024px+
-  // instead of 1280px+, giving iPad landscape a persistent navigation sidebar.
+  // On iPad, the left sidebar becomes persistent at 1024px+ instead of 1280px+,
+  // giving iPad landscape a persistent navigation sidebar.
+  // iPhones keep mobile rendering; only iPads get the lower threshold.
   // The right sidebar keeps the standard 1280px threshold on all platforms.
-  const shouldOverlayLeftSidebar = isCapacitorIOS ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
+  const shouldOverlayLeftSidebar = isCapacitorIPad ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
   const shouldOverlayRightSidebar = shouldOverlaySidebarsDefault;
 
   useResponsivePanels();
@@ -244,7 +245,7 @@ function Layout({ children }: LayoutProps) {
           {!shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
             <div className={cn(
               "relative flex-shrink-0 pt-4 overflow-hidden",
-              isCapacitorIOS
+              isCapacitorIPad
                 ? "flex w-[18rem]"
                 : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
             )}>
