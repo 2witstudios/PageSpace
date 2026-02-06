@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
 
 /**
@@ -14,7 +14,9 @@ import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
  */
 export function useTabSync() {
   const pathname = usePathname();
+  const router = useRouter();
   const lastSyncedPath = useRef<string | null>(null);
+  const didAttemptDesktopRestore = useRef(false);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
 
@@ -22,10 +24,33 @@ export function useTabSync() {
     // Wait for store to rehydrate from localStorage
     if (!rehydrated) return;
 
+    const state = useTabsStore.getState();
+    const hasTabs = state.tabs.length > 0;
+
+    // Heal invalid state: tabs exist but activeTabId is missing/stale.
+    if (hasTabs && !selectActiveTab(state)) {
+      state.setActiveTab(state.tabs[0].id);
+    }
+
+    // Desktop bootstrap: app starts at /dashboard, so restore the active tab route once
+    // to ensure page hooks mount immediately without requiring user interaction.
+    const isDesktop = typeof window !== 'undefined' && !!window.electron?.isDesktop;
+    if (isDesktop && !didAttemptDesktopRestore.current && pathname === '/dashboard' && hasTabs) {
+      const refreshedState = useTabsStore.getState();
+      const activeTab = selectActiveTab(refreshedState);
+      const restorePath = activeTab?.path;
+
+      didAttemptDesktopRestore.current = true;
+
+      if (restorePath && restorePath !== '/dashboard') {
+        lastSyncedPath.current = restorePath;
+        router.replace(restorePath);
+        return;
+      }
+    }
+
     // Skip if we already synced this path
     if (lastSyncedPath.current === pathname) return;
-
-    const state = useTabsStore.getState();
 
     // If no tabs exist, create one from current path
     if (state.tabs.length === 0) {
@@ -46,5 +71,5 @@ export function useTabSync() {
     // Navigate within the active tab
     state.navigateInActiveTab(pathname);
     lastSyncedPath.current = pathname;
-  }, [pathname, rehydrated]);
+  }, [pathname, rehydrated, router]);
 }
