@@ -497,6 +497,26 @@ export async function POST(request: Request) {
       });
     }
 
+    // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
+    try {
+      const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      const integrationTools = await resolvePageAgentIntegrationTools({
+        agentId: chatId,
+        userId,
+        driveId: page.driveId,
+      });
+      if (Object.keys(integrationTools).length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        filteredTools = { ...filteredTools, ...integrationTools } as any;
+        loggers.ai.info('AI Chat API: Merged integration tools', {
+          integrationToolCount: Object.keys(integrationTools).length,
+          totalTools: Object.keys(filteredTools).length,
+        });
+      }
+    } catch (error) {
+      loggers.ai.error('AI Chat API: Failed to resolve integration tools', error as Error);
+    }
+
     // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
     if (mcpTools && mcpTools.length > 0) {
       try {

@@ -153,6 +153,11 @@
       "import": "./dist/permissions/index.js",
       "require": "./dist/permissions/index.js"
     },
+    "./integrations": {
+      "types": "./dist/integrations/index.d.ts",
+      "import": "./dist/integrations/index.js",
+      "require": "./dist/integrations/index.js"
+    },
     "./monitoring": {
       "types": "./dist/monitoring/index.d.ts",
       "import": "./dist/monitoring/index.js",
@@ -307,6 +312,9 @@
       "permissions": [
         "./dist/permissions/index.d.ts"
       ],
+      "integrations": [
+        "./dist/integrations/index.d.ts"
+      ],
       "monitoring": [
         "./dist/monitoring/index.d.ts"
       ],
@@ -369,6 +377,7 @@
     "resend": "^6.1.2",
     "server-only": "^0.0.1",
     "xlsx": "^0.18.5",
+    "yaml": "^2.8.2",
     "zod": "^4.0.16"
   },
   "devDependencies": {

@@ -44,6 +44,9 @@ interface ConnectionWithProvider {
 }
 
 interface AuditEntry {
+  connectionId: string;
+  toolName: string;
+  driveId: string | null;
   success: boolean;
   errorType?: string;
   errorMessage?: string;
@@ -85,6 +88,9 @@ export const executeToolSaga = async (
 
     if (connection.status !== 'active') {
       await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
         success: false,
         errorType: 'INTEGRATION_INACTIVE',
         errorMessage: `Integration is ${connection.status}`,
@@ -118,6 +124,9 @@ export const executeToolSaga = async (
 
     if (!toolCheck.allowed) {
       await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
         success: false,
         errorType: 'TOOL_NOT_ALLOWED',
         errorMessage: toolCheck.reason,
@@ -167,6 +176,9 @@ export const executeToolSaga = async (
 
     if (!rateCheck.allowed) {
       await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
         success: false,
         errorType: 'RATE_LIMITED',
         errorMessage: 'Rate limit exceeded',
@@ -215,6 +227,9 @@ export const executeToolSaga = async (
 
     if (!response.success) {
       await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
         success: false,
         errorType: response.errorType?.toUpperCase() || 'HTTP_ERROR',
         errorMessage: response.error,
@@ -236,6 +251,9 @@ export const executeToolSaga = async (
 
     // 10. Log success
     await deps.logAudit({
+      connectionId: request.connectionId,
+      toolName: request.toolName,
+      driveId: request.driveId,
       success: true,
       responseCode: response.response?.status,
       durationMs: Date.now() - startTime,
@@ -248,12 +266,19 @@ export const executeToolSaga = async (
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-    await deps.logAudit({
-      success: false,
-      errorType: 'INTERNAL_ERROR',
-      errorMessage,
-      durationMs: Date.now() - startTime,
-    });
+    try {
+      await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
+        success: false,
+        errorType: 'INTERNAL_ERROR',
+        errorMessage,
+        durationMs: Date.now() - startTime,
+      });
+    } catch {
+      // Audit logging is best-effort; don't mask the original error
+    }
 
     return {
       success: false,

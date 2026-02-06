@@ -40,6 +40,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   createStreamAbortController,
@@ -650,6 +651,37 @@ MENTION PROCESSING:
       webSearchEnabled: webSearchMode,
       totalTools: Object.keys(finalTools).length
     });
+
+    // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
+    try {
+      const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+      let currentDriveId = locationContext?.currentDrive?.id || null;
+      let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
+      if (currentDriveId) {
+        const access = await getDriveAccess(currentDriveId, userId);
+        if (!access.isMember) {
+          // User is not a member of this drive — do not resolve drive-scoped integrations
+          currentDriveId = null;
+        } else {
+          userDriveRole = access.role;
+        }
+      }
+      const integrationTools = await resolveGlobalAssistantIntegrationTools({
+        userId,
+        driveId: currentDriveId,
+        userDriveRole,
+      });
+      if (Object.keys(integrationTools).length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        finalTools = { ...finalTools, ...integrationTools } as any;
+        loggers.api.info('Global Assistant: Merged integration tools', {
+          integrationToolCount: Object.keys(integrationTools).length,
+          totalTools: Object.keys(finalTools).length,
+        });
+      }
+    } catch (error) {
+      loggers.api.error('Global Assistant: Failed to resolve integration tools', error as Error);
+    }
 
     // Merge MCP tools if provided
     if (mcpTools && mcpTools.length > 0) {
