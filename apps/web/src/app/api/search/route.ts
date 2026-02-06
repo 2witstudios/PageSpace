@@ -3,6 +3,7 @@ import { db, eq, and, or, ilike, pages, drives, users, userProfiles, inArray, SQ
 import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 interface SearchResult {
   id: string;
@@ -225,7 +226,11 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q');
-    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 50);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 20,
+      min: 1,
+      max: 50,
+    });
 
     // Trim whitespace and validate - prevents whitespace-only queries
     const trimmedQuery = query?.trim();

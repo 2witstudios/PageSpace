@@ -7,6 +7,7 @@ import {
 } from '@pagespace/lib/monitoring/hash-chain-verifier';
 import { isValidId } from '@pagespace/lib/validators';
 import { verifyAdminAuth } from '@/lib/auth';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 /**
  * Hash Chain Integrity Check API Endpoint
@@ -49,7 +50,11 @@ export async function GET(request: Request) {
     const dateFrom = url.searchParams.get('dateFrom');
     const dateTo = url.searchParams.get('dateTo');
     const stopOnFirstBreak = url.searchParams.get('stopOnFirstBreak') !== 'false';
-    const batchSize = parseInt(url.searchParams.get('batchSize') || '1000', 10);
+    const batchSize = parseBoundedIntParam(url.searchParams.get('batchSize'), {
+      defaultValue: 1000,
+      min: 100,
+      max: 5000,
+    });
 
     switch (mode) {
       case 'full': {
@@ -62,14 +67,15 @@ export async function GET(request: Request) {
           batchSize: number;
         } = {
           stopOnFirstBreak,
-          batchSize: Math.min(5000, Math.max(100, batchSize)),
+          batchSize,
         };
 
         if (limit) {
-          const parsedLimit = parseInt(limit, 10);
-          if (!isNaN(parsedLimit) && parsedLimit > 0) {
-            options.limit = parsedLimit;
-          }
+          options.limit = parseBoundedIntParam(limit, {
+            defaultValue: 1000,
+            min: 1,
+            max: 100000,
+          });
         }
 
         if (dateFrom) {

@@ -40,6 +40,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   createStreamAbortController,
   removeStream,
@@ -84,7 +85,11 @@ export async function GET(
 
     // Parse pagination parameters
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 50,
+      min: 1,
+      max: 200,
+    });
     const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
     const direction = searchParams.get('direction') || 'before'; // 'before' or 'after'
 

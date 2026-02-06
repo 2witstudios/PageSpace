@@ -5,6 +5,7 @@ import { stripe, Stripe } from '@/lib/stripe';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import { PLANS } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/server';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -55,7 +56,11 @@ export async function GET(request: NextRequest) {
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') || '10'), 100);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 10,
+      min: 1,
+      max: 100,
+    });
     const startingAfter = searchParams.get('starting_after') || undefined;
 
     // Get user

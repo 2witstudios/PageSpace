@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, eq, and, or, ilike, userProfiles, users } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 export async function GET(request: Request) {
   try {
@@ -12,7 +13,11 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q');
-    const limit = Math.min(parseInt(searchParams.get('limit') || '10'), 50);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 10,
+      min: 1,
+      max: 50,
+    });
 
     if (!query || query.length < 2) {
       return NextResponse.json({ users: [] });
