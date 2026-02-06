@@ -191,6 +191,7 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      backgroundThrottling: false, // Prevent Chromium from throttling timers/rAF when window is hidden during startup
     },
     show: false, // Don't show until ready
   };
@@ -241,6 +242,9 @@ function createWindow(): void {
   // Show window when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+    // Re-enable background throttling now that the initial render is complete.
+    // This was disabled during startup to prevent Chromium from throttling timers/rAF.
+    mainWindow?.webContents.setBackgroundThrottling(true);
   });
 
   // Save window bounds on resize/move
@@ -1005,6 +1009,29 @@ async function handleAuthExchange(url: string): Promise<boolean> {
       csrfToken: tokens.csrfToken,
       deviceToken: tokens.deviceToken,
     });
+
+    // Propagate the session cookie into the BrowserWindow's cookie jar.
+    // The exchange endpoint returns Set-Cookie, but main-process fetch doesn't
+    // share cookies with the renderer session. Without this, the Next.js
+    // middleware (which checks for a session cookie on page routes) would
+    // redirect /dashboard to /auth/signin after OAuth exchange.
+    const appUrl = new URL(getAppUrl());
+    try {
+      await session.defaultSession.cookies.set({
+        url: appUrl.origin,
+        name: 'session',
+        value: tokens.sessionToken,
+        path: '/',
+        httpOnly: true,
+        secure: !appUrl.origin.includes('localhost') && !appUrl.origin.includes('127.0.0.1'),
+        sameSite: 'strict' as const,
+        expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
+      });
+    } catch (cookieError) {
+      // Non-fatal: the auth hook will recover via device refresh, but the
+      // initial page load may flash the signin page briefly.
+      logger.warn('[Auth Exchange] Failed to set session cookie in BrowserWindow', { cookieError });
+    }
 
     logger.info('[Auth Exchange] OAuth exchange successful', { provider });
 

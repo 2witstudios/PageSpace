@@ -15,6 +15,7 @@ import { sessionService } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
+import { createSessionCookie } from '@/lib/auth/cookie-config';
 
 const loginSchema = z.object({
   email: z.email(),
@@ -156,11 +157,19 @@ export async function POST(req: Request) {
     // Generate CSRF token using session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
-    // Return tokens in JSON body for mobile clients
+    // Return tokens in JSON body for mobile/desktop clients
     const headers = new Headers();
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
     // After successful login and rate limit reset, remaining attempts are back to max
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.LOGIN.maxAttempts));
+
+    // Set session cookie for desktop clients so the Next.js middleware
+    // allows page route requests (middleware checks for session cookie presence).
+    // Desktop primarily uses Bearer tokens for API calls, but the initial page load
+    // and hard refreshes go through middleware which requires a cookie.
+    if (platform === 'desktop') {
+      headers.append('Set-Cookie', createSessionCookie(sessionToken));
+    }
 
     return Response.json({
       user: {

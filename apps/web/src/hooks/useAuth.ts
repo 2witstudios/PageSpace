@@ -119,6 +119,7 @@ export function useAuth(): {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(desktopLoginPayload),
+          credentials: 'include',
         });
 
         if (response.ok) {
@@ -247,6 +248,17 @@ export function useAuth(): {
 
       // Reset token refresh state
       tokenRefreshActiveRef.current = false;
+
+      // Clear persisted tab state so desktop startup doesn't restore stale/inaccessible routes.
+      // Reset to a single /dashboard tab — closeAllTabs() preserves pinned tabs by design,
+      // but logout must fully clear session-specific state including pinned tabs.
+      try {
+        const { useTabsStore } = await import('@/stores/useTabsStore');
+        useTabsStore.setState({ tabs: [], activeTabId: null });
+      } catch {
+        // Non-critical — tabs will just show dashboard on next login
+      }
+
       endSession();
       router.push('/auth/signin');
     }

@@ -19,6 +19,7 @@
 
 import { consumeExchangeCode } from '@pagespace/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { z } from 'zod/v4';
 
 const exchangeRequestSchema = z.object({
@@ -58,10 +59,15 @@ export async function POST(req: Request) {
     });
 
     // Return tokens in response body (secure - not logged by proxies)
+    // Set session cookie so Next.js middleware allows page route requests
     return Response.json({
       sessionToken: data.sessionToken,
       csrfToken: data.csrfToken,
       deviceToken: data.deviceToken,
+    }, {
+      headers: {
+        'Set-Cookie': createSessionCookie(data.sessionToken),
+      },
     });
   } catch (error) {
     loggers.auth.error('Desktop exchange error', error as Error);

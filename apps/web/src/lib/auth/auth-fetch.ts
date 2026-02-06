@@ -962,6 +962,15 @@ class AuthFetch {
   }
 
   /**
+   * Pre-populates the session cache with a known-good token.
+   * Call this after loadSession() successfully retrieves a desktop token via IPC
+   * to avoid a redundant IPC roundtrip when fetchWithAuth runs shortly after.
+   */
+  warmSessionCache(token: string): void {
+    this.sessionCache = { token, timestamp: Date.now() };
+  }
+
+  /**
    * Checks if a request requires CSRF token
    * CSRF is required for:
    * - Mutation methods (POST, PUT, PATCH, DELETE)
@@ -1103,6 +1112,9 @@ export const clearCSRFToken = () =>
 
 export const clearSessionCache = () =>
   getAuthFetch().clearSessionCache();
+
+export const warmSessionCache = (token: string) =>
+  getAuthFetch().warmSessionCache(token);
 
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();

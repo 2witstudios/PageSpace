@@ -193,7 +193,11 @@ export async function POST(req: Request) {
       });
 
       const sessionClaims = await sessionService.validateSession(sessionToken);
-      const csrfToken = generateCSRFToken(sessionClaims?.sessionId ?? '');
+      if (!sessionClaims) {
+        loggers.auth.error('Failed to validate newly created session during web device refresh');
+        return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
+      }
+      const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
       const headers = new Headers();
       appendSessionCookie(headers, sessionToken);
@@ -225,17 +229,21 @@ export async function POST(req: Request) {
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
+    const headers = new Headers();
+    headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+    headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+
+    // Desktop needs a session cookie so Next.js middleware allows page route requests.
+    // Desktop primarily uses Bearer tokens for API calls, but middleware checks cookies.
+    if (deviceRecord.platform === 'desktop') {
+      appendSessionCookie(headers, sessionToken);
+    }
+
     return Response.json({
       sessionToken,
       csrfToken,
       deviceToken: activeDeviceToken,
-      // Note: No refreshToken - mobile/desktop use device tokens for refresh
-    }, {
-      headers: {
-        'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
-        'X-RateLimit-Remaining': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
-      },
-    });
+    }, { headers });
   } catch (error) {
     loggers.auth.error('Device token refresh error', error as Error);
     return Response.json({ error: 'An unexpected error occurred.' }, { status: 500 });
