@@ -1,13 +1,16 @@
 'use client';
 
-import React, { forwardRef, useRef, useImperativeHandle, useEffect } from 'react';
+import React, { forwardRef, useRef, useImperativeHandle, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
+import { AttachButton } from './AttachButton';
+import { AttachmentPreviewStrip } from './AttachmentPreviewStrip';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
+import type { ImageAttachment } from '@/lib/ai/shared/hooks/useImageAttachments';
 
 export interface ChatInputProps {
   /** Current input value */
@@ -62,6 +65,14 @@ export interface ChatInputProps {
   isVoiceModeActive?: boolean;
   /** Whether voice mode is available (user has OpenAI key) */
   isVoiceModeAvailable?: boolean;
+  /** Image attachments for vision support */
+  attachments?: ImageAttachment[];
+  /** Handler to add image files */
+  onAddFiles?: (files: File[]) => void;
+  /** Handler to remove an image attachment */
+  onRemoveFile?: (id: string) => void;
+  /** Whether the current model supports vision */
+  hasVision?: boolean;
 }
 
 export interface ChatInputRef {
@@ -77,6 +88,7 @@ export interface ChatInputRef {
  * Combines:
  * - ChatTextarea with @ mention support
  * - InputActions (send/stop buttons)
+ * - AttachButton + AttachmentPreviewStrip (vision support)
  * - Read-only indicator when applicable
  *
  * This component provides the inner content for InputCard.
@@ -111,6 +123,10 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onVoiceModeClick,
       isVoiceModeActive = false,
       isVoiceModeAvailable = false,
+      attachments,
+      onAddFiles,
+      onRemoveFile,
+      hasVision = false,
     },
     ref
   ) => {
@@ -166,18 +182,58 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     }));
 
     const handleSend = () => {
-      if (value.trim() && !disabled) {
+      const hasText = value.trim().length > 0;
+      const hasImages = (attachments?.length ?? 0) > 0;
+      if ((hasText || hasImages) && !disabled) {
         keyboard.dismiss();
         onSend();
       }
     };
 
-    const canSend = value.trim().length > 0 && !disabled;
+    const canSend = (value.trim().length > 0 || (attachments?.length ?? 0) > 0) && !disabled;
+
+    // Drag-and-drop handler for images
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+      if (!onAddFiles || !hasVision) return;
+      e.preventDefault();
+      e.stopPropagation();
+    }, [onAddFiles, hasVision]);
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+      if (!onAddFiles || !hasVision) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
+      if (files.length > 0) {
+        onAddFiles(files);
+      }
+    }, [onAddFiles, hasVision]);
 
     return (
-      <div className={cn('flex flex-col relative min-w-0')}>
+      <div
+        className={cn('flex flex-col relative min-w-0')}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {/* Attachment preview strip (shown when images are attached) */}
+        {attachments && attachments.length > 0 && onRemoveFile && (
+          <AttachmentPreviewStrip
+            attachments={attachments}
+            onRemove={onRemoveFile}
+          />
+        )}
+
         {/* Input row */}
         <div className="flex items-start gap-2 p-3 min-w-0">
+          {/* Attach button (shown when model supports vision) */}
+          {hasVision && onAddFiles && (
+            <AttachButton
+              onFiles={onAddFiles}
+              disabled={isStreaming || disabled}
+            />
+          )}
+
           <ChatTextarea
             ref={textareaRef}
             value={value}
@@ -189,6 +245,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             disabled={disabled}
             variant={variant}
             popupPlacement={popupPlacement}
+            onPasteFiles={hasVision && onAddFiles ? onAddFiles : undefined}
           />
 
           <InputActions

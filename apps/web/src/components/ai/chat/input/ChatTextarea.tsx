@@ -31,6 +31,8 @@ export interface ChatTextareaProps {
   variant?: 'main' | 'sidebar';
   /** Popup placement: 'top' for suggestions above (docked input), 'bottom' for suggestions below (centered input) */
   popupPlacement?: 'top' | 'bottom';
+  /** Handler for pasted image files (vision support) */
+  onPasteFiles?: (files: File[]) => void;
   /** Additional class names */
   className?: string;
 }
@@ -58,6 +60,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       disabled = false,
       variant = 'main',
       popupPlacement = 'top',
+      onPasteFiles,
       className,
     },
     ref
@@ -102,6 +105,28 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       }
     };
 
+    const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!onPasteFiles) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        onPasteFiles(imageFiles);
+      }
+      // If no image files, let normal text paste proceed
+    };
+
     return (
       <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
@@ -109,6 +134,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           value={value}
           onChange={(e) => suggestion.handleValueChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onScroll={handleScroll}
           onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={() => setIsComposing(false)}

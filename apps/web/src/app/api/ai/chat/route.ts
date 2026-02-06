@@ -303,17 +303,16 @@ export async function POST(request: Request) {
         
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        await db.insert(chatMessages).values({
-          id: messageId,
+        await saveMessageToDatabase({
+          messageId,
           pageId: chatId,
-          conversationId, // Group messages into conversation sessions
+          conversationId,
           userId,
           role: 'user',
           content: messageContent,
-          toolCalls: null,
-          toolResults: null,
-          createdAt: new Date(),
-          isActive: true,
+          toolCalls: undefined,
+          toolResults: undefined,
+          uiMessage: userMessage,
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');

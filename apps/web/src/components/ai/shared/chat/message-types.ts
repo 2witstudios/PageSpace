@@ -25,6 +25,16 @@ export interface TextPart {
 }
 
 /**
+ * A file/image part within a message (from AI SDK FileUIPart)
+ */
+export interface FilePart {
+  type: 'file';
+  url: string;
+  mediaType?: string;
+  filename?: string;
+}
+
+/**
  * A tool call part within a message (raw from AI SDK)
  */
 export interface ToolPart {
@@ -45,6 +55,14 @@ export interface TextGroupPart {
 }
 
 /**
+ * A group of consecutive file/image parts
+ */
+export interface FileGroupPart {
+  type: 'file-group';
+  parts: FilePart[];
+}
+
+/**
  * A processed tool part for rendering (normalized from raw ToolPart)
  */
 export interface ProcessedToolPart {
@@ -59,7 +77,7 @@ export interface ProcessedToolPart {
 /**
  * Union type for processed message parts
  */
-export type GroupedPart = TextGroupPart | ProcessedToolPart;
+export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart;
 
 /**
  * Valid tool states for type checking
@@ -79,6 +97,13 @@ export function isValidToolState(value: unknown): value is ValidToolState {
  */
 export function isTextGroupPart(part: GroupedPart): part is TextGroupPart {
   return part.type === 'text-group';
+}
+
+/**
+ * Type guard for FileGroupPart
+ */
+export function isFileGroupPart(part: GroupedPart): part is FileGroupPart {
+  return part.type === 'file-group';
 }
 
 /**
