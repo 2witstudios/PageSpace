@@ -91,6 +91,14 @@ export function InputPositioner({
       >
         {children}
       </div>
+      {/* Background fill behind safe area - extends UI behind iPad keyboard toolbar */}
+      {!isCentered && (
+        <div
+          className="absolute bottom-0 left-0 right-0 bg-background"
+          style={{ height: 'var(--safe-bottom-offset, 0px)' }}
+          aria-hidden="true"
+        />
+      )}
     </motion.div>
   );
 }
