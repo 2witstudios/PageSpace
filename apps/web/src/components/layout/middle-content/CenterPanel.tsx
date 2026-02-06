@@ -6,6 +6,7 @@ import { ViewHeader } from './content-header';
 import { usePageTree, TreePage } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { AlertCircle, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import FolderView from './page-views/folder/FolderView';
 import AiChatView from './page-views/ai-page/AiChatView';
 import ChannelView from './page-views/channel/ChannelView';
@@ -20,7 +21,7 @@ import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
@@ -36,6 +37,11 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const driveId = params.driveId as string;
   const { tree, isLoading, isError, isValidating, retry } = usePageTree(driveId);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
+
+  const handleRetry = useCallback(() => {
+    setLoadingTimedOut(false);
+    retry();
+  }, [retry]);
 
   // Track loading duration - show retry hint if loading takes too long
   useEffect(() => {
@@ -68,13 +74,10 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
             {isError?.message || 'Something went wrong loading the page tree.'}
           </p>
         </div>
-        <button
-          onClick={retry}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-        >
+        <Button onClick={handleRetry} size="sm">
           <RefreshCw className="h-4 w-4" />
           Try again
-        </button>
+        </Button>
       </div>
     );
   }
@@ -87,13 +90,10 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
           <Skeleton className="h-full w-full" />
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <p className="text-sm text-muted-foreground">Taking longer than expected...</p>
-            <button
-              onClick={retry}
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-background border border-border hover:bg-accent transition-colors"
-            >
+            <Button onClick={handleRetry} variant="outline" size="sm">
               <RefreshCw className="h-3.5 w-3.5" />
               Retry
-            </button>
+            </Button>
           </div>
         </div>
       );

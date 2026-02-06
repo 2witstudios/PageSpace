@@ -242,6 +242,9 @@ function createWindow(): void {
   // Show window when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+    // Re-enable background throttling now that the initial render is complete.
+    // This was disabled during startup to prevent Chromium from throttling timers/rAF.
+    mainWindow?.webContents.setBackgroundThrottling(true);
   });
 
   // Save window bounds on resize/move

@@ -55,6 +55,7 @@ vi.mock('swr', () => ({
     error: mockSWRState.error,
     mutate: mockMutate,
     isLoading: mockSWRState.data === undefined && mockSWRState.error === undefined,
+    isValidating: false,
   })),
   useSWRConfig: vi.fn(() => ({
     cache: {
@@ -293,6 +294,33 @@ describe('usePageTree', () => {
         expect.stringContaining('Skipping tree revalidation')
       );
       consoleLog.mockRestore();
+    });
+  });
+
+  describe('retry', () => {
+    it('given a driveId, should delete cache and mutate without editing guard', () => {
+      mockSWRState.data = [createMockTreePage()];
+      mockIsAnyEditing.mockReturnValue(true);
+
+      const { result } = renderHook(() => usePageTree('drive-123'));
+
+      act(() => {
+        result.current.retry();
+      });
+
+      // retry bypasses editing guard (unlike invalidateTree)
+      expect(mockCacheDelete).toHaveBeenCalledWith('/api/drives/drive-123/pages');
+      expect(mockMutate).toHaveBeenCalled();
+    });
+
+    it('given no driveId, should not attempt cache delete or mutate', () => {
+      const { result } = renderHook(() => usePageTree(undefined));
+
+      act(() => {
+        result.current.retry();
+      });
+
+      expect(mockCacheDelete).not.toHaveBeenCalled();
     });
   });
 

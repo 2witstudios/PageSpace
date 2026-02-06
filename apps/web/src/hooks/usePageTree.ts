@@ -156,6 +156,8 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     }, { revalidate: false });
   }, [mutate]);
 
+  // User-initiated retry: bypasses the editing guard (unlike invalidateTree)
+  // because the user explicitly chose to retry, so we should always honor it.
   const retry = useCallback(() => {
     if (swrKey) {
       cache.delete(swrKey);

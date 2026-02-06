@@ -34,10 +34,9 @@ export function useTabSync() {
 
     // Desktop bootstrap: app starts at /dashboard, so restore the active tab route once
     // to ensure page hooks mount immediately without requiring user interaction.
-    const isDesktop = typeof window !== 'undefined' && !!window.electron?.isDesktop;
+    const isDesktop = !!window.electron?.isDesktop;
     if (isDesktop && !didAttemptDesktopRestore.current && pathname === '/dashboard' && hasTabs) {
-      const refreshedState = useTabsStore.getState();
-      const activeTab = selectActiveTab(refreshedState);
+      const activeTab = selectActiveTab(useTabsStore.getState());
       const restorePath = activeTab?.path;
 
       didAttemptDesktopRestore.current = true;
@@ -52,15 +51,18 @@ export function useTabSync() {
     // Skip if we already synced this path
     if (lastSyncedPath.current === pathname) return;
 
+    // Re-read after potential healing / restore
+    const currentState = useTabsStore.getState();
+
     // If no tabs exist, create one from current path
-    if (state.tabs.length === 0) {
-      state.createTab({ path: pathname });
+    if (currentState.tabs.length === 0) {
+      currentState.createTab({ path: pathname });
       lastSyncedPath.current = pathname;
       return;
     }
 
     // Get active tab's current path
-    const activeTab = selectActiveTab(state);
+    const activeTab = selectActiveTab(currentState);
 
     // If active tab already at this path, just update sync ref
     if (activeTab?.path === pathname) {
@@ -69,7 +71,7 @@ export function useTabSync() {
     }
 
     // Navigate within the active tab
-    state.navigateInActiveTab(pathname);
+    currentState.navigateInActiveTab(pathname);
     lastSyncedPath.current = pathname;
   }, [pathname, rehydrated, router]);
 }

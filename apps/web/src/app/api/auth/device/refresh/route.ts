@@ -193,7 +193,11 @@ export async function POST(req: Request) {
       });
 
       const sessionClaims = await sessionService.validateSession(sessionToken);
-      const csrfToken = generateCSRFToken(sessionClaims?.sessionId ?? '');
+      if (!sessionClaims) {
+        loggers.auth.error('Failed to validate newly created session during web device refresh');
+        return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
+      }
+      const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
       const headers = new Headers();
       appendSessionCookie(headers, sessionToken);

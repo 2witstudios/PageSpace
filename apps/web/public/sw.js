@@ -73,7 +73,11 @@ self.addEventListener('fetch', (event) => {
       request.headers.get('next-router-prefetch') ||
       request.headers.get('next-router-state-tree') ||
       request.headers.get('next-url')) {
-    event.respondWith(fetch(request));
+    event.respondWith(
+      fetch(request).catch(() =>
+        new Response('', { status: 503, statusText: 'Service Unavailable' })
+      )
+    );
     return;
   }
 
