@@ -153,14 +153,14 @@ router.get('/:contentHash/:preset', async (req, res) => {
 
     // Get cached file
     const buffer = await contentStore.getCache(contentHash, preset);
-    
+
     if (!buffer) {
       return res.status(404).json({ error: 'File not found' });
     }
 
     // Determine content type based on preset or file extension
     let contentType = 'image/jpeg'; // Default
-    
+
     if (preset.endsWith('.webp')) {
       contentType = 'image/webp';
     } else if (preset.endsWith('.png')) {
