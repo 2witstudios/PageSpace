@@ -40,12 +40,28 @@ export type TreePage = Page & {
   hasChanges?: boolean;
 };
 
+const FETCH_TIMEOUT_MS = 15000; // 15 second timeout for page tree requests
+
 const fetcher = async (url: string) => {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch: ${response.status}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetchWithAuth(url, { signal: controller.signal });
+    if (!response.ok) {
+      const error = new Error(`Failed to fetch: ${response.status}`);
+      (error as Error & { status: number }).status = response.status;
+      throw error;
+    }
+    return response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Page tree request timed out');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 };
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
@@ -58,7 +74,7 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   }, [driveId, trashView]);
 
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
-  const { data, error, mutate } = useSWR<TreePage[]>(
+  const { data, error, mutate, isValidating } = useSWR<TreePage[]>(
     swrKey,
     fetcher,
     {
@@ -68,6 +84,12 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
       onSuccess: () => {
         hasLoadedRef.current = true;
       },
+      // Retry failed requests up to 3 times with increasing delay
+      errorRetryCount: 3,
+      errorRetryInterval: 2000,
+      // Don't revalidate automatically after error - let user retry manually
+      revalidateOnFocus: false,
+      revalidateOnReconnect: true,
     }
   );
   const { cache } = useSWRConfig();
@@ -136,14 +158,23 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     }, { revalidate: false });
   }, [mutate]);
 
+  const retry = useCallback(() => {
+    if (swrKey) {
+      cache.delete(swrKey);
+      mutate();
+    }
+  }, [swrKey, cache, mutate]);
+
   return {
     tree: data ?? [],
     isLoading: !error && !data && !!driveId,
     isError: error,
+    isValidating,
     mutate,
     updateNode,
     fetchAndMergeChildren,
     childLoadingMap,
     invalidateTree,
+    retry,
   };
 }

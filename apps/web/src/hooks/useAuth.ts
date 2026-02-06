@@ -119,6 +119,7 @@ export function useAuth(): {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(desktopLoginPayload),
+          credentials: 'include',
         });
 
         if (response.ok) {

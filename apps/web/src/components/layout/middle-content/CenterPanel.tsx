@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ViewHeader } from './content-header';
 import { usePageTree, TreePage } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 import FolderView from './page-views/folder/FolderView';
 import AiChatView from './page-views/ai-page/AiChatView';
 import ChannelView from './page-views/channel/ChannelView';
@@ -26,12 +27,25 @@ import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
 import { post } from '@/lib/auth/auth-fetch';
 
+const LOADING_TIMEOUT_MS = 12000; // Show retry hint after 12 seconds
+
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const params = useParams();
   const pathname = usePathname();
   const driveId = params.driveId as string;
-  const { tree, isLoading } = usePageTree(driveId);
+  const { tree, isLoading, isError, isValidating, retry } = usePageTree(driveId);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
+
+  // Track loading duration - show retry hint if loading takes too long
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setLoadingTimedOut(true), LOADING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isLoading]);
 
   // Handle special routes
   if (pathname.endsWith('/settings')) {
@@ -42,7 +56,47 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     return <MCPSettingsView />;
   }
 
+  // Error state - show message with retry button instead of infinite skeleton
+  if (isError && !isValidating) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+        <AlertCircle className="h-10 w-10 text-muted-foreground" />
+        <div className="text-center">
+          <p className="text-sm font-medium text-foreground">Failed to load pages</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {isError?.message || 'Something went wrong loading the page tree.'}
+          </p>
+        </div>
+        <button
+          onClick={retry}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Try again
+        </button>
+      </div>
+    );
+  }
+
   if (isLoading) {
+    // After timeout, show skeleton with retry option
+    if (loadingTimedOut) {
+      return (
+        <div className="h-full w-full relative">
+          <Skeleton className="h-full w-full" />
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <p className="text-sm text-muted-foreground">Taking longer than expected...</p>
+            <button
+              onClick={retry}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md bg-background border border-border hover:bg-accent transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
     return <Skeleton className="h-full w-full" />;
   }
 

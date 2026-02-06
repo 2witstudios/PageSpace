@@ -62,6 +62,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
+import { createSessionCookie } from '@/lib/auth/cookie-config';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -307,7 +308,13 @@ export async function POST(req: Request) {
       provider: 'google',
     });
 
-    return Response.json(response, { status: 200 });
+    const headers = new Headers();
+    // Desktop needs a session cookie so Next.js middleware allows page route requests
+    if (platform === 'desktop') {
+      headers.append('Set-Cookie', createSessionCookie(sessionToken));
+    }
+
+    return Response.json(response, { status: 200, headers });
   } catch (error) {
     loggers.auth.error('Mobile Google OAuth error', error as Error);
 
