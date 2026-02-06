@@ -1,12 +1,13 @@
 "use client";
 
-import React, { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
+import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 
 interface ChatInputProps {
   value: string;
@@ -31,20 +32,10 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
   crossDrive = false
 }, ref) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
+  const { overlayRef, hasMentions, handleScroll } = useMentionOverlay(textareaRef, value);
   const context = useSuggestionContext();
   // Track IME composition state to prevent accidental sends during predictive text
   const [isComposing, setIsComposing] = useState(false);
-
-  // Check if there are any mentions to render in the overlay
-  const hasMentions = /@\[[^\]]+\]\([^:]+:[^)]+\)/.test(value);
-
-  // Sync overlay scroll with textarea scroll
-  const handleScroll = useCallback(() => {
-    if (textareaRef.current && overlayRef.current) {
-      overlayRef.current.scrollTop = textareaRef.current.scrollTop;
-    }
-  }, []);
 
   const suggestion = useSuggestion({
     inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
