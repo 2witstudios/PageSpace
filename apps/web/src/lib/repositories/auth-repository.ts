@@ -74,5 +74,3 @@ export const authRepository = {
       .where(eq(users.id, userId));
   },
 };
-
-export type AuthRepository = typeof authRepository;

@@ -28,5 +28,3 @@ export const pageSpaceTools = {
   ...calendarReadTools,
   ...calendarWriteTools,
 };
-
-export type PageSpaceTools = typeof pageSpaceTools;

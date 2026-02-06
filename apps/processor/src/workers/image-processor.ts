@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import { contentStore } from '../server';
-import { IMAGE_PRESETS, ImagePreset } from '../types';
+import { IMAGE_PRESETS } from '../types';
 
 /** Sanitize a value for safe logging - strips control characters and newlines */
 function sanitizeLogValue(value: string): string {
@@ -107,29 +107,6 @@ export async function processImage(data: ImageJobData): Promise<any> {
     console.error('Failed to process image %s/%s:', sanitizeLogValue(contentHash), sanitizeLogValue(presetName), error);
     throw error;
   }
-}
-
-// Batch optimize function for multiple presets
-export async function optimizeImageForAllPresets(contentHash: string): Promise<any> {
-  const results: Record<string, any> = {};
-  
-  // Process all standard presets in parallel
-  const presets = ['ai-chat', 'ai-vision', 'thumbnail', 'preview'];
-  
-  await Promise.all(
-    presets.map(async (preset) => {
-      try {
-        results[preset] = await processImage({ contentHash, preset });
-      } catch (error) {
-        results[preset] = { 
-          success: false, 
-          error: error instanceof Error ? error.message : 'Unknown error' 
-        };
-      }
-    })
-  );
-
-  return results;
 }
 
 // Special function for AI vision processing

@@ -195,18 +195,3 @@ export function getTasksForDay(tasks: TaskWithDueDate[], date: Date): TaskWithDu
   });
 }
 
-// Format time for display
-export function formatEventTime(date: Date, allDay: boolean): string {
-  if (allDay) return 'All day';
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-// Get hour from date (0-23)
-export function getHour(date: Date): number {
-  return date.getHours();
-}
-
-// Get minutes from date (0-59)
-export function getMinutes(date: Date): number {
-  return date.getMinutes();
-}

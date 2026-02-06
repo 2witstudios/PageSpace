@@ -35,7 +35,3 @@ export function getPlatformStorage(): PlatformStorage {
   console.log(`[PlatformStorage] ${instance.platform}`);
   return instance;
 }
-
-export function resetPlatformStorage(): void {
-  instance = null;
-}

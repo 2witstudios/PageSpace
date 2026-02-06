@@ -58,39 +58,3 @@ export function validateMCPConfig(config: unknown): { success: true; data: z.inf
     };
   }
 }
-
-/**
- * Validate a single server configuration
- */
-export function validateServerConfig(name: string, config: unknown): { success: true; data: z.infer<typeof MCPServerConfigSchema> } | { success: false; error: string } {
-  // Validate server name
-  const nameRegex = /^[a-zA-Z0-9_-]+$/;
-  if (!nameRegex.test(name)) {
-    return {
-      success: false,
-      error: 'Server name must only contain letters, numbers, hyphens, and underscores',
-    };
-  }
-
-  // Validate config
-  try {
-    logger.debug('Validating server config', { serverName: name, config });
-    const result = MCPServerConfigSchema.parse(config);
-    logger.debug('Server config is valid', { serverName: name });
-    return { success: true, data: result };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      logger.error('Server validation failed', { serverName: name, errors: error.issues });
-      const firstError = error.issues[0];
-      return {
-        success: false,
-        error: `${firstError.path.join('.')}: ${firstError.message}`,
-      };
-    }
-    logger.error('Unknown validation error for server', { serverName: name, error });
-    return {
-      success: false,
-      error: 'Invalid server configuration',
-    };
-  }
-}

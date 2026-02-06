@@ -73,26 +73,6 @@ export function filterToolsForWebSearch<T>(
 }
 
 /**
- * Combined tool filtering - applies both read-only and web search filters
- */
-export function filterTools<T>(
-  tools: Record<string, T>,
-  options: { isReadOnly?: boolean; webSearchEnabled?: boolean }
-): Record<string, T> {
-  let filtered = tools;
-
-  if (options.isReadOnly) {
-    filtered = filterToolsForReadOnly(filtered, true);
-  }
-
-  if (options.webSearchEnabled === false) {
-    filtered = filterToolsForWebSearch(filtered, false);
-  }
-
-  return filtered;
-}
-
-/**
  * Get list of allowed tools for display purposes
  */
 export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {

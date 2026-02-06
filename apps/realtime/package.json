@@ -13,7 +13,6 @@
   "dependencies": {
     "@pagespace/db": "workspace:*",
     "@pagespace/lib": "workspace:*",
-    "cookie": "1.0.2",
     "dotenv": "^17.2.0",
     "socket.io": "^4.7.5"
   },

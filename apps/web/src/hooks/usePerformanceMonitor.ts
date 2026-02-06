@@ -107,29 +107,3 @@ export function usePerformanceMonitor() {
   };
 }
 
-// Hook for measuring component render performance
-export function useRenderPerformance(componentName: string) {
-  const renderCount = useRef(0);
-  const lastRenderTime = useRef(performance.now());
-
-  useEffect(() => {
-    if (!ENABLE_PERFORMANCE_MONITORING) return;
-    
-    const now = performance.now();
-    const timeSinceLastRender = now - lastRenderTime.current;
-    renderCount.current++;
-    
-    if (process.env.NODE_ENV === 'development') {
-      // Log frequent re-renders
-      if (timeSinceLastRender < 100 && renderCount.current > 1) {
-        console.warn(`🔄 Frequent re-render of ${componentName}: ${timeSinceLastRender.toFixed(2)}ms since last render (count: ${renderCount.current})`);
-      }
-    }
-    
-    lastRenderTime.current = now;
-  });
-
-  return {
-    renderCount: renderCount.current
-  };
-}

@@ -100,32 +100,3 @@ async function initializeRedis(): Promise<Redis | null> {
     return null;
   }
 }
-
-/**
- * Gracefully shutdown the shared Redis connection.
- * Should be called during application shutdown.
- */
-export async function shutdownSharedRedis(): Promise<void> {
-  if (sharedRedisClient) {
-    try {
-      await sharedRedisClient.quit();
-    } catch (error) {
-      loggers.api.warn('Error during Redis shutdown', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-    sharedRedisClient = null;
-    connectionPromise = null;
-    redisAvailable = false;
-    loggers.api.debug('Shared Redis client shutdown complete');
-  }
-}
-
-/**
- * Reset the shared Redis state (primarily for testing)
- */
-export function resetSharedRedis(): void {
-  sharedRedisClient = null;
-  connectionPromise = null;
-  redisAvailable = false;
-}

@@ -251,5 +251,3 @@ export const conversationRepository = {
     });
   },
 };
-
-export type ConversationRepository = typeof conversationRepository;

@@ -85,13 +85,10 @@ export const OutgoingMessageSchema = z.discriminatedUnion('type', [
  * Type exports for TypeScript type inference
  */
 export type PingMessage = z.infer<typeof PingMessageSchema>;
-export type PongMessage = z.infer<typeof PongMessageSchema>;
 export type ToolExecuteMessage = z.infer<typeof ToolExecuteMessageSchema>;
 export type ToolResultMessage = z.infer<typeof ToolResultMessageSchema>;
-export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
 
 export type IncomingMessage = z.infer<typeof IncomingMessageSchema>;
-export type OutgoingMessage = z.infer<typeof OutgoingMessageSchema>;
 
 /**
  * Message validation helper functions

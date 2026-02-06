@@ -41,22 +41,6 @@ export function getConnectionFingerprint(request: NextRequest): string {
   return fingerprint;
 }
 
-/**
- * Verify connection fingerprint matches stored fingerprint
- *
- * Used to detect if user's IP or browser changed mid-session
- *
- * @param currentFingerprint - Current connection fingerprint
- * @param storedFingerprint - Previously stored fingerprint
- * @returns true if fingerprints match
- */
-export function verifyFingerprint(
-  currentFingerprint: string,
-  storedFingerprint: string
-): boolean {
-  return currentFingerprint === storedFingerprint;
-}
-
 // ============================================================================
 // MESSAGE VALIDATION
 // ============================================================================

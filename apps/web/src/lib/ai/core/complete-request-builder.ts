@@ -290,23 +290,3 @@ END OF PAYLOAD
 ${divider}`;
 }
 
-/**
- * Build payload for both modes for comparison.
- */
-export function buildBothModePayloads(
-  contextType: 'dashboard' | 'drive' | 'page',
-  locationContext?: LocationContext
-): { fullAccess: CompletePayloadResult; readOnly: CompletePayloadResult } {
-  return {
-    fullAccess: buildCompleteRequest({
-      isReadOnly: false,
-      contextType,
-      locationContext,
-    }),
-    readOnly: buildCompleteRequest({
-      isReadOnly: true,
-      contextType,
-      locationContext,
-    }),
-  };
-}

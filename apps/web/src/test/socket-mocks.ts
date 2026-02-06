@@ -4,7 +4,6 @@
  */
 
 import { vi } from 'vitest';
-import type { Socket } from 'socket.io-client';
 
 type MockSocket = {
   connected: boolean;
@@ -80,13 +79,6 @@ export const createMockElectron = () => ({
 });
 
 /**
- * Creates a mock io() function for socket.io-client
- */
-export const createMockIo = (mockSocket: MockSocket) => {
-  return vi.fn(() => mockSocket as unknown as Socket);
-};
-
-/**
  * Mock window event listeners with tracking
  */
 export const createWindowEventMock = () => {
@@ -122,15 +114,3 @@ export const createWindowEventMock = () => {
   };
 };
 
-/**
- * Creates a mock fetch for token refresh endpoints
- */
-export const createMockFetch = (responses: Record<string, { ok: boolean; json?: unknown }>) => {
-  return vi.fn((url: string) => {
-    const response = responses[url] || { ok: false };
-    return Promise.resolve({
-      ok: response.ok,
-      json: () => Promise.resolve(response.json),
-    });
-  });
-};

@@ -94,27 +94,6 @@ export function roomMatchesPattern(room: string, pattern: string): boolean {
 }
 
 /**
- * Get all rooms that should be kicked for a drive removal
- * This includes the main drive room and associated activity rooms
- */
-export function getRoomsForDriveKick(driveId: string): string[] {
-  return [
-    `drive:${driveId}`,
-    `activity:drive:${driveId}`,
-  ];
-}
-
-/**
- * Get all rooms that should be kicked for a page permission revocation
- */
-export function getRoomsForPageKick(pageId: string): string[] {
-  return [
-    pageId, // Page room uses pageId directly
-    `activity:page:${pageId}`,
-  ];
-}
-
-/**
  * Execute the kick operation - remove user's sockets from matching rooms
  */
 export function executeKick(

@@ -110,5 +110,3 @@ export const chatMessageRepository = {
       .where(eq(chatMessages.id, messageId));
   },
 };
-
-export type ChatMessageRepository = typeof chatMessageRepository;

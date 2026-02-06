@@ -1083,9 +1083,6 @@ export { AuthFetch };
 export const fetchWithAuth = (...args: Parameters<AuthFetch['fetch']>) =>
   getAuthFetch().fetch(...args);
 
-export const fetchJSON = <T = unknown>(...args: Parameters<AuthFetch['fetchJSON']>) =>
-  getAuthFetch().fetchJSON<T>(...args);
-
 export const post = <T = unknown>(url: string, body?: unknown, options?: FetchOptions) =>
   getAuthFetch().post<T>(url, body, options);
 
@@ -1107,8 +1104,3 @@ export const clearSessionCache = () =>
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();
 
-export const isSystemSuspended = () =>
-  getAuthFetch().isSystemSuspended();
-
-export const getSuspendTime = () =>
-  getAuthFetch().getSuspendTime();

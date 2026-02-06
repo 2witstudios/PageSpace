@@ -132,33 +132,3 @@ export function buildSystemPrompt(
   return sections.join('\n\n');
 }
 
-/**
- * Get welcome message
- */
-export function getWelcomeMessage(
-  isReadOnly: boolean,
-  isNew: boolean = false
-): string {
-  const prefix = isNew ? 'Welcome! ' : '';
-
-  if (isReadOnly) {
-    return `${prefix}I'm in read-only mode. I can explore and analyze but won't make changes. What would you like to understand?`;
-  }
-
-  return `${prefix}I can help explore, understand, and work on your content. What would you like to work on?`;
-}
-
-/**
- * Get error message
- */
-export function getErrorMessage(error: string): string {
-  return `Issue: ${error}. Would you like me to try a different approach?`;
-}
-
-/**
- * Estimate token count for system prompt
- * Rough estimate: 4 characters per token
- */
-export function estimateSystemPromptTokens(prompt: string): number {
-  return Math.ceil(prompt.length / 4);
-}

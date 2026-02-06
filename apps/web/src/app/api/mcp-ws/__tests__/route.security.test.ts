@@ -37,7 +37,6 @@ vi.mock('@/lib/mcp/mcp-bridge', () => ({
 
 vi.mock('@/lib/websocket/ws-security', () => ({
   getConnectionFingerprint: vi.fn(() => 'mock_fingerprint_hash_1234567890abcdef'),
-  verifyFingerprint: vi.fn(() => true),
   validateMessageSize: vi.fn(() => ({ valid: true })),
   logSecurityEvent: vi.fn(),
   isSecureConnection: vi.fn(() => true),

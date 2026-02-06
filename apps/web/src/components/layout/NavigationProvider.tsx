@@ -1,7 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useMemo, ReactNode } from 'react';
-import Link from 'next/link';
+import { createContext, useContext, useEffect, useMemo, ReactNode } from 'react';
 import { LayoutErrorBoundary } from './LayoutErrorBoundary';
 import { useUnsavedChanges } from '@/hooks/useUnsavedChanges';
 
@@ -70,56 +69,3 @@ export function useNavigation(): NavigationContextType {
   return context;
 }
 
-/**
- * Higher-order component to inject navigation capabilities
- */
-export function withNavigation<P extends object>(
-  Component: React.ComponentType<P & NavigationContextType>
-) {
-  const WrappedComponent = (props: P) => {
-    const navigation = useNavigation();
-    return <Component {...props} {...navigation} />;
-  };
-
-  WrappedComponent.displayName = `withNavigation(${Component.displayName || Component.name})`;
-  
-  return WrappedComponent;
-}
-
-/**
- * Component for navigation links with automatic interception
- */
-interface NavigationLinkProps {
-  href: string;
-  children: ReactNode;
-  className?: string;
-  onClick?: (e: React.MouseEvent) => void;
-  disabled?: boolean;
-}
-
-export function NavigationLink({
-  href,
-  children,
-  className,
-  onClick,
-  disabled = false
-}: NavigationLinkProps) {
-  const style: React.CSSProperties = {
-    opacity: disabled ? 0.5 : 1,
-    pointerEvents: disabled ? 'none' : 'auto',
-  };
-
-  if (disabled) {
-    return (
-      <span className={className} style={style} onClick={(e) => e.preventDefault()}>
-        {children}
-      </span>
-    );
-  }
-
-  return (
-    <Link href={href} className={className} onClick={onClick} style={style}>
-      {children}
-    </Link>
-  );
-}

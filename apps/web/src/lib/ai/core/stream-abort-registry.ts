@@ -42,16 +42,6 @@ const startCleanupInterval = () => {
 };
 
 /**
- * Stop the cleanup interval (useful for testing and graceful shutdown)
- */
-export const stopCleanupInterval = (): void => {
-  if (cleanupInterval) {
-    clearInterval(cleanupInterval);
-    cleanupInterval = null;
-  }
-};
-
-/**
  * Create and register a new AbortController for a stream
  * Returns the streamId and AbortSignal to use with streamText
  *

@@ -51,8 +51,6 @@ export interface TaskListData {
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
 export type TaskPriority = 'low' | 'medium' | 'high';
-export type ViewMode = 'table' | 'kanban';
-
 export const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string }> = {
   pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
   in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },

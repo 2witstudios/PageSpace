@@ -332,7 +332,4 @@ export const useTabsStore = create<TabsState>()(
 );
 
 // Export standalone selectors
-export const selectTabCount = (state: TabsState) => state.tabs.length;
 export const selectHasMultipleTabs = (state: TabsState) => state.tabs.length > 1;
-export const selectActiveTab = (state: TabsState) =>
-  state.tabs.find(t => t.id === state.activeTabId) ?? null;

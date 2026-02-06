@@ -120,13 +120,6 @@ export function getConnection(userId: string): WebSocket | undefined {
 }
 
 /**
- * Get all active connections
- */
-export function getAllConnections(): Map<string, WebSocket> {
-  return connections;
-}
-
-/**
  * Update last ping time for a connection
  */
 export function updateLastPing(ws: WebSocket): void {
@@ -520,30 +513,6 @@ export function checkConnectionHealth(ws: WebSocket): ConnectionHealthCheck {
     lastPing: metadata.lastPing,
     connectedDuration,
   };
-}
-
-/**
- * Checks if connection is healthy and can execute tools
- * Throws an error with descriptive message if unhealthy
- *
- * @param ws - WebSocket connection to check
- * @throws Error if connection is unhealthy
- */
-export function assertConnectionHealthy(ws: WebSocket): void {
-  const health = checkConnectionHealth(ws);
-
-  if (!health.isHealthy) {
-    throw new Error(`Connection health check failed: ${health.reason}`);
-  }
-}
-
-/**
- * Get user ID for a WebSocket connection
- * Returns undefined if connection not registered
- */
-export function getUserIdForConnection(ws: WebSocket): string | undefined {
-  const metadata = connectionMetadata.get(ws);
-  return metadata?.userId;
 }
 
 /**

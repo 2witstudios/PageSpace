@@ -19,21 +19,6 @@ export interface SystemHealthData {
   activeUserCount: number;
 }
 
-export interface ApiMetricsData {
-  volumeOverTime: Array<{
-    hour: string;
-    count: string;
-    avg_response_time: string;
-  }>;
-  topEndpoints: Array<{
-    endpoint: string;
-    count: number;
-    avgResponseTime: number;
-  }>;
-  errorRate: number;
-  totalRequests: number;
-}
-
 export interface UserActivityData {
   heatmapData: Array<{
     day_of_week: string;
@@ -95,26 +80,6 @@ export interface ErrorAnalyticsData {
       reason?: string;
       [key: string]: unknown;
     } | null;
-  }>;
-}
-
-export interface PerformanceMetricsData {
-  responseTimes: Array<{
-    hour: string;
-    avg_response_time: string;
-    max_response_time: string;
-    min_response_time: string;
-  }>;
-  slowQueries: Array<{
-    endpoint: string;
-    responseTime: number;
-    timestamp: Date;
-    userId: string | null;
-  }>;
-  metricTypes: Array<{
-    metric: string;
-    avgValue: number;
-    count: number;
   }>;
 }
 

@@ -27,26 +27,3 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
 
   return 'Something went wrong. Please try again.';
 }
-
-/**
- * Check if error is an authentication error
- */
-export function isAuthenticationError(errorMessage: string | undefined): boolean {
-  if (!errorMessage) return false;
-  return errorMessage.includes('Unauthorized') || errorMessage.includes('401');
-}
-
-/**
- * Check if error is a rate limit error
- */
-export function isRateLimitError(errorMessage: string | undefined): boolean {
-  if (!errorMessage) return false;
-  return (
-    errorMessage.toLowerCase().includes('rate') ||
-    errorMessage.toLowerCase().includes('limit') ||
-    errorMessage.includes('429') ||
-    errorMessage.includes('402') ||
-    errorMessage.includes('Failed after') ||
-    errorMessage.includes('Provider returned error')
-  );
-}

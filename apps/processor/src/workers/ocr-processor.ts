@@ -111,17 +111,3 @@ async function performAIVisionOCR(contentHash: string): Promise<string> {
   
   return performTesseractOCR(imageBuffer, 'eng');
 }
-
-// Export function to check if a file needs OCR
-export function needsOCR(mimeType: string): boolean {
-  const imageTypes = [
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'image/webp',
-    'image/tiff',
-    'image/bmp'
-  ];
-
-  return imageTypes.includes(mimeType);
-}

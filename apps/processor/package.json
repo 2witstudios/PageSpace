@@ -29,7 +29,6 @@
     "@types/express": "^5.0.1",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.6",
-    "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
   }

@@ -108,22 +108,3 @@ export async function broadcastCalendarEvent(payload: CalendarEventPayload): Pro
     );
   }
 }
-
-/**
- * Helper to create a calendar event payload
- */
-export function createCalendarEventPayload(
-  eventId: string,
-  driveId: string | null,
-  operation: CalendarOperation,
-  userId: string,
-  attendeeIds: string[]
-): CalendarEventPayload {
-  return {
-    eventId,
-    driveId,
-    operation,
-    userId,
-    attendeeIds,
-  };
-}

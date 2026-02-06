@@ -21,10 +21,6 @@ export type MentionData =
   | PageMentionData 
   | UserMentionData;
 
-export interface EnhancedMention extends BaseMention {
-  data: MentionData;
-}
-
 // Type-specific mention interfaces
 export interface PageMention extends BaseMention {
   type: 'page';
@@ -35,11 +31,6 @@ export interface UserMention extends BaseMention {
   type: 'user';
   data: UserMentionData;
 }
-
-// Union type for all specific mention types
-export type TypedMention = 
-  | PageMention 
-  | UserMention;
 
 // For search results and suggestions
 export interface MentionSuggestion {

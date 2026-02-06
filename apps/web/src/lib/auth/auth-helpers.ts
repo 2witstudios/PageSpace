@@ -88,32 +88,6 @@ export async function requireAuth(
   return authUser;
 }
 
-export async function requireAdmin(
-  request: Request | NextRequest
-): Promise<AuthUser | NextResponse> {
-  const authUser = await getAuthUser(request);
-
-  if (!authUser) {
-    return new NextResponse('Unauthorized', {
-      status: 401,
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-    });
-  }
-
-  if (authUser.role !== 'admin') {
-    return new NextResponse('Forbidden: Admin access required', {
-      status: 403,
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-    });
-  }
-
-  return authUser;
-}
-
 export function isAuthError(result: AuthUser | NextResponse): result is NextResponse {
   return result instanceof NextResponse;
 }

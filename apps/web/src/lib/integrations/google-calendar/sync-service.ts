@@ -351,10 +351,3 @@ const upsertEvent = async (
 
   return { action: 'created' };
 };
-
-/**
- * Trigger sync for a user (can be called from API or background job).
- */
-export const triggerSync = async (userId: string): Promise<SyncResult> => {
-  return syncGoogleCalendar(userId);
-};

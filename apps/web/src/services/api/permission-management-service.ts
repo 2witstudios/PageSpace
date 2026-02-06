@@ -269,5 +269,3 @@ export const permissionManagementService = {
     return { success: true };
   },
 };
-
-export type PermissionManagementService = typeof permissionManagementService;

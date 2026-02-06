@@ -366,19 +366,6 @@ export function getDefaultModel(provider: string): string {
 }
 
 /**
- * Check if a model is valid for a provider
- */
-export function isValidModel(provider: string, model: string): boolean {
-  const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
-  if (!providerConfig) return false;
-  // For PageSpace, also accept aliases (standard, pro)
-  if (provider === 'pagespace' && isPageSpaceModelAlias(model)) {
-    return true;
-  }
-  return model in providerConfig.models;
-}
-
-/**
  * Get display name for a model
  */
 export function getModelDisplayName(provider: string, model: string): string {
@@ -388,7 +375,6 @@ export function getModelDisplayName(provider: string, model: string): string {
 }
 
 export type AIProvider = keyof typeof AI_PROVIDERS;
-export type AIModel<T extends AIProvider> = keyof typeof AI_PROVIDERS[T]['models'];
 
 /**
  * Get user-facing display name for AI usage.

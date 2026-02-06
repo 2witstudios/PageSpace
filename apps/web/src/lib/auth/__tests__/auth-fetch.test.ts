@@ -29,7 +29,6 @@ vi.mock('@/lib/auth/platform-storage', () => ({
     supportsCSRF: vi.fn().mockReturnValue(true),
     dispatchAuthEvent: vi.fn(),
   }),
-  resetPlatformStorage: vi.fn(),
 }));
 
 // Reset modules before each test to get fresh AuthFetch instance

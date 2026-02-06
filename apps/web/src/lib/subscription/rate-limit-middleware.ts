@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { incrementUsage } from './usage-service';
 import { getTomorrowMidnightUTC, type ProviderType } from '@pagespace/lib';
 
 export interface RateLimitResult {
@@ -7,49 +6,6 @@ export interface RateLimitResult {
   remaining: number;
   limit: number;
   subscriptionTier: string;
-}
-
-/**
- * Check and enforce rate limits for AI provider calls
- */
-export async function checkAIRateLimit(
-  userId: string,
-  provider: string,
-  model?: string
-): Promise<RateLimitResult> {
-  // Determine provider type based on model name for PageSpace provider
-  const isProModel = provider === 'pagespace' && model === 'glm-4.7';
-  const providerType: ProviderType = isProModel ? 'pro' : 'standard';
-
-  try {
-    const result = await incrementUsage(userId, providerType);
-
-    if (!result.success) {
-      return {
-        allowed: false,
-        remaining: result.remainingCalls,
-        limit: result.limit,
-        subscriptionTier: 'unknown', // Will be filled by caller if needed
-      };
-    }
-
-    return {
-      allowed: true,
-      remaining: result.remainingCalls,
-      limit: result.limit,
-      subscriptionTier: 'unknown', // Will be filled by caller if needed
-    };
-
-  } catch (error) {
-    console.error('Rate limit check failed:', error);
-    // On error, deny the request
-    return {
-      allowed: false,
-      remaining: 0,
-      limit: 0,
-      subscriptionTier: 'unknown',
-    };
-  }
 }
 
 /**

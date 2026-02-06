@@ -1,5 +1,5 @@
 import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
-import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
+import { getStorageConfigFromSubscription, type SubscriptionTier } from './subscription-utils';
 
 export interface StorageQuota {
   userId: string;
@@ -9,12 +9,6 @@ export interface StorageQuota {
   utilizationPercent: number;
   tier: 'free' | 'pro' | 'founder' | 'business';
   warningLevel: 'none' | 'warning' | 'critical';
-}
-
-// Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
-export function mapSubscriptionToStorageTier(subscriptionTier: 'free' | 'pro' | 'founder' | 'business'): 'free' | 'pro' | 'founder' | 'business' {
-  const tier = getStorageTierFromSubscription(subscriptionTier);
-  return tier; // Return tier directly since we've removed enterprise
 }
 
 export interface StorageCheckResult {
@@ -387,16 +381,3 @@ export function parseBytes(size: string): number {
   return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
 }
 
-/**
- * @deprecated - Removed: Use subscription tier changes instead
- */
-export async function changeUserTier(): Promise<void> {
-  throw new Error('changeUserTier has been removed - storage tiers are computed from subscription tiers automatically');
-}
-
-/**
- * @deprecated - Removed: Storage tiers are computed dynamically
- */
-export async function updateStorageTierFromSubscription(): Promise<void> {
-  throw new Error('updateStorageTierFromSubscription has been removed - storage tiers are computed dynamically');
-}

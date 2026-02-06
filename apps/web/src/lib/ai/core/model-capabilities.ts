@@ -284,29 +284,6 @@ export async function hasToolCapability(model: string, provider: string): Promis
 }
 
 /**
- * Get suggested tool-capable models for fallback
- * @param provider - Current provider
- * @returns Array of model suggestions
- */
-export function getSuggestedToolCapableModels(provider: string): string[] {
-  switch (provider) {
-    case 'ollama':
-      return ['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'];
-    case 'openrouter':
-    case 'openrouter_free':
-      return ['meta-llama/llama-3.1-8b-instruct', 'qwen/qwen-2.5-7b-instruct'];
-    case 'google':
-      return ['gemini-2.5-flash', 'gemini-1.5-flash'];
-    case 'openai':
-      return ['gpt-4o-mini', 'gpt-3.5-turbo'];
-    case 'anthropic':
-      return ['claude-3-haiku', 'claude-3-5-sonnet'];
-    default:
-      return ['gpt-4o-mini', 'claude-3-haiku', 'gemini-2.5-flash'];
-  }
-}
-
-/**
  * Model capabilities interface
  */
 export interface ModelCapabilities {

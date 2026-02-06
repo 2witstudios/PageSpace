@@ -230,10 +230,3 @@ export const emailStyles = {
   },
 };
 
-/**
- * Utility: Create a styled divider
- */
-export const divider = {
-  borderTop: `1px solid ${colors.border}`,
-  margin: `${spacing.lg} 0`,
-};

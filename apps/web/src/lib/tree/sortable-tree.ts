@@ -51,38 +51,6 @@ export function flattenTree<T extends TreeItem>(
 }
 
 /**
- * Build a tree from flattened items
- */
-export function buildTree<T extends TreeItem>(flattenedItems: FlattenedItem<T>[]): T[] {
-  const root: T[] = [];
-  const nodes: Record<string, T> = {};
-  const childrenMap: Record<string, T[]> = {};
-
-  for (const { item, parentId } of flattenedItems) {
-    const clonedItem = { ...item, children: [] as T[] };
-    nodes[item.id] = clonedItem;
-
-    if (parentId === null) {
-      root.push(clonedItem);
-    } else {
-      if (!childrenMap[parentId]) {
-        childrenMap[parentId] = [];
-      }
-      childrenMap[parentId].push(clonedItem);
-    }
-  }
-
-  // Assign children to their parents
-  for (const [parentId, children] of Object.entries(childrenMap)) {
-    if (nodes[parentId]) {
-      nodes[parentId].children = children;
-    }
-  }
-
-  return root;
-}
-
-/**
  * Find an item in the tree by ID
  */
 export function findItemDeep<T extends TreeItem>(
@@ -162,26 +130,6 @@ export function countChildren<T extends TreeItem>(items: T[], count = 0): number
     }
     return acc + 1;
   }, count);
-}
-
-/**
- * Get the flattened index of all descendant IDs (for removing from sortable list during drag)
- */
-export function getDescendantIds<T extends TreeItem>(items: T[], id: UniqueIdentifier): string[] {
-  const item = findItemDeep(items, id);
-  if (!item?.children?.length) return [];
-
-  const ids: string[] = [];
-  const collectIds = (children: T[]) => {
-    for (const child of children) {
-      ids.push(child.id);
-      if (child.children?.length) {
-        collectIds(child.children as T[]);
-      }
-    }
-  };
-  collectIds(item.children as T[]);
-  return ids;
 }
 
 /**
@@ -309,29 +257,3 @@ export function getProjection<T extends TreeItem>(
   };
 }
 
-/**
- * Apply a move operation to the tree
- * Returns a new flattened array with the item moved to its projected position
- */
-export function applyProjection<T extends TreeItem>(
-  items: FlattenedItem<T>[],
-  activeId: UniqueIdentifier,
-  overId: UniqueIdentifier,
-  projection: Projection
-): FlattenedItem<T>[] {
-  const activeIndex = items.findIndex(({ item }) => item.id === activeId);
-  const overIndex = items.findIndex(({ item }) => item.id === overId);
-  const activeItem = items[activeIndex];
-
-  // Move the item
-  const newItems = arrayMove(items, activeIndex, overIndex);
-
-  // Update the moved item's depth and parentId
-  newItems[overIndex] = {
-    ...activeItem,
-    depth: projection.depth,
-    parentId: projection.parentId,
-  };
-
-  return newItems;
-}

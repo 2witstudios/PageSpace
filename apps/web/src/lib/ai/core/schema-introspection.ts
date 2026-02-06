@@ -271,13 +271,6 @@ export function extractToolSchemas(
 }
 
 /**
- * Format JSON Schema for display as pretty-printed JSON
- */
-export function formatSchemaForDisplay(schema: JsonSchema): string {
-  return JSON.stringify(schema, null, 2);
-}
-
-/**
  * Calculate total token estimate for all tool schemas
  */
 export function calculateTotalToolTokens(schemas: ToolSchemaInfo[]): number {

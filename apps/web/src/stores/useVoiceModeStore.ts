@@ -212,10 +212,3 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     });
   },
 }));
-
-// Selector helpers
-export const selectIsVoiceModeEnabled = (state: VoiceModeState) => state.isEnabled;
-export const selectVoiceState = (state: VoiceModeState) => state.voiceState;
-export const selectIsListening = (state: VoiceModeState) => state.voiceState === 'listening';
-export const selectIsSpeaking = (state: VoiceModeState) => state.voiceState === 'speaking';
-export const selectIsProcessing = (state: VoiceModeState) => state.voiceState === 'processing';
