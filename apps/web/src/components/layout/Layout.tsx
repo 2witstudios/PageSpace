@@ -19,7 +19,7 @@ import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
-import { useCapacitor } from "@/hooks/useCapacitor";
+import { useDeviceTier } from "@/hooks/useDeviceTier";
 import { cn } from "@/lib/utils";
 import { useTabSync } from "@/hooks/useTabSync";
 import { useRouter } from "next/navigation";
@@ -58,13 +58,12 @@ function Layout({ children }: LayoutProps) {
 
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
-  const { isIPad: isCapacitorIPad } = useCapacitor();
+  const { isTablet } = useDeviceTier();
 
-  // On iPad, the left sidebar becomes persistent at 1024px+ instead of 1280px+,
-  // giving iPad landscape a persistent navigation sidebar.
-  // iPhones keep mobile rendering; only iPads get the lower threshold.
-  // The right sidebar keeps the standard 1280px threshold on all platforms.
-  const shouldOverlayLeftSidebar = isCapacitorIPad ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
+  // On tablet (iPad), the left sidebar becomes persistent at 1024px+ (landscape)
+  // instead of 1280px+, giving iPad a persistent navigation sidebar while keeping
+  // all other views mobile-optimized (handled by useMobile() returning true for tablets).
+  const shouldOverlayLeftSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
   const shouldOverlayRightSidebar = shouldOverlaySidebarsDefault;
 
   useResponsivePanels();
@@ -245,7 +244,7 @@ function Layout({ children }: LayoutProps) {
           {!shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
             <div className={cn(
               "relative flex-shrink-0 pt-4 overflow-hidden",
-              isCapacitorIPad
+              isTablet
                 ? "flex w-[18rem]"
                 : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
             )}>
