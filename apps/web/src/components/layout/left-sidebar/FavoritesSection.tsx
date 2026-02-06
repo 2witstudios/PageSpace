@@ -78,14 +78,14 @@ export default function FavoritesSection() {
     <Collapsible
       open={!favoritesCollapsed}
       onOpenChange={(open) => setFavoritesCollapsed(!open)}
-      className="border-t border-[var(--separator)]"
+      className="border-t border-[var(--sidebar-divider)]"
     >
       <CollapsibleTrigger asChild>
         <Button
           variant="ghost"
-          className="w-full justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
+          className="w-full justify-between px-2 py-2.5 h-auto font-normal text-muted-foreground hover:text-foreground bg-[var(--sidebar-section-bg)]"
         >
-          <span className="text-xs font-medium flex items-center gap-1.5">
+          <span className="text-[11px] font-semibold tracking-wide flex items-center gap-1.5">
             <Star className="h-3.5 w-3.5" />
             Favorites
           </span>
@@ -234,8 +234,8 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative
 
 function FavoritesSkeleton() {
   return (
-    <div className="border-t border-[var(--separator)]">
-      <div className="flex items-center justify-between px-2 py-2">
+    <div className="border-t border-[var(--sidebar-divider)]">
+      <div className="flex items-center justify-between px-2 py-2.5 bg-[var(--sidebar-section-bg)]">
         <Skeleton className="h-4 w-20" />
         <Skeleton className="h-3.5 w-3.5" />
       </div>
