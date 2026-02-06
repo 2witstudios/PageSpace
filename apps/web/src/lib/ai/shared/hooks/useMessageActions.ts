@@ -8,6 +8,8 @@ import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 
+type SetMessagesAction = UIMessage[] | ((previousMessages: UIMessage[]) => UIMessage[]);
+
 interface UseMessageActionsOptions {
   /**
    * For agent mode: the agent/page ID
@@ -25,7 +27,7 @@ interface UseMessageActionsOptions {
   /**
    * Setter for messages (from useChat)
    */
-  setMessages: (messages: UIMessage[]) => void;
+  setMessages: (messages: SetMessagesAction) => void;
   /**
    * Regenerate function (from useChat)
    */
@@ -80,10 +82,11 @@ export function useMessageActions({
           const response = await fetchWithAuth(
             `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
           );
-          if (response.ok) {
-            const data = await response.json();
-            setMessages(data.messages || []);
+          if (!response.ok) {
+            throw new Error(`Failed to refresh messages after edit: ${response.status}`);
           }
+          const data = await response.json();
+          setMessages(data.messages || []);
         } else {
           // Global mode: Use global API
           await patch(
@@ -95,11 +98,12 @@ export function useMessageActions({
           const response = await fetchWithAuth(
             `/api/ai/global/${conversationId}/messages`
           );
-          if (response.ok) {
-            const data = await response.json();
-            const loadedMessages = Array.isArray(data) ? data : data.messages || [];
-            setMessages(loadedMessages);
+          if (!response.ok) {
+            throw new Error(`Failed to refresh messages after edit: ${response.status}`);
           }
+          const data = await response.json();
+          const loadedMessages = Array.isArray(data) ? data : data.messages || [];
+          setMessages(loadedMessages);
         }
 
         onEditVersionChange?.();
@@ -118,6 +122,18 @@ export function useMessageActions({
     async (messageId: string) => {
       if (!conversationId) return;
 
+      const deletedMessage = messages.find((message) => message.id === messageId);
+      if (!deletedMessage) {
+        return;
+      }
+
+      const previousIndex = messages.findIndex((message) => message.id === messageId);
+
+      // Optimistically remove the message for fast UI feedback.
+      setMessages((previousMessages) =>
+        previousMessages.filter((message) => message.id !== messageId)
+      );
+
       try {
         if (isAgentMode) {
           await del(
@@ -127,12 +143,25 @@ export function useMessageActions({
           await del(`/api/ai/global/${conversationId}/messages/${messageId}`);
         }
 
-        // Optimistically update local state
-        const filtered = messages.filter((m) => m.id !== messageId);
-        setMessages(filtered);
-
         toast.success('Message deleted');
       } catch (error) {
+        // Roll back only the deleted message so we don't clobber unrelated updates
+        // that may have arrived while the request was in flight.
+        setMessages((previousMessages) => {
+          if (previousMessages.some((message) => message.id === messageId)) {
+            return previousMessages;
+          }
+
+          const nextMessages = [...previousMessages];
+          const safeInsertIndex = Math.min(
+            Math.max(previousIndex, 0),
+            nextMessages.length
+          );
+          nextMessages.splice(safeInsertIndex, 0, deletedMessage);
+
+          return nextMessages;
+        });
+
         console.error('Failed to delete message:', error);
         toast.error('Failed to delete message');
         throw error;

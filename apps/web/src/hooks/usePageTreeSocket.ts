@@ -23,9 +23,30 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
 
   // Track the current drive to avoid unnecessary revalidations
   const currentDriveRef = useRef<string | undefined>(driveId);
+  // Track page IDs present in the current tree snapshot for safe granular updates.
+  // If an incoming event targets a missing page, we must fall back to full revalidation.
+  const treePageIdsRef = useRef<Set<string>>(new Set());
   
   // Debounced revalidation to handle rapid consecutive operations
   const revalidationTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    const ids = new Set<string>();
+    const stack = [...tree];
+
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node) continue;
+
+      ids.add(node.id);
+
+      if (node.children?.length) {
+        stack.push(...node.children);
+      }
+    }
+
+    treePageIdsRef.current = ids;
+  }, [tree]);
   
   const debouncedRevalidate = useCallback(() => {
     if (revalidationTimeoutRef.current) {
@@ -53,6 +74,13 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     // Keep strict correctness for events without socket metadata
     // (e.g. server-side or tool-originated updates).
     if (!eventData.socketId) {
+      debouncedRevalidate();
+      return;
+    }
+
+    // If this page isn't in the local tree snapshot, updateNode would no-op.
+    // Revalidate to prevent stale sidebar state.
+    if (!treePageIdsRef.current.has(eventData.pageId)) {
       debouncedRevalidate();
       return;
     }

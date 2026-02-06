@@ -309,6 +309,16 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const latestAgentMessagesRef = useRef(agentMessages);
+  const latestGlobalMessagesRef = useRef(globalLocalMessages);
+
+  useEffect(() => {
+    latestAgentMessagesRef.current = agentMessages;
+  }, [agentMessages]);
+
+  useEffect(() => {
+    latestGlobalMessagesRef.current = globalLocalMessages;
+  }, [globalLocalMessages]);
 
   // Wrap stop handler to abort server-side stream before client-side stop
   // This ensures the server stops processing when user clicks Stop
@@ -337,13 +347,23 @@ const GlobalAssistantView: React.FC = () => {
       conversationId: currentConversationId,
       messages,
       setMessages: selectedAgent
-        ? (msgs) => {
-            setAgentMessages(msgs);
-            setAgentStoreMessages(msgs); // Sync to store
+        ? (nextOrUpdater) => {
+            const nextMessages =
+              typeof nextOrUpdater === 'function'
+                ? nextOrUpdater(latestAgentMessagesRef.current)
+                : nextOrUpdater;
+
+            setAgentMessages(nextMessages);
+            setAgentStoreMessages(nextMessages); // Sync to store
           }
-        : (msgs) => {
-            setGlobalMessages(msgs);
-            setGlobalLocalMessages(msgs);
+        : (nextOrUpdater) => {
+            const nextMessages =
+              typeof nextOrUpdater === 'function'
+                ? nextOrUpdater(latestGlobalMessagesRef.current)
+                : nextOrUpdater;
+
+            setGlobalMessages(nextMessages);
+            setGlobalLocalMessages(nextMessages);
           },
       regenerate,
     });
