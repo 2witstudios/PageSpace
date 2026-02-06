@@ -86,7 +86,9 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // Show loading skeleton while SWR is retrying after a failed initial fetch.
   // Without this, the component falls through to "Page not found" during retry
   // windows because isLoading is false (error exists) but tree is still empty.
-  if (isValidating && tree.length === 0) {
+  // Gated on !isLoading so the initial load still goes through the isLoading
+  // branch below, which has timeout+retry UI.
+  if (!isLoading && isValidating && tree.length === 0) {
     return <Skeleton className="h-full w-full" />;
   }
 
