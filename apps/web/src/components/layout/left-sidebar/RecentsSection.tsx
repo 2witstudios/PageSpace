@@ -100,7 +100,6 @@ export default function RecentsSection() {
     <Collapsible
       open={!recentsCollapsed}
       onOpenChange={(open) => setRecentsCollapsed(!open)}
-      className="border-t border-[var(--sidebar-divider)]"
     >
       <CollapsibleTrigger asChild>
         <Button
@@ -196,7 +195,7 @@ function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemPr
 
 function RecentsSkeleton() {
   return (
-    <div className="border-t border-[var(--sidebar-divider)]">
+    <div>
       <div className="flex items-center justify-between px-2 py-2.5 bg-[var(--sidebar-section-bg)]">
         <Skeleton className="h-4 w-16" />
         <Skeleton className="h-3.5 w-3.5" />
