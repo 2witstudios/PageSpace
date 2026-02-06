@@ -328,9 +328,8 @@ export async function POST(request: NextRequest) {
             linkSource: 'web-upload',
           })
           .onConflictDoUpdate({
-            target: filePages.pageId,
+            target: [filePages.fileId, filePages.pageId],
             set: {
-              fileId: contentHash,
               linkedBy: userId,
               linkedAt: new Date(),
               linkSource: 'web-upload',

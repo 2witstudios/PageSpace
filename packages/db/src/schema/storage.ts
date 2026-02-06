@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, bigint, integer, index, primaryKey, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, bigint, integer, index, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { drives, pages } from './core';
 import { users } from './auth';
@@ -32,7 +32,6 @@ export const filePages = pgTable('file_pages', {
   linkSource: text('linkSource'),
 }, (table) => ({
   pk: primaryKey({ columns: [table.fileId, table.pageId] }),
-  pageUnique: unique('file_pages_page_id_key').on(table.pageId),
   fileIdx: index('file_pages_file_id_idx').on(table.fileId),
   pageIdx: index('file_pages_page_id_idx').on(table.pageId),
 }));

@@ -512,6 +512,13 @@
       "when": 1770344316364,
       "tag": "0072_cool_scourge",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1770406537095,
+      "tag": "0073_open_gorilla_man",
+      "breakpoints": true
     }
   ]
 }

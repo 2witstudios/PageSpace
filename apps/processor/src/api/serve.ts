@@ -29,9 +29,7 @@ router.get('/:contentHash/original', async (req, res) => {
 
     let accessInfo;
     try {
-      accessInfo = await checkFileAccess(userId, contentHash, 'view', {
-        authDriveId: auth.driveId,
-      });
+      accessInfo = await checkFileAccess(userId, contentHash, 'view');
       if (!accessInfo.allowed) {
         throw new Error('Access denied');
       }
@@ -148,23 +146,21 @@ router.get('/:contentHash/:preset', async (req, res) => {
     }
 
     try {
-      await assertFileAccess(userId, contentHash, 'view', {
-        authDriveId: auth.driveId,
-      });
+      await assertFileAccess(userId, contentHash, 'view');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
 
     // Get cached file
     const buffer = await contentStore.getCache(contentHash, preset);
-    
+
     if (!buffer) {
       return res.status(404).json({ error: 'File not found' });
     }
 
     // Determine content type based on preset or file extension
     let contentType = 'image/jpeg'; // Default
-    
+
     if (preset.endsWith('.webp')) {
       contentType = 'image/webp';
     } else if (preset.endsWith('.png')) {
@@ -226,9 +222,7 @@ router.get('/:contentHash/metadata', async (req, res) => {
     }
 
     try {
-      await assertFileAccess(userId, contentHash, 'view', {
-        authDriveId: auth.driveId,
-      });
+      await assertFileAccess(userId, contentHash, 'view');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }

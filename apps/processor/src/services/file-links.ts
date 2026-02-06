@@ -35,9 +35,8 @@ export async function ensureFileLinked(options: {
         linkedBy,
       })
       .onConflictDoUpdate({
-        target: [filePages.pageId],
+        target: [filePages.fileId, filePages.pageId],
         set: {
-          fileId,
           linkedBy,
           linkedAt: new Date(),
         },

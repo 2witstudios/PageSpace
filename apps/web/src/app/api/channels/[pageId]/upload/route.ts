@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db, pages, files, eq } from '@pagespace/db';
+import { db, pages, files, filePages, eq } from '@pagespace/db';
 import { canUserEditPage } from '@pagespace/lib/server';
 import {
   checkStorageQuota,
@@ -186,6 +186,17 @@ export async function POST(
         throw new Error('Failed to load existing file metadata');
       }
     }
+
+    // Link file to channel page so the processor can verify access via page permissions
+    await db
+      .insert(filePages)
+      .values({
+        fileId: contentHash,
+        pageId,
+        linkedBy: userId,
+        linkSource: 'channel-upload',
+      })
+      .onConflictDoNothing();
 
     // Update storage usage
     await updateStorageUsage(userId, file.size, {
