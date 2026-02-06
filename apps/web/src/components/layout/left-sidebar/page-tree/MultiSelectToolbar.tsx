@@ -7,7 +7,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { X, Trash2, FolderInput, Copy, CheckSquare } from "lucide-react";
+import { X, Trash2, FolderInput, Copy, CheckSquare, MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useMultiSelectStore } from "@/stores/useMultiSelectStore";
 import { MovePageDialog } from "@/components/dialogs/MovePageDialog";
@@ -23,6 +23,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+import { useMobile } from "@/hooks/useMobile";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 
 interface MultiSelectToolbarProps {
   driveId: string;
@@ -42,11 +50,12 @@ export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProp
   const [isCopyOpen, setCopyOpen] = useState(false);
   const [isDeleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [actionsSheetOpen, setActionsSheetOpen] = useState(false);
+  const isMobile = useMobile();
 
   const selectedPages = getSelectedPages();
   const selectedCount = getSelectedCount();
 
-  // Must define all hooks before any conditional returns
   const handleSuccess = useCallback(() => {
     exitMultiSelectMode();
     onMutate();
@@ -96,7 +105,6 @@ export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProp
     }
   }, [selectedCount, selectedPages, exitMultiSelectMode, onMutate]);
 
-  // Only show toolbar for the active drive
   if (!isMultiSelectMode || activeDriveId !== driveId) {
     return null;
   }
@@ -112,72 +120,146 @@ export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProp
             </span>
           </div>
 
-          <div className="flex items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setMoveOpen(true)}
-                  disabled={selectedCount === 0}
-                  className="h-8 px-2"
-                >
-                  <FolderInput className="h-4 w-4" />
-                  <span className="sr-only">Move</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Move to...</TooltipContent>
-            </Tooltip>
+          {isMobile ? (
+            /* Mobile: single button to open action sheet */
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setActionsSheetOpen(true)}
+                disabled={selectedCount === 0}
+                className="h-8 px-2"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCancel}
+                className="h-8 px-2"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            /* Desktop: icon buttons with tooltips */
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setMoveOpen(true)}
+                    disabled={selectedCount === 0}
+                    className="h-8 px-2"
+                  >
+                    <FolderInput className="h-4 w-4" />
+                    <span className="sr-only">Move</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Move to...</TooltipContent>
+              </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCopyOpen(true)}
-                  disabled={selectedCount === 0}
-                  className="h-8 px-2"
-                >
-                  <Copy className="h-4 w-4" />
-                  <span className="sr-only">Copy</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copy to...</TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCopyOpen(true)}
+                    disabled={selectedCount === 0}
+                    className="h-8 px-2"
+                  >
+                    <Copy className="h-4 w-4" />
+                    <span className="sr-only">Copy</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy to...</TooltipContent>
+              </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setDeleteOpen(true)}
-                  disabled={selectedCount === 0}
-                  className="h-8 px-2 text-destructive hover:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  <span className="sr-only">Delete</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Move to trash</TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setDeleteOpen(true)}
+                    disabled={selectedCount === 0}
+                    className="h-8 px-2 text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    <span className="sr-only">Delete</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Move to trash</TooltipContent>
+              </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleCancel}
-                  className="h-8 px-2"
-                >
-                  <X className="h-4 w-4" />
-                  <span className="sr-only">Cancel</span>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Cancel selection</TooltipContent>
-            </Tooltip>
-          </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCancel}
+                    className="h-8 px-2"
+                  >
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Cancel</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Cancel selection</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Mobile action sheet */}
+      <Sheet open={actionsSheetOpen} onOpenChange={setActionsSheetOpen}>
+        <SheetContent
+          side="bottom"
+          className="rounded-t-2xl pb-[calc(1rem+env(safe-area-inset-bottom))]"
+        >
+          <SheetHeader className="px-5 pt-3 pb-0">
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" />
+            <SheetTitle className="text-base">
+              {selectedCount} {selectedCount === 1 ? "page" : "pages"} selected
+            </SheetTitle>
+            <SheetDescription className="sr-only">Actions for selected pages</SheetDescription>
+          </SheetHeader>
+
+          <div className="px-5 pb-4 mt-2 space-y-1">
+            <button
+              onClick={() => { setActionsSheetOpen(false); setMoveOpen(true); }}
+              className="flex items-center gap-3 w-full px-3 py-3.5 rounded-lg text-sm active:bg-accent transition-colors"
+            >
+              <FolderInput className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-medium">Move to...</div>
+                <div className="text-xs text-muted-foreground">Move selected pages to another location</div>
+              </div>
+            </button>
+            <button
+              onClick={() => { setActionsSheetOpen(false); setCopyOpen(true); }}
+              className="flex items-center gap-3 w-full px-3 py-3.5 rounded-lg text-sm active:bg-accent transition-colors"
+            >
+              <Copy className="h-5 w-5 text-muted-foreground" />
+              <div className="text-left">
+                <div className="font-medium">Copy to...</div>
+                <div className="text-xs text-muted-foreground">Duplicate selected pages</div>
+              </div>
+            </button>
+            <div className="h-px bg-border my-2" />
+            <button
+              onClick={() => { setActionsSheetOpen(false); setDeleteOpen(true); }}
+              className="flex items-center gap-3 w-full px-3 py-3.5 rounded-lg text-sm text-destructive active:bg-destructive/10 transition-colors"
+            >
+              <Trash2 className="h-5 w-5" />
+              <div className="text-left">
+                <div className="font-medium">Move to Trash</div>
+                <div className="text-xs text-destructive/70">Pages can be restored later</div>
+              </div>
+            </button>
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <MovePageDialog
         isOpen={isMoveOpen}

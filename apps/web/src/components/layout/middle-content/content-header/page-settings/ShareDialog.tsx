@@ -37,7 +37,7 @@ import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } = {}) {
+export function ShareDialog({ pageId: propPageId, externalOpen, onExternalOpenChange }: { pageId?: string | null; externalOpen?: boolean; onExternalOpenChange?: (open: boolean) => void } = {}) {
   const storePageId = usePageStore((state) => state.pageId);
   const pageId = propPageId !== undefined ? propPageId : storePageId;
   const params = useParams();
@@ -45,7 +45,9 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
   const { tree } = usePageTree(driveId);
   const pageResult = pageId ? findNodeAndParent(tree, pageId) : null;
   const page = pageResult?.node;
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
+  const setIsOpen = onExternalOpenChange || setInternalOpen;
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [permissions, setPermissions] = useState({
@@ -124,8 +126,10 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
     }
   };
 
-  // Show button but disable if no share permission
-  if (!canShare) {
+  const isExternallyControlled = externalOpen !== undefined;
+
+  // Show button but disable if no share permission (only when not externally controlled)
+  if (!canShare && !isExternallyControlled) {
     return (
       <TooltipProvider>
         <Tooltip>
@@ -145,12 +149,14 @@ export function ShareDialog({ pageId: propPageId }: { pageId?: string | null } =
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size={isMobile ? "icon" : "sm"}>
-          <Share2 className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
-          {!isMobile && "Share"}
-        </Button>
-      </DialogTrigger>
+      {!isExternallyControlled && (
+        <DialogTrigger asChild>
+          <Button variant="ghost" size={isMobile ? "icon" : "sm"}>
+            <Share2 className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
+            {!isMobile && "Share"}
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Share &ldquo;{page.title}&rdquo;</DialogTitle>
