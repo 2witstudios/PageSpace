@@ -7,7 +7,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
-import { Mic, AudioLines, MicOff } from 'lucide-react';
+import { Mic, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { ToolsPopover } from './ToolsPopover';
@@ -47,12 +47,6 @@ export interface InputFooterProps {
   isListening?: boolean;
   /** Whether microphone is supported by the browser */
   isMicSupported?: boolean;
-  /** Callback when voice mode button is clicked */
-  onVoiceModeClick?: () => void;
-  /** Whether voice mode is currently active */
-  isVoiceModeActive?: boolean;
-  /** Whether voice mode is available (user has OpenAI key) */
-  isVoiceModeAvailable?: boolean;
   /** Error message from microphone/speech recognition */
   micError?: string | null;
   /** Callback to clear the mic error */
@@ -97,9 +91,6 @@ export function InputFooter({
   onMicClick,
   isListening = false,
   isMicSupported = true,
-  onVoiceModeClick,
-  isVoiceModeActive = false,
-  isVoiceModeAvailable = false,
   micError,
   onClearMicError,
   selectedProvider,
@@ -147,34 +138,6 @@ export function InputFooter({
             onChange={onProviderModelChange}
             disabled={disabled}
           />
-        )}
-
-        {/* Voice Mode button (OpenAI STT/TTS) */}
-        {isVoiceModeAvailable && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onVoiceModeClick}
-                disabled={disabled}
-                className={cn(
-                  'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
-                  isVoiceModeActive
-                    ? 'text-primary'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                <AudioLines className="h-4 w-4" />
-                <span className="sr-only">
-                  {isVoiceModeActive ? 'Exit voice mode' : 'Enter voice mode'}
-                </span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {isVoiceModeActive ? 'Exit voice mode' : 'Voice mode (hands-free)'}
-            </TooltipContent>
-          </Tooltip>
         )}
 
         {/* Mic button (basic STT) */}

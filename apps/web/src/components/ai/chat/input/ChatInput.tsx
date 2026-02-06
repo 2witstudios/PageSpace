@@ -2,6 +2,13 @@
 
 import React, { forwardRef, useRef, useImperativeHandle, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import { AudioLines } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from '@/components/ui/tooltip';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
 import { InputActions } from './InputActions';
 import { InputFooter } from '@/components/ui/floating-input';
@@ -191,6 +198,34 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             popupPlacement={popupPlacement}
           />
 
+          {/* Voice Mode button - shown only when input is empty */}
+          {isVoiceModeAvailable && !value.trim() && !isStreaming && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onVoiceModeClick}
+                  disabled={disabled}
+                  className={cn(
+                    'h-9 w-9 shrink-0 p-0 self-end transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
+                    isVoiceModeActive
+                      ? 'text-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <AudioLines className="h-4 w-4" />
+                  <span className="sr-only">
+                    {isVoiceModeActive ? 'Exit voice mode' : 'Enter voice mode'}
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {isVoiceModeActive ? 'Exit voice mode' : 'Voice mode (hands-free)'}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           <InputActions
             isStreaming={isStreaming}
             onSend={handleSend}
@@ -220,9 +255,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           isMicSupported={isSupported}
           micError={speechError}
           onClearMicError={clearSpeechError}
-          onVoiceModeClick={onVoiceModeClick}
-          isVoiceModeActive={isVoiceModeActive}
-          isVoiceModeAvailable={isVoiceModeAvailable}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}
