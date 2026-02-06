@@ -59,71 +59,69 @@ export const resizeImageForVision = (
   maxDimension: number = MAX_VISION_DIMENSION
 ): Promise<ResizeResult> => {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
+    const reader = new FileReader();
 
-    img.onload = () => {
-      URL.revokeObjectURL(url);
+    reader.onload = () => {
+      const fileDataUrl = reader.result as string;
+      const img = new Image();
 
-      const { width, height, wasResized } = calculateResizeDimensions(
-        img.naturalWidth,
-        img.naturalHeight,
-        maxDimension
-      );
+      img.onload = () => {
+        const { width, height, wasResized } = calculateResizeDimensions(
+          img.naturalWidth,
+          img.naturalHeight,
+          maxDimension
+        );
 
-      if (!wasResized) {
-        // No resize needed — convert to data URL directly
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
+        if (!wasResized) {
           resolve({
-            dataUrl,
+            dataUrl: fileDataUrl,
             width: img.naturalWidth,
             height: img.naturalHeight,
             originalWidth: img.naturalWidth,
             originalHeight: img.naturalHeight,
-            dataUrlLength: dataUrl.length,
+            dataUrlLength: fileDataUrl.length,
             mediaType: file.type || 'image/jpeg',
           });
-        };
-        reader.onerror = () => reject(new Error('Failed to read image file'));
-        reader.readAsDataURL(file);
-        return;
-      }
+          return;
+        }
 
-      // Resize via canvas
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('Failed to get canvas context'));
-        return;
-      }
+        // Resize via canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Failed to get canvas context'));
+          return;
+        }
 
-      ctx.drawImage(img, 0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
 
-      const outputType = getOutputMediaType(file.type);
-      const quality = outputType === 'image/jpeg' ? JPEG_QUALITY : undefined;
-      const dataUrl = canvas.toDataURL(outputType, quality);
+        const outputType = getOutputMediaType(file.type);
+        const quality = outputType === 'image/jpeg' ? JPEG_QUALITY : undefined;
+        const dataUrl = canvas.toDataURL(outputType, quality);
 
-      resolve({
-        dataUrl,
-        width,
-        height,
-        originalWidth: img.naturalWidth,
-        originalHeight: img.naturalHeight,
-        dataUrlLength: dataUrl.length,
-        mediaType: outputType,
-      });
+        resolve({
+          dataUrl,
+          width,
+          height,
+          originalWidth: img.naturalWidth,
+          originalHeight: img.naturalHeight,
+          dataUrlLength: dataUrl.length,
+          mediaType: outputType,
+        });
+      };
+
+      img.onerror = () => {
+        reject(new Error('Failed to load image'));
+      };
+
+      img.src = fileDataUrl;
     };
 
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Failed to load image'));
-    };
+    reader.onerror = () => reject(new Error('Failed to read image file'));
 
-    img.src = url;
+    reader.readAsDataURL(file);
   });
 };
 

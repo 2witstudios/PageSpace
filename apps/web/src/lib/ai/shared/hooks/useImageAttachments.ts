@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { resizeImageForVision, MAX_IMAGES_PER_MESSAGE } from '../utils/image-resize';
 
@@ -8,7 +8,7 @@ export interface ImageAttachment {
   id: string;
   filename: string;
   mediaType: string;
-  /** Blob URL for local preview (revoked on cleanup) */
+  /** Data URL for preview (set after resize completes) */
   previewUrl: string;
   /** Data URL set after resize (used for sending to AI) */
   dataUrl?: string;
@@ -18,19 +18,10 @@ export interface ImageAttachment {
 
 /**
  * Hook for managing image attachments in AI chat inputs.
- * Handles file validation, client-side resize, blob URL lifecycle, and data URL conversion.
+ * Handles file validation, client-side resize, and data URL conversion.
  */
 export function useImageAttachments() {
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
-  const blobUrlsRef = useRef<Set<string>>(new Set());
-
-  // Cleanup blob URLs on unmount
-  useEffect(() => {
-    return () => {
-      blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      blobUrlsRef.current.clear();
-    };
-  }, []);
 
   const addFiles = useCallback(async (files: File[]) => {
     const imageFiles = files.filter((f) => f.type.startsWith('image/'));
@@ -49,17 +40,13 @@ export function useImageAttachments() {
         toast.info(`Added ${toAdd.length} of ${imageFiles.length} images (max ${MAX_IMAGES_PER_MESSAGE})`);
       }
 
-      const newAttachments: ImageAttachment[] = toAdd.map((file) => {
-        const previewUrl = URL.createObjectURL(file);
-        blobUrlsRef.current.add(previewUrl);
-        return {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          filename: file.name,
-          mediaType: file.type,
-          previewUrl,
-          processing: true,
-        };
-      });
+      const newAttachments: ImageAttachment[] = toAdd.map((file) => ({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        filename: file.name,
+        mediaType: file.type,
+        previewUrl: '',
+        processing: true,
+      }));
 
       // Kick off async resize for each new attachment
       toAdd.forEach((file, i) => {
@@ -68,7 +55,7 @@ export function useImageAttachments() {
           setAttachments((current) =>
             current.map((a) =>
               a.id === attachmentId
-                ? { ...a, dataUrl: result.dataUrl, mediaType: result.mediaType, processing: false }
+                ? { ...a, previewUrl: result.dataUrl, dataUrl: result.dataUrl, mediaType: result.mediaType, processing: false }
                 : a
             )
           );
@@ -84,24 +71,11 @@ export function useImageAttachments() {
   }, []);
 
   const removeFile = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const target = prev.find((a) => a.id === id);
-      if (target) {
-        URL.revokeObjectURL(target.previewUrl);
-        blobUrlsRef.current.delete(target.previewUrl);
-      }
-      return prev.filter((a) => a.id !== id);
-    });
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
   const clearFiles = useCallback(() => {
-    setAttachments((prev) => {
-      prev.forEach((a) => {
-        URL.revokeObjectURL(a.previewUrl);
-        blobUrlsRef.current.delete(a.previewUrl);
-      });
-      return [];
-    });
+    setAttachments([]);
   }, []);
 
   /**
