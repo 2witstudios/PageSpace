@@ -207,7 +207,7 @@ export interface ToolGrant {
 
 export interface ToolCallRequest {
   userId: string;
-  agentId: string;
+  agentId: string | null;
   driveId: string | null;
   connectionId: string;
   toolName: string;

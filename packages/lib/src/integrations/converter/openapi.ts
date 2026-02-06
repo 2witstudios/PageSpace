@@ -325,12 +325,12 @@ function buildToolFromOperation(
     required: required.length > 0 ? required : undefined,
   };
 
-  // Build query params map from query parameters
-  const queryParams: Record<string, string> = {};
+  // Build query params map from query parameters using ParameterRef
+  const queryParams: Record<string, { $param: string }> = {};
   if (operation.parameters) {
     for (const param of operation.parameters) {
       if (param.in === 'query') {
-        queryParams[param.name] = `{${param.name}}`;
+        queryParams[param.name] = { $param: param.name };
       }
     }
   }
@@ -352,6 +352,10 @@ function buildToolFromOperation(
           bodyTemplate[propName] = { $param: propName };
         }
         executionConfig.bodyTemplate = bodyTemplate;
+        executionConfig.bodyEncoding = 'json';
+      } else {
+        // Non-object body (array, primitive) — reference the 'body' input param
+        executionConfig.bodyTemplate = { $param: 'body' };
         executionConfig.bodyEncoding = 'json';
       }
     }

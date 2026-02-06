@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { canUserEditPage } from '@pagespace/lib/permissions';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   listGrantsByAgent,
   createGrant,
@@ -108,6 +109,18 @@ export async function POST(
     }
     if (connection.status !== 'active') {
       return NextResponse.json({ error: 'Connection is not active' }, { status: 400 });
+    }
+
+    // Verify the requesting user owns this connection (user-scoped)
+    // or is a member of the drive that owns it (drive-scoped)
+    const isUserConnection = connection.userId === auth.userId;
+    let isDriveMember = false;
+    if (connection.driveId) {
+      const access = await getDriveAccess(connection.driveId, auth.userId);
+      isDriveMember = access.isMember;
+    }
+    if (!isUserConnection && !isDriveMember) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
     // Check for existing grant

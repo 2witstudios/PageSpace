@@ -47,7 +47,7 @@ function createResolutionDeps(): ResolutionDependencies {
 /**
  * Create a configured tool executor wired to database dependencies.
  */
-function createConfiguredExecutor(userId: string, agentId: string, driveId: string | null) {
+function createConfiguredExecutor(userId: string, agentId: string | null, driveId: string | null) {
   return createToolExecutor({
     loadConnection: (connectionId) =>
       getConnectionWithProvider(db, connectionId) as Promise<LoadConnectionResult>,
@@ -130,11 +130,11 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
 
   if (grants.length === 0) return {};
 
-  const executor = createConfiguredExecutor(userId, 'global-assistant', driveId);
+  const executor = createConfiguredExecutor(userId, null, driveId);
 
   return convertIntegrationToolsToAISDK(
     grants,
-    { userId, agentId: 'global-assistant', driveId },
+    { userId, agentId: null, driveId },
     executor
   );
 }
