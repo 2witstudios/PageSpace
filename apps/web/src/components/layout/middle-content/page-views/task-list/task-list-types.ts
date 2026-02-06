@@ -1,5 +1,32 @@
 // Shared types and config for task list views
 
+export interface TaskStatusConfig {
+  id: string;
+  taskListId: string;
+  name: string;
+  slug: string;
+  color: string;
+  group: 'todo' | 'in_progress' | 'done';
+  position: number;
+}
+
+export interface TaskAssigneeData {
+  id: string;
+  taskId: string;
+  userId: string | null;
+  agentPageId: string | null;
+  user?: {
+    id: string;
+    name: string | null;
+    image: string | null;
+  } | null;
+  agentPage?: {
+    id: string;
+    title: string | null;
+    type: string;
+  } | null;
+}
+
 export interface TaskItem {
   id: string;
   taskListId: string;
@@ -9,13 +36,14 @@ export interface TaskItem {
   pageId: string | null;
   title: string;
   description: string | null;
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
+  status: string;
   priority: 'low' | 'medium' | 'high';
   position: number;
   dueDate: string | null;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  // Legacy single-assignee relations (backward compat)
   assignee?: {
     id: string;
     name: string | null;
@@ -26,6 +54,8 @@ export interface TaskItem {
     title: string | null;
     type: string;
   } | null;
+  // Multiple assignees (new)
+  assignees?: TaskAssigneeData[];
   user?: {
     id: string;
     name: string | null;
@@ -47,18 +77,44 @@ export interface TaskListData {
     updatedAt: string;
   };
   tasks: TaskItem[];
+  statusConfigs: TaskStatusConfig[];
 }
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
 export type TaskPriority = 'low' | 'medium' | 'high';
+export type TaskStatusGroup = 'todo' | 'in_progress' | 'done';
 export type ViewMode = 'table' | 'kanban';
 
-export const STATUS_CONFIG: Record<TaskStatus, { label: string; color: string }> = {
-  pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
-  in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
-  completed: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
-  blocked: { label: 'Blocked', color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
+// Default status configs used when a task list has no custom configs yet
+export const DEFAULT_STATUS_CONFIG: Record<string, { label: string; color: string; group: TaskStatusGroup }> = {
+  pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300', group: 'todo' },
+  in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300', group: 'in_progress' },
+  completed: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300', group: 'done' },
+  blocked: { label: 'Blocked', color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300', group: 'in_progress' },
 };
+
+// Build a STATUS_CONFIG-compatible map from custom status configs
+export function buildStatusConfig(configs: TaskStatusConfig[]): Record<string, { label: string; color: string; group: TaskStatusGroup }> {
+  if (configs.length === 0) return DEFAULT_STATUS_CONFIG;
+
+  const map: Record<string, { label: string; color: string; group: TaskStatusGroup }> = {};
+  for (const config of configs) {
+    map[config.slug] = { label: config.name, color: config.color, group: config.group };
+  }
+  return map;
+}
+
+// Get ordered status slugs from configs (for kanban columns, status dropdowns)
+export function getStatusOrder(configs: TaskStatusConfig[]): string[] {
+  if (configs.length === 0) return ['pending', 'in_progress', 'blocked', 'completed'];
+  return [...configs].sort((a, b) => a.position - b.position).map(c => c.slug);
+}
+
+// Determine if a status slug represents a "done" state
+export function isCompletedStatus(slug: string, configs: TaskStatusConfig[]): boolean {
+  if (configs.length === 0) return slug === 'completed';
+  const config = configs.find(c => c.slug === slug);
+  return config?.group === 'done';
+}
 
 export const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string }> = {
   low: { label: 'Low', color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
@@ -66,8 +122,10 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: strin
   high: { label: 'High', color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400' },
 };
 
-// Column order for kanban view
-export const STATUS_ORDER: TaskStatus[] = ['pending', 'in_progress', 'blocked', 'completed'];
+// Backward-compatible aliases
+export type TaskStatus = string;
+export const STATUS_CONFIG = DEFAULT_STATUS_CONFIG;
+export const STATUS_ORDER: string[] = ['pending', 'in_progress', 'blocked', 'completed'];
 
 // Task handlers interface for shared components
 export interface TaskHandlers {
@@ -75,6 +133,7 @@ export interface TaskHandlers {
   onStatusChange: (taskId: string, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
   onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange?: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
   onSaveTitle: (taskId: string, title: string) => void;
   onDelete: (taskId: string) => void;

@@ -164,6 +164,7 @@ function ChannelView({ page }: ChannelViewProps) {
       // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
+      toast.error('Failed to send message. Please try again.');
     }
   };
 

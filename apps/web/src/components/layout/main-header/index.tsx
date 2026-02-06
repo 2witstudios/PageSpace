@@ -12,6 +12,7 @@ import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
 import RecentsDropdown from "@/components/shared/RecentsDropdown";
 import { UsageCounter } from "@/components/billing/UsageCounter";
+import NavButtons from "./NavButtons";
 
 interface TopBarProps {
   onToggleLeftPanel: () => void;
@@ -44,6 +45,8 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
           >
             <PanelLeft className="h-5 w-5" />
           </Button>
+
+          <NavButtons />
 
           <Link
             href="/dashboard"

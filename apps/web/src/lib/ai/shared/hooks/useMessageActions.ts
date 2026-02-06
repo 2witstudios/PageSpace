@@ -70,51 +70,70 @@ export function useMessageActions({
     async (messageId: string, newContent: string) => {
       if (!conversationId) return;
 
+      const originalMessage = messages.find((message) => message.id === messageId);
+      if (!originalMessage) {
+        return;
+      }
+
+      // Optimistically apply the edit for responsive UI feedback.
+      setMessages((previousMessages) =>
+        previousMessages.map((message) => {
+          if (message.id !== messageId) return message;
+          return {
+            ...message,
+            parts: message.parts.map((part) =>
+              part.type === 'text' ? { ...part, text: newContent } : part
+            ),
+          };
+        })
+      );
+
       try {
         if (isAgentMode) {
-          // Agent mode: Use agent API
           await patch(
             `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
-
-          // Refetch agent messages
-          const response = await fetchWithAuth(
-            `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
-          );
-          if (!response.ok) {
-            throw new Error(`Failed to refresh messages after edit: ${response.status}`);
-          }
-          const data = await response.json();
-          setMessages(data.messages || []);
         } else {
-          // Global mode: Use global API
           await patch(
             `/api/ai/global/${conversationId}/messages/${messageId}`,
             { content: newContent }
           );
-
-          // Refetch messages
-          const response = await fetchWithAuth(
-            `/api/ai/global/${conversationId}/messages`
-          );
-          if (!response.ok) {
-            throw new Error(`Failed to refresh messages after edit: ${response.status}`);
-          }
-          const data = await response.json();
-          const loadedMessages = Array.isArray(data) ? data : data.messages || [];
-          setMessages(loadedMessages);
         }
 
         onEditVersionChange?.();
         toast.success('Message updated successfully');
+
+        // Refetch to reconcile with server state (non-critical)
+        try {
+          const url = isAgentMode
+            ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
+            : `/api/ai/global/${conversationId}/messages`;
+          const response = await fetchWithAuth(url);
+          if (response.ok) {
+            const data = await response.json();
+            const loaded = isAgentMode
+              ? data.messages || []
+              : Array.isArray(data) ? data : data.messages || [];
+            setMessages(loaded);
+          }
+        } catch {
+          // Refetch failed — optimistic update already applied, server has the edit
+        }
       } catch (error) {
+        // Roll back only the edited message to avoid clobbering unrelated updates.
+        setMessages((previousMessages) =>
+          previousMessages.map((message) =>
+            message.id === messageId ? originalMessage : message
+          )
+        );
+
         console.error('Failed to edit message:', error);
-        toast.error('Failed to edit message');
+        toast.error('Failed to save edit. Your local changes may not persist.');
         throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, setMessages, onEditVersionChange]
+    [isAgentMode, agentId, conversationId, messages, setMessages, onEditVersionChange]
   );
 
   // Delete a message

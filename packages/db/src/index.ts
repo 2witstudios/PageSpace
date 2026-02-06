@@ -56,8 +56,6 @@ export {
   activityResourceEnum,
   activityChangeGroupTypeEnum,
   contentFormatEnum,
-  retentionPolicies,
-  subscriptionTierEnum,
 } from './schema/monitoring';
 
 // Security audit logging re-exports

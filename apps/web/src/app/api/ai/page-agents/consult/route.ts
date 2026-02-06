@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs } from 'ai';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
+import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import {
@@ -411,6 +412,19 @@ export async function POST(request: Request) {
           errors: toolErrors,
         });
       }
+      // Track AI usage
+      const usage = result.usage;
+      AIMonitoring.trackUsage({
+        userId,
+        provider: agent.aiProvider || 'pagespace',
+        model: agent.aiModel || 'glm-4.5-air',
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+        pageId: agentId,
+        driveId: agent.driveId,
+        success: true,
+      });
     } catch (aiError) {
       loggers.api.error('Agent consultation AI generation error:', aiError as Error);
       return NextResponse.json(

@@ -141,7 +141,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     }, [loadSettings, propProvider]);
 
     // Speech recognition
-    const { isListening, isSupported, toggleListening } = useSpeechRecognition({
+    const { isListening, isSupported, error: speechError, toggleListening, clearError: clearSpeechError } = useSpeechRecognition({
       onTranscript: (text) => {
         const newValue = value + (value ? ' ' : '') + text;
         onChange(newValue);
@@ -218,6 +218,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onMicClick={toggleListening}
           isListening={isListening}
           isMicSupported={isSupported}
+          micError={speechError}
+          onClearMicError={clearSpeechError}
           onVoiceModeClick={onVoiceModeClick}
           isVoiceModeActive={isVoiceModeActive}
           isVoiceModeAvailable={isVoiceModeAvailable}

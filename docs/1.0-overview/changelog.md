@@ -1,3 +1,49 @@
+## 2026-02-05
+
+### Custom Task Categories & Multiple Assignees
+
+Task lists now support custom status categories and multiple assignees per task, bringing flexible project management capabilities closer to Notion-style databases while keeping the identity of a task list.
+
+#### Custom Status Categories
+- **New `task_status_configs` table**: Each task list can define its own set of statuses
+- **Status groups**: Every custom status belongs to a group (`todo`, `in_progress`, `done`) that drives system behavior (completion tracking, Kanban columns, etc.)
+- **Default statuses auto-created**: New task lists get the 4 defaults (To Do, In Progress, Blocked, Done) automatically
+- **Status management UI**: New `StatusConfigManager` dialog lets users add, rename, reorder, and delete custom statuses with color presets
+- **Validation**: API validates task status against the task list's configured statuses
+- **Migration path**: Existing task lists without configs get defaults auto-provisioned on first access
+
+#### Multiple Assignees Per Task
+- **New `task_assignees` junction table**: Tasks can have any number of user and/or AI agent assignees
+- **New `MultiAssigneeSelect` component**: Stacked avatars display with multi-select popover for adding/removing assignees
+- **Backward compatible**: Legacy `assigneeId`/`assigneeAgentId` fields kept in sync as primary assignee for existing code
+- **API support**: Both `assigneeIds` array (new) and legacy single-assignee fields accepted
+
+#### API Changes
+- `GET /api/pages/[pageId]/tasks` now returns `statusConfigs` array alongside tasks
+- `POST /api/pages/[pageId]/tasks` accepts `assigneeIds` array for multiple assignees
+- `PATCH /api/pages/[pageId]/tasks/[taskId]` validates status against custom configs, accepts `assigneeIds`
+- New `GET/POST/PUT/DELETE /api/pages/[pageId]/tasks/statuses` endpoint for status config CRUD
+- `GET /api/tasks` dashboard endpoint accepts any status string (not just enum values)
+- AI `update_task` tool supports custom status slugs and `assigneeIds` array
+
+#### Schema Changes
+- New table: `task_status_configs` (id, taskListId, name, slug, color, group, position)
+- New table: `task_assignees` (id, taskId, userId, agentPageId)
+- `task_items.status` changed from enum to plain text for custom status support
+- Migration: `0072_cool_scourge.sql`
+### Added - Back/Forward Navigation Buttons
+
+Added browser-style back/forward navigation buttons to the main header navbar, integrated with the per-tab history system.
+
+- **NavButtons component**: `apps/web/src/components/layout/main-header/NavButtons.tsx`
+  - Reads target path before store mutation for reliable navigation
+  - Uses `canGoBack`/`canGoForward` pure functions from `tab-navigation.ts`
+  - Hidden on small screens (`hidden sm:flex`) for mobile responsiveness
+- **Component tests**: `apps/web/src/components/layout/main-header/__tests__/NavButtons.test.tsx`
+  - Rendering, disabled states, navigation clicks, and store integration
+
+---
+
 ## 2025-01-17
 
 ### Documentation Update - Editor Architecture & State Management Decoupling

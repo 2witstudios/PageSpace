@@ -41,7 +41,6 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -49,7 +48,6 @@ import { AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/share
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
@@ -62,9 +60,12 @@ import {
   useMCPTools,
   useMessageActions,
   useProviderSettings,
+  useChatTransport,
+  useStreamingRegistration,
+  useChatStop,
   LocationContext,
 } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import {
   ProviderSetupCard,
@@ -258,24 +259,22 @@ const GlobalAssistantView: React.FC = () => {
   // CHAT CONFIGURATION
   // ============================================
 
+  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+
   // Agent mode chat config
   const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId) return null;
+    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: agentTransport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
     };
-  }, [selectedAgent, agentConversationId, agentInitialMessages]);
+  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
 
   // Global mode chat
   const {
@@ -319,19 +318,7 @@ const GlobalAssistantView: React.FC = () => {
   useEffect(() => {
     latestGlobalMessagesRef.current = globalLocalMessages;
   }, [globalLocalMessages]);
-
-  // Wrap stop handler to abort server-side stream before client-side stop
-  // This ensures the server stops processing when user clicks Stop
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  const stop = useCallback(async () => {
-    try {
-      if (currentConversationId) {
-        await abortActiveStream({ chatId: currentConversationId });
-      }
-    } finally {
-      rawStop();
-    }
-  }, [currentConversationId, rawStop]);
+  const stop = useChatStop(currentConversationId, rawStop);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -546,20 +533,11 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
   // Register streaming state with editing store
-  useEffect(() => {
-    const componentId = `global-assistant-${currentConversationId || 'init'}`;
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        conversationId: currentConversationId || undefined,
-        componentName: 'GlobalAssistantView',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, currentConversationId]);
+  useStreamingRegistration(
+    `global-assistant-${currentConversationId || 'init'}`,
+    isStreaming,
+    { conversationId: currentConversationId || undefined, componentName: 'GlobalAssistantView' }
+  );
 
   // Reset error visibility when new error occurs
   useEffect(() => {
