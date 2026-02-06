@@ -3,6 +3,7 @@ import { db, dmConversations, connections, eq, and, or, sql } from '@pagespace/d
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { isEmailVerified } from '@pagespace/lib';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -15,7 +16,11 @@ export async function GET(request: Request) {
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 20,
+      min: 1,
+      max: 100,
+    });
     const cursor = searchParams.get('cursor'); // ISO timestamp
     const direction = searchParams.get('direction') || 'after'; // 'before' or 'after'
 

@@ -5,6 +5,7 @@ import { loggers } from '@pagespace/lib/server';
 import { createOrUpdateMessageNotification, isEmailVerified } from '@pagespace/lib';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -21,7 +22,11 @@ export async function GET(
 
     const { conversationId } = await context.params;
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 50,
+      min: 1,
+      max: 100,
+    });
     const before = searchParams.get('before'); // For pagination
 
     // Verify user is participant in conversation
