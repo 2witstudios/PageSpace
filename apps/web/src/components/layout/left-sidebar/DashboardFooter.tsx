@@ -80,7 +80,6 @@ export default function DashboardFooter() {
     <Collapsible
       open={!dashboardFooterCollapsed}
       onOpenChange={(open) => setDashboardFooterCollapsed(!open)}
-      className="border-t border-[var(--sidebar-divider)]"
     >
       <CollapsibleTrigger asChild>
         <Button

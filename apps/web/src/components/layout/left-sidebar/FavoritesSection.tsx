@@ -78,7 +78,6 @@ export default function FavoritesSection() {
     <Collapsible
       open={!favoritesCollapsed}
       onOpenChange={(open) => setFavoritesCollapsed(!open)}
-      className="border-t border-[var(--sidebar-divider)]"
     >
       <CollapsibleTrigger asChild>
         <Button
@@ -234,7 +233,7 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative
 
 function FavoritesSkeleton() {
   return (
-    <div className="border-t border-[var(--sidebar-divider)]">
+    <div>
       <div className="flex items-center justify-between px-2 py-2.5 bg-[var(--sidebar-section-bg)]">
         <Skeleton className="h-4 w-20" />
         <Skeleton className="h-3.5 w-3.5" />
