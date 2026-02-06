@@ -13,8 +13,7 @@ import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
-import { UIMessage, DefaultChatTransport } from 'ai';
-import { useEditingStore } from '@/stores/useEditingStore';
+import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
@@ -25,7 +24,7 @@ import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceModeOverlay } from '@/components/ai/voice';
 
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 
 // Shared hooks and components
@@ -34,6 +33,9 @@ import {
   useMessageActions,
   useProviderSettings,
   useConversations,
+  useChatTransport,
+  useStreamingRegistration,
+  useChatStop,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -149,51 +151,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Use conversation ID for stream tracking (falls back to page.id before conversation is created)
   const streamTrackingId = currentConversationId || page.id;
 
-  // Use a ref for the transport to prevent unnecessary recreations.
-  // Creating a new DefaultChatTransport causes useChat to reset its entire state.
-  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
-  const transportTrackingIdRef = useRef<string | null>(null);
+  const transport = useChatTransport(streamTrackingId, '/api/ai/chat');
 
   const chatConfig = useMemo(
-    () => {
-      // Only create a new transport when the tracking ID changes
-      if (transportTrackingIdRef.current !== streamTrackingId || !transportRef.current) {
-        transportRef.current = new DefaultChatTransport({
-          api: '/api/ai/chat',
-          fetch: createStreamTrackingFetch({ chatId: streamTrackingId }),
-        });
-        transportTrackingIdRef.current = streamTrackingId;
-      }
-
-      return {
-        id: page.id,
-        messages: initialMessages,
-        transport: transportRef.current,
-        experimental_throttle: 100,
-        onError: (error: Error) => {
-          console.error('AiChatView: Chat error:', error);
-        },
-      };
-    },
-    [page.id, streamTrackingId, initialMessages]
+    () => ({
+      id: page.id,
+      messages: initialMessages,
+      transport: transport!,
+      experimental_throttle: 100,
+      onError: (error: Error) => {
+        console.error('AiChatView: Chat error:', error);
+      },
+    }),
+    [page.id, transport, initialMessages]
   );
 
   const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
     useChat(chatConfig);
 
   const isStreaming = status === 'submitted' || status === 'streaming';
-
-  // Combined stop function that calls both abort endpoint (server-side) and useChat stop (client-side)
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  const stop = useCallback(async () => {
-    try {
-      // Call abort endpoint to stop server-side processing
-      await abortActiveStream({ chatId: streamTrackingId });
-    } finally {
-      // Call useChat's stop to abort client-side fetch
-      chatStop();
-    }
-  }, [streamTrackingId, chatStop]);
+  const stop = useChatStop(streamTrackingId, chatStop);
   const isLoading = !isInitialized;
 
   // ============================================
@@ -276,20 +253,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [page.id]);
 
   // Register streaming state with editing store
-  useEffect(() => {
-    const componentId = `ai-chat-${page.id}`;
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        pageId: page.id,
-        componentName: 'AiChatView',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, page.id]);
+  useStreamingRegistration(
+    `ai-chat-${page.id}`,
+    isStreaming,
+    { pageId: page.id, componentName: 'AiChatView' }
+  );
 
   // Reset error visibility when new error occurs
   useEffect(() => {

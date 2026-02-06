@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { createStreamTrackingFetch } from '@/lib/ai/core/client';
+import { useChatTransport } from '@/lib/ai/shared';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -203,34 +203,22 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }
   }, [currentConversationId]);
 
-  // Use a ref for the transport to prevent unnecessary recreations during streaming.
-  // Creating a new DefaultChatTransport causes useChat to reset its state entirely.
-  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
-  const transportConversationIdRef = useRef<string | null>(null);
+  // Stable transport that only recreates when conversation ID changes
+  const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
+  const transport = useChatTransport(currentConversationId, apiEndpoint);
 
   // Create stable chat config
   // IMPORTANT: Uses initialMessages which is set by loadConversation when switching conversations.
   // The chatConfig only changes when:
   // 1. currentConversationId changes (switching conversations)
   // 2. initialMessages changes (set during loadConversation)
-  // The transport is reused via ref to prevent useChat resets.
   const chatConfig = useMemo(() => {
-    if (!currentConversationId) return null;
-
-    // Only create a new transport when the conversation ID actually changes
-    if (transportConversationIdRef.current !== currentConversationId || !transportRef.current) {
-      const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
-      transportRef.current = new DefaultChatTransport({
-        api: apiEndpoint,
-        fetch: createStreamTrackingFetch({ chatId: currentConversationId }),
-      });
-      transportConversationIdRef.current = currentConversationId;
-    }
+    if (!currentConversationId || !transport) return null;
 
     return {
       id: currentConversationId,
       messages: initialMessages,
-      transport: transportRef.current,
+      transport,
       experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Global Chat Error:', error);
@@ -239,7 +227,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [currentConversationId, initialMessages]);
+  }, [currentConversationId, transport, initialMessages]);
 
   // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({
