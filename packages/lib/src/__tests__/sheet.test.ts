@@ -233,6 +233,62 @@ describe('sheet evaluation', () => {
   });
 });
 
+describe('absolute cell references with $', () => {
+  it('evaluates formulas with absolute column and row ($B$14)', () => {
+    const sheet = createEmptySheet(20, 5);
+    sheet.cells.B14 = '2';
+    sheet.cells.D18 = '5';
+    sheet.cells.A1 = '=D18*$B$14';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'A1')).toBe('10');
+    expect(getError(evaluation, 'A1')).toBeUndefined();
+  });
+
+  it('evaluates formulas with absolute column only ($B14)', () => {
+    const sheet = createEmptySheet(20, 5);
+    sheet.cells.B14 = '3';
+    sheet.cells.A1 = '=$B14+7';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'A1')).toBe('10');
+    expect(getError(evaluation, 'A1')).toBeUndefined();
+  });
+
+  it('evaluates formulas with absolute row only (B$14)', () => {
+    const sheet = createEmptySheet(20, 5);
+    sheet.cells.B14 = '4';
+    sheet.cells.A1 = '=B$14*3';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'A1')).toBe('12');
+    expect(getError(evaluation, 'A1')).toBeUndefined();
+  });
+
+  it('handles absolute references in ranges', () => {
+    const sheet = createEmptySheet(5, 5);
+    sheet.cells.A1 = '1';
+    sheet.cells.A2 = '2';
+    sheet.cells.A3 = '3';
+    sheet.cells.B1 = '=SUM($A$1:$A$3)';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'B1')).toBe('6');
+    expect(getError(evaluation, 'B1')).toBeUndefined();
+  });
+
+  it('handles mixed absolute and relative references in a formula', () => {
+    const sheet = createEmptySheet(5, 5);
+    sheet.cells.A1 = '10';
+    sheet.cells.B1 = '0.5';
+    sheet.cells.C1 = '=A1*$B$1';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'C1')).toBe('5');
+    expect(getError(evaluation, 'C1')).toBeUndefined();
+  });
+});
+
 describe('sheet sanitisation', () => {
   it('removes invalid cell keys and enforces bounds', () => {
     const dirtySheet = {

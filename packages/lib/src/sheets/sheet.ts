@@ -1120,6 +1120,31 @@ function tokenize(formula: string): Token[] {
       continue;
     }
 
+    if (char === '$') {
+      let end = index + 1;
+      while (end < formula.length && /[A-Za-z]/.test(formula[end])) {
+        end += 1;
+      }
+      if (end > index + 1) {
+        if (end < formula.length && formula[end] === '$') {
+          end += 1;
+        }
+        const digitStart = end;
+        while (end < formula.length && /[0-9]/.test(formula[end])) {
+          end += 1;
+        }
+        if (end > digitStart) {
+          const stripped = formula.slice(index, end).replace(/\$/g, '').toUpperCase();
+          if (cellRegex.test(stripped)) {
+            tokens.push({ type: 'cell', value: stripped });
+            index = end;
+            continue;
+          }
+        }
+      }
+      throw new Error(`Unexpected character '${char}' in formula`);
+    }
+
     if (/[A-Za-z_]/.test(char)) {
       let end = index + 1;
       while (end < formula.length && /[A-Za-z0-9_]/.test(formula[end])) {
@@ -1127,6 +1152,22 @@ function tokenize(formula: string): Token[] {
       }
       const raw = formula.slice(index, end);
       const upper = raw.toUpperCase();
+
+      if (!cellRegex.test(upper) && /^[A-Z]+$/.test(upper) && end < formula.length && formula[end] === '$') {
+        let absEnd = end + 1;
+        while (absEnd < formula.length && /[0-9]/.test(formula[absEnd])) {
+          absEnd += 1;
+        }
+        if (absEnd > end + 1) {
+          const stripped = upper + formula.slice(end + 1, absEnd);
+          if (cellRegex.test(stripped)) {
+            tokens.push({ type: 'cell', value: stripped });
+            index = absEnd;
+            continue;
+          }
+        }
+      }
+
       if (cellRegex.test(upper)) {
         tokens.push({ type: 'cell', value: upper });
       } else if (upper === 'TRUE' || upper === 'FALSE') {
