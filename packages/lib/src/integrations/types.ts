@@ -208,7 +208,7 @@ export interface ToolGrant {
 export interface ToolCallRequest {
   userId: string;
   agentId: string;
-  driveId: string;
+  driveId: string | null;
   connectionId: string;
   toolName: string;
   input: Record<string, unknown>;
@@ -300,7 +300,7 @@ export type AuditErrorType =
   | 'network';
 
 export interface AuditLogEntry {
-  driveId: string;
+  driveId: string | null;
   agentId: string;
   userId: string;
   connectionId: string;

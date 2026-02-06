@@ -40,6 +40,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { MCPTool } from '@/types/mcp';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import {
   createStreamAbortController,
   removeStream,
@@ -650,10 +651,15 @@ MENTION PROCESSING:
     try {
       const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
       const currentDriveId = locationContext?.currentDrive?.id || null;
+      let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
+      if (currentDriveId) {
+        const access = await getDriveAccess(currentDriveId, userId);
+        userDriveRole = access.role;
+      }
       const integrationTools = await resolveGlobalAssistantIntegrationTools({
         userId,
         driveId: currentDriveId,
-        userDriveRole: null, // Role resolved inside the function based on drive access
+        userDriveRole,
       });
       if (Object.keys(integrationTools).length > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -8,10 +8,12 @@ import {
   getProviderById,
   createConnection,
   findUserConnection,
+  findDriveConnection,
   updateConnectionCredentials,
   updateConnectionStatus,
 } from '@pagespace/lib/integrations';
 import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
 /**
  * GET /api/user/integrations/callback
@@ -47,7 +49,8 @@ export async function GET(request: Request) {
       userId: string;
       providerId: string;
       name: string;
-      visibility: string;
+      visibility?: string;
+      driveId?: string;
       returnUrl: string;
     }>(state, process.env.OAUTH_STATE_SECRET);
 
@@ -56,7 +59,7 @@ export async function GET(request: Request) {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=invalid_state`, baseUrl));
     }
 
-    const { userId, providerId, name, visibility, returnUrl } = stateData;
+    const { userId, providerId, name, visibility, driveId, returnUrl } = stateData;
 
     // Load provider
     const provider = await getProviderById(db, providerId);
@@ -106,25 +109,53 @@ export async function GET(request: Request) {
 
     const encrypted = await encryptCredentials(credentialsToEncrypt);
 
-    // Upsert connection
-    const existing = await findUserConnection(db, userId, providerId);
-    if (existing) {
-      await updateConnectionCredentials(db, existing.id, encrypted);
-      await updateConnectionStatus(db, existing.id, 'active');
-    } else {
-      await createConnection(db, {
-        providerId,
-        userId,
-        name,
-        status: 'active',
-        credentials: encrypted,
-        visibility: (visibility as 'private' | 'owned_drives' | 'all_drives') || 'owned_drives',
-        connectedBy: userId,
-        connectedAt: new Date(),
-      });
-    }
+    // Upsert connection — drive-scoped or user-scoped
+    if (driveId) {
+      // Drive-scoped connection: verify user has admin access
+      const access = await getDriveAccess(driveId, userId);
+      if (!access.isOwner && !access.isAdmin) {
+        loggers.auth.warn('OAuth callback: user lacks admin access to drive', { userId, driveId });
+        return NextResponse.redirect(new URL(`${defaultReturn}?error=access_denied`, baseUrl));
+      }
 
-    loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
+      const existing = await findDriveConnection(db, driveId, providerId);
+      if (existing) {
+        await updateConnectionCredentials(db, existing.id, encrypted);
+        await updateConnectionStatus(db, existing.id, 'active');
+      } else {
+        await createConnection(db, {
+          providerId,
+          driveId,
+          name,
+          status: 'active',
+          credentials: encrypted,
+          connectedBy: userId,
+          connectedAt: new Date(),
+        });
+      }
+
+      loggers.auth.info('Drive integration connected via OAuth', { userId, driveId, providerId, slug: provider.slug });
+    } else {
+      // User-scoped connection
+      const existing = await findUserConnection(db, userId, providerId);
+      if (existing) {
+        await updateConnectionCredentials(db, existing.id, encrypted);
+        await updateConnectionStatus(db, existing.id, 'active');
+      } else {
+        await createConnection(db, {
+          providerId,
+          userId,
+          name,
+          status: 'active',
+          credentials: encrypted,
+          visibility: (visibility as 'private' | 'owned_drives' | 'all_drives') || 'owned_drives',
+          connectedBy: userId,
+          connectedAt: new Date(),
+        });
+      }
+
+      loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
+    }
 
     const redirectPath = returnUrl || defaultReturn;
     const redirectUrl = new URL(redirectPath, baseUrl);

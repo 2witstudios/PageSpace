@@ -46,7 +46,7 @@ export interface GrantWithConnectionAndProvider {
 export interface ExecutorContext {
   userId: string;
   agentId: string;
-  driveId: string;
+  driveId: string | null;
 }
 
 export interface CoreTool {

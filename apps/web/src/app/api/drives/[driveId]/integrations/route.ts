@@ -107,6 +107,10 @@ export async function POST(
       return NextResponse.json({ error: 'Provider not found or disabled' }, { status: 404 });
     }
 
+    if (provider.driveId && provider.driveId !== driveId) {
+      return NextResponse.json({ error: 'Provider not available for this drive' }, { status: 404 });
+    }
+
     const existing = await findDriveConnection(db, driveId, providerId);
     if (existing) {
       return NextResponse.json({ error: 'Connection already exists for this provider' }, { status: 409 });

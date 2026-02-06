@@ -47,17 +47,17 @@ function createResolutionDeps(): ResolutionDependencies {
 /**
  * Create a configured tool executor wired to database dependencies.
  */
-function createConfiguredExecutor(userId: string, agentId: string, driveId: string) {
+function createConfiguredExecutor(userId: string, agentId: string, driveId: string | null) {
   return createToolExecutor({
     loadConnection: (connectionId) =>
       getConnectionWithProvider(db, connectionId) as Promise<LoadConnectionResult>,
     logAudit: async (entry) => {
       await logAuditEntry(db, {
-        driveId,
+        driveId: entry.driveId ?? driveId,
         agentId,
         userId,
-        connectionId: '', // Will be filled by the saga
-        toolName: '',     // Will be filled by the saga
+        connectionId: entry.connectionId,
+        toolName: entry.toolName,
         success: entry.success,
         errorType: entry.errorType,
         errorMessage: entry.errorMessage,
@@ -130,11 +130,11 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
 
   if (grants.length === 0) return {};
 
-  const executor = createConfiguredExecutor(userId, 'global-assistant', driveId || 'dashboard');
+  const executor = createConfiguredExecutor(userId, 'global-assistant', driveId);
 
   return convertIntegrationToolsToAISDK(
     grants,
-    { userId, agentId: 'global-assistant', driveId: driveId || 'dashboard' },
+    { userId, agentId: 'global-assistant', driveId },
     executor
   );
 }
