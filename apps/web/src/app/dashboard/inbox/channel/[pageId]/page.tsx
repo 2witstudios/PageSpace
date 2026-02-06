@@ -51,6 +51,29 @@ interface MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  file?: {
+    id: string;
+    mimeType: string | null;
+    sizeBytes: number;
+  } | null;
+}
+
+function isImageAttachment(m: MessageWithUser): boolean {
+  if (m.attachmentMeta?.mimeType?.startsWith('image/')) return true;
+  if (m.file?.mimeType?.startsWith('image/')) return true;
+  return false;
+}
+
+function getFileId(m: MessageWithUser): string | null {
+  return m.fileId || m.file?.id || null;
+}
+
+function getAttachmentName(m: MessageWithUser): string {
+  return m.attachmentMeta?.originalName || 'Attachment';
+}
+
+function getAttachmentSize(m: MessageWithUser): number | null {
+  return m.attachmentMeta?.size ?? m.file?.sizeBytes ?? null;
 }
 
 interface Page {
@@ -411,46 +434,47 @@ export default function InboxChannelPage() {
                     </div>
                   )}
                   {/* File attachment */}
-                  {m.attachmentMeta && (
+                  {(m.attachmentMeta || m.file) && getFileId(m) && (
                     <div className="mt-2">
-                      {m.attachmentMeta.mimeType.startsWith('image/') ? (
+                      {isImageAttachment(m) ? (
                         <a
-                          href={`/api/files/${m.fileId}/view?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                          href={`/api/files/${getFileId(m)}/view?filename=${encodeURIComponent(getAttachmentName(m))}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="block max-w-sm"
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
                           <img
-                            src={`/api/files/${m.fileId}/view`}
-                            alt={m.attachmentMeta.originalName}
+                            src={`/api/files/${getFileId(m)}/view`}
+                            alt={getAttachmentName(m)}
                             className="rounded-lg max-h-64 object-contain border border-border/50"
-                            loading="lazy"
                           />
                         </a>
                       ) : (
                         <a
-                          href={`/api/files/${m.fileId}/download?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                          href={`/api/files/${getFileId(m)}/download?filename=${encodeURIComponent(getAttachmentName(m))}`}
                           className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
                         >
                           <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-                            {m.attachmentMeta.mimeType.includes('pdf') ? (
+                            {(m.attachmentMeta?.mimeType || m.file?.mimeType || '').includes('pdf') ? (
                               <FileText className="h-5 w-5 text-red-500" />
-                            ) : m.attachmentMeta.mimeType.includes('document') || m.attachmentMeta.mimeType.includes('word') ? (
+                            ) : (m.attachmentMeta?.mimeType || m.file?.mimeType || '').includes('document') || (m.attachmentMeta?.mimeType || m.file?.mimeType || '').includes('word') ? (
                               <FileText className="h-5 w-5 text-blue-500" />
                             ) : (
                               <FileIcon className="h-5 w-5 text-muted-foreground" />
                             )}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">{m.attachmentMeta.originalName}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {m.attachmentMeta.size < 1024
-                                ? `${m.attachmentMeta.size} B`
-                                : m.attachmentMeta.size < 1024 * 1024
-                                ? `${(m.attachmentMeta.size / 1024).toFixed(1)} KB`
-                                : `${(m.attachmentMeta.size / (1024 * 1024)).toFixed(1)} MB`}
-                            </p>
+                            <p className="text-sm font-medium truncate">{getAttachmentName(m)}</p>
+                            {getAttachmentSize(m) != null && (
+                              <p className="text-xs text-muted-foreground">
+                                {getAttachmentSize(m)! < 1024
+                                  ? `${getAttachmentSize(m)} B`
+                                  : getAttachmentSize(m)! < 1024 * 1024
+                                  ? `${(getAttachmentSize(m)! / 1024).toFixed(1)} KB`
+                                  : `${(getAttachmentSize(m)! / (1024 * 1024)).toFixed(1)} MB`}
+                              </p>
+                            )}
                           </div>
                           <Download className="h-4 w-4 text-muted-foreground shrink-0" />
                         </a>
