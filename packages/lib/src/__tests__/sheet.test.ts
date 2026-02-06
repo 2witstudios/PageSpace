@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   SHEETDOC_MAGIC,
+  adjustFormulaReferences,
   createEmptySheet,
   decodeCellAddress,
   encodeCellAddress,
@@ -230,6 +231,106 @@ describe('sheet evaluation', () => {
     expect(getDisplay(evaluation, 'A5')).toBe('#ERROR');
     expect(getError(evaluation, 'A5')).toBe('Referenced page "Missing" is not available');
     expect(evaluation.byAddress.A2.dependsOn.some((ref) => ref.includes('@[Sales]'))).toBe(true);
+  });
+});
+
+describe('absolute cell references with $', () => {
+  it('evaluates formulas with absolute column and row ($B$14)', () => {
+    const sheet = createEmptySheet(20, 5);
+    sheet.cells.B14 = '2';
+    sheet.cells.D18 = '5';
+    sheet.cells.A1 = '=D18*$B$14';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'A1')).toBe('10');
+    expect(getError(evaluation, 'A1')).toBeUndefined();
+  });
+
+  it('evaluates formulas with absolute column only ($B14)', () => {
+    const sheet = createEmptySheet(20, 5);
+    sheet.cells.B14 = '3';
+    sheet.cells.A1 = '=$B14+7';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'A1')).toBe('10');
+    expect(getError(evaluation, 'A1')).toBeUndefined();
+  });
+
+  it('evaluates formulas with absolute row only (B$14)', () => {
+    const sheet = createEmptySheet(20, 5);
+    sheet.cells.B14 = '4';
+    sheet.cells.A1 = '=B$14*3';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'A1')).toBe('12');
+    expect(getError(evaluation, 'A1')).toBeUndefined();
+  });
+
+  it('handles absolute references in ranges', () => {
+    const sheet = createEmptySheet(5, 5);
+    sheet.cells.A1 = '1';
+    sheet.cells.A2 = '2';
+    sheet.cells.A3 = '3';
+    sheet.cells.B1 = '=SUM($A$1:$A$3)';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'B1')).toBe('6');
+    expect(getError(evaluation, 'B1')).toBeUndefined();
+  });
+
+  it('handles mixed absolute and relative references in a formula', () => {
+    const sheet = createEmptySheet(5, 5);
+    sheet.cells.A1 = '10';
+    sheet.cells.B1 = '0.5';
+    sheet.cells.C1 = '=A1*$B$1';
+
+    const evaluation = evaluateSheet(sheet);
+    expect(getDisplay(evaluation, 'C1')).toBe('5');
+    expect(getError(evaluation, 'C1')).toBeUndefined();
+  });
+});
+
+describe('adjustFormulaReferences', () => {
+  it('shifts relative references by the given offset', () => {
+    expect(adjustFormulaReferences('=A1+B2', 1, 0)).toBe('=A2+B3');
+    expect(adjustFormulaReferences('=A1+B2', 0, 1)).toBe('=B1+C2');
+    expect(adjustFormulaReferences('=A1+B2', 2, 3)).toBe('=D3+E4');
+  });
+
+  it('does not shift fully absolute references ($COL$ROW)', () => {
+    expect(adjustFormulaReferences('=$B$14', 5, 5)).toBe('=$B$14');
+    expect(adjustFormulaReferences('=D18*$B$14', 1, 0)).toBe('=D19*$B$14');
+  });
+
+  it('does not shift the absolute column ($COL)', () => {
+    expect(adjustFormulaReferences('=$B14', 1, 1)).toBe('=$B15');
+    expect(adjustFormulaReferences('=$A1+C1', 0, 2)).toBe('=$A1+E1');
+  });
+
+  it('does not shift the absolute row (COL$ROW)', () => {
+    expect(adjustFormulaReferences('=B$14', 1, 1)).toBe('=C$14');
+    expect(adjustFormulaReferences('=A$1+A2', 1, 0)).toBe('=A$1+A3');
+  });
+
+  it('handles mixed absolute and relative in one formula', () => {
+    // Copy =A1*$B$1 one row down: A1 shifts, $B$1 stays
+    expect(adjustFormulaReferences('=A1*$B$1', 1, 0)).toBe('=A2*$B$1');
+    // Copy =A1*$B$1 one column right: A1 shifts, $B$1 stays
+    expect(adjustFormulaReferences('=A1*$B$1', 0, 1)).toBe('=B1*$B$1');
+  });
+
+  it('preserves absolute markers in range references', () => {
+    expect(adjustFormulaReferences('=SUM($A$1:$A$3)', 2, 2)).toBe('=SUM($A$1:$A$3)');
+    expect(adjustFormulaReferences('=SUM(A1:$A$3)', 1, 0)).toBe('=SUM(A2:$A$3)');
+  });
+
+  it('returns non-formula strings unchanged', () => {
+    expect(adjustFormulaReferences('hello', 1, 1)).toBe('hello');
+    expect(adjustFormulaReferences('123', 5, 5)).toBe('123');
+  });
+
+  it('clamps to row/column zero instead of going negative', () => {
+    expect(adjustFormulaReferences('=A1', -5, -5)).toBe('=A1');
   });
 });
 
