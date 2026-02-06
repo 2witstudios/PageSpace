@@ -77,13 +77,12 @@ import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-vie
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
   PRIORITY_CONFIG,
-  STATUS_ORDER,
   buildStatusConfig,
   getStatusOrder,
   type TaskPriority,
   type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+import { type TaskStatusGroup } from '@/lib/task-status-config';
 import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
 import { getStatusDisplay, getAssigneeText } from './task-helpers';
 import { FilterControls } from './FilterControls';
