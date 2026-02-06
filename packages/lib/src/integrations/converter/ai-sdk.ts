@@ -79,7 +79,7 @@ export function buildIntegrationToolName(
  */
 export function parseIntegrationToolName(
   name: string
-): { providerSlug: string; connectionId: string; toolId: string } | null {
+): { providerSlug: string; connectionShortId: string; toolId: string } | null {
   if (!name.startsWith(INT_TOOL_PREFIX)) return null;
 
   const rest = name.slice(INT_TOOL_PREFIX.length);
@@ -88,7 +88,7 @@ export function parseIntegrationToolName(
 
   return {
     providerSlug: parts[0],
-    connectionId: parts[1],
+    connectionShortId: parts[1],
     toolId: parts.slice(2).join('__'),
   };
 }

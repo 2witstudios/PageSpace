@@ -30,7 +30,7 @@ describe('parseIntegrationToolName', () => {
     const result = parseIntegrationToolName('int__github__abc123de__list_repos');
     expect(result).toEqual({
       providerSlug: 'github',
-      connectionId: 'abc123de',
+      connectionShortId: 'abc123de',
       toolId: 'list_repos',
     });
   });
@@ -39,7 +39,7 @@ describe('parseIntegrationToolName', () => {
     const result = parseIntegrationToolName('int__github__abc123de__list__all__repos');
     expect(result).toEqual({
       providerSlug: 'github',
-      connectionId: 'abc123de',
+      connectionShortId: 'abc123de',
       toolId: 'list__all__repos',
     });
   });

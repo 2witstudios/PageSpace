@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSignedState, verifySignedState } from './oauth-state';
 
@@ -73,7 +74,6 @@ describe('verifySignedState', () => {
     decoded.data.timestamp = oldTimestamp;
 
     // Re-sign with correct secret
-    const crypto = require('crypto');
     const newSig = crypto
       .createHmac('sha256', TEST_SECRET)
       .update(JSON.stringify(decoded.data))

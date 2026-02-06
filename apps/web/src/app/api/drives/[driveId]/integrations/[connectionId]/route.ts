@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { getConnectionById, deleteConnection } from '@pagespace/lib/integrations';
+import { getConnectionById, getConnectionWithProvider, deleteConnection } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -26,7 +26,7 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
-    const connection = await getConnectionById(db, connectionId);
+    const connection = await getConnectionWithProvider(db, connectionId);
     if (!connection || connection.driveId !== driveId) {
       return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
     }
@@ -42,6 +42,12 @@ export async function GET(
         baseUrlOverride: connection.baseUrlOverride,
         lastUsedAt: connection.lastUsedAt,
         createdAt: connection.createdAt,
+        provider: connection.provider ? {
+          id: connection.provider.id,
+          slug: connection.provider.slug,
+          name: connection.provider.name,
+          description: connection.provider.description,
+        } : null,
       },
     });
   } catch (error) {
@@ -74,6 +80,14 @@ export async function DELETE(
     }
 
     await deleteConnection(db, connectionId);
+
+    loggers.api.info('Drive integration connection deleted', {
+      connectionId,
+      driveId,
+      connectionName: connection.name,
+      deletedBy: auth.userId,
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     loggers.api.error('Error deleting drive integration:', error as Error);

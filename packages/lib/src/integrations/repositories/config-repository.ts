@@ -26,7 +26,8 @@ export const getOrCreateConfig = async (
 
   if (existing) return existing;
 
-  const [created] = await database
+  // Use onConflictDoNothing to handle concurrent inserts for the same userId
+  const rows = await database
     .insert(globalAssistantConfig)
     .values({
       userId,
@@ -34,9 +35,18 @@ export const getOrCreateConfig = async (
       driveOverrides: {},
       inheritDriveIntegrations: true,
     })
+    .onConflictDoNothing({ target: globalAssistantConfig.userId })
     .returning();
 
-  return created;
+  // If conflict occurred, re-fetch the existing row
+  if (rows.length === 0) {
+    const refetched = await database.query.globalAssistantConfig.findFirst({
+      where: eq(globalAssistantConfig.userId, userId),
+    });
+    return refetched!;
+  }
+
+  return rows[0];
 };
 
 /**
@@ -63,29 +73,14 @@ export const updateConfig = async (
   userId: string,
   data: Partial<Pick<GlobalAssistantConfig, 'enabledUserIntegrations' | 'driveOverrides' | 'inheritDriveIntegrations'>>
 ): Promise<GlobalAssistantConfig> => {
-  // Try to get existing config
-  const existing = await getConfig(database, userId);
+  // Ensure config exists (race-safe)
+  await getOrCreateConfig(database, userId);
 
-  if (existing) {
-    const [updated] = await database
-      .update(globalAssistantConfig)
-      .set(data)
-      .where(eq(globalAssistantConfig.userId, userId))
-      .returning();
-
-    return updated;
-  }
-
-  // Create new config with provided data
-  const [created] = await database
-    .insert(globalAssistantConfig)
-    .values({
-      userId,
-      enabledUserIntegrations: data.enabledUserIntegrations ?? null,
-      driveOverrides: data.driveOverrides ?? {},
-      inheritDriveIntegrations: data.inheritDriveIntegrations ?? true,
-    })
+  const [updated] = await database
+    .update(globalAssistantConfig)
+    .set(data)
+    .where(eq(globalAssistantConfig.userId, userId))
     .returning();
 
-  return created;
+  return updated;
 };

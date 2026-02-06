@@ -266,15 +266,19 @@ export const executeToolSaga = async (
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-    await deps.logAudit({
-      connectionId: request.connectionId,
-      toolName: request.toolName,
-      driveId: request.driveId,
-      success: false,
-      errorType: 'INTERNAL_ERROR',
-      errorMessage,
-      durationMs: Date.now() - startTime,
-    });
+    try {
+      await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
+        success: false,
+        errorType: 'INTERNAL_ERROR',
+        errorMessage,
+        durationMs: Date.now() - startTime,
+      });
+    } catch {
+      // Audit logging is best-effort; don't mask the original error
+    }
 
     return {
       success: false,

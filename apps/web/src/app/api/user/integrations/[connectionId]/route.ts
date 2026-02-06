@@ -88,12 +88,21 @@ export async function PATCH(
     if (validation.data.visibility !== undefined) updateData.visibility = validation.data.visibility;
     if (validation.data.configOverrides !== undefined) updateData.configOverrides = validation.data.configOverrides;
 
-    const [updated] = await db
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
+    }
+
+    const rows = await db
       .update(integrationConnections)
       .set(updateData)
       .where(eq(integrationConnections.id, connectionId))
       .returning();
 
+    if (rows.length === 0) {
+      return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
+    }
+
+    const updated = rows[0];
     return NextResponse.json({
       connection: {
         id: updated.id,

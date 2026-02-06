@@ -23,7 +23,7 @@ const createConnectionSchema = z.object({
   name: z.string().min(1).max(100),
   credentials: z.record(z.string(), z.string()).optional(),
   baseUrlOverride: z.string().url().optional(),
-  returnUrl: z.string().optional(),
+  returnUrl: z.string().startsWith('/').optional(),
 });
 
 /**
@@ -139,7 +139,13 @@ export async function POST(
       );
 
       const oauthConfig = config.authMethod.config;
-      const clientId = process.env[`INTEGRATION_${provider.slug.toUpperCase()}_CLIENT_ID`] || '';
+      const envSlug = provider.slug.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      const clientId = process.env[`INTEGRATION_${envSlug}_CLIENT_ID`] || '';
+
+      if (!clientId) {
+        loggers.api.error('Missing OAuth client ID for provider', { slug: provider.slug, envVar: `INTEGRATION_${envSlug}_CLIENT_ID` });
+        return NextResponse.json({ error: 'OAuth not configured for this provider' }, { status: 500 });
+      }
 
       const url = buildOAuthAuthorizationUrl(oauthConfig, {
         clientId,

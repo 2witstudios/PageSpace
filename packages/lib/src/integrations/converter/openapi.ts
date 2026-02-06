@@ -297,12 +297,19 @@ function buildToolFromOperation(
   }
 
   // Add request body to input schema
+  // Track whether body was wrapped (for bodyTemplate generation later)
+  let bodyWrapped = false;
   if (operation.requestBody?.content) {
     const jsonContent = operation.requestBody.content['application/json'];
     if (jsonContent?.schema) {
       const bodySchema = resolveSchema(jsonContent.schema, schemas);
-      if (bodySchema.properties) {
-        const bodyProps = bodySchema.properties as Record<string, Record<string, unknown>>;
+      const bodyProps = bodySchema.properties as Record<string, Record<string, unknown>> | undefined;
+
+      // Check for name collisions between body properties and path/query params
+      const hasCollision = bodyProps
+        && Object.keys(bodyProps).some((name) => name in properties);
+
+      if (bodyProps && !hasCollision) {
         for (const [propName, propSchema] of Object.entries(bodyProps)) {
           properties[propName] = propSchema;
         }
@@ -311,6 +318,8 @@ function buildToolFromOperation(
         }
       } else {
         // Wrap entire body schema as a single 'body' parameter
+        // (either non-object schema or collision detected)
+        bodyWrapped = true;
         properties['body'] = bodySchema;
         if (operation.requestBody.required) {
           required.push('body');
@@ -345,17 +354,17 @@ function buildToolFromOperation(
   if (['POST', 'PUT', 'PATCH'].includes(method) && operation.requestBody?.content) {
     const jsonContent = operation.requestBody.content['application/json'];
     if (jsonContent?.schema) {
-      const bodySchema = resolveSchema(jsonContent.schema, schemas);
-      if (bodySchema.properties) {
+      if (bodyWrapped) {
+        // Body was wrapped as a single 'body' param (non-object or collision)
+        executionConfig.bodyTemplate = { $param: 'body' };
+        executionConfig.bodyEncoding = 'json';
+      } else {
+        const bodySchema = resolveSchema(jsonContent.schema, schemas);
         const bodyTemplate: Record<string, unknown> = {};
         for (const propName of Object.keys(bodySchema.properties as Record<string, unknown>)) {
           bodyTemplate[propName] = { $param: propName };
         }
         executionConfig.bodyTemplate = bodyTemplate;
-        executionConfig.bodyEncoding = 'json';
-      } else {
-        // Non-object body (array, primitive) — reference the 'body' input param
-        executionConfig.bodyTemplate = { $param: 'body' };
         executionConfig.bodyEncoding = 'json';
       }
     }

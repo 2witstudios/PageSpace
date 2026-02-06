@@ -76,8 +76,9 @@ export async function GET(request: Request) {
     const redirectUri = `${baseUrl}/api/user/integrations/callback`;
 
     // Get client credentials from environment
-    const clientId = process.env[`INTEGRATION_${provider.slug.toUpperCase()}_CLIENT_ID`] || '';
-    const clientSecret = process.env[`INTEGRATION_${provider.slug.toUpperCase()}_CLIENT_SECRET`] || '';
+    const envSlug = provider.slug.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    const clientId = process.env[`INTEGRATION_${envSlug}_CLIENT_ID`] || '';
+    const clientSecret = process.env[`INTEGRATION_${envSlug}_CLIENT_SECRET`] || '';
 
     if (!clientId || !clientSecret) {
       loggers.auth.error('Missing OAuth client credentials for provider', { slug: provider.slug });
@@ -157,7 +158,13 @@ export async function GET(request: Request) {
       loggers.auth.info('Integration connected via OAuth', { userId, providerId, slug: provider.slug });
     }
 
-    const redirectPath = returnUrl || defaultReturn;
+    // Validate returnUrl is a safe relative path (no scheme, no host, starts with /)
+    const isSafeReturn = returnUrl
+      && returnUrl.startsWith('/')
+      && !returnUrl.startsWith('//')
+      && !returnUrl.includes('\\')
+      && !/[\r\n]/.test(returnUrl);
+    const redirectPath = isSafeReturn ? returnUrl : defaultReturn;
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('connected', 'true');
 
