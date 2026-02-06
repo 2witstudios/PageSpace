@@ -87,8 +87,6 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
       // Retry failed requests up to 3 times with increasing delay
       errorRetryCount: 3,
       errorRetryInterval: 2000,
-      // Don't revalidate automatically after error - let user retry manually
-      revalidateOnFocus: false,
       revalidateOnReconnect: true,
     }
   );

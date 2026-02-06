@@ -56,8 +56,9 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     return <MCPSettingsView />;
   }
 
-  // Error state - show message with retry button instead of infinite skeleton
-  if (isError && !isValidating) {
+  // Error state - only show error overlay when no stale data is available.
+  // SWR keeps `data` populated during failed revalidations, so prefer showing stale content.
+  if (isError && !isValidating && tree.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
         <AlertCircle className="h-10 w-10 text-muted-foreground" />

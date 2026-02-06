@@ -248,6 +248,15 @@ export function useAuth(): {
 
       // Reset token refresh state
       tokenRefreshActiveRef.current = false;
+
+      // Clear persisted tab state so desktop startup doesn't restore stale/inaccessible routes
+      try {
+        const { useTabsStore } = await import('@/stores/useTabsStore');
+        useTabsStore.getState().closeAllTabs();
+      } catch {
+        // Non-critical — tabs will just show dashboard on next login
+      }
+
       endSession();
       router.push('/auth/signin');
     }

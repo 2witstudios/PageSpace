@@ -232,8 +232,8 @@ describe('usePageTree', () => {
         await result.current.fetchAndMergeChildren('parent');
       });
 
-      // Observable: API was called to fetch children
-      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/pages/parent/children');
+      // Observable: API was called to fetch children (with AbortController signal for timeout)
+      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/pages/parent/children', expect.objectContaining({ signal: expect.any(AbortSignal) }));
 
       /** @boundary-contract Optimistic merge: update tree without refetch */
       expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
