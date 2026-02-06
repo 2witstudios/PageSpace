@@ -314,7 +314,7 @@ describe('POST /api/pages', () => {
     });
 
     it('passes MCP context when authenticated via MCP', async () => {
-      (isMCPAuthResult as Mock).mockReturnValue(true);
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
 
       await POST(createRequest({
         title: 'MCP Page',
