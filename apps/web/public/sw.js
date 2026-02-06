@@ -5,8 +5,8 @@
  * Uses network-first strategy for API data, cache-first for static assets.
  */
 
-const CACHE_NAME = 'pagespace-v1';
-const STATIC_CACHE_NAME = 'pagespace-static-v1';
+const CACHE_NAME = 'pagespace-v2';
+const STATIC_CACHE_NAME = 'pagespace-static-v2';
 
 // Core pages to cache for offline access
 const OFFLINE_URLS = ['/', '/offline'];
@@ -62,7 +62,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets (fonts, images): cache-first
+  // Next.js RSC (React Server Component) flight data and prefetch requests
+  // must NEVER be cache-first — same URL serves different content based on
+  // headers, and payloads become stale after deploys.
+  if (request.headers.get('rsc') ||
+      request.headers.get('next-router-prefetch') ||
+      request.headers.get('next-router-state-tree') ||
+      request.headers.get('next-url')) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
+  // Static assets (fonts, images, content-hashed JS/CSS): cache-first
   if (isStaticAsset(url.pathname)) {
     event.respondWith(cacheFirstWithNetwork(request));
     return;
@@ -74,8 +85,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else: cache-first with network fallback
-  event.respondWith(cacheFirstWithNetwork(request));
+  // Everything else: network-first to avoid serving stale dynamic content
+  event.respondWith(networkFirstWithCache(request));
 });
 
 /**

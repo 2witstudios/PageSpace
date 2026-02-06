@@ -91,17 +91,27 @@ export default async function RootLayout({
             __html: `__webpack_nonce__ = ${JSON.stringify(nonce)};`,
           }}
         />
-        {/* Register service worker for offline support */}
+        {/* Register service worker for offline support (skip in Electron — persistent
+            profile + cache-first strategy causes stale chunks after web deploys) */}
         <script
           nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('/sw.js').catch(function(err) {
-                    console.log('ServiceWorker registration failed:', err);
+                if (navigator.userAgent.includes('Electron')) {
+                  navigator.serviceWorker.getRegistrations().then(function(regs) {
+                    regs.forEach(function(r) { r.unregister(); });
                   });
-                });
+                  caches.keys().then(function(names) {
+                    names.forEach(function(n) { caches.delete(n); });
+                  });
+                } else {
+                  window.addEventListener('load', function() {
+                    navigator.serviceWorker.register('/sw.js').catch(function(err) {
+                      console.log('ServiceWorker registration failed:', err);
+                    });
+                  });
+                }
               }
             `,
           }}
