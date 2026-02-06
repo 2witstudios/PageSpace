@@ -49,7 +49,18 @@ interface GlobalChatContextValue {
   refreshConversation: () => Promise<void>;
 }
 
+interface GlobalChatConversationContextValue {
+  currentConversationId: string | null;
+  initialMessages: UIMessage[];
+  isInitialized: boolean;
+  setCurrentConversationId: (id: string | null) => void;
+  loadConversation: (id: string) => Promise<void>;
+  createNewConversation: () => Promise<void>;
+  refreshConversation: () => Promise<void>;
+}
+
 const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
+const GlobalChatConversationContext = createContext<GlobalChatConversationContextValue | undefined>(undefined);
 
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // Conversation management state
@@ -258,10 +269,30 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     refreshConversation,
   ]);
 
+  // Conversation-only context value for consumers that should not re-render on message stream updates
+  const conversationContextValue: GlobalChatConversationContextValue = useMemo(() => ({
+    currentConversationId,
+    initialMessages,
+    isInitialized,
+    setCurrentConversationId,
+    loadConversation,
+    createNewConversation,
+    refreshConversation,
+  }), [
+    currentConversationId,
+    initialMessages,
+    isInitialized,
+    loadConversation,
+    createNewConversation,
+    refreshConversation,
+  ]);
+
   return (
-    <GlobalChatContext.Provider value={contextValue}>
-      {children}
-    </GlobalChatContext.Provider>
+    <GlobalChatConversationContext.Provider value={conversationContextValue}>
+      <GlobalChatContext.Provider value={contextValue}>
+        {children}
+      </GlobalChatContext.Provider>
+    </GlobalChatConversationContext.Provider>
   );
 }
 
@@ -272,6 +303,17 @@ export function useGlobalChat() {
   const context = useContext(GlobalChatContext);
   if (!context) {
     throw new Error('useGlobalChat must be used within a GlobalChatProvider');
+  }
+  return context;
+}
+
+/**
+ * Hook to access global conversation controls without subscribing to live message stream state.
+ */
+export function useGlobalChatConversation() {
+  const context = useContext(GlobalChatConversationContext);
+  if (!context) {
+    throw new Error('useGlobalChatConversation must be used within a GlobalChatProvider');
   }
   return context;
 }

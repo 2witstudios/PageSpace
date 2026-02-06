@@ -78,7 +78,8 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
-  const { setRightSidebarOpen, setRightSheetOpen } = useLayoutStore();
+  const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
+  const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -96,19 +97,18 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // AGENT STORE - for agent selection and conversation management
   // ============================================
-  const {
-    selectedAgent,
-    selectAgent,
-    initializeFromUrlOrCookie,
-    conversationId: agentConversationId,
-    conversationMessages: agentInitialMessages,
-    isConversationLoading: agentIsLoading,
-    setConversationMessages: setAgentStoreMessages,
-    createNewConversation: createAgentConversation,
-    loadMostRecentConversation,
-    setAgentStreaming,
-    setAgentStopStreaming,
-  } = usePageAgentDashboardStore();
+  const selectedAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
+  const selectAgent = usePageAgentDashboardStore((state) => state.selectAgent);
+  const initializeFromUrlOrCookie = usePageAgentDashboardStore((state) => state.initializeFromUrlOrCookie);
+  const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
+  const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
+  const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
+  const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
+  const loadMostRecentConversation = usePageAgentDashboardStore((state) => state.loadMostRecentConversation);
+  const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
+  const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
+  const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
@@ -172,7 +172,8 @@ const GlobalAssistantView: React.FC = () => {
   } = useMCPTools({ conversationId: currentConversationId });
 
   // Get drives from store
-  const { drives, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -307,6 +308,16 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const latestAgentMessagesRef = useRef(agentMessages);
+  const latestGlobalMessagesRef = useRef(globalLocalMessages);
+
+  useEffect(() => {
+    latestAgentMessagesRef.current = agentMessages;
+  }, [agentMessages]);
+
+  useEffect(() => {
+    latestGlobalMessagesRef.current = globalLocalMessages;
+  }, [globalLocalMessages]);
   const stop = useChatStop(currentConversationId, rawStop);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
@@ -317,20 +328,36 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // MESSAGE ACTIONS (shared hook)
   // ============================================
+  const agentSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestAgentMessagesRef.current)
+          : nextOrUpdater;
+      setAgentMessages(nextMessages);
+      setAgentStoreMessages(nextMessages);
+    },
+    [setAgentMessages, setAgentStoreMessages]
+  );
+
+  const globalSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestGlobalMessagesRef.current)
+          : nextOrUpdater;
+      setGlobalMessages(nextMessages);
+      setGlobalLocalMessages(nextMessages);
+    },
+    [setGlobalMessages, setGlobalLocalMessages]
+  );
+
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
     useMessageActions({
       agentId: selectedAgent?.id || null,
       conversationId: currentConversationId,
       messages,
-      setMessages: selectedAgent
-        ? (msgs) => {
-            setAgentMessages(msgs);
-            setAgentStoreMessages(msgs); // Sync to store
-          }
-        : (msgs) => {
-            setGlobalMessages(msgs);
-            setGlobalLocalMessages(msgs);
-          },
+      setMessages: selectedAgent ? agentSetMessages : globalSetMessages,
       regenerate,
     });
 
@@ -526,9 +553,6 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // HANDLERS
   // ============================================
-
-  // Get setActiveTab from store for sidebar tab control
-  const { setActiveTab } = usePageAgentDashboardStore();
 
   const handleNewConversation = async () => {
     if (selectedAgent) {
@@ -812,4 +836,4 @@ const GlobalAssistantView: React.FC = () => {
   );
 };
 
-export default GlobalAssistantView;
+export default React.memo(GlobalAssistantView);

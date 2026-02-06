@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
@@ -331,7 +331,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, children }: SortableTaskR
   );
 }
 
-export default function TaskListView({ page }: TaskListViewProps) {
+function TaskListView({ page }: TaskListViewProps) {
   const router = useRouter();
   const { user } = useAuth();
   const { permissions } = usePermissions(page.id);
@@ -348,7 +348,9 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const hasLoadedRef = useRef(false);
 
   // Use centralized socket store for proper authentication
-  const { socket, connectionStatus, connect } = useSocketStore();
+  const socket = useSocketStore((state) => state.socket);
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
+  const connect = useSocketStore((state) => state.connect);
 
   // Drag-and-drop sensors
   const sensors = useSensors(
@@ -1082,3 +1084,10 @@ export default function TaskListView({ page }: TaskListViewProps) {
     </div>
   );
 }
+
+export default memo(
+  TaskListView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.driveId === nextProps.page.driveId
+);

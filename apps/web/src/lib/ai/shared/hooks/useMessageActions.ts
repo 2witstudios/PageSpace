@@ -3,10 +3,12 @@
  * Used by both Agent engine and Global Assistant engine
  */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
+
+type SetMessagesAction = UIMessage[] | ((previousMessages: UIMessage[]) => UIMessage[]);
 
 interface UseMessageActionsOptions {
   /**
@@ -25,7 +27,7 @@ interface UseMessageActionsOptions {
   /**
    * Setter for messages (from useChat)
    */
-  setMessages: (messages: UIMessage[]) => void;
+  setMessages: (messages: SetMessagesAction) => void;
   /**
    * Regenerate function (from useChat)
    */
@@ -63,23 +65,31 @@ export function useMessageActions({
 }: UseMessageActionsOptions): UseMessageActionsResult {
   const isAgentMode = Boolean(agentId);
 
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
   // Edit a message
   const handleEdit = useCallback(
     async (messageId: string, newContent: string) => {
       if (!conversationId) return;
 
-      // Optimistically update the message in local state first
-      // This ensures the UI reflects the edit immediately, even if the API call fails
-      const updatedMessages = messages.map((m) => {
-        if (m.id !== messageId) return m;
-        return {
-          ...m,
-          parts: m.parts.map((part) =>
-            part.type === 'text' ? { ...part, text: newContent } : part
-          ),
-        };
-      });
-      setMessages(updatedMessages);
+      const originalMessage = messagesRef.current.find((message) => message.id === messageId);
+      if (!originalMessage) {
+        return;
+      }
+
+      // Optimistically apply the edit for responsive UI feedback.
+      setMessages((previousMessages) =>
+        previousMessages.map((message) => {
+          if (message.id !== messageId) return message;
+          return {
+            ...message,
+            parts: message.parts.map((part) =>
+              part.type === 'text' ? { ...part, text: newContent } : part
+            ),
+          };
+        })
+      );
 
       try {
         if (isAgentMode) {
@@ -114,11 +124,19 @@ export function useMessageActions({
           // Refetch failed — optimistic update already applied, server has the edit
         }
       } catch (error) {
+        // Roll back only the edited message to avoid clobbering unrelated updates.
+        setMessages((previousMessages) =>
+          previousMessages.map((message) =>
+            message.id === messageId ? originalMessage : message
+          )
+        );
+
         console.error('Failed to edit message:', error);
         toast.error('Failed to save edit. Your local changes may not persist.');
+        throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, messages, setMessages, onEditVersionChange]
+    [isAgentMode, agentId, conversationId, setMessages, onEditVersionChange]
   );
 
   // Delete a message
@@ -126,10 +144,17 @@ export function useMessageActions({
     async (messageId: string) => {
       if (!conversationId) return;
 
-      // Optimistically update local state first
-      const previousMessages = [...messages];
-      const filtered = messages.filter((m) => m.id !== messageId);
-      setMessages(filtered);
+      const deletedMessage = messagesRef.current.find((message) => message.id === messageId);
+      if (!deletedMessage) {
+        return;
+      }
+
+      const previousIndex = messagesRef.current.findIndex((message) => message.id === messageId);
+
+      // Optimistically remove the message for fast UI feedback.
+      setMessages((previousMessages) =>
+        previousMessages.filter((message) => message.id !== messageId)
+      );
 
       try {
         if (isAgentMode) {
@@ -142,49 +167,64 @@ export function useMessageActions({
 
         toast.success('Message deleted');
       } catch (error) {
+        // Roll back only the deleted message so we don't clobber unrelated updates
+        // that may have arrived while the request was in flight.
+        setMessages((previousMessages) => {
+          if (previousMessages.some((message) => message.id === messageId)) {
+            return previousMessages;
+          }
+
+          const nextMessages = [...previousMessages];
+          const safeInsertIndex = Math.min(
+            Math.max(previousIndex, 0),
+            nextMessages.length
+          );
+          nextMessages.splice(safeInsertIndex, 0, deletedMessage);
+
+          return nextMessages;
+        });
+
         console.error('Failed to delete message:', error);
-        // Revert optimistic update on failure
-        setMessages(previousMessages);
         toast.error('Failed to delete message');
         throw error;
       }
     },
-    [isAgentMode, agentId, conversationId, messages, setMessages]
+    [isAgentMode, agentId, conversationId, setMessages]
   );
 
   // Retry/regenerate the last response
   const handleRetry = useCallback(async () => {
     if (!conversationId) return;
 
+    const currentMessages = messagesRef.current;
+
     // Before regenerating, clean up old assistant responses after the last user message
-    const lastUserMsgIndex = messages.map((m) => m.role).lastIndexOf('user');
+    const lastUserMsgIndex = currentMessages.map((m) => m.role).lastIndexOf('user');
 
     if (lastUserMsgIndex !== -1) {
       // Get all assistant messages after the last user message
-      const assistantMessagesToDelete = messages
+      const assistantMessagesToDelete = currentMessages
         .slice(lastUserMsgIndex + 1)
         .filter((m) => m.role === 'assistant');
 
-      // Delete them from the database
-      for (const msg of assistantMessagesToDelete) {
-        try {
-          if (isAgentMode) {
-            await del(
-              `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
-            );
-          } else {
-            await del(`/api/ai/global/${conversationId}/messages/${msg.id}`);
-          }
-        } catch (error) {
-          console.error('Failed to delete old assistant message:', error);
-        }
-      }
-
-      // Remove them from state
-      const filteredMessages = messages.filter(
-        (m) => !assistantMessagesToDelete.some((toDelete) => toDelete.id === m.id)
+      // Delete them from the database in parallel — calls are independent
+      await Promise.allSettled(
+        assistantMessagesToDelete.map((msg) => {
+          const url = isAgentMode
+            ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages/${msg.id}`
+            : `/api/ai/global/${conversationId}/messages/${msg.id}`;
+          return del(url).catch((error) => {
+            console.error('Failed to delete old assistant message:', error);
+          });
+        })
       );
-      setMessages(filteredMessages);
+
+      // Remove them from state using functional updater to avoid stale snapshot
+      setMessages((previousMessages) =>
+        previousMessages.filter(
+          (m) => !assistantMessagesToDelete.some((toDelete) => toDelete.id === m.id)
+        )
+      );
     }
 
     // Now regenerate with a clean slate
@@ -196,7 +236,7 @@ export function useMessageActions({
           }
         : undefined,
     });
-  }, [isAgentMode, agentId, conversationId, messages, setMessages, regenerate]);
+  }, [isAgentMode, agentId, conversationId, setMessages, regenerate]);
 
   // Compute last message IDs for UI
   const lastAssistantMessageId = messages

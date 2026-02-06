@@ -745,6 +745,8 @@ export async function POST(request: Request) {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
+          let startChunkSent = false;
+
           // Send the server-generated message ID to the client at stream start
           // streamId is passed via X-Stream-Id header (see result.toUIMessageStreamResponse below)
           // Wrapped in try/catch to handle early disconnect - continue processing anyway
@@ -753,6 +755,7 @@ export async function POST(request: Request) {
               type: 'start',
               messageId: serverAssistantMessageId,
             });
+            startChunkSent = true;
           } catch {
             // Client disconnected before first write - continue processing
             // to ensure onFinish fires and the message is saved
@@ -813,6 +816,21 @@ export async function POST(request: Request) {
           // will continue processing server-side even if writes fail
           for await (const chunk of aiResult.toUIMessageStream()) {
             try {
+              // We already emitted a start chunk with a server-controlled message ID.
+              // Skip any additional start chunks so client/server message IDs stay aligned.
+              if (chunk.type === 'start') {
+                if (startChunkSent) {
+                  continue;
+                }
+
+                writer.write({
+                  type: 'start',
+                  messageId: serverAssistantMessageId,
+                });
+                startChunkSent = true;
+                continue;
+              }
+
               writer.write(chunk);
             } catch {
               // Client disconnected - continue processing to ensure onFinish fires

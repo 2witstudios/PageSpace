@@ -10,7 +10,8 @@ export default function TrashPage() {
   const params = useParams();
   const driveId = params.driveId as string;
   const { tree, isLoading, isError, mutate } = usePageTree(driveId, true);
-  const { drives, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
   
   const drive = drives.find(d => d.id === driveId);
 

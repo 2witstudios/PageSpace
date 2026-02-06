@@ -18,7 +18,8 @@ const fetcher = async (url: string) => {
 };
 
 export function EditorToggles() {
-  const { activeView, setActiveView } = useDocumentStore();
+  const activeView = useDocumentStore((state) => state.activeView);
+  const setActiveView = useDocumentStore((state) => state.setActiveView);
   const params = useParams();
   const pageId = params.pageId as string;
   const isMobile = useMobile();
