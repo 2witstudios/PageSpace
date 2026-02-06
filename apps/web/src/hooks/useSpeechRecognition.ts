@@ -127,7 +127,7 @@ export function useSpeechRecognition({
     }
   }, []);
 
-  const toggleListening = useCallback(() => {
+  const toggleListening = useCallback(async () => {
     const recognition = recognitionRef.current;
     if (!recognition) return;
 
@@ -136,8 +136,27 @@ export function useSpeechRecognition({
 
     if (isListening) {
       recognition.stop();
-    } else {
+      return;
+    }
+
+    // Explicitly request microphone permission before starting recognition.
+    // SpeechRecognition.start() alone does NOT trigger the browser's permission
+    // prompt in many cases (non-secure contexts, previously denied, etc.).
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Permission granted - stop the stream immediately, we only needed the prompt
+      stream.getTracks().forEach((track) => track.stop());
       recognition.start();
+    } catch (err) {
+      const message =
+        err instanceof DOMException && err.name === 'NotAllowedError'
+          ? 'Microphone access denied. Check your browser permissions.'
+          : err instanceof DOMException && err.name === 'NotFoundError'
+            ? 'No microphone found. Please connect a microphone.'
+            : 'Could not access microphone.';
+      setError(message);
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = setTimeout(() => setError(null), 6000);
     }
   }, [isListening, clearError]);
 
