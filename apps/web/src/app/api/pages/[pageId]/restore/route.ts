@@ -3,7 +3,7 @@ import { pages, db, and, eq } from '@pagespace/db';
 import { loggers, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring';
 
@@ -12,7 +12,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 async function recursivelyRestore(
   pageId: string,
   tx: typeof db,
-  context: { userId: string; actorEmail: string; actorDisplayName?: string; changeGroupId: string; changeGroupType: 'user' | 'ai' | 'automation' | 'system' }
+  context: { userId: string; actorEmail: string; actorDisplayName?: string; changeGroupId: string; changeGroupType: 'user' | 'ai' | 'automation' | 'system'; metadata?: Record<string, unknown> }
 ) {
   const [pageRecord] = await tx
     .select({ revision: pages.revision })
@@ -85,6 +85,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const actorInfo = await getActorInfo(auth.userId);
     const changeGroupId = createChangeGroupId();
     const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
+    const isMCP = isMCPAuthResult(auth);
 
     await db.transaction(async (tx) => {
       await recursivelyRestore(pageId, tx, {
@@ -93,6 +94,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         actorDisplayName: actorInfo.actorDisplayName ?? undefined,
         changeGroupId,
         changeGroupType,
+        metadata: isMCP ? { source: 'mcp' } : undefined,
       });
     });
 

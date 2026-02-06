@@ -39,6 +39,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({

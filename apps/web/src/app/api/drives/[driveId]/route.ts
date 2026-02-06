@@ -9,7 +9,7 @@ import {
 } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 
@@ -138,6 +138,7 @@ export async function PATCH(
       newValues.drivePrompt = updatedDrive?.drivePrompt ?? drive.drivePrompt;
     }
 
+    const isMCP = isMCPAuthResult(auth);
     logDriveActivity(userId, 'update', {
       id: driveId,
       name: updatedDrive?.name ?? drive.name,
@@ -147,6 +148,7 @@ export async function PATCH(
         updatedFields,
         previousName: drive.name,
         newName: validatedBody.name,
+        ...(isMCP && { source: 'mcp' }),
       },
       previousValues: Object.keys(previousValues).length > 0 ? previousValues : undefined,
       newValues: Object.keys(newValues).length > 0 ? newValues : undefined,
@@ -219,11 +221,13 @@ export async function DELETE(
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
+    const isMCP = isMCPAuthResult(auth);
     logDriveActivity(userId, 'trash', {
       id: driveId,
       name: drive.name,
     }, {
       ...actorInfo,
+      metadata: isMCP ? { source: 'mcp' } : undefined,
       previousValues: { isTrashed: drive.isTrashed },
       newValues: { isTrashed: true },
     });

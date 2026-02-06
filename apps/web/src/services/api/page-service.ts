@@ -500,7 +500,7 @@ export const pageService = {
   /**
    * Trash a page (soft delete)
    */
-  async trashPage(pageId: string, userId: string, options: { trashChildren: boolean }): Promise<TrashPageResult> {
+  async trashPage(pageId: string, userId: string, options: { trashChildren: boolean; metadata?: Record<string, unknown> }): Promise<TrashPageResult> {
     // Check authorization
     const canDelete = await canUserDeletePage(userId, pageId);
     if (!canDelete) {
@@ -530,7 +530,7 @@ export const pageService = {
       actorDisplayName: actorInfo.actorDisplayName ?? undefined,
       changeGroupId,
       changeGroupType,
-      metadata: { trashChildren: options.trashChildren },
+      metadata: { ...options.metadata, trashChildren: options.trashChildren },
     };
 
     await db.transaction(async (tx) => {

@@ -3,9 +3,11 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, inArray, desc, isNull } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { createChangeGroupId } from '@pagespace/lib/monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -169,6 +171,30 @@ export async function POST(request: Request) {
         nextPosition += 1;
       }
     });
+
+    // Log activity for each moved page
+    const actorInfo = await getActorInfo(userId);
+    const isMCP = isMCPAuthResult(auth);
+    const changeGroupId = createChangeGroupId();
+    for (const page of sourcePages) {
+      logPageActivity(userId, 'move', {
+        id: page.id,
+        title: page.title ?? undefined,
+        driveId: targetDriveId,
+      }, {
+        ...actorInfo,
+        changeGroupId,
+        changeGroupType: 'user',
+        updatedFields: ['driveId', 'parentId', 'position'],
+        previousValues: { driveId: page.driveId, parentId: page.parentId },
+        newValues: { driveId: targetDriveId, parentId: targetParentId },
+        metadata: {
+          bulkOperation: 'move',
+          totalPages: pageIds.length,
+          ...(isMCP && { source: 'mcp' }),
+        },
+      });
+    }
 
     // Invalidate caches and broadcast events
     for (const driveId of affectedDriveIds) {

@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -64,7 +65,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 
@@ -278,7 +279,8 @@ describe('POST /api/pages', () => {
           driveId: mockDriveId,
           parentId: 'parent_123',
           content: '<p>Custom content</p>',
-        })
+        }),
+        undefined,
       );
     });
 
@@ -306,7 +308,24 @@ describe('POST /api/pages', () => {
           enabledTools: ['read_page'],
           aiProvider: 'anthropic',
           aiModel: 'claude-3',
-        })
+        }),
+        undefined,
+      );
+    });
+
+    it('passes MCP context when authenticated via MCP', async () => {
+      vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+      await POST(createRequest({
+        title: 'MCP Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      expect(pageService.createPage).toHaveBeenCalledWith(
+        mockUserId,
+        expect.objectContaining({ title: 'MCP Page' }),
+        { context: { metadata: { source: 'mcp' } } },
       );
     });
   });

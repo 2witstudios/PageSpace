@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { pageReorderService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -33,11 +33,13 @@ export async function PATCH(request: Request) {
     }
 
     // Execute the reorder operation
+    const isMCP = isMCPAuthResult(auth);
     const result = await pageReorderService.reorderPage({
       pageId,
       newParentId,
       newPosition,
       userId: auth.userId,
+      metadata: isMCP ? { source: 'mcp' } : undefined,
     });
 
     if (!result.success) {
