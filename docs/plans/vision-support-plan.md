@@ -7,7 +7,7 @@ Enable vision-capable AI models in PageSpace to receive and process images direc
 This plan covers **Phase 1: Direct Image Upload to Chat** (images attached to user messages). Phase 2 (AI reading images from the drive via tool calling) is deferred as a separate effort.
 
 **Applies to all three AI surfaces:**
-1. **AI Chat Pages** (AiChatView) — dedicated chat pages with history/settings tabs
+1. **AI_CHAT pages** (AiChatView) — dedicated AI chat pages with history/settings tabs
 2. **Global Assistant** (GlobalAssistantView + SidebarChatTab) — workspace-level assistant in middle panel and right sidebar
 3. **Page Agents** (SidebarChatTab agent mode) — page-level agents in the right sidebar
 
@@ -112,8 +112,8 @@ Place the attachment button **in the textarea row**, to the left of the textarea
 4. **No footer changes** — the footer remains untouched
 
 **Why this works for all three surfaces:**
-- **AI Chat Pages** (variant="main"): Full space, paperclip fits naturally in the `flex items-start gap-2 p-3` row
-- **Global Assistant** (variant="main"): Same layout as AI Chat Pages
+- **AI_CHAT pages** (variant="main"): Full space, paperclip fits naturally in the `flex items-start gap-2 p-3` row
+- **Global Assistant** (variant="main"): Same layout as AI_CHAT pages
 - **Sidebar** (variant="sidebar"): Narrower but the paperclip is only 36px wide, and thumbnails scroll horizontally. Provider selector is already moved above the input in sidebar, so there's room
 
 **Current textarea row layout** (`ChatInput.tsx` line 180):
@@ -285,7 +285,7 @@ Since all three surfaces use `ChatInput`, the component changes in Layer 2 propa
 3. Include files in the `sendMessage` call
 4. Determine `hasVision` from the current model
 
-#### 3.1 AI Chat Pages (AiChatView)
+#### 3.1 AI_CHAT Pages (AiChatView)
 
 **File:** `apps/web/src/components/layout/middle-content/page-views/ai-page/AiChatView.tsx`
 
@@ -564,7 +564,7 @@ interface FilePart {
 - [ ] Send oversized image → client resizes before sending
 - [ ] Send non-image file → rejected with error
 - [ ] Sidebar layout → images don't overflow, scroll works
-- [ ] AI Chat Page → images render in message bubbles
+- [ ] AI_CHAT page → images render in message bubbles
 - [ ] Global Assistant (middle panel) → vision works
 - [ ] Global Assistant (sidebar) → vision works in compact view
 - [ ] Page Agent (sidebar) → vision works with agent's model
@@ -576,7 +576,7 @@ interface FilePart {
 1. **`useImageAttachments` hook + `image-resize` utility** — foundation, testable independently
 2. **`AttachButton` + `AttachmentPreviewStrip`** — new components, visual-only
 3. **`ChatInput` + `ChatTextarea` modifications** — integrate attach button, paste, preview into shared input
-4. **`AiChatView` integration** — wire up hook + sendMessage for AI Chat Pages
+4. **`AiChatView` integration** — wire up hook + sendMessage for AI_CHAT pages
 5. **`GlobalAssistantView` + `SidebarChatTab` integration** — wire up for global assistant + page agents
 6. **`message-types.ts` + `useGroupedParts`** — type system updates for file parts
 7. **`ImageMessageContent` + `MessageRenderer` + `CompactMessageRenderer`** — display images in messages
