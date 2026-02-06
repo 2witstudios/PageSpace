@@ -3,6 +3,8 @@ import { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
@@ -252,6 +254,9 @@ const SidebarChatTab: React.FC = () => {
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
+
+  // Image attachments for vision support
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -530,7 +535,8 @@ const SidebarChatTab: React.FC = () => {
   }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
 
   const handleSendMessage = useCallback(async () => {
-    if (!input.trim() || !currentConversationId) return;
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
     // Derive isReadOnly from writeMode (inverted)
     const isReadOnly = !writeMode;
@@ -556,8 +562,9 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ text: input }, { body });
+    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body });
     setInput('');
+    clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -571,6 +578,8 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
+    getFilesForSend,
+    clearFiles,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -920,6 +929,12 @@ const SidebarChatTab: React.FC = () => {
           onVoiceModeClick={handleVoiceModeToggle}
           isVoiceModeActive={isVoiceModeEnabled}
           isVoiceModeAvailable={isOpenAIConfigured}
+          attachments={attachments}
+          onAddFiles={addFiles}
+          onRemoveFile={removeFile}
+          hasVision={hasVisionCapability(
+            (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
+          )}
         />
       </div>
 

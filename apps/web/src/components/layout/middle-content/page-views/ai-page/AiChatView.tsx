@@ -49,6 +49,8 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -85,6 +87,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
 
+  // Image attachments for vision support
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
+
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
   const inputRef = useRef<ChatInputRef>(null);
@@ -104,6 +109,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setSelectedModel,
     isProviderConfigured,
   } = useProviderSettings({ pageId: page.id });
+
+  const hasVision = hasVisionCapability(selectedModel || '');
 
   const {
     isDesktop,
@@ -349,14 +356,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const sendMessageWithContext = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) {
+    const files = getFilesForSend();
+    if (!trimmed && files.length === 0) {
       return;
     }
 
     const pageContext = await buildFreshPageContext();
 
     sendMessage(
-      { text: trimmed },
+      { text: trimmed, files: files.length > 0 ? files : undefined },
       {
         body: {
           chatId: page.id,
@@ -380,6 +388,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     isReadOnly,
     webSearchEnabled,
     mcpToolSchemas,
+    getFilesForSend,
   ]);
 
   const handleSendMessage = useCallback(() => {
@@ -387,16 +396,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
     }
-    if (!input.trim()) return;
+    if (!input.trim() && attachments.length === 0) return;
 
     void sendMessageWithContext(input);
     setInput('');
+    clearFiles();
     inputRef.current?.clear();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     isReadOnly,
     input,
+    attachments.length,
     sendMessageWithContext,
+    clearFiles,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -642,6 +654,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 onVoiceModeClick={handleVoiceModeToggle}
                 isVoiceModeActive={isVoiceModeEnabled}
                 isVoiceModeAvailable={isOpenAIConfigured}
+                attachments={attachments}
+                onAddFiles={addFiles}
+                onRemoveFile={removeFile}
+                hasVision={hasVision}
               />
             )}
           />

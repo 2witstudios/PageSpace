@@ -65,6 +65,8 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
+import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -98,6 +100,13 @@ export async function POST(request: Request) {
     }
     userId = authResult.userId;
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
+
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.ai.warn('AI Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
 
     // Parse request body for AI SDK v5 pattern
     const requestBody = await request.json();
@@ -182,6 +191,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
+    // Image security validation — validate file parts in the user message
+    const userMessageForValidation = messages[messages.length - 1];
+    const messageHasImages = userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation);
+    if (messageHasImages) {
+      const imageValidation = validateUserMessageFileParts(userMessageForValidation);
+      if (!imageValidation.valid) {
+        loggers.ai.warn('AI Chat API: Image validation failed', { error: imageValidation.error });
+        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+      }
+    }
+
     // Check if user has permission to view and edit this AI chat page
     const maskedUserId = maskIdentifier(userId);
     const maskedChatId = maskIdentifier(chatId);
@@ -234,6 +254,18 @@ export async function POST(request: Request) {
     if (!page) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Vision capability gate — reject images sent to non-vision models
+    if (messageHasImages) {
+      const effectiveModel = selectedModel || page.aiModel;
+      if (effectiveModel && !hasVisionCapability(effectiveModel)) {
+        loggers.ai.warn('AI Chat API: Images sent to non-vision model', { model: effectiveModel });
+        return NextResponse.json(
+          { error: `The selected model "${effectiveModel}" does not support image attachments. Please choose a vision-capable model.` },
+          { status: 400 }
+        );
+      }
     }
 
     // Extract custom agent configuration from page
@@ -303,17 +335,16 @@ export async function POST(request: Request) {
         
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        await db.insert(chatMessages).values({
-          id: messageId,
+        await saveMessageToDatabase({
+          messageId,
           pageId: chatId,
-          conversationId, // Group messages into conversation sessions
+          conversationId,
           userId,
           role: 'user',
           content: messageContent,
-          toolCalls: null,
-          toolResults: null,
-          createdAt: new Date(),
-          isActive: true,
+          toolCalls: undefined,
+          toolResults: undefined,
+          uiMessage: userMessage,
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');

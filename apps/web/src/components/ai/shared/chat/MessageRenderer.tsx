@@ -11,7 +11,8 @@ import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart } from './message-types';
+import { ImageMessageContent } from './ImageMessageContent';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -359,6 +360,13 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+              />
+            );
+          } else if (isFileGroupPart(group)) {
+            return (
+              <ImageMessageContent
+                key={`${message.id}-file-${index}`}
+                parts={group.parts}
               />
             );
           } else if (isProcessedToolPart(group)) {
