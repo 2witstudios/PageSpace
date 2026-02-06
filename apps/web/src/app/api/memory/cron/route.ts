@@ -14,8 +14,8 @@
  *
  * Paying users only: 'pro', 'founder', 'business' subscription tiers
  *
- * Security: Localhost-only access (zero trust - no secret comparison)
- * Trigger via: curl http://localhost:3000/api/memory/cron
+ * Security: CRON_SECRET Bearer token + internal network origin check
+ * Trigger via: curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/memory/cron
  */
 
 import { NextResponse } from 'next/server';
@@ -45,7 +45,7 @@ const PAYING_TIERS = ['pro', 'founder', 'business'];
 const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
-  // Zero trust: only allow requests from localhost (no secret comparison)
+  // Validate cron secret + internal network origin
   const authError = validateCronRequest(request);
   if (authError) {
     return authError;

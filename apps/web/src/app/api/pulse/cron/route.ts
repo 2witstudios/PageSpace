@@ -103,7 +103,7 @@ When you see content diffs, understand WHAT was written, not just that something
 Keep it to 1-3 sentences. Sound like a person, not a bot.`;
 
 export async function POST(req: Request) {
-  // Zero trust: only allow requests from localhost (no secret comparison)
+  // Validate cron secret + internal network origin
   const authError = validateCronRequest(req);
   if (authError) {
     return authError;
