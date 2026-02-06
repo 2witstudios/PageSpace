@@ -56,6 +56,10 @@ self.addEventListener('fetch', (event) => {
   // Skip cross-origin requests
   if (url.origin !== self.location.origin) return;
 
+  // Let the browser handle Next.js build assets directly.
+  // Avoid SW-managed cache for runtime chunks to prevent stale bundle mismatches.
+  if (url.pathname.startsWith('/_next/')) return;
+
   // API requests: network-first with cache fallback
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(networkFirstWithCache(request));
@@ -167,8 +171,6 @@ async function networkFirstWithOfflineFallback(request) {
  */
 function isStaticAsset(pathname) {
   const staticExtensions = [
-    '.js',
-    '.css',
     '.png',
     '.jpg',
     '.jpeg',
