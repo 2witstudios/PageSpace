@@ -13,6 +13,7 @@ import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
+import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
@@ -20,18 +21,30 @@ const GOOGLE_READ_ONLY_ERROR =
   'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
 
 /**
- * Parse a date string that can be either ISO 8601 or natural language
- * Uses chrono-node for natural language parsing
+ * Parse a date string that can be either ISO 8601 or natural language.
+ * Uses chrono-node for natural language parsing with timezone awareness.
+ * @param input - Date string (ISO 8601 or natural language)
+ * @param referenceDate - Reference date for relative parsing (e.g., "tomorrow")
+ * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
  */
-function parseDateTime(input: string, referenceDate?: Date): Date {
+function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
   // Try ISO 8601 first
   const isoDate = new Date(input);
   if (!isNaN(isoDate.getTime())) {
     return isoDate;
   }
 
+  // Build timezone-aware reference for chrono-node so that
+  // natural language like "tomorrow at 3pm" is interpreted in the user's timezone
+  const ref: { instant: Date; timezone?: number } = {
+    instant: referenceDate ?? new Date(),
+  };
+  if (timezone) {
+    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
+  }
+
   // Try natural language parsing with chrono-node
-  const parsed = chrono.parseDate(input, referenceDate ?? new Date(), { forwardDate: true });
+  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
   if (!parsed) {
     throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
   }
@@ -114,7 +127,7 @@ export const calendarWriteTools = {
       description: z.string().max(10000).nullable().optional().describe('Event description'),
       location: z.string().max(1000).nullable().optional().describe('Event location'),
       allDay: z.boolean().optional().describe('Whether this is an all-day event (default: false)'),
-      timezone: z.string().optional().describe('Timezone for the event (default: UTC, e.g., "America/New_York")'),
+      timezone: z.string().optional().describe('Timezone for the event (defaults to user\'s timezone, e.g., "America/New_York")'),
       recurrence: recurrenceRuleSchema.describe('Recurrence rule for repeating events'),
       visibility: z
         .enum(['DRIVE', 'ATTENDEES_ONLY', 'PRIVATE'])
@@ -147,20 +160,23 @@ export const calendarWriteTools = {
         throw new Error('User authentication required');
       }
 
-      // Apply defaults
+      // Get user timezone from execution context for timezone-aware operations
+      const userTimezone = (ctx as ToolExecutionContext)?.timezone;
+
+      // Apply defaults - prefer user's timezone over UTC when AI doesn't specify one
       const allDay = allDayInput ?? false;
-      const timezone = timezoneInput ?? 'UTC';
+      const timezone = normalizeTimezone(timezoneInput ?? userTimezone);
       const visibility = visibilityInput ?? 'DRIVE';
       const color = colorInput ?? 'default';
 
       try {
-        // Parse dates
-        const parsedStartAt = parseDateTime(startAt);
-        const parsedEndAt = parseDateTime(endAt, parsedStartAt);
+        // Parse dates using user's timezone for correct natural language interpretation
+        const parsedStartAt = parseDateTime(startAt, undefined, timezone);
+        const parsedEndAt = parseDateTime(endAt, parsedStartAt, timezone);
 
         // Default end time to 1 hour after start if they're the same
         if (parsedEndAt.getTime() === parsedStartAt.getTime()) {
-          parsedEndAt.setHours(parsedEndAt.getHours() + 1);
+          parsedEndAt.setTime(parsedEndAt.getTime() + 60 * 60 * 1000);
         }
 
         if (parsedEndAt <= parsedStartAt) {
@@ -285,7 +301,7 @@ export const calendarWriteTools = {
             visibility: event.visibility,
             attendeesInvited: otherAttendees.length,
           },
-          summary: `Created "${title}" for ${parsedStartAt.toLocaleDateString()} at ${parsedStartAt.toLocaleTimeString()}${otherAttendees.length > 0 ? ` with ${otherAttendees.length} attendee${otherAttendees.length === 1 ? '' : 's'}` : ''}`,
+          summary: `Created "${title}" for ${formatDateInTimezone(parsedStartAt, timezone)}${otherAttendees.length > 0 ? ` with ${otherAttendees.length} attendee${otherAttendees.length === 1 ? '' : 's'}` : ''}`,
           stats: {
             eventCount: 1,
             attendeesInvited: otherAttendees.length,
@@ -365,9 +381,10 @@ export const calendarWriteTools = {
           };
         }
 
-        // Parse dates if provided
-        const parsedStartAt = startAt ? parseDateTime(startAt) : undefined;
-        const parsedEndAt = endAt ? parseDateTime(endAt, parsedStartAt ?? event.startAt) : undefined;
+        // Parse dates if provided, using user timezone for correct interpretation
+        const updateTimezone = timezone ?? event.timezone ?? (ctx as ToolExecutionContext)?.timezone;
+        const parsedStartAt = startAt ? parseDateTime(startAt, undefined, updateTimezone) : undefined;
+        const parsedEndAt = endAt ? parseDateTime(endAt, parsedStartAt ?? event.startAt, updateTimezone) : undefined;
 
         // Validate dates
         const newStartAt = parsedStartAt ?? event.startAt;

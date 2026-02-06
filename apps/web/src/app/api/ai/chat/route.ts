@@ -736,7 +736,8 @@ export async function POST(request: Request) {
     }
     
     // Build timestamp system prompt for temporal awareness
-    const timestampSystemPrompt = buildTimestampSystemPrompt();
+    const userTimezone = user?.timezone ?? undefined;
+    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
@@ -802,6 +803,7 @@ export async function POST(request: Request) {
             abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
             experimental_context: {
               userId,
+              timezone: userTimezone,
               aiProvider: currentProvider,
               aiModel: currentModel,
               conversationId,
@@ -820,7 +822,7 @@ export async function POST(request: Request) {
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId, AI context, location context, and model capabilities to tools
+            }, // Pass userId, timezone, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {

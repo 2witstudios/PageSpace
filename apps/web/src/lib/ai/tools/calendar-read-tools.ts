@@ -15,6 +15,7 @@ import {
 } from '@pagespace/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { type ToolExecutionContext } from '../core';
+import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone } from '../core/timestamp-utils';
 
 /**
  * Check if user can access an event based on visibility rules
@@ -458,7 +459,7 @@ export const calendarReadTools = {
         return {
           success: true,
           data: { event: formatted },
-          summary: `Event "${event.title}" on ${event.startAt.toLocaleDateString()} at ${event.startAt.toLocaleTimeString()}`,
+          summary: `Event "${event.title}" on ${formatDateInTimezone(event.startAt, (ctx as ToolExecutionContext)?.timezone ?? event.timezone)}`,
           stats: {
             attendeeCount: event.attendees?.length ?? 0,
             ...(rsvpSummary && { rsvpSummary }),
@@ -605,7 +606,8 @@ export const calendarReadTools = {
           orderBy: [calendarEvents.startAt],
         });
 
-        // Find free slots
+        // Find free slots using user's timezone for working hour boundaries
+        const userTz = normalizeTimezone((ctx as ToolExecutionContext)?.timezone);
         const durationMs = durationMinutes * 60 * 1000;
         const freeSlots: Array<{ start: string; end: string; durationMinutes: number }> = [];
 
@@ -627,15 +629,38 @@ export const calendarReadTools = {
           }
         }
 
-        // Iterate through each day in the range
-        const currentDate = new Date(parsedStartDate);
-        currentDate.setHours(0, 0, 0, 0);
+        // Helper: get the UTC time representing a specific hour on the calendar day
+        // that `refDate` falls on in the user's timezone.
+        // Uses two-pass offset resolution (same as getStartOfTodayInTimezone) so that
+        // DST boundaries don't produce an incorrect UTC instant.
+        function getHourInUserTz(refDate: Date, hour: number): Date {
+          const fmt = new Intl.DateTimeFormat('en-US', {
+            timeZone: userTz,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          });
+          const parts = fmt.formatToParts(refDate);
+          const y = parseInt(parts.find(p => p.type === 'year')?.value ?? '0', 10);
+          const m = parseInt(parts.find(p => p.type === 'month')?.value ?? '0', 10);
+          const d = parseInt(parts.find(p => p.type === 'day')?.value ?? '0', 10);
+          const naiveUtcMs = Date.UTC(y, m - 1, d, hour, 0, 0, 0);
 
-        while (currentDate < parsedEndDate) {
-          const dayStart = new Date(currentDate);
-          dayStart.setHours(workingHoursStart, 0, 0, 0);
-          const dayEnd = new Date(currentDate);
-          dayEnd.setHours(workingHoursEnd, 0, 0, 0);
+          // Pass 1: compute offset at the naive UTC point
+          const offsetMs1 = getTimezoneOffsetMinutes(userTz, new Date(naiveUtcMs)) * 60 * 1000;
+          const candidate = new Date(naiveUtcMs - offsetMs1);
+
+          // Pass 2: recompute offset at the candidate; if DST shifted, use the corrected value
+          const offsetMs2 = getTimezoneOffsetMinutes(userTz, candidate) * 60 * 1000;
+          return new Date(naiveUtcMs - offsetMs2);
+        }
+
+        // Iterate through each day in the range (using timezone-aware day boundaries)
+        let cursor = getHourInUserTz(parsedStartDate, 0); // midnight of first day in user's tz
+
+        while (cursor.getTime() < parsedEndDate.getTime()) {
+          const dayStart = getHourInUserTz(cursor, workingHoursStart);
+          const dayEnd = getHourInUserTz(cursor, workingHoursEnd);
 
           // Clamp to query range
           const effectiveStart = Math.max(dayStart.getTime(), parsedStartDate.getTime());
@@ -671,8 +696,8 @@ export const calendarReadTools = {
             }
           }
 
-          // Move to next day
-          currentDate.setDate(currentDate.getDate() + 1);
+          // Advance to next day (midnight of next day in user's timezone)
+          cursor = getHourInUserTz(new Date(cursor.getTime() + 25 * 60 * 60 * 1000), 0);
         }
 
         // Limit to reasonable number of slots
