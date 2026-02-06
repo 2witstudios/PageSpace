@@ -650,11 +650,16 @@ MENTION PROCESSING:
     // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
     try {
       const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-      const currentDriveId = locationContext?.currentDrive?.id || null;
+      let currentDriveId = locationContext?.currentDrive?.id || null;
       let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
       if (currentDriveId) {
         const access = await getDriveAccess(currentDriveId, userId);
-        userDriveRole = access.role;
+        if (!access.isMember) {
+          // User is not a member of this drive — do not resolve drive-scoped integrations
+          currentDriveId = null;
+        } else {
+          userDriveRole = access.role;
+        }
       }
       const integrationTools = await resolveGlobalAssistantIntegrationTools({
         userId,
