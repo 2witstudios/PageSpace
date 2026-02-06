@@ -63,7 +63,7 @@ export function InputPositioner({
   return (
     <motion.div
       className={cn(
-        'absolute z-10 left-0 right-0',
+        'absolute z-30 left-0 right-0',
         // Horizontal padding varies by state
         isCentered ? 'px-6' : 'px-4',
         className
