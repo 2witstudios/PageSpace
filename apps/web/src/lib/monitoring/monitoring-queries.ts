@@ -433,7 +433,7 @@ export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
     .orderBy(desc(apiMetrics.duration))
     .limit(20);
 
-  // Get performance by endpoint (using apiMetrics instead of performanceMetrics)
+  // Get performance by endpoint
   const metricTypes = await db
     .select({
       metric: apiMetrics.endpoint,

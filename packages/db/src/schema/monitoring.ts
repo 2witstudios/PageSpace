@@ -11,7 +11,6 @@ import {
   jsonb,
   index,
   real,
-  uuid,
   pgEnum,
   check
 } from 'drizzle-orm/pg-core';
@@ -23,8 +22,6 @@ import { drives, pages } from './core';
 // Enums
 export const logLevelEnum = pgEnum('log_level', ['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
 export const httpMethodEnum = pgEnum('http_method', ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']);
-export const subscriptionTierEnum = pgEnum('subscription_tier', ['free', 'pro', 'business', 'founder']);
-
 /**
  * System logs - structured application logs
  */
@@ -206,38 +203,6 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
 }));
 
 /**
- * Performance metrics - track application performance
- */
-export const performanceMetrics = pgTable('performance_metrics', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
-  
-  // Metric details
-  metric: text('metric').notNull(), // page_load, db_query, file_upload, etc.
-  value: real('value').notNull(),
-  unit: text('unit').notNull(), // ms, bytes, count, percent
-  
-  // Context
-  userId: text('user_id'),
-  sessionId: text('session_id'),
-  pageId: text('page_id'),
-  driveId: text('drive_id'),
-  
-  // Additional details
-  metadata: jsonb('metadata'),
-  
-  // System metrics
-  cpuUsage: real('cpu_usage'), // percentage
-  memoryUsage: real('memory_usage'), // MB
-  diskUsage: real('disk_usage'), // MB
-}, (table) => ({
-  timestampIdx: index('idx_performance_timestamp').on(table.timestamp),
-  metricIdx: index('idx_performance_metric').on(table.metric, table.timestamp),
-  valueIdx: index('idx_performance_value').on(table.value),
-  userIdIdx: index('idx_performance_user_id').on(table.userId),
-}));
-
-/**
  * Error logs - detailed error tracking
  */
 export const errorLogs = pgTable('error_logs', {
@@ -277,78 +242,6 @@ export const errorLogs = pgTable('error_logs', {
   userIdIdx: index('idx_errors_user_id').on(table.userId),
   resolvedIdx: index('idx_errors_resolved').on(table.resolved),
   endpointIdx: index('idx_errors_endpoint').on(table.endpoint),
-}));
-
-/**
- * Daily aggregates - pre-computed daily statistics
- */
-export const dailyAggregates = pgTable('daily_aggregates', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  date: timestamp('date', { mode: 'date' }).notNull(),
-  category: text('category').notNull(), // api, ai, performance, errors
-  
-  // Counts
-  totalCount: integer('total_count').default(0),
-  successCount: integer('success_count').default(0),
-  errorCount: integer('error_count').default(0),
-  
-  // Performance
-  avgDuration: real('avg_duration'), // milliseconds
-  minDuration: real('min_duration'),
-  maxDuration: real('max_duration'),
-  p50Duration: real('p50_duration'),
-  p95Duration: real('p95_duration'),
-  p99Duration: real('p99_duration'),
-  
-  // Users
-  uniqueUsers: integer('unique_users').default(0),
-  uniqueSessions: integer('unique_sessions').default(0),
-  
-  // AI specific
-  totalTokens: integer('total_tokens'),
-  totalCost: real('total_cost'),
-  
-  // Metadata
-  metadata: jsonb('metadata'),
-  computedAt: timestamp('computed_at', { mode: 'date' }).defaultNow(),
-}, (table) => ({
-  dateIdx: index('idx_aggregates_date').on(table.date, table.category),
-  categoryIdx: index('idx_aggregates_category').on(table.category),
-}));
-
-/**
- * Alert history - track system alerts
- */
-export const alertHistory = pgTable('alert_history', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
-  
-  // Alert details
-  type: text('type').notNull(), // error_rate, performance, ai_cost, security
-  severity: text('severity').notNull(), // info, warning, error, critical
-  message: text('message').notNull(),
-  
-  // Thresholds
-  threshold: real('threshold'),
-  actualValue: real('actual_value'),
-  
-  // Notification
-  notified: boolean('notified').default(false),
-  notifiedAt: timestamp('notified_at', { mode: 'date' }),
-  notificationChannel: text('notification_channel'), // email, webhook, slack
-  
-  // Resolution
-  acknowledged: boolean('acknowledged').default(false),
-  acknowledgedAt: timestamp('acknowledged_at', { mode: 'date' }),
-  acknowledgedBy: text('acknowledged_by'),
-  
-  // Metadata
-  metadata: jsonb('metadata'),
-}, (table) => ({
-  timestampIdx: index('idx_alerts_timestamp').on(table.timestamp),
-  typeIdx: index('idx_alerts_type').on(table.type, table.timestamp),
-  severityIdx: index('idx_alerts_severity').on(table.severity),
-  acknowledgedIdx: index('idx_alerts_acknowledged').on(table.acknowledged),
 }));
 
 // Activity logging enums
@@ -525,16 +418,3 @@ export const activityLogsRelations = relations(activityLogs, ({ one }) => ({
   }),
 }));
 
-/**
- * Retention policies - plan-based version history retention limits
- * Determines how long activity logs are accessible for rollback
- */
-export const retentionPolicies = pgTable('retention_policies', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  subscriptionTier: subscriptionTierEnum('subscriptionTier').notNull().unique(),
-  retentionDays: integer('retentionDays').notNull(), // -1 = unlimited
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
-}, (table) => ({
-  validRetentionDays: check('valid_retention_days', sql`${table.retentionDays} >= -1`),
-}));
