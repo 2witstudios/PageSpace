@@ -630,7 +630,9 @@ export const calendarReadTools = {
         }
 
         // Helper: get the UTC time representing a specific hour on the calendar day
-        // that `refDate` falls on in the user's timezone
+        // that `refDate` falls on in the user's timezone.
+        // Uses two-pass offset resolution (same as getStartOfTodayInTimezone) so that
+        // DST boundaries don't produce an incorrect UTC instant.
         function getHourInUserTz(refDate: Date, hour: number): Date {
           const fmt = new Intl.DateTimeFormat('en-US', {
             timeZone: userTz,
@@ -643,8 +645,14 @@ export const calendarReadTools = {
           const m = parseInt(parts.find(p => p.type === 'month')?.value ?? '0', 10);
           const d = parseInt(parts.find(p => p.type === 'day')?.value ?? '0', 10);
           const naiveUtcMs = Date.UTC(y, m - 1, d, hour, 0, 0, 0);
-          const offsetMs = getTimezoneOffsetMinutes(userTz, new Date(naiveUtcMs)) * 60 * 1000;
-          return new Date(naiveUtcMs - offsetMs);
+
+          // Pass 1: compute offset at the naive UTC point
+          const offsetMs1 = getTimezoneOffsetMinutes(userTz, new Date(naiveUtcMs)) * 60 * 1000;
+          const candidate = new Date(naiveUtcMs - offsetMs1);
+
+          // Pass 2: recompute offset at the candidate; if DST shifted, use the corrected value
+          const offsetMs2 = getTimezoneOffsetMinutes(userTz, candidate) * 60 * 1000;
+          return new Date(naiveUtcMs - offsetMs2);
         }
 
         // Iterate through each day in the range (using timezone-aware day boundaries)
