@@ -69,11 +69,16 @@ export async function middleware(req: NextRequest) {
 
     // Public routes that don't require authentication
     // Note: Cron routes handle their own auth via validateCronRequest (internal network only)
+    // Device/mobile auth endpoints authenticate via body tokens (device token, email/password),
+    // not session cookies, so they must bypass the cookie check to allow cookie-expired recovery.
     if (
       pathname.startsWith('/api/auth/login') ||
       pathname.startsWith('/api/auth/signup') ||
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/google') ||
+      pathname.startsWith('/api/auth/device/') ||
+      pathname.startsWith('/api/auth/mobile/') ||
+      pathname.startsWith('/api/auth/desktop/') ||
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
