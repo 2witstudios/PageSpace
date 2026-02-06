@@ -530,7 +530,7 @@ export const pageService = {
       actorDisplayName: actorInfo.actorDisplayName ?? undefined,
       changeGroupId,
       changeGroupType,
-      metadata: { trashChildren: options.trashChildren, ...options.metadata },
+      metadata: { ...options.metadata, trashChildren: options.trashChildren },
     };
 
     await db.transaction(async (tx) => {

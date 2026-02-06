@@ -198,7 +198,7 @@ export async function POST(request: Request) {
       }
     });
 
-    // Log activity for each copied page
+    // Log activity for each top-level copied page (children are covered by the parent entry's totalPages count)
     const actorInfo = await getActorInfo(userId);
     const isMCP = isMCPAuthResult(auth);
     const changeGroupId = createChangeGroupId();
@@ -214,7 +214,7 @@ export async function POST(request: Request) {
         metadata: {
           bulkOperation: 'copy',
           sourcePageId: copied.sourceId,
-          totalPages: copiedPages.length,
+          totalPages: copiedCount,
           includeChildren,
           ...(isMCP && { source: 'mcp' }),
         },

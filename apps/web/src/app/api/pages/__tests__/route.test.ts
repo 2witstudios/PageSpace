@@ -65,7 +65,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 
@@ -310,6 +310,22 @@ describe('POST /api/pages', () => {
           aiModel: 'claude-3',
         }),
         undefined,
+      );
+    });
+
+    it('passes MCP context when authenticated via MCP', async () => {
+      (isMCPAuthResult as Mock).mockReturnValue(true);
+
+      await POST(createRequest({
+        title: 'MCP Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+      }));
+
+      expect(pageService.createPage).toHaveBeenCalledWith(
+        mockUserId,
+        expect.objectContaining({ title: 'MCP Page' }),
+        { context: { metadata: { source: 'mcp' } } },
       );
     });
   });
