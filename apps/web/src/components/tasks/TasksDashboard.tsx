@@ -77,11 +77,13 @@ import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-vie
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
   PRIORITY_CONFIG,
-  STATUS_ORDER,
+  buildStatusConfig,
+  getStatusOrder,
   type TaskPriority,
+  type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
-import type { Task, TaskFilters, Drive, Pagination } from './types';
+import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
 import { getStatusDisplay, getAssigneeText } from './task-helpers';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
@@ -118,6 +120,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   // State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
+  const [statusConfigsByTaskList, setStatusConfigsByTaskList] = useState<StatusConfigsByTaskList>({});
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pagination, setPagination] = useState<Pagination | null>(null);
@@ -288,8 +291,15 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
         if (append) {
           setTasks((prev) => [...prev, ...data.tasks]);
+          // Merge new configs into existing ones
+          if (data.statusConfigsByTaskList) {
+            setStatusConfigsByTaskList(prev => ({ ...prev, ...data.statusConfigsByTaskList }));
+          }
         } else {
           setTasks(data.tasks);
+          if (data.statusConfigsByTaskList) {
+            setStatusConfigsByTaskList(data.statusConfigsByTaskList);
+          }
         }
         setPagination(data.pagination);
         setLastRefreshTime(new Date());
@@ -358,16 +368,31 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     }
   };
 
+  // Helper to get status configs for a specific task
+  const getConfigsForTask = useCallback((task: Task): TaskStatusConfig[] => {
+    return statusConfigsByTaskList[task.taskListId] || [];
+  }, [statusConfigsByTaskList]);
+
   // Task update handlers
   const handleStatusChange = async (task: Task, newStatus: string) => {
     if (!task.taskListPageId) return;
 
     try {
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { status: newStatus });
-      // Clear enriched status metadata so getStatusDisplay() recomputes from DEFAULT_STATUS_CONFIG
+      // Resolve status metadata from task's own configs for optimistic update
+      const configs = getConfigsForTask(task);
+      const configMap = buildStatusConfig(configs);
+      const matched = configMap[newStatus];
+      const fallback = DEFAULT_STATUS_CONFIG[newStatus];
       setTasks(prev => prev.map(t =>
         t.id === task.id
-          ? { ...t, status: newStatus, statusGroup: undefined, statusLabel: undefined, statusColor: undefined }
+          ? {
+              ...t,
+              status: newStatus,
+              statusGroup: matched?.group ?? fallback?.group ?? t.statusGroup,
+              statusLabel: matched?.label ?? fallback?.label ?? t.statusLabel,
+              statusColor: matched?.color ?? fallback?.color ?? t.statusColor,
+            }
           : t
       ));
     } catch {
@@ -392,8 +417,15 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
   const handleToggleComplete = async (task: Task) => {
     const statusDisplay = getStatusDisplay(task);
-    const newStatus = statusDisplay.group === 'done' ? 'pending' : 'completed';
-    await handleStatusChange(task, newStatus);
+    const configs = getConfigsForTask(task);
+    const sorted = [...configs].sort((a, b) => a.position - b.position);
+    if (statusDisplay.group === 'done') {
+      const firstTodo = sorted.find(c => c.group === 'todo');
+      await handleStatusChange(task, firstTodo?.slug || 'pending');
+    } else {
+      const firstDone = sorted.find(c => c.group === 'done');
+      await handleStatusChange(task, firstDone?.slug || 'completed');
+    }
   };
 
   const handleStartEdit = (task: Task) => {
@@ -506,9 +538,12 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     if (targetGroup) {
       const currentGroup = getStatusDisplay(draggedTask).group;
       if (currentGroup !== targetGroup) {
-        // Map group to a default status slug for the transition
-        const groupToStatus: Record<TaskStatusGroup, string> = { todo: 'pending', in_progress: 'in_progress', done: 'completed' };
-        await handleStatusChange(draggedTask, groupToStatus[targetGroup]);
+        // Use task's own configs to find first status in target group
+        const configs = getConfigsForTask(draggedTask);
+        const sorted = [...configs].sort((a, b) => a.position - b.position);
+        const firstInGroup = sorted.find(c => c.group === targetGroup);
+        const fallback: Record<TaskStatusGroup, string> = { todo: 'pending', in_progress: 'in_progress', done: 'completed' };
+        await handleStatusChange(draggedTask, firstInGroup?.slug || fallback[targetGroup]);
       }
     }
   };
@@ -736,6 +771,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                 {/* Mobile Sheets */}
                 <TaskDetailSheet
                   task={detailSheetTask}
+                  statusConfigs={detailSheetTask ? getConfigsForTask(detailSheetTask) : []}
                   open={detailSheetOpen}
                   onOpenChange={setDetailSheetOpen}
                   onStatusChange={handleStatusChange}
@@ -755,6 +791,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                   selectedDriveId={selectedDriveId}
                   filters={filters}
                   activeFilterCount={activeFilterCount}
+                  statusConfigsByTaskList={statusConfigsByTaskList}
                   onDriveChange={handleDriveChange}
                   onFiltersChange={handleFiltersChange}
                   onClearFilters={clearFilters}
@@ -854,6 +891,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                     selectedDriveId={selectedDriveId}
                     filters={filters}
                     hasActiveFilters={hasActiveFilters}
+                    statusConfigsByTaskList={statusConfigsByTaskList}
                     onDriveChange={handleDriveChange}
                     onFiltersChange={handleFiltersChange}
                     onClearFilters={clearFilters}
@@ -952,6 +990,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                           <TaskTableRow
                             key={task.id}
                             task={task}
+                            statusConfigs={getConfigsForTask(task)}
                             onStatusChange={handleStatusChange}
                             onPriorityChange={handlePriorityChange}
                             onToggleComplete={handleToggleComplete}
@@ -1006,6 +1045,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 // Table Row Component
 interface TaskTableRowProps {
   task: Task;
+  statusConfigs: TaskStatusConfig[];
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
   onToggleComplete: (task: Task) => void;
@@ -1023,6 +1063,7 @@ interface TaskTableRowProps {
 
 function TaskTableRow({
   task,
+  statusConfigs,
   onStatusChange,
   onPriorityChange,
   onToggleComplete,
@@ -1040,6 +1081,8 @@ function TaskTableRow({
   const statusDisplay = getStatusDisplay(task);
   const isCompleted = statusDisplay.group === 'done';
   const cancelTriggeredRef = useRef(false);
+  const statusConfigMap = buildStatusConfig(statusConfigs);
+  const taskStatusOrder = getStatusOrder(statusConfigs);
 
   return (
     <TableRow className={cn('group', isCompleted && 'opacity-60')}>
@@ -1112,12 +1155,12 @@ function TaskTableRow({
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {STATUS_ORDER.map((status) => {
-              const config = DEFAULT_STATUS_CONFIG[status];
+            {taskStatusOrder.map((slug) => {
+              const config = statusConfigMap[slug];
               return (
-                <SelectItem key={status} value={status}>
+                <SelectItem key={slug} value={slug}>
                   <Badge className={cn('text-xs', config?.color || '')}>
-                    {config?.label || status}
+                    {config?.label || slug}
                   </Badge>
                 </SelectItem>
               );

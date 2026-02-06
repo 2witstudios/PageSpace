@@ -3,13 +3,15 @@
  */
 
 // Re-export shared types
-import type { TaskPriority as SharedTaskPriority, TaskAssigneeData } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import type { TaskPriority as SharedTaskPriority, TaskAssigneeData, TaskStatusConfig } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { TaskStatusGroup } from '@/lib/task-status-config';
 
 export type TaskStatus = string;
 export type TaskPriority = SharedTaskPriority;
-export type { TaskAssigneeData };
+export type { TaskAssigneeData, TaskStatusConfig };
 export type { TaskStatusGroup };
+
+export type StatusConfigsByTaskList = Record<string, TaskStatusConfig[]>;
 
 export interface TaskUser {
   id: string;
