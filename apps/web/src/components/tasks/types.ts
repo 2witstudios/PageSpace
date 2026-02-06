@@ -33,6 +33,8 @@ export interface TaskList {
   title: string;
 }
 
+export type TaskStatusGroup = 'todo' | 'in_progress' | 'done';
+
 export interface Task {
   id: string;
   taskListId: string;
@@ -56,10 +58,14 @@ export interface Task {
   user: TaskUser | null;
   page: TaskPage | null;
   taskList: TaskList | null;
-  // Enriched fields
+  // Enriched fields from API
   driveId?: string;
   taskListPageId?: string;
   taskListPageTitle?: string;
+  // Status metadata (computed from custom status configs)
+  statusGroup?: TaskStatusGroup;
+  statusLabel?: string;
+  statusColor?: string;
 }
 
 export interface TaskFilters {

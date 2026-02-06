@@ -26,10 +26,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
+import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  STATUS_CONFIG,
+  DEFAULT_STATUS_CONFIG,
   PRIORITY_CONFIG,
   STATUS_ORDER,
   type TaskPriority,
@@ -43,7 +43,7 @@ export interface TaskDetailSheetProps {
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
   onToggleComplete: (task: Task) => void;
-  onAssigneeChange: (task: Task, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange: (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (task: Task, date: Date | null) => void;
   onSaveTitle: (task: Task, title: string) => void;
   onDelete: (task: Task) => void;
@@ -57,7 +57,7 @@ export function TaskDetailSheet({
   onStatusChange,
   onPriorityChange,
   onToggleComplete,
-  onAssigneeChange,
+  onMultiAssigneeChange,
   onDueDateChange,
   onSaveTitle,
   onDelete,
@@ -75,8 +75,12 @@ export function TaskDetailSheet({
 
   if (!task) return null;
 
-  const isCompleted = task.status === 'completed';
+  const isCompleted = task.statusGroup ? task.statusGroup === 'done' : task.status === 'completed';
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
+
+  // Safe status display
+  const statusLabel = task.statusLabel || DEFAULT_STATUS_CONFIG[task.status]?.label || task.status;
+  const statusColor = task.statusColor || DEFAULT_STATUS_CONFIG[task.status]?.color || 'bg-slate-100 text-slate-600';
 
   const startEditTitle = () => {
     setEditingTitle(task.title);
@@ -176,19 +180,22 @@ export function TaskDetailSheet({
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
-                    <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                      {STATUS_CONFIG[task.status].label}
+                    <Badge className={cn('text-xs', statusColor)}>
+                      {statusLabel}
                     </Badge>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {STATUS_ORDER.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      <Badge className={cn('text-xs', STATUS_CONFIG[status].color)}>
-                        {STATUS_CONFIG[status].label}
-                      </Badge>
-                    </SelectItem>
-                  ))}
+                  {STATUS_ORDER.map((status) => {
+                    const config = DEFAULT_STATUS_CONFIG[status];
+                    return (
+                      <SelectItem key={status} value={status}>
+                        <Badge className={cn('text-xs', config?.color || '')}>
+                          {config?.label || status}
+                        </Badge>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -230,16 +237,15 @@ export function TaskDetailSheet({
             </div>
           </div>
 
-          {/* Assignee */}
+          {/* Assignees */}
           {task.driveId && (
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Assignee</label>
+              <label className="text-xs font-medium text-muted-foreground">Assignees</label>
               <div className="rounded-md border px-1 py-1">
-                <AssigneeSelect
+                <MultiAssigneeSelect
                   driveId={task.driveId}
-                  currentAssignee={task.assignee}
-                  currentAssigneeAgent={task.assigneeAgent}
-                  onSelect={(assigneeId, agentId) => onAssigneeChange(task, assigneeId, agentId)}
+                  assignees={task.assignees || []}
+                  onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
                 />
               </div>
             </div>

@@ -73,20 +73,37 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useMobile } from '@/hooks/useMobile';
 import { useCapacitor } from '@/hooks/useCapacitor';
-import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
+import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  STATUS_CONFIG,
+  DEFAULT_STATUS_CONFIG,
   PRIORITY_CONFIG,
   STATUS_ORDER,
-  type TaskStatus,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Task, TaskFilters, Drive, Pagination } from './types';
+import type { Task, TaskFilters, TaskStatusGroup, Drive, Pagination } from './types';
 import { FilterControls } from './FilterControls';
 import { TaskCompactRow } from './TaskCompactRow';
 import { TaskDetailSheet } from './TaskDetailSheet';
 import { TaskFilterSheet, TaskFilterButton } from './TaskFilterSheet';
+
+// Safe status config lookup: uses task's enriched status metadata with fallback to defaults
+function getStatusDisplay(task: Task): { label: string; color: string; group: TaskStatusGroup } {
+  if (task.statusLabel && task.statusColor && task.statusGroup) {
+    return { label: task.statusLabel, color: task.statusColor, group: task.statusGroup };
+  }
+  const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];
+  if (defaultConfig) return defaultConfig;
+  return { label: task.status, color: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400', group: 'todo' };
+}
+
+// Status group labels and colors for kanban columns
+const STATUS_GROUP_CONFIG: Record<TaskStatusGroup, { label: string; color: string }> = {
+  todo: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
+  in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
+  done: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
+};
+const STATUS_GROUPS: TaskStatusGroup[] = ['todo', 'in_progress', 'done'];
 
 interface TasksDashboardProps {
   context: 'user' | 'drive';
@@ -135,7 +152,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   // Filter state from URL params
   const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
   const [filters, setFilters] = useState<ExtendedFilters>(() => ({
-    status: (searchParams.get('status') as TaskStatus) || undefined,
+    status: searchParams.get('status') || undefined,
     priority: (searchParams.get('priority') as TaskPriority) || undefined,
     driveId: searchParams.get('driveId') || undefined,
     search: searchParams.get('search') || undefined,
@@ -358,7 +375,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { status: newStatus });
       // Update local state optimistically
       setTasks(prev => prev.map(t =>
-        t.id === task.id ? { ...t, status: newStatus as TaskStatus } : t
+        t.id === task.id ? { ...t, status: newStatus } : t
       ));
     } catch {
       toast.error('Failed to update status');
@@ -381,7 +398,8 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   };
 
   const handleToggleComplete = async (task: Task) => {
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed';
+    const statusDisplay = getStatusDisplay(task);
+    const newStatus = statusDisplay.group === 'done' ? 'pending' : 'completed';
     await handleStatusChange(task, newStatus);
   };
 
@@ -405,17 +423,16 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     setEditingTaskId(null);
   };
 
-  const handleAssigneeChange = async (task: Task, assigneeId: string | null, agentId: string | null) => {
+  const handleMultiAssigneeChange = async (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!task.taskListPageId) return;
 
     try {
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, {
-        assigneeId,
-        assigneeAgentId: agentId,
+        assigneeIds,
       });
       fetchTasks(); // Refetch to get updated assignee data
     } catch {
-      toast.error('Failed to update assignee');
+      toast.error('Failed to update assignees');
       fetchTasks();
     }
   };
@@ -479,36 +496,41 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     const draggedTask = tasks.find(t => t.id === active.id);
     if (!draggedTask) return;
 
-    // Determine target status
-    let targetStatus: TaskStatus | null = null;
+    // Determine target status group
+    let targetGroup: TaskStatusGroup | null = null;
 
-    // Check if dropped on a column
-    if (STATUS_ORDER.includes(over.id as TaskStatus)) {
-      targetStatus = over.id as TaskStatus;
+    // Check if dropped on a group column
+    if (STATUS_GROUPS.includes(over.id as TaskStatusGroup)) {
+      targetGroup = over.id as TaskStatusGroup;
     } else {
-      // Check if dropped on a task - find that task's status
+      // Check if dropped on a task - use that task's status group
       const targetTask = tasks.find(t => t.id === over.id);
       if (targetTask) {
-        targetStatus = targetTask.status;
+        targetGroup = getStatusDisplay(targetTask).group;
       }
     }
 
-    if (targetStatus && draggedTask.status !== targetStatus) {
-      await handleStatusChange(draggedTask, targetStatus);
+    if (targetGroup) {
+      const currentGroup = getStatusDisplay(draggedTask).group;
+      if (currentGroup !== targetGroup) {
+        // Map group to a default status slug for the transition
+        const groupToStatus: Record<TaskStatusGroup, string> = { todo: 'pending', in_progress: 'in_progress', done: 'completed' };
+        await handleStatusChange(draggedTask, groupToStatus[targetGroup]);
+      }
     }
   };
 
-  // Group tasks by status for kanban
-  const tasksByStatus = useMemo(() => {
-    const grouped: Record<TaskStatus, Task[]> = {
-      pending: [],
+  // Group tasks by status group for kanban
+  const tasksByGroup = useMemo(() => {
+    const grouped: Record<TaskStatusGroup, Task[]> = {
+      todo: [],
       in_progress: [],
-      completed: [],
-      blocked: [],
+      done: [],
     };
 
     for (const task of tasks) {
-      grouped[task.status].push(task);
+      const { group } = getStatusDisplay(task);
+      grouped[group].push(task);
     }
 
     return grouped;
@@ -726,7 +748,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                   onStatusChange={handleStatusChange}
                   onPriorityChange={handlePriorityChange}
                   onToggleComplete={handleToggleComplete}
-                  onAssigneeChange={handleAssigneeChange}
+                  onMultiAssigneeChange={handleMultiAssigneeChange}
                   onDueDateChange={handleDueDateChange}
                   onSaveTitle={handleSaveTitle}
                   onDelete={handleDeleteTask}
@@ -881,11 +903,11 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                     onDragEnd={handleDragEnd}
                   >
                     <div className="flex gap-4 overflow-x-auto pb-4">
-                      {STATUS_ORDER.map((status) => (
+                      {STATUS_GROUPS.map((group) => (
                         <KanbanColumn
-                          key={status}
-                          status={status}
-                          tasks={tasksByStatus[status]}
+                          key={group}
+                          statusGroup={group}
+                          tasks={tasksByGroup[group]}
                           onToggleComplete={handleToggleComplete}
                           onNavigate={handleNavigate}
                           onStartEdit={handleStartEdit}
@@ -940,7 +962,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
                             onStatusChange={handleStatusChange}
                             onPriorityChange={handlePriorityChange}
                             onToggleComplete={handleToggleComplete}
-                            onAssigneeChange={handleAssigneeChange}
+                            onMultiAssigneeChange={handleMultiAssigneeChange}
                             onDueDateChange={handleDueDateChange}
                             onStartEdit={handleStartEdit}
                             onSaveTitle={handleSaveTitle}
@@ -994,7 +1016,7 @@ interface TaskTableRowProps {
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
   onToggleComplete: (task: Task) => void;
-  onAssigneeChange: (task: Task, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange: (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (task: Task, date: Date | null) => void;
   onStartEdit: (task: Task) => void;
   onSaveTitle: (task: Task, title: string) => void;
@@ -1011,7 +1033,7 @@ function TaskTableRow({
   onStatusChange,
   onPriorityChange,
   onToggleComplete,
-  onAssigneeChange,
+  onMultiAssigneeChange,
   onDueDateChange,
   onStartEdit,
   onSaveTitle,
@@ -1022,7 +1044,8 @@ function TaskTableRow({
   onEditingTitleChange,
   onCancelEdit,
 }: TaskTableRowProps) {
-  const isCompleted = task.status === 'completed';
+  const statusDisplay = getStatusDisplay(task);
+  const isCompleted = statusDisplay.group === 'done';
   const cancelTriggeredRef = useRef(false);
 
   return (
@@ -1090,19 +1113,22 @@ function TaskTableRow({
         >
           <SelectTrigger className="h-8 w-28">
             <SelectValue>
-              <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                {STATUS_CONFIG[task.status].label}
+              <Badge className={cn('text-xs', statusDisplay.color)}>
+                {statusDisplay.label}
               </Badge>
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {STATUS_ORDER.map((status) => (
-              <SelectItem key={status} value={status}>
-                <Badge className={cn('text-xs', STATUS_CONFIG[status].color)}>
-                  {STATUS_CONFIG[status].label}
-                </Badge>
-              </SelectItem>
-            ))}
+            {STATUS_ORDER.map((status) => {
+              const config = DEFAULT_STATUS_CONFIG[status];
+              return (
+                <SelectItem key={status} value={status}>
+                  <Badge className={cn('text-xs', config?.color || '')}>
+                    {config?.label || status}
+                  </Badge>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </TableCell>
@@ -1132,14 +1158,13 @@ function TaskTableRow({
         </Select>
       </TableCell>
 
-      {/* Assignee */}
+      {/* Assignees */}
       <TableCell>
         {task.driveId && (
-          <AssigneeSelect
+          <MultiAssigneeSelect
             driveId={task.driveId}
-            currentAssignee={task.assignee}
-            currentAssigneeAgent={task.assigneeAgent}
-            onSelect={(assigneeId, agentId) => onAssigneeChange(task, assigneeId, agentId)}
+            assignees={task.assignees || []}
+            onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
           />
         )}
       </TableCell>
@@ -1202,7 +1227,7 @@ function TaskTableRow({
 
 // Kanban Column Component
 interface KanbanColumnProps {
-  status: TaskStatus;
+  statusGroup: TaskStatusGroup;
   tasks: Task[];
   onToggleComplete: (task: Task) => void;
   onNavigate: (task: Task) => void;
@@ -1216,7 +1241,7 @@ interface KanbanColumnProps {
 }
 
 function KanbanColumn({
-  status,
+  statusGroup,
   tasks,
   onToggleComplete,
   onNavigate,
@@ -1228,8 +1253,8 @@ function KanbanColumn({
   onSaveTitle,
   onCancelEdit,
 }: KanbanColumnProps) {
-  const { setNodeRef } = useDroppable({ id: status });
-  const config = STATUS_CONFIG[status];
+  const { setNodeRef } = useDroppable({ id: statusGroup });
+  const config = STATUS_GROUP_CONFIG[statusGroup];
 
   return (
     <div className="flex-shrink-0 w-72 flex flex-col">
@@ -1244,7 +1269,7 @@ function KanbanColumn({
       {/* Cards */}
       <ScrollArea className="flex-1">
         <SortableContext
-          id={status}
+          id={statusGroup}
           items={tasks.map(t => t.id)}
           strategy={verticalListSortingStrategy}
         >
@@ -1343,7 +1368,8 @@ function KanbanCard({
   onSaveTitle,
   onCancelEdit,
 }: KanbanCardProps) {
-  const isCompleted = task.status === 'completed';
+  const statusDisplay = getStatusDisplay(task);
+  const isCompleted = statusDisplay.group === 'done';
   const cancelTriggeredRef = useRef(false);
 
   return (
@@ -1445,18 +1471,22 @@ function KanbanCard({
             {PRIORITY_CONFIG[task.priority].label}
           </Badge>
 
-          {/* Assignee */}
-          {(task.assignee || task.assigneeAgent) && (
+          {/* Assignees */}
+          {(task.assignees && task.assignees.length > 0) ? (
+            <span className="text-xs text-muted-foreground">
+              {task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ') || 'Assigned'}
+            </span>
+          ) : (task.assignee || task.assigneeAgent) ? (
             <span className="text-xs text-muted-foreground">
               {task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}
             </span>
-          )}
+          ) : null}
 
           {/* Due date */}
           {task.dueDate && (
             <span className={cn(
               'text-xs',
-              isPast(new Date(task.dueDate)) && task.status !== 'completed'
+              isPast(new Date(task.dueDate)) && !isCompleted
                 ? 'text-red-500 font-medium'
                 : isToday(new Date(task.dueDate))
                   ? 'text-amber-500'

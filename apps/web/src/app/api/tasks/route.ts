@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { DEFAULT_STATUS_CONFIG } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -293,7 +294,20 @@ export async function GET(request: Request) {
 
     const whereCondition = and(...filterConditions);
 
-    // Fetch tasks with relations
+    // Fetch status configs for all involved task lists
+    const statusConfigRows = await db.query.taskStatusConfigs.findMany({
+      where: inArray(taskStatusConfigs.taskListId, taskListIds),
+    });
+
+    // Build map: taskListId -> status configs
+    const taskListStatusMap = new Map<string, typeof statusConfigRows>();
+    for (const config of statusConfigRows) {
+      const existing = taskListStatusMap.get(config.taskListId) || [];
+      existing.push(config);
+      taskListStatusMap.set(config.taskListId, existing);
+    }
+
+    // Fetch tasks with relations (including multi-assignees)
     const tasks = await db.query.taskItems.findMany({
       where: whereCondition,
       with: {
@@ -302,6 +316,12 @@ export async function GET(request: Request) {
         },
         assigneeAgent: {
           columns: { id: true, title: true, type: true },
+        },
+        assignees: {
+          with: {
+            user: { columns: { id: true, name: true, image: true } },
+            agentPage: { columns: { id: true, title: true, type: true } },
+          },
         },
         user: {
           columns: { id: true, name: true, image: true },
@@ -318,7 +338,7 @@ export async function GET(request: Request) {
       offset: params.offset,
     });
 
-    // Enrich tasks with drive and task list page info
+    // Enrich tasks with drive, task list page info, and status metadata
     // Filter out orphaned tasks where pageInfo is missing to prevent undefined URLs
     const enrichedTasks = tasks
       .map(task => {
@@ -330,11 +350,24 @@ export async function GET(request: Request) {
           });
           return null;
         }
+
+        // Compute status metadata from custom configs or defaults
+        const configs = taskListStatusMap.get(task.taskListId) || [];
+        const matchingConfig = configs.find(c => c.slug === task.status);
+        const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];
+
+        const statusGroup = matchingConfig?.group || defaultConfig?.group || 'todo';
+        const statusLabel = matchingConfig?.name || defaultConfig?.label || task.status;
+        const statusColor = matchingConfig?.color || defaultConfig?.color || 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400';
+
         return {
           ...task,
           driveId: pageInfo.driveId,
           taskListPageId: pageInfo.pageId,
           taskListPageTitle: pageInfo.taskListTitle,
+          statusGroup,
+          statusLabel,
+          statusColor,
         };
       })
       .filter((task): task is NonNullable<typeof task> => task !== null);

@@ -29,10 +29,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
+import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  STATUS_CONFIG,
+  DEFAULT_STATUS_CONFIG,
   PRIORITY_CONFIG,
   STATUS_ORDER,
   type TaskPriority,
@@ -44,7 +44,7 @@ export interface TaskMobileCardProps {
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
   onToggleComplete: (task: Task) => void;
-  onAssigneeChange: (task: Task, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange: (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (task: Task, date: Date | null) => void;
   onStartEdit: (task: Task) => void;
   onSaveTitle: (task: Task, title: string) => void;
@@ -61,7 +61,7 @@ export const TaskMobileCard = memo(function TaskMobileCard({
   onStatusChange,
   onPriorityChange,
   onToggleComplete,
-  onAssigneeChange,
+  onMultiAssigneeChange,
   onDueDateChange,
   onStartEdit,
   onSaveTitle,
@@ -72,10 +72,19 @@ export const TaskMobileCard = memo(function TaskMobileCard({
   onEditingTitleChange,
   onCancelEdit,
 }: TaskMobileCardProps) {
-  const isCompleted = task.status === 'completed';
+  const isCompleted = task.statusGroup ? task.statusGroup === 'done' : task.status === 'completed';
   const cancelTriggeredRef = useRef(false);
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
+
+  // Safe status display
+  const statusLabel = task.statusLabel || DEFAULT_STATUS_CONFIG[task.status]?.label || task.status;
+  const statusColor = task.statusColor || DEFAULT_STATUS_CONFIG[task.status]?.color || 'bg-slate-100 text-slate-600';
+
+  // Assignee display text
+  const assigneeText = (task.assignees && task.assignees.length > 0)
+    ? task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ')
+    : (task.assignee?.name || task.assigneeAgent?.title || null);
 
   return (
     <Card className={cn(isCompleted && 'opacity-60')}>
@@ -133,13 +142,13 @@ export const TaskMobileCard = memo(function TaskMobileCard({
             )}
 
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-              {(task.assignee || task.assigneeAgent) && (
-                <span>{task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}</span>
+              {assigneeText && (
+                <span>{assigneeText}</span>
               )}
               {dueDate && (
                 <span
                   className={cn(
-                    isPast(dueDate) && task.status !== 'completed'
+                    isPast(dueDate) && !isCompleted
                       ? 'text-red-500 font-medium'
                       : isToday(dueDate)
                         ? 'text-amber-500'
@@ -187,19 +196,22 @@ export const TaskMobileCard = memo(function TaskMobileCard({
           >
             <SelectTrigger className="h-9 w-full justify-start">
               <SelectValue>
-                <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                  {STATUS_CONFIG[task.status].label}
+                <Badge className={cn('text-xs', statusColor)}>
+                  {statusLabel}
                 </Badge>
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {STATUS_ORDER.map((status) => (
-                <SelectItem key={status} value={status}>
-                  <Badge className={cn('text-xs', STATUS_CONFIG[status].color)}>
-                    {STATUS_CONFIG[status].label}
-                  </Badge>
-                </SelectItem>
-              ))}
+              {STATUS_ORDER.map((status) => {
+                const config = DEFAULT_STATUS_CONFIG[status];
+                return (
+                  <SelectItem key={status} value={status}>
+                    <Badge className={cn('text-xs', config?.color || '')}>
+                      {config?.label || status}
+                    </Badge>
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
 
@@ -227,11 +239,10 @@ export const TaskMobileCard = memo(function TaskMobileCard({
 
           {task.driveId && (
             <div className="col-span-2 rounded-md border bg-muted/20 px-1 py-1">
-              <AssigneeSelect
+              <MultiAssigneeSelect
                 driveId={task.driveId}
-                currentAssignee={task.assignee}
-                currentAssigneeAgent={task.assigneeAgent}
-                onSelect={(assigneeId, agentId) => onAssigneeChange(task, assigneeId, agentId)}
+                assignees={task.assignees || []}
+                onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
               />
             </div>
           )}

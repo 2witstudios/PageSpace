@@ -189,11 +189,14 @@ export async function PATCH(
   let updatedTask;
   try {
     [updatedTask] = await db.transaction(async (tx) => {
-      // Update the task
-      const [task] = await tx.update(taskItems)
-        .set(updates)
-        .where(eq(taskItems.id, taskId))
-        .returning();
+      // Update the task (only if there are field-level updates)
+      let task = existingTask;
+      if (Object.keys(updates).length > 0) {
+        [task] = await tx.update(taskItems)
+          .set(updates)
+          .where(eq(taskItems.id, taskId))
+          .returning();
+      }
 
       // If title changed and task has a linked page, update the page title too
       if (updates.title && existingTask.pageId) {

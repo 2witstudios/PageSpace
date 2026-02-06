@@ -25,7 +25,7 @@ export const TaskCompactRow = memo(function TaskCompactRow({
   onToggleComplete,
   onTap,
 }: TaskCompactRowProps) {
-  const isCompleted = task.status === 'completed';
+  const isCompleted = task.statusGroup ? task.statusGroup === 'done' : task.status === 'completed';
   const dueDate = task.dueDate ? new Date(task.dueDate) : null;
   const isOverdue = dueDate && isPast(dueDate) && !isCompleted;
   const isDueToday = dueDate && isToday(dueDate);
@@ -91,12 +91,16 @@ export const TaskCompactRow = memo(function TaskCompactRow({
             </span>
           )}
 
-          {/* Assignee name */}
-          {(task.assignee || task.assigneeAgent) && (
+          {/* Assignee names */}
+          {(task.assignees && task.assignees.length > 0) ? (
+            <span className="truncate max-w-[100px]">
+              {task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ')}
+            </span>
+          ) : (task.assignee || task.assigneeAgent) ? (
             <span className="truncate max-w-[100px]">
               {task.assignee?.name || task.assigneeAgent?.title}
             </span>
-          )}
+          ) : null}
 
           {/* Source task list name */}
           {task.taskListPageTitle && (
