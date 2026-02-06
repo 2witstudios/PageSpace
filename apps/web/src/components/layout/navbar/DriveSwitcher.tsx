@@ -35,8 +35,8 @@ export default function DriveSwitcher() {
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
 
-  // Favorites store
-  const { isFavorite, addFavorite, removeFavorite, fetchFavorites, isSynced } = useFavorites();
+  // Favorites store - subscribe to driveIds directly so useMemo recomputes when favorites change
+  const { isFavorite, addFavorite, removeFavorite, fetchFavorites, isSynced, driveIds } = useFavorites();
 
   const { driveId } = params;
   const urlDriveId = Array.isArray(driveId) ? driveId[0] : driveId;
@@ -94,7 +94,7 @@ export default function DriveSwitcher() {
       recentDrives: recent,
       allDrives: sortedAll,
     };
-  }, [drives, searchQuery, isFavorite]);
+  }, [drives, searchQuery, isFavorite, driveIds]);
 
   const handleSelectDrive = (drive: Drive) => {
     setCurrentDrive(drive.id);
