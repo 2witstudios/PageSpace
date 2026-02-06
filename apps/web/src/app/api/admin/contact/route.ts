@@ -9,6 +9,7 @@ import {
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { verifyAdminAuth } from '@/lib/auth';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 export async function GET(request: Request) {
   try {
@@ -27,8 +28,16 @@ export async function GET(request: Request) {
     const searchTerm = url.searchParams.get('search') || '';
     const sortBy = url.searchParams.get('sortBy') || 'createdAt';
     const sortOrder = url.searchParams.get('sortOrder') || 'desc';
-    const page = parseInt(url.searchParams.get('page') || '1');
-    const pageSize = parseInt(url.searchParams.get('pageSize') || '50');
+    const page = parseBoundedIntParam(url.searchParams.get('page'), {
+      defaultValue: 1,
+      min: 1,
+      max: 100000,
+    });
+    const pageSize = parseBoundedIntParam(url.searchParams.get('pageSize'), {
+      defaultValue: 50,
+      min: 1,
+      max: 200,
+    });
     const offset = (page - 1) * pageSize;
 
     // Build where conditions for search

@@ -6,15 +6,14 @@
  * from the Global Assistant.
  */
 
-import { TreePage, usePageTree } from '@/hooks/usePageTree';
+import { TreePage } from '@/hooks/usePageTree';
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
-import { UIMessage, DefaultChatTransport } from 'ai';
-import { useEditingStore } from '@/stores/useEditingStore';
+import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
@@ -24,8 +23,9 @@ import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceModeOverlay } from '@/components/ai/voice';
+import { useSWRConfig } from 'swr';
 
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 
 // Shared hooks and components
@@ -34,6 +34,9 @@ import {
   useMessageActions,
   useProviderSettings,
   useConversations,
+  useChatTransport,
+  useStreamingRegistration,
+  useChatStop,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -54,8 +57,8 @@ interface AiChatViewProps {
 const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const params = useParams();
   const driveId = params.driveId as string;
-  const { drives } = useDriveStore();
-  const { tree } = usePageTree(driveId);
+  const drives = useDriveStore((state) => state.drives);
+  const { cache } = useSWRConfig();
   const { user } = useAuth();
 
   // ============================================
@@ -148,41 +151,27 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // Use conversation ID for stream tracking (falls back to page.id before conversation is created)
   const streamTrackingId = currentConversationId || page.id;
+
+  const transport = useChatTransport(streamTrackingId, '/api/ai/chat');
+
   const chatConfig = useMemo(
-    () => ({
+    () => !transport ? null : ({
       id: page.id,
       messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: streamTrackingId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('AiChatView: Chat error:', error);
       },
     }),
-    // Re-create transport when conversation changes for proper stream tracking
-    [page.id, streamTrackingId, initialMessages]
+    [page.id, transport, initialMessages]
   );
 
   const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
-    useChat(chatConfig);
+    useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
-
-  // Combined stop function that calls both abort endpoint (server-side) and useChat stop (client-side)
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  const stop = useCallback(async () => {
-    try {
-      // Call abort endpoint to stop server-side processing
-      await abortActiveStream({ chatId: streamTrackingId });
-    } finally {
-      // Call useChat's stop to abort client-side fetch
-      chatStop();
-    }
-  }, [streamTrackingId, chatStop]);
+  const stop = useChatStop(streamTrackingId, chatStop);
   const isLoading = !isInitialized;
 
   // ============================================
@@ -265,20 +254,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [page.id]);
 
   // Register streaming state with editing store
-  useEffect(() => {
-    const componentId = `ai-chat-${page.id}`;
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        pageId: page.id,
-        componentName: 'AiChatView',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, page.id]);
+  useStreamingRegistration(
+    `ai-chat-${page.id}`,
+    isStreaming,
+    { pageId: page.id, componentName: 'AiChatView' }
+  );
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -319,18 +299,64 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // HANDLERS
   // ============================================
 
-  const handleSendMessage = useCallback(() => {
-    if (isReadOnly) {
-      toast.error('You do not have permission to send messages in this AI chat');
+  const buildFreshPageContext = useCallback(async () => {
+    const currentDrive = drives.find((drive) => drive.id === driveId);
+    const treeCacheKey = `/api/drives/${encodeURIComponent(driveId)}/pages`;
+    const treeCacheValue = cache.get(treeCacheKey) as { data?: TreePage[] } | undefined;
+    const cachedTree = Array.isArray(treeCacheValue?.data) ? treeCacheValue.data : [];
+    const pagePathInfo = buildPagePath(cachedTree, page.id, driveId);
+    let breadcrumbs: string[] = pagePathInfo?.breadcrumbs || [driveId, page.title];
+    let pagePath = pagePathInfo?.path || `/${driveId}/${page.title}`;
+    let parentPath = pagePathInfo?.parentPath || `/${driveId}`;
+
+    if (!pagePathInfo) {
+      try {
+        const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${page.id}/breadcrumbs`);
+        if (breadcrumbsResponse.ok) {
+          const breadcrumbItems = (await breadcrumbsResponse.json()) as Array<{ title?: string }>;
+          const breadcrumbTitles = breadcrumbItems
+            .map((item) => item.title?.trim())
+            .filter((title): title is string => Boolean(title));
+
+          if (breadcrumbTitles.length > 0) {
+            breadcrumbs = [driveId, ...breadcrumbTitles];
+            pagePath = `/${driveId}/${breadcrumbTitles.map((title) => encodeURIComponent(title)).join('/')}`;
+            if (breadcrumbTitles.length > 1) {
+              parentPath = `/${driveId}/${breadcrumbTitles
+                .slice(0, -1)
+                .map((title) => encodeURIComponent(title))
+                .join('/')}`;
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to fetch breadcrumbs for AI page context:', error);
+      }
+    }
+
+    return {
+      pageId: page.id,
+      pageTitle: page.title,
+      pageType: page.type,
+      pagePath,
+      parentPath,
+      breadcrumbs,
+      driveId: currentDrive?.id,
+      driveName: currentDrive?.name || driveId,
+      driveSlug: currentDrive?.slug,
+    };
+  }, [cache, drives, driveId, page.id, page.title, page.type]);
+
+  const sendMessageWithContext = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
       return;
     }
-    if (!input.trim()) return;
 
-    const currentDrive = drives.find((d) => d.id === driveId);
-    const pagePathInfo = buildPagePath(tree, page.id, driveId);
+    const pageContext = await buildFreshPageContext();
 
     sendMessage(
-      { text: input },
+      { text: trimmed },
       {
         body: {
           chatId: page.id,
@@ -340,36 +366,37 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           isReadOnly,
           webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          pageContext: {
-            pageId: page.id,
-            pageTitle: page.title,
-            pageType: page.type,
-            pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
-            parentPath: pagePathInfo?.parentPath || `/${driveId}`,
-            breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
-            driveId: currentDrive?.id,
-            driveName: currentDrive?.name || driveId,
-            driveSlug: currentDrive?.slug,
-          },
+          pageContext,
         },
       }
     );
+  }, [
+    buildFreshPageContext,
+    sendMessage,
+    page.id,
+    currentConversationId,
+    selectedProvider,
+    selectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    mcpToolSchemas,
+  ]);
+
+  const handleSendMessage = useCallback(() => {
+    if (isReadOnly) {
+      toast.error('You do not have permission to send messages in this AI chat');
+      return;
+    }
+    if (!input.trim()) return;
+
+    void sendMessageWithContext(input);
     setInput('');
     inputRef.current?.clear();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     isReadOnly,
     input,
-    drives,
-    driveId,
-    tree,
-    page,
-    sendMessage,
-    currentConversationId,
-    selectedProvider,
-    selectedModel,
-    mcpToolSchemas,
-    webSearchEnabled,
+    sendMessageWithContext,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -380,46 +407,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
     if (!text.trim()) return;
 
-    const currentDrive = drives.find((d) => d.id === driveId);
-    const pagePathInfo = buildPagePath(tree, page.id, driveId);
-
-    sendMessage(
-      { text },
-      {
-        body: {
-          chatId: page.id,
-          conversationId: currentConversationId,
-          selectedProvider,
-          selectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          pageContext: {
-            pageId: page.id,
-            pageTitle: page.title,
-            pageType: page.type,
-            pagePath: pagePathInfo?.path || `/${driveId}/${page.title}`,
-            parentPath: pagePathInfo?.parentPath || `/${driveId}`,
-            breadcrumbs: pagePathInfo?.breadcrumbs || [driveId, page.title],
-            driveId: currentDrive?.id,
-            driveName: currentDrive?.name || driveId,
-            driveSlug: currentDrive?.slug,
-          },
-        },
-      }
-    );
+    void sendMessageWithContext(text);
   }, [
     isReadOnly,
-    drives,
-    driveId,
-    tree,
-    page,
-    sendMessage,
-    currentConversationId,
-    selectedProvider,
-    selectedModel,
-    mcpToolSchemas,
-    webSearchEnabled,
+    sendMessageWithContext,
   ]);
 
   // Voice mode toggle handler
@@ -688,4 +679,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   );
 };
 
-export default AiChatView;
+export default React.memo(
+  AiChatView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.title === nextProps.page.title &&
+    prevProps.page.type === nextProps.page.type
+);

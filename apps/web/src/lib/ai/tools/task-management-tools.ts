@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, taskLists, taskItems, pages, eq, and, desc, asc, not } from '@pagespace/db';
+import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, isNull, inArray } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
@@ -52,26 +52,35 @@ When creating tasks:
 - The page title stays synced with the task title
 - DO NOT delete these pages directly - use this tool to manage tasks
 
+Status:
+- Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
+- Each status belongs to a group (todo, in_progress, done) that controls completion behavior
+- Use a status slug that exists in the task list's configuration
+
 Assignment:
-- Use assigneeId to assign to a human user
-- Use assigneeAgentId to assign to an AI agent (use the agent's page ID)
-- Agents can assign tasks to themselves or other agents
-- Set both to null to unassign`,
+- Use assigneeIds array to assign multiple users and/or agents
+- Each entry: { type: 'user'|'agent', id: 'string' }
+- Or use legacy assigneeId/assigneeAgentId for single assignment
+- Agents can assign tasks to themselves or other agents`,
     inputSchema: z.object({
       taskId: z.string().optional().describe('Task ID to update (omit to create new task)'),
       pageId: z.string().optional().describe('TASK_LIST page ID (required when creating new task)'),
       title: z.string().optional().describe('Task title (required when creating)'),
       description: z.string().optional().describe('Task description'),
-      status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Task status'),
+      status: z.string().optional().describe('Task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Task priority'),
-      assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user)'),
-      assigneeAgentId: z.string().nullable().optional().describe('Agent page ID to assign (null to unassign agent). Use this to assign tasks to AI agents including yourself.'),
+      assigneeId: z.string().nullable().optional().describe('User ID to assign (null to unassign user). Legacy single-assignee field.'),
+      assigneeAgentId: z.string().nullable().optional().describe('Agent page ID to assign (null to unassign agent). Legacy single-assignee field.'),
+      assigneeIds: z.array(z.object({
+        type: z.enum(['user', 'agent']),
+        id: z.string(),
+      })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
       note: z.string().optional().describe('Note about this update'),
       position: z.number().optional().describe('Position in the list (for new tasks, defaults to end)'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, dueDate, note, position } = params;
+      const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
@@ -152,13 +161,28 @@ Assignment:
             }
           }
 
+          // Fetch status configs for rollup and validation
+          const validConfigs = await db.query.taskStatusConfigs.findMany({
+            where: eq(taskStatusConfigs.taskListId, existingTask.taskListId),
+            columns: { slug: true, group: true },
+          });
+
           // Build update object
           const updateData: Record<string, unknown> = {};
           if (title !== undefined) updateData.title = title;
           if (description !== undefined) updateData.description = description;
           if (status !== undefined) {
-            updateData.status = status;
-            updateData.completedAt = status === 'completed' ? new Date() : null;
+            if (validConfigs.length > 0) {
+              const matched = validConfigs.find(c => c.slug === status);
+              if (!matched) {
+                throw new Error(`Invalid status "${status}". Valid: ${validConfigs.map(c => c.slug).join(', ')}`);
+              }
+              updateData.status = status;
+              updateData.completedAt = matched.group === 'done' ? new Date() : null;
+            } else {
+              updateData.status = status;
+              updateData.completedAt = status === 'completed' ? new Date() : null;
+            }
           }
           if (priority !== undefined) updateData.priority = priority;
           if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
@@ -177,28 +201,62 @@ Assignment:
             };
           }
 
-          const [updatedTask] = await db
-            .update(taskItems)
-            .set(updateData)
-            .where(eq(taskItems.id, taskId))
-            .returning();
+          resultTask = await db.transaction(async (tx) => {
+            const [updatedTask] = await tx
+              .update(taskItems)
+              .set(updateData)
+              .where(eq(taskItems.id, taskId))
+              .returning();
 
-          resultTask = updatedTask;
+            // Handle multiple assignees
+            if (assigneeIds && assigneeIds.length > 0) {
+              await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+              const rows = assigneeIds.map(a => ({
+                taskId,
+                ...(a.type === 'user' ? { userId: a.id } : { agentPageId: a.id }),
+              }));
+              await tx.insert(taskAssignees).values(rows);
+
+              // Sync legacy fields
+              const firstUser = assigneeIds.find(a => a.type === 'user');
+              const firstAgent = assigneeIds.find(a => a.type === 'agent');
+              await tx.update(taskItems).set({
+                assigneeId: firstUser?.id || null,
+                assigneeAgentId: firstAgent?.id || null,
+              }).where(eq(taskItems.id, taskId));
+            } else if (assigneeId !== undefined || assigneeAgentId !== undefined) {
+              // Legacy single-assignee: sync to junction table
+              await tx.delete(taskAssignees).where(eq(taskAssignees.taskId, taskId));
+              const rows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+              if (assigneeId) rows.push({ taskId, userId: assigneeId });
+              if (assigneeAgentId) rows.push({ taskId, agentPageId: assigneeAgentId });
+              if (rows.length > 0) await tx.insert(taskAssignees).values(rows);
+            }
+
+            return updatedTask;
+          });
 
           // Update task list status based on task completion
           if (status !== undefined) {
+            const doneStatusSlugs = validConfigs.length > 0
+              ? new Set(validConfigs.filter(c => c.group === 'done').map(c => c.slug))
+              : new Set(['completed']);
+            const inProgressSlugs = validConfigs.length > 0
+              ? new Set(validConfigs.filter(c => c.group === 'in_progress').map(c => c.slug))
+              : new Set(['in_progress']);
+
             const siblingTasks = await db
               .select()
               .from(taskItems)
               .where(eq(taskItems.taskListId, existingTask.taskListId));
 
             const allCompleted = siblingTasks.every(t =>
-              t.id === taskId ? status === 'completed' : t.status === 'completed'
+              t.id === taskId ? doneStatusSlugs.has(status) : doneStatusSlugs.has(t.status)
             );
 
             if (allCompleted) {
               await db.update(taskLists).set({ status: 'completed' }).where(eq(taskLists.id, existingTask.taskListId));
-            } else if (status === 'in_progress') {
+            } else if (inProgressSlugs.has(status)) {
               await db.update(taskLists).set({ status: 'in_progress' }).where(and(
                 eq(taskLists.id, existingTask.taskListId),
                 eq(taskLists.status, 'pending')
@@ -209,13 +267,13 @@ Assignment:
           // Broadcast update event
           await broadcastTaskEvent({
             type: 'task_updated',
-            taskId: updatedTask.id,
+            taskId: resultTask.id,
             userId,
             pageId: taskList.pageId || undefined,
-            data: { title: updatedTask.title, note },
+            data: { title: resultTask.title, note },
           });
 
-          message = `Updated task "${updatedTask.title}"`;
+          message = `Updated task "${resultTask.title}"`;
         } else {
           // CREATE new task - requires pageId of a TASK_LIST page
 
@@ -294,6 +352,19 @@ Assignment:
             }
           }
 
+          // Validate custom status if provided
+          const resolvedStatus = status || 'pending';
+          const statusConfigsForList = await db.query.taskStatusConfigs.findMany({
+            where: eq(taskStatusConfigs.taskListId, taskList!.id),
+            columns: { slug: true, group: true },
+          });
+          if (statusConfigsForList.length > 0 && status) {
+            const matched = statusConfigsForList.find(c => c.slug === status);
+            if (!matched) {
+              throw new Error(`Invalid status "${status}". Valid: ${statusConfigsForList.map(c => c.slug).join(', ')}`);
+            }
+          }
+
           // Create document page and task in transaction
           const result = await db.transaction(async (tx) => {
             // Create document page for the task
@@ -308,16 +379,19 @@ Assignment:
             }).returning();
 
             // Create task with link to the page
+            const primaryUserId = assigneeId || (assigneeIds?.find(a => a.type === 'user')?.id) || null;
+            const primaryAgentId = assigneeAgentId || (assigneeIds?.find(a => a.type === 'agent')?.id) || null;
+
             const [newTask] = await tx.insert(taskItems).values({
               taskListId: taskList!.id,
               userId,
               pageId: taskPage.id,
               title: title!,
               description: description || null,
-              status: status || 'pending',
+              status: resolvedStatus,
               priority: priority || 'medium',
-              assigneeId: assigneeId || null,
-              assigneeAgentId: assigneeAgentId || null,
+              assigneeId: primaryUserId,
+              assigneeAgentId: primaryAgentId,
               dueDate: dueDate ? new Date(dueDate) : null,
               position: nextTaskPosition,
               metadata: {
@@ -325,6 +399,21 @@ Assignment:
                 note,
               },
             }).returning();
+
+            // Create multiple assignees in junction table
+            const assigneeRows: { taskId: string; userId?: string; agentPageId?: string }[] = [];
+            if (assigneeIds && assigneeIds.length > 0) {
+              for (const a of assigneeIds) {
+                if (a.type === 'user') assigneeRows.push({ taskId: newTask.id, userId: a.id });
+                else if (a.type === 'agent') assigneeRows.push({ taskId: newTask.id, agentPageId: a.id });
+              }
+            } else {
+              if (primaryUserId) assigneeRows.push({ taskId: newTask.id, userId: primaryUserId });
+              if (primaryAgentId) assigneeRows.push({ taskId: newTask.id, agentPageId: primaryAgentId });
+            }
+            if (assigneeRows.length > 0) {
+              await tx.insert(taskAssignees).values(assigneeRows);
+            }
 
             return { task: newTask, page: taskPage };
           });
@@ -386,6 +475,12 @@ Assignment:
                 id: true,
                 title: true,
                 type: true,
+              },
+            },
+            assignees: {
+              with: {
+                user: { columns: { id: true, name: true } },
+                agentPage: { columns: { id: true, title: true } },
               },
             },
           },
@@ -452,6 +547,12 @@ Assignment:
               title: t.assigneeAgent.title,
               type: t.assigneeAgent.type,
             } : null,
+            assignees: t.assignees?.map(a => ({
+              userId: a.userId,
+              agentPageId: a.agentPageId,
+              user: a.user ? { id: a.user.id, name: a.user.name } : null,
+              agentPage: a.agentPage ? { id: a.agentPage.id, title: a.agentPage.title } : null,
+            })) || [],
           })),
           message,
         };
@@ -472,13 +573,13 @@ Assignment:
 By default, returns tasks assigned to YOU (the current agent).
 Optionally filter by:
 - agentId: See tasks assigned to a specific agent
-- status: Filter by task status (pending, in_progress, completed, blocked)
+- status: Filter by task status slug (e.g. pending, in_progress, completed, blocked, or any custom status)
 - driveId: Only show tasks from a specific drive
 
 This helps agents understand their responsibilities and coordinate work with other agents.`,
     inputSchema: z.object({
       agentId: z.string().optional().describe('Agent page ID to query (defaults to current agent if in agent context)'),
-      status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional().describe('Filter by task status'),
+      status: z.string().optional().describe('Filter by task status slug (e.g. pending, in_progress, completed, blocked)'),
       driveId: z.string().optional().describe('Filter by drive ID'),
       includeCompleted: z.boolean().default(false).describe('Include completed tasks (default: false)'),
     }),
@@ -532,8 +633,8 @@ This helps agents understand their responsibilities and coordinate work with oth
         if (status) {
           conditions.push(eq(taskItems.status, status));
         } else if (!includeCompleted) {
-          // Exclude completed by default
-          conditions.push(not(eq(taskItems.status, 'completed')));
+          // Exclude completed by default (use completedAt for custom status support)
+          conditions.push(isNull(taskItems.completedAt));
         }
 
         // Query tasks assigned to the agent
@@ -588,13 +689,23 @@ This helps agents understand their responsibilities and coordinate work with oth
           return true;
         });
 
-        // Group tasks by status for easier consumption
-        const tasksByStatus = {
-          pending: filteredTasks.filter(t => t.status === 'pending'),
-          in_progress: filteredTasks.filter(t => t.status === 'in_progress'),
-          blocked: filteredTasks.filter(t => t.status === 'blocked'),
-          completed: filteredTasks.filter(t => t.status === 'completed'),
-        };
+        // Build group lookup from status configs across all task lists
+        const uniqueTaskListIds = [...new Set(filteredTasks.map(t => t.taskList?.id).filter(Boolean))] as string[];
+        const allConfigs = uniqueTaskListIds.length > 0
+          ? await db.query.taskStatusConfigs.findMany({
+              where: inArray(taskStatusConfigs.taskListId, uniqueTaskListIds),
+            })
+          : [];
+        const slugToGroup = new Map(allConfigs.map(c => [c.slug, c.group]));
+
+        // Group tasks by config group (fall back to completedAt/status heuristic)
+        const byGroup: Record<string, typeof filteredTasks> = { todo: [], in_progress: [], done: [] };
+        for (const t of filteredTasks) {
+          const group = slugToGroup.get(t.status)
+            || (t.completedAt ? 'done' : t.status === 'in_progress' || t.status === 'blocked' ? 'in_progress' : 'todo');
+          if (!byGroup[group]) byGroup[group] = [];
+          byGroup[group].push(t);
+        }
 
         return {
           success: true,
@@ -605,10 +716,11 @@ This helps agents understand their responsibilities and coordinate work with oth
           },
           summary: {
             total: filteredTasks.length,
-            pending: tasksByStatus.pending.length,
-            in_progress: tasksByStatus.in_progress.length,
-            blocked: tasksByStatus.blocked.length,
-            completed: tasksByStatus.completed.length,
+            byGroup: {
+              todo: byGroup.todo?.length || 0,
+              in_progress: byGroup.in_progress?.length || 0,
+              done: byGroup.done?.length || 0,
+            },
           },
           tasks: filteredTasks.map(t => ({
             id: t.id,

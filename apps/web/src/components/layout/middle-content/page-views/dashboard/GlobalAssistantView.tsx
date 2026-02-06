@@ -41,7 +41,6 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -49,7 +48,6 @@ import { AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/share
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
@@ -62,9 +60,12 @@ import {
   useMCPTools,
   useMessageActions,
   useProviderSettings,
+  useChatTransport,
+  useStreamingRegistration,
+  useChatStop,
   LocationContext,
 } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import {
   ProviderSetupCard,
@@ -77,7 +78,8 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
-  const { setRightSidebarOpen, setRightSheetOpen } = useLayoutStore();
+  const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
+  const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -95,19 +97,18 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // AGENT STORE - for agent selection and conversation management
   // ============================================
-  const {
-    selectedAgent,
-    selectAgent,
-    initializeFromUrlOrCookie,
-    conversationId: agentConversationId,
-    conversationMessages: agentInitialMessages,
-    isConversationLoading: agentIsLoading,
-    setConversationMessages: setAgentStoreMessages,
-    createNewConversation: createAgentConversation,
-    loadMostRecentConversation,
-    setAgentStreaming,
-    setAgentStopStreaming,
-  } = usePageAgentDashboardStore();
+  const selectedAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
+  const selectAgent = usePageAgentDashboardStore((state) => state.selectAgent);
+  const initializeFromUrlOrCookie = usePageAgentDashboardStore((state) => state.initializeFromUrlOrCookie);
+  const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
+  const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
+  const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
+  const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
+  const loadMostRecentConversation = usePageAgentDashboardStore((state) => state.loadMostRecentConversation);
+  const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
+  const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
+  const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
@@ -171,7 +172,8 @@ const GlobalAssistantView: React.FC = () => {
   } = useMCPTools({ conversationId: currentConversationId });
 
   // Get drives from store
-  const { drives, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -257,24 +259,22 @@ const GlobalAssistantView: React.FC = () => {
   // CHAT CONFIGURATION
   // ============================================
 
+  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+
   // Agent mode chat config
   const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId) return null;
+    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: agentTransport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
     };
-  }, [selectedAgent, agentConversationId, agentInitialMessages]);
+  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
 
   // Global mode chat
   const {
@@ -308,19 +308,17 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const latestAgentMessagesRef = useRef(agentMessages);
+  const latestGlobalMessagesRef = useRef(globalLocalMessages);
 
-  // Wrap stop handler to abort server-side stream before client-side stop
-  // This ensures the server stops processing when user clicks Stop
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  const stop = useCallback(async () => {
-    try {
-      if (currentConversationId) {
-        await abortActiveStream({ chatId: currentConversationId });
-      }
-    } finally {
-      rawStop();
-    }
-  }, [currentConversationId, rawStop]);
+  useEffect(() => {
+    latestAgentMessagesRef.current = agentMessages;
+  }, [agentMessages]);
+
+  useEffect(() => {
+    latestGlobalMessagesRef.current = globalLocalMessages;
+  }, [globalLocalMessages]);
+  const stop = useChatStop(currentConversationId, rawStop);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -330,20 +328,36 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // MESSAGE ACTIONS (shared hook)
   // ============================================
+  const agentSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestAgentMessagesRef.current)
+          : nextOrUpdater;
+      setAgentMessages(nextMessages);
+      setAgentStoreMessages(nextMessages);
+    },
+    [setAgentMessages, setAgentStoreMessages]
+  );
+
+  const globalSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestGlobalMessagesRef.current)
+          : nextOrUpdater;
+      setGlobalMessages(nextMessages);
+      setGlobalLocalMessages(nextMessages);
+    },
+    [setGlobalMessages, setGlobalLocalMessages]
+  );
+
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
     useMessageActions({
       agentId: selectedAgent?.id || null,
       conversationId: currentConversationId,
       messages,
-      setMessages: selectedAgent
-        ? (msgs) => {
-            setAgentMessages(msgs);
-            setAgentStoreMessages(msgs); // Sync to store
-          }
-        : (msgs) => {
-            setGlobalMessages(msgs);
-            setGlobalLocalMessages(msgs);
-          },
+      setMessages: selectedAgent ? agentSetMessages : globalSetMessages,
       regenerate,
     });
 
@@ -525,20 +539,11 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
   // Register streaming state with editing store
-  useEffect(() => {
-    const componentId = `global-assistant-${currentConversationId || 'init'}`;
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        conversationId: currentConversationId || undefined,
-        componentName: 'GlobalAssistantView',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, currentConversationId]);
+  useStreamingRegistration(
+    `global-assistant-${currentConversationId || 'init'}`,
+    isStreaming,
+    { conversationId: currentConversationId || undefined, componentName: 'GlobalAssistantView' }
+  );
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -548,9 +553,6 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // HANDLERS
   // ============================================
-
-  // Get setActiveTab from store for sidebar tab control
-  const { setActiveTab } = usePageAgentDashboardStore();
 
   const handleNewConversation = async () => {
     if (selectedAgent) {
@@ -834,4 +836,4 @@ const GlobalAssistantView: React.FC = () => {
   );
 };
 
-export default GlobalAssistantView;
+export default React.memo(GlobalAssistantView);

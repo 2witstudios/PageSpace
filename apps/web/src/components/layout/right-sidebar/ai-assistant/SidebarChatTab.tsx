@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { DefaultChatTransport, UIMessage } from 'ai';
+import { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
@@ -15,7 +15,6 @@ import {
 } from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
@@ -23,7 +22,8 @@ import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInf
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
+import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceModeOverlay } from '@/components/ai/voice';
@@ -173,24 +173,22 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Agent Chat Configuration
   // ============================================
+  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+
   const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId) return null;
+    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: agentTransport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Sidebar Agent Chat error:', error);
         toast.error('Chat error. Please try again.');
       },
     };
-  }, [selectedAgent, agentConversationId, agentInitialMessages]);
+  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
 
   // ============================================
   // Sidebar Chat (custom hook - unified interface)
@@ -266,7 +264,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Drive Loading
   // ============================================
-  const { fetchDrives } = useDriveStore();
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   useEffect(() => {
     fetchDrives();
@@ -427,22 +425,11 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Editing Store Registration
   // ============================================
-  useEffect(() => {
-    const componentId = `assistant-sidebar-${currentConversationId || 'init'}`;
-
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        conversationId: currentConversationId || undefined,
-        componentName: 'SidebarChatTab',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, currentConversationId]);
+  useStreamingRegistration(
+    `assistant-sidebar-${currentConversationId || 'init'}`,
+    status === 'submitted' || status === 'streaming',
+    { conversationId: currentConversationId || undefined, componentName: 'SidebarChatTab' }
+  );
 
   // ============================================
   // Effects: UI State
@@ -946,4 +933,4 @@ const SidebarChatTab: React.FC = () => {
   );
 };
 
-export default SidebarChatTab;
+export default React.memo(SidebarChatTab);

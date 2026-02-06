@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -40,7 +40,7 @@ interface MessageWithReactions extends MessageWithUser {
   } | null;
 }
 
-export default function ChannelView({ page }: ChannelViewProps) {
+function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -48,7 +48,9 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
-  const { socket, connectionStatus, connect } = useSocketStore();
+  const socket = useSocketStore((state) => state.socket);
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
+  const connect = useSocketStore((state) => state.connect);
 
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
@@ -162,6 +164,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
       // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
+      toast.error('Failed to send message. Please try again.');
     }
   };
 
@@ -231,14 +234,14 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const handleRemoveReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!user) return;
 
-    // Optimistic update
-    const removedReaction = messages
-      .find((m) => m.id === messageId)
-      ?.reactions?.find((r) => r.emoji === emoji && r.userId === user.id);
-
+    // Capture removedReaction inside the updater so messages isn't a dependency
+    let removedReaction: Reaction | undefined;
     setMessages((prev) =>
       prev.map((m) => {
         if (m.id !== messageId) return m;
+        removedReaction ??= m.reactions?.find(
+          (r) => r.emoji === emoji && r.userId === user.id
+        );
         return {
           ...m,
           reactions: (m.reactions || []).filter(
@@ -253,19 +256,20 @@ export default function ChannelView({ page }: ChannelViewProps) {
     } catch {
       // Revert optimistic update on error
       if (removedReaction) {
+        const reactionToRestore = removedReaction;
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id !== messageId) return m;
             return {
               ...m,
-              reactions: [...(m.reactions || []), removedReaction],
+              reactions: [...(m.reactions || []), reactionToRestore],
             };
           })
         );
       }
       toast.error('Failed to remove reaction');
     }
-  }, [page.id, user, messages]);
+  }, [page.id, user]);
 
   // Handle real-time reaction updates
   useEffect(() => {
@@ -431,3 +435,12 @@ export default function ChannelView({ page }: ChannelViewProps) {
     </div>
   );
 }
+
+// Only re-render when the channel identity changes.
+// Update this comparator if additional page fields are consumed.
+export default memo(
+  ChannelView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.driveId === nextProps.page.driveId
+);

@@ -2,11 +2,16 @@
  * Types for the Tasks Dashboard components
  */
 
-// Re-export shared types from task-list-types
-import type { TaskStatus as SharedTaskStatus, TaskPriority as SharedTaskPriority } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+// Re-export shared types
+import type { TaskPriority as SharedTaskPriority, TaskAssigneeData, TaskStatusConfig } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import type { TaskStatusGroup } from '@/lib/task-status-config';
 
-export type TaskStatus = SharedTaskStatus;
+export type TaskStatus = string;
 export type TaskPriority = SharedTaskPriority;
+export type { TaskAssigneeData, TaskStatusConfig };
+export type { TaskStatusGroup };
+
+export type StatusConfigsByTaskList = Record<string, TaskStatusConfig[]>;
 
 export interface TaskUser {
   id: string;
@@ -51,13 +56,18 @@ export interface Task {
   // Relations
   assignee: TaskUser | null;
   assigneeAgent: TaskAgent | null;
+  assignees?: TaskAssigneeData[];
   user: TaskUser | null;
   page: TaskPage | null;
   taskList: TaskList | null;
-  // Enriched fields
+  // Enriched fields from API
   driveId?: string;
   taskListPageId?: string;
   taskListPageTitle?: string;
+  // Status metadata (computed from custom status configs)
+  statusGroup?: TaskStatusGroup;
+  statusLabel?: string;
+  statusColor?: string;
 }
 
 export interface TaskFilters {

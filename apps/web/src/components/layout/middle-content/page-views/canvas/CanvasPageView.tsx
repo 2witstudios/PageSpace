@@ -23,7 +23,11 @@ interface CanvasPageViewProps {
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
 const CanvasPageView = ({ page }: CanvasPageViewProps) => {
-  const { content, setContent, updateContentFromServer, setDocument, setSaveCallback } = useDocumentStore();
+  const content = useDocumentStore((state) => state.content);
+  const setContent = useDocumentStore((state) => state.setContent);
+  const updateContentFromServer = useDocumentStore((state) => state.updateContentFromServer);
+  const setDocument = useDocumentStore((state) => state.setDocument);
+  const setSaveCallback = useDocumentStore((state) => state.setSaveCallback);
   const [activeTab, setActiveTab] = useState('view');
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -199,4 +203,9 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   );
 };
 
-export default CanvasPageView;
+export default React.memo(
+  CanvasPageView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.content === nextProps.page.content
+);

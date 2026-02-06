@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import {
   ExternalLink,
@@ -26,24 +26,27 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
+import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  STATUS_CONFIG,
   PRIORITY_CONFIG,
-  STATUS_ORDER,
+  buildStatusConfig,
+  getStatusOrder,
   type TaskPriority,
+  type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Task } from './types';
+import { getStatusDisplay } from './task-helpers';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
+  statusConfigs: TaskStatusConfig[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
   onToggleComplete: (task: Task) => void;
-  onAssigneeChange: (task: Task, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange: (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (task: Task, date: Date | null) => void;
   onSaveTitle: (task: Task, title: string) => void;
   onDelete: (task: Task) => void;
@@ -52,12 +55,13 @@ export interface TaskDetailSheetProps {
 
 export function TaskDetailSheet({
   task,
+  statusConfigs,
   open,
   onOpenChange,
   onStatusChange,
   onPriorityChange,
   onToggleComplete,
-  onAssigneeChange,
+  onMultiAssigneeChange,
   onDueDateChange,
   onSaveTitle,
   onDelete,
@@ -73,10 +77,15 @@ export function TaskDetailSheet({
     setEditingTitle('');
   }, [task?.id]);
 
+  const statusConfigMap = useMemo(() => buildStatusConfig(statusConfigs), [statusConfigs]);
+  const taskStatusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
+
   if (!task) return null;
 
-  const isCompleted = task.status === 'completed';
+  const statusDisplay = getStatusDisplay(task);
+  const isCompleted = statusDisplay.group === 'done';
   const hasLinkedPage = Boolean(task.pageId && task.driveId);
+  const { label: statusLabel, color: statusColor } = statusDisplay;
 
   const startEditTitle = () => {
     setEditingTitle(task.title);
@@ -176,19 +185,22 @@ export function TaskDetailSheet({
               >
                 <SelectTrigger className="h-10 w-full">
                   <SelectValue>
-                    <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                      {STATUS_CONFIG[task.status].label}
+                    <Badge className={cn('text-xs', statusColor)}>
+                      {statusLabel}
                     </Badge>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {STATUS_ORDER.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      <Badge className={cn('text-xs', STATUS_CONFIG[status].color)}>
-                        {STATUS_CONFIG[status].label}
-                      </Badge>
-                    </SelectItem>
-                  ))}
+                  {taskStatusOrder.map((slug) => {
+                    const config = statusConfigMap[slug];
+                    return (
+                      <SelectItem key={slug} value={slug}>
+                        <Badge className={cn('text-xs', config?.color || '')}>
+                          {config?.label || slug}
+                        </Badge>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -230,16 +242,15 @@ export function TaskDetailSheet({
             </div>
           </div>
 
-          {/* Assignee */}
+          {/* Assignees */}
           {task.driveId && (
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Assignee</label>
+              <label className="text-xs font-medium text-muted-foreground">Assignees</label>
               <div className="rounded-md border px-1 py-1">
-                <AssigneeSelect
+                <MultiAssigneeSelect
                   driveId={task.driveId}
-                  currentAssignee={task.assignee}
-                  currentAssigneeAgent={task.assigneeAgent}
-                  onSelect={(assigneeId, agentId) => onAssigneeChange(task, assigneeId, agentId)}
+                  assignees={task.assignees || []}
+                  onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
                 />
               </div>
             </div>

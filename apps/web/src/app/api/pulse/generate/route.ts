@@ -44,6 +44,7 @@ import {
   type StackedDiff,
 } from '@pagespace/lib/content';
 import { readPageContent, loggers } from '@pagespace/lib/server';
+import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -637,6 +638,18 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
     const summary = result.text.trim();
 
+    // Track AI usage
+    const usage = result.usage;
+    AIMonitoring.trackUsage({
+      userId,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+      success: true,
+    });
+
     // Extract greeting
     let greeting: string | null = null;
     const greetingMatch = summary.match(/^([^.!?]+[!])\s*/);
@@ -645,8 +658,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     }
 
     // Save to database
-    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-    const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    const expiresAt = new Date(now.getTime() + 6 * 60 * 60 * 1000);
 
     const [savedSummary] = await db.insert(pulseSummaries).values({
       userId,
@@ -694,7 +707,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       },
       aiProvider: providerResult.provider,
       aiModel: providerResult.modelName,
-      periodStart: twoHoursAgo,
+      periodStart: sixHoursAgo,
       periodEnd: now,
       generatedAt: now,
       expiresAt,

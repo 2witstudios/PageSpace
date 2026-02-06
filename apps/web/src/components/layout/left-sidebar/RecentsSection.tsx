@@ -100,14 +100,13 @@ export default function RecentsSection() {
     <Collapsible
       open={!recentsCollapsed}
       onOpenChange={(open) => setRecentsCollapsed(!open)}
-      className="border-t border-[var(--separator)]"
     >
       <CollapsibleTrigger asChild>
         <Button
           variant="ghost"
-          className="w-full justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
+          className="w-full justify-between px-2 py-2.5 h-auto font-normal text-muted-foreground hover:text-foreground bg-[var(--sidebar-section-bg)]"
         >
-          <span className="text-xs font-medium flex items-center gap-1.5">
+          <span className="text-[11px] font-semibold tracking-wide flex items-center gap-1.5">
             <Clock className="h-3.5 w-3.5" />
             Recents
           </span>
@@ -196,8 +195,8 @@ function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemPr
 
 function RecentsSkeleton() {
   return (
-    <div className="border-t border-[var(--separator)]">
-      <div className="flex items-center justify-between px-2 py-2">
+    <div>
+      <div className="flex items-center justify-between px-2 py-2.5 bg-[var(--sidebar-section-bg)]">
         <Skeleton className="h-4 w-16" />
         <Skeleton className="h-3.5 w-3.5" />
       </div>

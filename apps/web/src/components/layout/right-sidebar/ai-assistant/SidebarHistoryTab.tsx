@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/context-menu';
 import { formatDistanceToNow } from 'date-fns';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { setConversationId } from '@/lib/url-state';
@@ -58,7 +58,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     loadConversation: loadGlobalConversation,
     createNewConversation: createNewGlobalConversation,
     currentConversationId: globalConversationId,
-  } = useGlobalChat();
+  } = useGlobalChatConversation();
 
   // Use sidebar agent state for agent conversation management (page context)
   const {
@@ -68,7 +68,9 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   } = usePageAgentSidebarState();
 
   // Use central agent store for dashboard context
-  const agentStore = usePageAgentDashboardStore();
+  const dashboardConversationId = usePageAgentDashboardStore((state) => state.conversationId);
+  const loadDashboardConversation = usePageAgentDashboardStore((state) => state.loadConversation);
+  const createDashboardConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -82,11 +84,11 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const activeConversationId = useMemo(() => {
     if (selectedAgent) {
       // Agent mode
-      return isDashboardContext ? agentStore.conversationId : sidebarAgentConversationId;
+      return isDashboardContext ? dashboardConversationId : sidebarAgentConversationId;
     }
     // Global assistant mode
     return globalConversationId;
-  }, [selectedAgent, isDashboardContext, agentStore.conversationId, sidebarAgentConversationId, globalConversationId]);
+  }, [selectedAgent, isDashboardContext, dashboardConversationId, sidebarAgentConversationId, globalConversationId]);
 
   // Filter conversations based on search query
   const filteredConversations = useMemo(() => {
@@ -165,7 +167,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     if (selectedAgent) {
       if (isDashboardContext) {
         // Dashboard context: load into shared agent store (GlobalAssistantView will react)
-        await agentStore.loadConversation(conversationId);
+        await loadDashboardConversation(conversationId);
       } else {
         // Page context: load into sidebar's own state
         try {
@@ -187,7 +189,13 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       // Update URL for browser history
       setConversationId(conversationId, 'push');
     }
-  }, [selectedAgent, isDashboardContext, agentStore, refreshSidebarAgentConversation, loadGlobalConversation]);
+  }, [
+    selectedAgent,
+    isDashboardContext,
+    loadDashboardConversation,
+    refreshSidebarAgentConversation,
+    loadGlobalConversation,
+  ]);
 
   const handleDeleteConversation = useCallback(async (conversationId: string) => {
     if (!confirm('Are you sure you want to delete this conversation?')) {
@@ -209,7 +217,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       if (conversationId === activeConversationId) {
         if (selectedAgent) {
           if (isDashboardContext) {
-            await agentStore.createNewConversation();
+            await createDashboardConversation();
           } else {
             await createNewSidebarAgentConversation();
           }
@@ -220,7 +228,14 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     } catch (error) {
       console.error('Failed to delete conversation:', error);
     }
-  }, [selectedAgent, activeConversationId, isDashboardContext, agentStore, createNewSidebarAgentConversation, createNewGlobalConversation]);
+  }, [
+    selectedAgent,
+    activeConversationId,
+    isDashboardContext,
+    createDashboardConversation,
+    createNewSidebarAgentConversation,
+    createNewGlobalConversation,
+  ]);
 
   // Determine if we should virtualize based on conversation count
   const shouldVirtualize = filteredConversations.length >= VIRTUALIZATION_THRESHOLD;
@@ -374,4 +389,4 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   );
 };
 
-export default SidebarHistoryTab;
+export default React.memo(SidebarHistoryTab);

@@ -31,7 +31,7 @@ export type PulseResponse = {
     greeting: string | null;
     generatedAt: Date;
     expiresAt: Date;
-    isStale: boolean; // True if older than 2 hours
+    isStale: boolean; // True if older than 6 hours
   } | null;
 
   // Real-time stats (always fresh)
@@ -62,7 +62,7 @@ export async function GET(req: Request) {
 
   try {
     const now = new Date();
-    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
@@ -194,7 +194,7 @@ export async function GET(req: Request) {
 
     // Determine if summary is stale
     const isStale = latestSummary
-      ? new Date(latestSummary.generatedAt).getTime() < twoHoursAgo.getTime()
+      ? new Date(latestSummary.generatedAt).getTime() < sixHoursAgo.getTime()
       : true;
 
     // Determine if client should refresh

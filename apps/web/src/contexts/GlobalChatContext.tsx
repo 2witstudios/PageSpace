@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { createStreamTrackingFetch } from '@/lib/ai/core/client';
+import { useChatTransport } from '@/lib/ai/shared';
 
 /**
  * Global Chat Context - ONLY for Global Assistant state
@@ -49,7 +49,18 @@ interface GlobalChatContextValue {
   refreshConversation: () => Promise<void>;
 }
 
+interface GlobalChatConversationContextValue {
+  currentConversationId: string | null;
+  initialMessages: UIMessage[];
+  isInitialized: boolean;
+  setCurrentConversationId: (id: string | null) => void;
+  loadConversation: (id: string) => Promise<void>;
+  createNewConversation: () => Promise<void>;
+  refreshConversation: () => Promise<void>;
+}
+
 const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
+const GlobalChatConversationContext = createContext<GlobalChatConversationContextValue | undefined>(undefined);
 
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // Conversation management state
@@ -203,35 +214,31 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     }
   }, [currentConversationId]);
 
+  // Stable transport that only recreates when conversation ID changes
+  const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
+  const transport = useChatTransport(currentConversationId, apiEndpoint);
+
   // Create stable chat config
   // IMPORTANT: Uses initialMessages which is set by loadConversation when switching conversations.
   // The chatConfig only changes when:
   // 1. currentConversationId changes (switching conversations)
   // 2. initialMessages changes (set during loadConversation)
-  // This keeps the config stable during normal messaging to avoid confusing useChat.
   const chatConfig = useMemo(() => {
-    if (!currentConversationId) return null;
-
-    const apiEndpoint = `/api/ai/global/${currentConversationId}/messages`;
+    if (!currentConversationId || !transport) return null;
 
     return {
       id: currentConversationId,
       messages: initialMessages,
-      transport: new DefaultChatTransport({
-        api: apiEndpoint,
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: currentConversationId }),
-      }),
-      experimental_throttle: 100, // Match agent mode throttle for consistent streaming feel
+      transport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
-        console.error('❌ Global Chat Error:', error);
+        console.error('Global Chat Error:', error);
         if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-          console.error('🔒 Authentication failed - user may need to log in again');
+          console.error('Authentication failed - user may need to log in again');
         }
       },
     };
-  }, [currentConversationId, initialMessages]);
+  }, [currentConversationId, transport, initialMessages]);
 
   // Context value
   const contextValue: GlobalChatContextValue = useMemo(() => ({
@@ -262,10 +269,30 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     refreshConversation,
   ]);
 
+  // Conversation-only context value for consumers that should not re-render on message stream updates
+  const conversationContextValue: GlobalChatConversationContextValue = useMemo(() => ({
+    currentConversationId,
+    initialMessages,
+    isInitialized,
+    setCurrentConversationId,
+    loadConversation,
+    createNewConversation,
+    refreshConversation,
+  }), [
+    currentConversationId,
+    initialMessages,
+    isInitialized,
+    loadConversation,
+    createNewConversation,
+    refreshConversation,
+  ]);
+
   return (
-    <GlobalChatContext.Provider value={contextValue}>
-      {children}
-    </GlobalChatContext.Provider>
+    <GlobalChatConversationContext.Provider value={conversationContextValue}>
+      <GlobalChatContext.Provider value={contextValue}>
+        {children}
+      </GlobalChatContext.Provider>
+    </GlobalChatConversationContext.Provider>
   );
 }
 
@@ -276,6 +303,17 @@ export function useGlobalChat() {
   const context = useContext(GlobalChatContext);
   if (!context) {
     throw new Error('useGlobalChat must be used within a GlobalChatProvider');
+  }
+  return context;
+}
+
+/**
+ * Hook to access global conversation controls without subscribing to live message stream state.
+ */
+export function useGlobalChatConversation() {
+  const context = useContext(GlobalChatConversationContext);
+  if (!context) {
+    throw new Error('useGlobalChatConversation must be used within a GlobalChatProvider');
   }
   return context;
 }

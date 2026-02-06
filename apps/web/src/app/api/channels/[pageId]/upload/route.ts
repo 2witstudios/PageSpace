@@ -10,7 +10,7 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
-import { createUploadServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { createUploadServiceToken, isPermissionDeniedError } from '@pagespace/lib/services/validated-service-token';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -116,15 +116,33 @@ export async function POST(
     const driveId = channelPage.driveId;
 
     // Create service token for processor
-    const { token: serviceToken } = await createUploadServiceToken({
-      userId,
-      driveId,
-      pageId, // Channel page ID for permission validation
-    });
+    // Pass pageId as both the resource and parentId so permission is checked
+    // against the channel page (page-level), not drive membership (drive-level).
+    // Without parentId, createUploadServiceToken falls back to drive membership
+    // checks, which fails for page-level collaborators who aren't drive members.
+    let serviceToken: string;
+    try {
+      const { token } = await createUploadServiceToken({
+        userId,
+        driveId,
+        pageId,
+        parentId: pageId,
+      });
+      serviceToken = token;
+    } catch (error) {
+      if (isPermissionDeniedError(error)) {
+        return NextResponse.json(
+          { error: 'Permission denied for file upload' },
+          { status: 403 }
+        );
+      }
+      throw error;
+    }
 
     // Forward file to processor service
     const processorFormData = new FormData();
     processorFormData.append('file', file);
+    processorFormData.append('pageId', pageId);
     processorFormData.append('userId', userId);
     processorFormData.append('driveId', driveId);
 

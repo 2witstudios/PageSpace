@@ -22,7 +22,8 @@ import { DeleteDriveDialog } from "@/components/dialogs/DeleteDriveDialog";
 import { Drive } from "@pagespace/lib";
 
 export default function GlobalTrashPage() {
-  const { drives, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const { user } = useAuth();
   const [deleteDialogState, setDeleteDialogState] = useState<{ isOpen: boolean; drive: Drive | null }>({ isOpen: false, drive: null });
 

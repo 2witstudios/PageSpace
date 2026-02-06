@@ -18,13 +18,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { getPermissionErrorMessage, canManageDrive } from "@/hooks/usePermissions";
 import { useDriveStore } from "@/hooks/useDrive";
-import { useLayoutStore } from "@/stores/useLayoutStore";
 
 import CreatePageDialog from "./CreatePageDialog";
 import DashboardFooter from "./DashboardFooter";
 import DashboardSidebar from "./DashboardSidebar";
 import DriveFooter from "./DriveFooter";
-import Pulse from "./Pulse";
 import PageTree from "./page-tree/PageTree";
 import PrimaryNavigation from "./PrimaryNavigation";
 import DriveSwitcher from "@/components/layout/navbar/DriveSwitcher";
@@ -46,8 +44,6 @@ export default function Sidebar({ className }: SidebarProps) {
   // Use selective Zustand subscriptions to prevent unnecessary re-renders
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
-  const dashboardFooterCollapsed = useLayoutStore((state) => state.dashboardFooterCollapsed);
-
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
   const { mutate } = useSWRConfig();
 
@@ -145,9 +141,6 @@ export default function Sidebar({ className }: SidebarProps) {
 
         {/* Drive footer - only shown when in a drive */}
         {driveId && <DriveFooter canManage={canManage} />}
-
-        {/* Pulse - shown when NOT in a drive and User Actions is collapsed */}
-        {!driveId && dashboardFooterCollapsed && <Pulse />}
 
         {/* Dashboard footer - only shown when NOT in a drive */}
         {!driveId && <DashboardFooter />}

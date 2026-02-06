@@ -44,6 +44,7 @@ import {
   type StackedDiff,
 } from '@pagespace/lib/content';
 import { readPageContent, loggers } from '@pagespace/lib/server';
+import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { validateCronRequest } from '@/lib/auth/cron-auth';
 
 // System prompt for generating pulse summaries
@@ -110,10 +111,10 @@ export async function POST(req: Request) {
 
   try {
     const now = new Date();
-    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-    const fourHoursAgo = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
 
-    // Find active users (users with a session activity in the last 4 hours)
+    // Find active users (users with a session activity in the last 12 hours)
     // This targets users who are likely to see the summary soon
     const activeSessionUsers = await db
       .select({ userId: sessions.userId })
@@ -122,7 +123,7 @@ export async function POST(req: Request) {
         and(
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
-          gte(sessions.lastUsedAt, fourHoursAgo)
+          gte(sessions.lastUsedAt, twelveHoursAgo)
         )
       )
       .groupBy(sessions.userId);
@@ -134,14 +135,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'No active users', generated: 0 });
     }
 
-    // Check which users need a new summary (no summary in last 2 hours)
+    // Check which users need a new summary (no summary in last 6 hours)
     const usersWithRecentSummaries = await db
       .select({ userId: pulseSummaries.userId })
       .from(pulseSummaries)
       .where(
         and(
           inArray(pulseSummaries.userId, activeUserIds),
-          gte(pulseSummaries.generatedAt, twoHoursAgo)
+          gte(pulseSummaries.generatedAt, sixHoursAgo)
         )
       )
       .groupBy(pulseSummaries.userId);
@@ -776,6 +777,18 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
   const summary = result.text.trim();
 
+  // Track AI usage
+  const usage = result.usage;
+  AIMonitoring.trackUsage({
+    userId,
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+    success: true,
+  });
+
   // Extract greeting
   let greeting: string | null = null;
   const greetingMatch = summary.match(/^([^.!?]+[!])\s*/);
@@ -784,8 +797,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   }
 
   // Save to database
-  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-  const expiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+  const sixHoursAgoForPeriod = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+  const expiresAt = new Date(now.getTime() + 6 * 60 * 60 * 1000);
 
   await db.insert(pulseSummaries).values({
     userId,
@@ -833,7 +846,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     },
     aiProvider: providerResult.provider,
     aiModel: providerResult.modelName,
-    periodStart: twoHoursAgo,
+    periodStart: sixHoursAgoForPeriod,
     periodEnd: now,
     generatedAt: now,
     expiresAt,

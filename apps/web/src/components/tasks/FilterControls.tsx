@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { User, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,12 +12,11 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
-  STATUS_CONFIG,
-  STATUS_ORDER,
   type TaskStatus,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Drive } from './types';
+import type { Drive, StatusConfigsByTaskList } from './types';
+import { aggregateStatuses } from './task-helpers';
 
 type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 type AssigneeFilter = 'mine' | 'all';
@@ -34,6 +34,7 @@ export interface FilterControlsProps {
     assigneeFilter?: AssigneeFilter;
   };
   hasActiveFilters: boolean;
+  statusConfigsByTaskList?: StatusConfigsByTaskList;
   onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<{
     status?: TaskStatus;
@@ -51,11 +52,17 @@ export function FilterControls({
   selectedDriveId,
   filters,
   hasActiveFilters,
+  statusConfigsByTaskList,
   onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: FilterControlsProps) {
   const isMobile = layout === 'mobile';
+
+  const aggregatedStatuses = useMemo(
+    () => aggregateStatuses(statusConfigsByTaskList),
+    [statusConfigsByTaskList],
+  );
 
   // Drive selector
   const DriveSelector = (
@@ -88,9 +95,9 @@ export function FilterControls({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="all">All statuses</SelectItem>
-        {STATUS_ORDER.map((status) => (
-          <SelectItem key={status} value={status}>
-            {STATUS_CONFIG[status].label}
+        {aggregatedStatuses.map((s) => (
+          <SelectItem key={s.slug} value={s.slug}>
+            {s.label}
           </SelectItem>
         ))}
       </SelectContent>

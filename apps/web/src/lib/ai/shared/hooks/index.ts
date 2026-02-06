@@ -6,3 +6,6 @@ export { useMCPTools } from './useMCPTools';
 export { useConversations } from './useConversations';
 export { useMessageActions } from './useMessageActions';
 export { useProviderSettings } from './useProviderSettings';
+export { useChatTransport } from './useChatTransport';
+export { useStreamingRegistration } from './useStreamingRegistration';
+export { useChatStop } from './useChatStop';

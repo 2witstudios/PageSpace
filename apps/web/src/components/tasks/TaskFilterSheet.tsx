@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { User, Users, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,12 +19,11 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
-  STATUS_CONFIG,
-  STATUS_ORDER,
   type TaskStatus,
   type TaskPriority,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Drive } from './types';
+import type { Drive, StatusConfigsByTaskList } from './types';
+import { aggregateStatuses } from './task-helpers';
 
 type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 type AssigneeFilter = 'mine' | 'all';
@@ -42,6 +42,7 @@ export interface TaskFilterSheetProps {
     assigneeFilter?: AssigneeFilter;
   };
   activeFilterCount: number;
+  statusConfigsByTaskList?: StatusConfigsByTaskList;
   onDriveChange: (driveId: string) => void;
   onFiltersChange: (filters: Partial<{
     status?: TaskStatus;
@@ -60,10 +61,16 @@ export function TaskFilterSheet({
   selectedDriveId,
   filters,
   activeFilterCount,
+  statusConfigsByTaskList,
   onDriveChange,
   onFiltersChange,
   onClearFilters,
 }: TaskFilterSheetProps) {
+  const aggregatedStatuses = useMemo(
+    () => aggregateStatuses(statusConfigsByTaskList),
+    [statusConfigsByTaskList],
+  );
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -159,9 +166,9 @@ export function TaskFilterSheet({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                {STATUS_ORDER.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {STATUS_CONFIG[status].label}
+                {aggregatedStatuses.map((s) => (
+                  <SelectItem key={s.slug} value={s.slug}>
+                    {s.label}
                   </SelectItem>
                 ))}
               </SelectContent>

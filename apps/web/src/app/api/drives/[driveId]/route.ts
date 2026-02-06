@@ -11,6 +11,7 @@ import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -116,6 +117,11 @@ export async function PATCH(
       );
     }
 
+    trackDriveOperation(userId, 'update', driveId, {
+      name: updatedDrive?.name,
+      updatedFields: Object.keys(validatedBody),
+    });
+
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
     const updatedFields = Object.keys(validatedBody).filter(
@@ -205,6 +211,11 @@ export async function DELETE(
         slug: drive.slug,
       })
     );
+
+    trackDriveOperation(userId, 'delete', driveId, {
+      name: drive.name,
+      slug: drive.slug,
+    });
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);

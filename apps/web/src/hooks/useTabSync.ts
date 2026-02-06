@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
-import { useTabsStore } from '@/stores/useTabsStore';
+import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
 
 /**
  * Syncs URL navigation with the browser-style tabs store.
@@ -17,10 +17,6 @@ export function useTabSync() {
   const lastSyncedPath = useRef<string | null>(null);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
-  const tabs = useTabsStore((state) => state.tabs);
-  const activeTabId = useTabsStore((state) => state.activeTabId);
-  const createTab = useTabsStore((state) => state.createTab);
-  const navigateInActiveTab = useTabsStore((state) => state.navigateInActiveTab);
 
   useEffect(() => {
     // Wait for store to rehydrate from localStorage
@@ -29,15 +25,17 @@ export function useTabSync() {
     // Skip if we already synced this path
     if (lastSyncedPath.current === pathname) return;
 
+    const state = useTabsStore.getState();
+
     // If no tabs exist, create one from current path
-    if (tabs.length === 0) {
-      createTab({ path: pathname });
+    if (state.tabs.length === 0) {
+      state.createTab({ path: pathname });
       lastSyncedPath.current = pathname;
       return;
     }
 
     // Get active tab's current path
-    const activeTab = tabs.find(t => t.id === activeTabId);
+    const activeTab = selectActiveTab(state);
 
     // If active tab already at this path, just update sync ref
     if (activeTab?.path === pathname) {
@@ -46,7 +44,7 @@ export function useTabSync() {
     }
 
     // Navigate within the active tab
-    navigateInActiveTab(pathname);
+    state.navigateInActiveTab(pathname);
     lastSyncedPath.current = pathname;
-  }, [pathname, rehydrated, tabs, activeTabId, createTab, navigateInActiveTab]);
+  }, [pathname, rehydrated]);
 }

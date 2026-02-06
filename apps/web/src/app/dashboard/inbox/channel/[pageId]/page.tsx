@@ -70,7 +70,9 @@ export default function InboxChannelPage() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const channelInputRef = useRef<ChannelInputRef>(null);
 
-  const { socket, connectionStatus, connect } = useSocketStore();
+  const socket = useSocketStore((state) => state.socket);
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
+  const connect = useSocketStore((state) => state.connect);
   const { permissions } = usePermissions(pageId);
   const canEdit = permissions?.canEdit || false;
 
