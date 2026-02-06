@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useTabsStore } from "@/stores/useTabsStore";
+import { canGoBack as canGoBackFn, canGoForward as canGoForwardFn } from "@/lib/tabs/tab-navigation";
 
 export default function NavButtons() {
   const router = useRouter();
@@ -18,25 +19,27 @@ export default function NavButtons() {
   );
 
   const handleBack = useCallback(() => {
+    const { tabs, activeTabId } = useTabsStore.getState();
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    if (!activeTab || !canGoBackFn(activeTab)) return;
+
+    const targetPath = activeTab.history[activeTab.historyIndex - 1];
     goBackInActiveTab();
-    const state = useTabsStore.getState();
-    const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
-    if (activeTab) {
-      router.push(activeTab.path);
-    }
+    router.push(targetPath);
   }, [goBackInActiveTab, router]);
 
   const handleForward = useCallback(() => {
+    const { tabs, activeTabId } = useTabsStore.getState();
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    if (!activeTab || !canGoForwardFn(activeTab)) return;
+
+    const targetPath = activeTab.history[activeTab.historyIndex + 1];
     goForwardInActiveTab();
-    const state = useTabsStore.getState();
-    const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
-    if (activeTab) {
-      router.push(activeTab.path);
-    }
+    router.push(targetPath);
   }, [goForwardInActiveTab, router]);
 
   return (
-    <div className="flex items-center">
+    <div className="hidden sm:flex items-center">
       <Button
         variant="ghost"
         size="icon"
