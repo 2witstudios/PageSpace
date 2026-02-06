@@ -3,6 +3,8 @@ import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
   createSecureResponse,
   createSecureErrorResponse,
+  isPublicPageRoute,
+  shouldDisableCOEP,
 } from '@/middleware/security-headers';
 import { logSecurityEvent } from '@pagespace/lib/server';
 import {
@@ -61,7 +63,7 @@ export async function middleware(req: NextRequest) {
     const authHeader = req.headers.get('authorization');
     if (authHeader?.startsWith(MCP_BEARER_PREFIX) || authHeader?.startsWith(SESSION_BEARER_PREFIX)) {
       // API routes get restrictive CSP (no nonce needed)
-      const { response } = createSecureResponse(isProduction, req, true);
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return response;
     }
 
@@ -78,7 +80,13 @@ export async function middleware(req: NextRequest) {
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron'
     ) {
-      const { response } = createSecureResponse(isProduction, req, isAPIRoute);
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
+      return response;
+    }
+
+    // Public page routes (auth pages) get security headers but no session check
+    if (isPublicPageRoute(pathname)) {
+      const { response } = createSecureResponse(isProduction, req, { disableCOEP: shouldDisableCOEP(pathname) });
       return response;
     }
 
@@ -103,7 +111,7 @@ export async function middleware(req: NextRequest) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response } = createSecureResponse(isProduction, req, isAPIRoute);
+    const { response } = createSecureResponse(isProduction, req, { isAPIRoute, disableCOEP: shouldDisableCOEP(pathname) });
 
     return response;
   });
@@ -112,7 +120,7 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     {
-      source: '/((?!_next/static|_next/image|favicon.ico|auth).*)',
+      source: '/((?!_next/static|_next/image|favicon.ico).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },

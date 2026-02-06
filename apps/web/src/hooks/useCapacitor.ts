@@ -13,6 +13,8 @@ interface CapacitorState {
   isIOS: boolean;
   /** Whether running specifically on Android */
   isAndroid: boolean;
+  /** Whether running on iPad (iOS Capacitor with tablet-sized screen) */
+  isIPad: boolean;
   /** Whether state has been determined (for SSR hydration) */
   isReady: boolean;
 }
@@ -36,6 +38,7 @@ export function useCapacitor(): CapacitorState {
     platform: 'web',
     isIOS: false,
     isAndroid: false,
+    isIPad: false,
     isReady: false,
   });
 
@@ -46,11 +49,17 @@ export function useCapacitor(): CapacitorState {
 
     if (isCapacitor && capacitor) {
       const platform = capacitor.getPlatform?.() as Platform || 'web';
+      const isIOSPlatform = platform === 'ios';
+      // Detect iPad: iOS Capacitor + tablet-sized screen (min dimension >= 768px).
+      // All iPads have min(width, height) >= 768px; all iPhones are well under.
+      const isIPadDevice = isIOSPlatform &&
+        Math.min(window.screen.width, window.screen.height) >= 768;
       setState({
         isNative: true,
         platform,
-        isIOS: platform === 'ios',
+        isIOS: isIOSPlatform,
         isAndroid: platform === 'android',
+        isIPad: isIPadDevice,
         isReady: true,
       });
     } else {
@@ -59,6 +68,7 @@ export function useCapacitor(): CapacitorState {
         platform: 'web',
         isIOS: false,
         isAndroid: false,
+        isIPad: false,
         isReady: true,
       });
     }

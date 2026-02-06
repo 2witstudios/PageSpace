@@ -1,4 +1,5 @@
 import { loggers } from '@pagespace/lib/server';
+import { hasVisionCapability } from './vision-models';
 
 const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
 

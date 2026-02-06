@@ -5,6 +5,10 @@
  */
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
+  // OpenAI GPT-5.3 Models (all have vision)
+  'gpt-5.3-codex': true,
+  'openai/gpt-5.3-codex': true,
+
   // OpenAI GPT-5.2 Models (all have vision)
   'gpt-5.2': true,
   'gpt-5.2-codex': true,
@@ -46,6 +50,8 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'openai/gpt-4': true,
 
   // Anthropic Claude 3+ (all have vision)
+  'claude-opus-4-6-20260204': true,
+  'anthropic/claude-opus-4.6': true,
   'claude-opus-4-1-20250805': true,
   'claude-sonnet-4-1-20250805': true,
   'claude-3-7-sonnet-20250219': true,

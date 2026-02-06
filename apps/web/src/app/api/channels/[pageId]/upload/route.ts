@@ -142,6 +142,7 @@ export async function POST(
     // Forward file to processor service
     const processorFormData = new FormData();
     processorFormData.append('file', file);
+    processorFormData.append('pageId', pageId);
     processorFormData.append('userId', userId);
     processorFormData.append('driveId', driveId);
 
