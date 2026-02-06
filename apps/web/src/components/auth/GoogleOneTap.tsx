@@ -224,6 +224,10 @@ export function GoogleOneTap({
         script.src = GOOGLE_GSI_SCRIPT_URL;
         script.async = true;
         script.defer = true;
+        const wpNonce = (window as Record<string, unknown>).__webpack_nonce__;
+        if (typeof wpNonce === 'string') {
+          script.nonce = wpNonce;
+        }
         script.onload = initializeGoogleOneTap;
         script.onerror = () => {
           console.error('Failed to load Google Identity Services script');

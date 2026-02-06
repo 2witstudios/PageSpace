@@ -11,6 +11,8 @@ import {
   applySecurityHeaders,
   createSecureResponse,
   createSecureErrorResponse,
+  isPublicPageRoute,
+  shouldDisableCOEP,
   NONCE_HEADER,
 } from '../security-headers';
 
@@ -314,7 +316,7 @@ describe('Security Headers', () => {
     });
 
     it('uses API CSP policy when isAPIRoute is true', () => {
-      const { response } = createSecureResponse(false, undefined, true);
+      const { response } = createSecureResponse(false, undefined, { isAPIRoute: true });
 
       const csp = response.headers.get('Content-Security-Policy');
       expect(csp).toContain("default-src 'none'");
@@ -331,7 +333,7 @@ describe('Security Headers', () => {
     });
 
     it('does not set CSP in request headers for API routes', () => {
-      createSecureResponse(false, undefined, true);
+      createSecureResponse(false, undefined, { isAPIRoute: true });
 
       const requestHeaders = getLastRequestHeaders();
       expect(requestHeaders?.get('Content-Security-Policy')).toBeNull();
@@ -382,6 +384,69 @@ describe('Security Headers', () => {
       const response = createSecureErrorResponse('Error', 500, false);
 
       expect(response.headers.get('Strict-Transport-Security')).toBeNull();
+    });
+  });
+
+  describe('route classification', () => {
+    it('isPublicPageRoute identifies auth routes as public', () => {
+      expect(isPublicPageRoute('/auth/signin')).toBe(true);
+      expect(isPublicPageRoute('/auth/signup')).toBe(true);
+      expect(isPublicPageRoute('/auth')).toBe(true);
+      expect(isPublicPageRoute('/dashboard')).toBe(false);
+      expect(isPublicPageRoute('/authorize')).toBe(false);
+    });
+
+    it('shouldDisableCOEP returns true for auth and Stripe routes', () => {
+      expect(shouldDisableCOEP('/auth/signin')).toBe(true);
+      expect(shouldDisableCOEP('/auth')).toBe(true);
+      expect(shouldDisableCOEP('/settings/plan')).toBe(true);
+      expect(shouldDisableCOEP('/settings/billing')).toBe(true);
+      expect(shouldDisableCOEP('/dashboard')).toBe(false);
+      expect(shouldDisableCOEP('/authentication')).toBe(false);
+      expect(shouldDisableCOEP('/auth-callback')).toBe(false);
+    });
+
+    it('auth routes receive CSP headers with valid nonce', () => {
+      const mockRequest = new Request('https://example.com/auth/signin');
+      const { response, nonce } = createSecureResponse(false, mockRequest, { disableCOEP: true });
+
+      const csp = response.headers.get('Content-Security-Policy');
+      expect(csp).toContain(`nonce-${nonce}`);
+      expect(csp).toContain('strict-dynamic');
+    });
+
+    it('auth routes receive all security headers but disable COEP', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: true, disableCOEP: true });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(response.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+      expect(response.headers.has('Strict-Transport-Security')).toBe(true);
+      expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
+    });
+
+    it('createSecureResponse accepts options object and always returns security headers', () => {
+      // With disableCOEP: true
+      const { response: r1 } = createSecureResponse(false, undefined, { disableCOEP: true });
+      expect(r1.headers.has('Content-Security-Policy')).toBe(true);
+      expect(r1.headers.has('X-Frame-Options')).toBe(true);
+      expect(r1.headers.has('X-Content-Type-Options')).toBe(true);
+      expect(r1.headers.has('Referrer-Policy')).toBe(true);
+      expect(r1.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
+
+      // With disableCOEP: false
+      const { response: r2 } = createSecureResponse(false, undefined, { disableCOEP: false });
+      expect(r2.headers.has('Content-Security-Policy')).toBe(true);
+      expect(r2.headers.has('X-Frame-Options')).toBe(true);
+      expect(r2.headers.has('Cross-Origin-Embedder-Policy')).toBe(true);
+
+      // With isAPIRoute: true
+      const { response: r3 } = createSecureResponse(false, undefined, { isAPIRoute: true });
+      const csp = r3.headers.get('Content-Security-Policy');
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).not.toContain('nonce-');
     });
   });
 });

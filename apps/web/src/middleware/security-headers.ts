@@ -114,12 +114,26 @@ export const applySecurityHeaders = (
   return response;
 };
 
+export const isPublicPageRoute = (pathname: string): boolean =>
+  pathname === '/auth' || pathname.startsWith('/auth/');
+
+export const shouldDisableCOEP = (pathname: string): boolean =>
+  pathname.startsWith('/settings/plan') ||
+  pathname.startsWith('/settings/billing') ||
+  pathname === '/auth' ||
+  pathname.startsWith('/auth/');
+
+type CreateSecureResponseOptions = {
+  isAPIRoute?: boolean;
+  disableCOEP?: boolean;
+};
+
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  isAPIRoute: boolean = false,
-  disableCOEP: boolean = false
+  options: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
+  const { isAPIRoute = false, disableCOEP = false } = options;
   const nonce = generateNonce();
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
