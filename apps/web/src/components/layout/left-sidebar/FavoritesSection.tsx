@@ -43,7 +43,7 @@ export default function FavoritesSection() {
     }
   }, [isSynced, fetchFavorites]);
 
-  const handleNavigate = useCallback((href: string, e?: MouseEvent) => {
+  const handleNavigate = useCallback((href: string, itemType: "page" | "drive", e?: MouseEvent) => {
     if (e && shouldOpenInNewTab(e)) {
       e.preventDefault();
       createTab({ path: href });
@@ -51,7 +51,7 @@ export default function FavoritesSection() {
     }
 
     router.push(href);
-    if (isSheetBreakpoint) {
+    if (isSheetBreakpoint && itemType !== "drive") {
       setLeftSheetOpen(false);
     }
   }, [router, isSheetBreakpoint, setLeftSheetOpen, createTab]);
@@ -113,7 +113,7 @@ export default function FavoritesSection() {
                 <FavoriteItem
                   key={favorite.id}
                   favorite={favorite}
-                  onNavigate={(e) => handleNavigate(href, e)}
+                  onNavigate={(e) => handleNavigate(href, favorite.itemType, e)}
                   onOpenInNewTab={() => handleOpenInNewTab(href)}
                   onRemove={() => handleRemoveFavorite(favorite.id)}
                   isNative={isNative}
