@@ -101,13 +101,11 @@ export const transformPageSpaceEventToGoogle = (event: CalendarEvent) => {
 
   // Set start/end times
   if (event.allDay) {
-    const startDate = new Date(event.startAt);
-    const endDate = new Date(event.endAt);
     body.start = {
-      date: `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}-${String(startDate.getDate()).padStart(2, '0')}`,
+      date: event.startAt.toISOString().slice(0, 10),
     };
     body.end = {
-      date: `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`,
+      date: event.endAt.toISOString().slice(0, 10),
     };
   } else {
     body.start = {
@@ -153,7 +151,7 @@ export const getActiveConnection = async (
   // Resolve the target calendar — use googleEmail if first calendar is 'primary'
   const firstCalendar = connection.selectedCalendars?.[0] || 'primary';
   const targetCalendarId = firstCalendar === 'primary'
-    ? connection.googleEmail
+    ? (connection.googleEmail || 'primary')
     : firstCalendar;
 
   return {

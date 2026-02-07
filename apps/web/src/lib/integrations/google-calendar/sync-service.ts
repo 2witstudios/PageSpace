@@ -112,7 +112,7 @@ export const syncGoogleCalendar = async (
     // Resolve 'primary' alias to actual email to prevent duplicates
     const rawCalendars = connection.selectedCalendars || ['primary'];
     const resolvedCalendars = rawCalendars.map(id =>
-      id === 'primary' ? connection.googleEmail : id
+      id === 'primary' ? (connection.googleEmail || 'primary') : id
     );
     const calendarsToSync = [...new Set(resolvedCalendars)];
     const accessToken = tokenResult.accessToken;
