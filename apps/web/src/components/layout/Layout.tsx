@@ -60,11 +60,11 @@ function Layout({ children }: LayoutProps) {
   const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
   const { isTablet } = useDeviceTier();
 
-  // On tablet (iPad), the left sidebar becomes persistent at 1024px+ (landscape)
-  // instead of 1280px+, giving iPad a persistent navigation sidebar while keeping
-  // all other views mobile-optimized (handled by useMobile() returning true for tablets).
+  // On tablet (iPad), both sidebars become persistent at 1024px+ (landscape)
+  // instead of 1280px+, giving iPad persistent navigation and assistant sidebars
+  // while keeping all other views mobile-optimized (handled by useMobile() returning true for tablets).
   const shouldOverlayLeftSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
-  const shouldOverlayRightSidebar = shouldOverlaySidebarsDefault;
+  const shouldOverlayRightSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
 
   useResponsivePanels();
 
@@ -151,13 +151,12 @@ function Layout({ children }: LayoutProps) {
       return;
     }
 
-    // Right sidebar is in overlay mode: toggle with exclusive logic
+    // Right sidebar is in overlay mode (desktop 1024-1279px): exclusive toggle
     if (shouldOverlayRightSidebar) {
       if (rightSidebarOpen) {
         setRightSidebarOpen(false);
       } else {
         // Only close left sidebar if left is also in overlay mode
-        // (On iPad, left sidebar is persistent so we don't close it)
         if (shouldOverlayLeftSidebar && leftSidebarOpen) {
           setLeftSidebarOpen(false);
         }
@@ -166,7 +165,7 @@ function Layout({ children }: LayoutProps) {
       return;
     }
 
-    // Right sidebar is in persistent mode (>=1280px on all platforms)
+    // Right sidebar is in persistent mode (>=1280px, or iPad >=1024px)
     toggleRightSidebar();
   }, [
     isSheetBreakpoint,
@@ -284,8 +283,13 @@ function Layout({ children }: LayoutProps) {
             )}
           </main>
 
-          {!shouldOverlayRightSidebar && rightSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
+          {!shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
+            <div className={cn(
+              "relative flex-shrink-0 pt-4 overflow-hidden",
+              isTablet
+                ? "flex w-[18rem]"
+                : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
+            )}>
               <RightPanel className="h-full w-full" />
             </div>
           )}
