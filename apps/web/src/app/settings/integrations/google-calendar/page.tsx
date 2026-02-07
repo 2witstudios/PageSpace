@@ -98,21 +98,6 @@ export default function GoogleCalendarSettingsPage() {
     }
   }, []);
 
-  const fetchCalendars = useCallback(async () => {
-    setLoadingCalendars(true);
-    try {
-      const response = await fetchWithAuth("/api/integrations/google-calendar/calendars");
-      if (response.ok) {
-        const data = await response.json();
-        setAvailableCalendars(data.calendars || []);
-      }
-    } catch (err) {
-      console.error("Failed to fetch calendars:", err);
-    } finally {
-      setLoadingCalendars(false);
-    }
-  }, []);
-
   const handleSync = useCallback(async (silent = false) => {
     setSyncing(true);
     try {
@@ -160,10 +145,6 @@ export default function GoogleCalendarSettingsPage() {
       if (!response.ok) {
         const data = await response.json();
         toast.error(data.error || "Failed to update calendars");
-        // Revert on failure
-        if (connection) {
-          setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
-        }
         return;
       }
 
@@ -171,11 +152,38 @@ export default function GoogleCalendarSettingsPage() {
       handleSync(true);
     } catch (err) {
       console.error("Failed to save calendar selection:", err);
-      if (connection) {
-        setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
-      }
     }
-  }, [connection, handleSync]);
+  }, [handleSync]);
+
+  const fetchCalendars = useCallback(async () => {
+    setLoadingCalendars(true);
+    try {
+      const response = await fetchWithAuth("/api/integrations/google-calendar/calendars");
+      if (response.ok) {
+        const data = await response.json();
+        const calendars: GoogleCalendar[] = data.calendars || [];
+        setAvailableCalendars(calendars);
+
+        // Replace 'primary' alias with actual primary calendar ID to prevent duplicates
+        const primaryCal = calendars.find((c) => c.primary);
+        if (primaryCal) {
+          setSelectedCalendarIds((prev) => {
+            if (!prev.includes("primary")) return prev;
+            const corrected = prev
+              .map((id) => (id === "primary" ? primaryCal.id : id))
+              .filter((id, i, arr) => arr.indexOf(id) === i);
+            // Schedule persistence outside the updater to avoid side effects
+            queueMicrotask(() => saveCalendarSelection(corrected));
+            return corrected;
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch calendars:", err);
+    } finally {
+      setLoadingCalendars(false);
+    }
+  }, [saveCalendarSelection]);
 
   useEffect(() => {
     fetchStatus();

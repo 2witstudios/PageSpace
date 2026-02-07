@@ -326,7 +326,11 @@ function MobileMonthAgenda({
     return monthDays
       .map((day: Date) => ({
         date: day,
-        events: getEventsForDay(events, day),
+        events: getEventsForDay(events, day).sort((a, b) => {
+          if (a.allDay && !b.allDay) return -1;
+          if (!a.allDay && b.allDay) return 1;
+          return new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+        }),
         tasks: showTasks ? getTasksForDay(tasks, day) : [],
       }))
       .filter((group: { events: CalendarEvent[]; tasks: TaskWithDueDate[] }) =>

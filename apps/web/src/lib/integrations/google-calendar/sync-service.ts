@@ -87,6 +87,16 @@ export const syncGoogleCalendar = async (
     // Get connection details
     const connection = await db.query.googleCalendarConnections.findFirst({
       where: eq(googleCalendarConnections.userId, userId),
+      columns: {
+        id: true,
+        status: true,
+        selectedCalendars: true,
+        targetDriveId: true,
+        markAsReadOnly: true,
+        syncCursor: true,
+        googleEmail: true,
+        webhookChannels: true,
+      },
     });
 
     if (!connection) {
@@ -99,7 +109,12 @@ export const syncGoogleCalendar = async (
       return result;
     }
 
-    const calendarsToSync = connection.selectedCalendars || ['primary'];
+    // Resolve 'primary' alias to actual email to prevent duplicates
+    const rawCalendars = connection.selectedCalendars || ['primary'];
+    const resolvedCalendars = rawCalendars.map(id =>
+      id === 'primary' ? (connection.googleEmail || 'primary') : id
+    );
+    const calendarsToSync = [...new Set(resolvedCalendars)];
     const accessToken = tokenResult.accessToken;
 
     // Determine time range for sync
