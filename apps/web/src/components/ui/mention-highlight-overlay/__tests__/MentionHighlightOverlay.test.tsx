@@ -19,19 +19,24 @@ describe('MentionHighlightOverlay', () => {
 
   describe('text rendering', () => {
     it('given plain text with no mentions, should render text in spans', () => {
-      render(<MentionHighlightOverlay value="hello world" />);
+      render(<MentionHighlightOverlay value="hello world" mentions={[]} />);
 
       expect(screen.getByText('hello world')).toBeInTheDocument();
     });
 
     it('given empty string, should render zero-width space', () => {
-      const { container } = render(<MentionHighlightOverlay value="" />);
+      const { container } = render(<MentionHighlightOverlay value="" mentions={[]} />);
 
       expect(container.textContent).toBe('\u200B');
     });
 
     it('given a single page mention, should render formatted @label', () => {
-      render(<MentionHighlightOverlay value="@[My Page](abc123:page)" />);
+      render(
+        <MentionHighlightOverlay
+          value="@My Page"
+          mentions={[{ label: 'My Page', id: 'abc123', type: 'page' }]}
+        />
+      );
 
       const mention = screen.getByText('@My Page');
       expect(mention).toBeInTheDocument();
@@ -39,7 +44,12 @@ describe('MentionHighlightOverlay', () => {
     });
 
     it('given a single user mention, should render formatted @label', () => {
-      render(<MentionHighlightOverlay value="@[Alice](user1:user)" />);
+      render(
+        <MentionHighlightOverlay
+          value="@Alice"
+          mentions={[{ label: 'Alice', id: 'user1', type: 'user' }]}
+        />
+      );
 
       const mention = screen.getByText('@Alice');
       expect(mention).toBeInTheDocument();
@@ -48,7 +58,13 @@ describe('MentionHighlightOverlay', () => {
 
     it('given mixed content with multiple mention types, should render all segments correctly', () => {
       const { container } = render(
-        <MentionHighlightOverlay value="Hello @[Doc](id1:page) and @[Bob](id2:user) bye" />
+        <MentionHighlightOverlay
+          value="Hello @Doc and @Bob bye"
+          mentions={[
+            { label: 'Doc', id: 'id1', type: 'page' },
+            { label: 'Bob', id: 'id2', type: 'user' },
+          ]}
+        />
       );
 
       const overlay = container.firstElementChild!;
@@ -64,7 +80,13 @@ describe('MentionHighlightOverlay', () => {
 
     it('given multiple page mentions, should render each with correct label', () => {
       render(
-        <MentionHighlightOverlay value="@[First](id1:page) then @[Second](id2:page)" />
+        <MentionHighlightOverlay
+          value="@First then @Second"
+          mentions={[
+            { label: 'First', id: 'id1', type: 'page' },
+            { label: 'Second', id: 'id2', type: 'page' },
+          ]}
+        />
       );
 
       expect(screen.getByText('@First')).toBeInTheDocument();
@@ -74,17 +96,26 @@ describe('MentionHighlightOverlay', () => {
 
   describe('page mention interaction', () => {
     it('given a page mention, should have role="link" and pointer-events-auto', () => {
-      render(<MentionHighlightOverlay value="@[My Page](abc123:page)" />);
+      render(
+        <MentionHighlightOverlay
+          value="@My Page"
+          mentions={[{ label: 'My Page', id: 'abc123', type: 'page' }]}
+        />
+      );
 
       const mention = screen.getByRole('link', { hidden: true });
       expect(mention).toHaveClass('pointer-events-auto');
     });
 
     it('given a page mention mousedown, should call navigateToPage with correct id', () => {
-      render(<MentionHighlightOverlay value="@[My Page](abc123:page)" />);
+      render(
+        <MentionHighlightOverlay
+          value="@My Page"
+          mentions={[{ label: 'My Page', id: 'abc123', type: 'page' }]}
+        />
+      );
 
       const mention = screen.getByRole('link', { hidden: true });
-      // fireEvent.mouseDown is needed since the handler is onMouseDown, not onClick
       const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
       Object.defineProperty(event, 'preventDefault', { value: vi.fn() });
       Object.defineProperty(event, 'stopPropagation', { value: vi.fn() });
@@ -97,18 +128,22 @@ describe('MentionHighlightOverlay', () => {
 
     it('given multiple page mentions, should navigate to correct id for each', () => {
       render(
-        <MentionHighlightOverlay value="@[First](id1:page) and @[Second](id2:page)" />
+        <MentionHighlightOverlay
+          value="@First and @Second"
+          mentions={[
+            { label: 'First', id: 'id1', type: 'page' },
+            { label: 'Second', id: 'id2', type: 'page' },
+          ]}
+        />
       );
 
       const links = screen.getAllByRole('link', { hidden: true });
       expect(links).toHaveLength(2);
 
-      // Click first mention
       const event1 = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
       links[0].dispatchEvent(event1);
       expect(mockNavigateToPage).toHaveBeenCalledWith('id1');
 
-      // Click second mention
       const event2 = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
       links[1].dispatchEvent(event2);
       expect(mockNavigateToPage).toHaveBeenCalledWith('id2');
@@ -117,13 +152,23 @@ describe('MentionHighlightOverlay', () => {
 
   describe('user mention interaction', () => {
     it('given a user mention, should NOT have role="link"', () => {
-      render(<MentionHighlightOverlay value="@[Alice](user1:user)" />);
+      render(
+        <MentionHighlightOverlay
+          value="@Alice"
+          mentions={[{ label: 'Alice', id: 'user1', type: 'user' }]}
+        />
+      );
 
       expect(screen.queryByRole('link', { hidden: true })).not.toBeInTheDocument();
     });
 
     it('given a user mention, should NOT have pointer-events-auto class', () => {
-      render(<MentionHighlightOverlay value="@[Alice](user1:user)" />);
+      render(
+        <MentionHighlightOverlay
+          value="@Alice"
+          mentions={[{ label: 'Alice', id: 'user1', type: 'user' }]}
+        />
+      );
 
       const mention = screen.getByText('@Alice');
       expect(mention).not.toHaveClass('pointer-events-auto');
@@ -132,14 +177,14 @@ describe('MentionHighlightOverlay', () => {
 
   describe('container attributes', () => {
     it('given rendered overlay, should have aria-hidden="true"', () => {
-      const { container } = render(<MentionHighlightOverlay value="test" />);
+      const { container } = render(<MentionHighlightOverlay value="test" mentions={[]} />);
 
       const overlay = container.firstElementChild;
       expect(overlay).toHaveAttribute('aria-hidden', 'true');
     });
 
     it('given rendered overlay, should have correct base classes', () => {
-      const { container } = render(<MentionHighlightOverlay value="test" />);
+      const { container } = render(<MentionHighlightOverlay value="test" mentions={[]} />);
 
       const overlay = container.firstElementChild;
       expect(overlay).toHaveClass(
@@ -153,7 +198,7 @@ describe('MentionHighlightOverlay', () => {
 
     it('given custom className, should merge with base classes', () => {
       const { container } = render(
-        <MentionHighlightOverlay value="test" className="px-3 py-2 custom-class" />
+        <MentionHighlightOverlay value="test" mentions={[]} className="px-3 py-2 custom-class" />
       );
 
       const overlay = container.firstElementChild;
@@ -162,7 +207,7 @@ describe('MentionHighlightOverlay', () => {
 
     it('given a ref, should forward to the container div', () => {
       const ref = React.createRef<HTMLDivElement>();
-      render(<MentionHighlightOverlay ref={ref} value="test" />);
+      render(<MentionHighlightOverlay ref={ref} value="test" mentions={[]} />);
 
       expect(ref.current).toBeInstanceOf(HTMLDivElement);
       expect(ref.current).toHaveAttribute('aria-hidden', 'true');

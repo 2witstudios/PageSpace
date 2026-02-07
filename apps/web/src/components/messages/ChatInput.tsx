@@ -1,13 +1,13 @@
 "use client";
 
-import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useRef, useState, useCallback } from 'react';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
-import { useMentionOverlay } from '@/hooks/useMentionOverlay';
+import { useMentionDisplay } from '@/hooks/useMentionDisplay';
 
 interface ChatInputProps {
   value: string;
@@ -32,24 +32,36 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
   crossDrive = false
 }, ref) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { overlayRef, hasMentions, handleScroll } = useMentionOverlay(textareaRef, value);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const context = useSuggestionContext();
   // Track IME composition state to prevent accidental sends during predictive text
   const [isComposing, setIsComposing] = useState(false);
 
+  // Bidirectional display ↔ raw conversion.
+  const {
+    displayValue,
+    hasMentions,
+    mentions,
+    handleDisplayChange,
+    trackMention,
+    clearMentions,
+  } = useMentionDisplay({ value, onChange });
+
   const suggestion = useSuggestion({
     inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
-    onValueChange: onChange,
+    onValueChange: handleDisplayChange,
     trigger: '@',
     driveId,
     crossDrive,
-    mentionFormat: 'markdown-typed',
+    mentionFormat: 'label',
     variant: 'chat',
     popupPlacement: 'top',
+    onMentionInserted: trackMention,
   });
 
   useImperativeHandle(ref, () => ({
     clear: () => {
+      clearMentions();
       onChange('');
     },
     focus: () => {
@@ -72,11 +84,17 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
     }
   };
 
+  const handleScroll = useCallback(() => {
+    if (textareaRef.current && overlayRef.current) {
+      overlayRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
+  }, []);
+
   return (
     <div className="w-full relative">
       <Textarea
         ref={textareaRef}
-        value={value}
+        value={displayValue}
         onChange={(e) => suggestion.handleValueChange(e.target.value)}
         onKeyDown={handleKeyDown}
         onScroll={handleScroll}
@@ -92,7 +110,8 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
       {hasMentions && (
         <MentionHighlightOverlay
           ref={overlayRef}
-          value={value}
+          value={displayValue}
+          mentions={mentions}
           className="px-3 py-2 text-base md:text-sm text-foreground min-h-[40px] max-h-[120px]"
         />
       )}

@@ -17,6 +17,10 @@ export interface UseSuggestionProps {
   popupPlacement?: 'top' | 'bottom';
   appendSpace?: boolean;
   triggerPattern?: RegExp;
+  /** Called when a mention is inserted, before onValueChange.
+   *  Consumers that strip mention IDs from the textarea value use this
+   *  to track the metadata separately. */
+  onMentionInserted?: (label: string, id: string, type: MentionType) => void;
 }
 
 export interface UseSuggestionResult {
@@ -46,6 +50,7 @@ export function useSuggestion({
   popupPlacement = 'bottom',
   appendSpace = true,
   triggerPattern,
+  onMentionInserted,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
 
@@ -114,7 +119,14 @@ export function useSuggestion({
       
       // Temporarily suppress mention detection to avoid interference
       suppressMentionDetection.current = true;
-      
+
+      // Notify consumer before the value change so it can track metadata
+      onMentionInserted?.(
+        selectedSuggestion.label,
+        selectedSuggestion.id,
+        selectedSuggestion.type,
+      );
+
       onValueChange(newValue);
 
       // Set cursor position after the mention synchronously
