@@ -3,7 +3,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { useDocumentManagerStore, DocumentState } from '@/stores/useDocumentManagerStore';
 import { useDirtyStore } from '@/stores/useDirtyStore';
 import { toast } from 'sonner';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
 
 // Document state selectors
@@ -68,6 +68,13 @@ export const useDocumentSaving = (pageId: string) => {
   // Resets when user navigates away (component remounts)
   const [sessionId] = useState(() => createId());
 
+  const clearSavingState = useCallback((id: string) => {
+    const state = useDocumentManagerStore.getState();
+    const newSaving = new Set(state.savingDocuments);
+    newSaving.delete(id);
+    useDocumentManagerStore.setState({ savingDocuments: newSaving });
+  }, []);
+
   const saveDocument = useCallback(
     async (content: string) => {
       try {
@@ -76,14 +83,66 @@ export const useDocumentSaving = (pageId: string) => {
 
         markAsSaving(pageId);
 
+        // Read current revision for optimistic locking
+        const docBeforeSave = useDocumentManagerStore.getState().documents.get(pageId);
+        const expectedRevision = docBeforeSave?.revision;
+
         // Include socket ID in request headers to prevent self-refetch loop
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
         if (socket?.id) {
           headers['X-Socket-ID'] = socket.id;
         }
 
-        // Pass changeGroupId to group related edits in activity log
-        await patch(`/api/pages/${pageId}`, { content, changeGroupId: sessionId }, { headers });
+        // Pass changeGroupId and expectedRevision to detect concurrent edits
+        const response = await fetchWithAuth(`/api/pages/${pageId}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ content, expectedRevision, changeGroupId: sessionId }),
+        });
+
+        if (!response.ok) {
+          if (response.status === 409) {
+            // Revision conflict - another tab/user modified the page
+            // Log the discarded local content so it can be recovered from dev tools
+            console.warn(
+              `[conflict] Page ${pageId}: local edits discarded. Content was:`,
+              content
+            );
+            toast.error('Document was modified elsewhere. Your local copy has been updated.', {
+              id: `conflict-${pageId}`,
+            });
+            // Refetch latest to update revision and content, stopping the retry loop
+            try {
+              const freshResponse = await fetchWithAuth(`/api/pages/${pageId}`);
+              if (freshResponse.ok) {
+                const freshPage = await freshResponse.json();
+                useDocumentManagerStore.getState().updateDocument(pageId, {
+                  content: freshPage.content ?? '',
+                  revision: freshPage.revision,
+                  isDirty: false,
+                  lastSaved: Date.now(),
+                  lastUpdateTime: Date.now(),
+                });
+                useDirtyStore.getState().clearDirty(pageId);
+              }
+            } catch {
+              // Refetch failed - user can still manually refresh
+            }
+            clearSavingState(pageId);
+            return false;
+          }
+          const errorData = await response.json().catch(() => ({ error: 'Save failed' }));
+          throw new Error(errorData.error || 'Save failed');
+        }
+
+        const savedPage = await response.json();
+
+        // Update stored revision from server response
+        if (savedPage.revision !== undefined) {
+          useDocumentManagerStore.getState().updateDocument(pageId, { revision: savedPage.revision });
+        }
 
         // Only mark as saved if NO updates happened since save started
         // This prevents showing "Saved" when user typed during the save
@@ -94,31 +153,21 @@ export const useDocumentSaving = (pageId: string) => {
             currentDoc.content === content &&
             currentDoc.lastUpdateTime < saveStartTime) {
           markAsSaved(pageId);
-          // Clear dirty flag from useDirtyStore on successful save
           useDirtyStore.getState().clearDirty(pageId);
         } else {
-          // Content changed while saving - remove from saving state but keep dirty
-          const state = useDocumentManagerStore.getState();
-          const newSaving = new Set(state.savingDocuments);
-          newSaving.delete(pageId);
-          useDocumentManagerStore.setState({ savingDocuments: newSaving });
+          // Content changed while saving - keep dirty
+          clearSavingState(pageId);
         }
 
         return true;
       } catch (error) {
         console.error('Save failed:', error);
         toast.error('Failed to save document');
-
-        // Remove from saving state but keep isDirty true since save failed
-        const state = useDocumentManagerStore.getState();
-        const newSaving = new Set(state.savingDocuments);
-        newSaving.delete(pageId);
-        useDocumentManagerStore.setState({ savingDocuments: newSaving });
-
+        clearSavingState(pageId);
         throw error;
       }
     },
-    [pageId, markAsSaving, markAsSaved, socket, sessionId]
+    [pageId, markAsSaving, markAsSaved, clearSavingState, socket, sessionId]
   );
 
   return {
@@ -157,8 +206,11 @@ export const useDocument = (pageId: string, initialContent?: string) => {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const page = await response.json();
-        const createDocument = useDocumentManagerStore.getState().createDocument;
-        createDocument(pageId, page.content || '');
+        const store = useDocumentManagerStore.getState();
+        store.createDocument(pageId, page.content || '');
+        if (page.revision !== undefined) {
+          store.updateDocument(pageId, { revision: page.revision });
+        }
         setActiveDocument(pageId);
       } else {
         console.error('Failed to fetch page content:', response.status);
@@ -200,15 +252,17 @@ export const useDocument = (pageId: string, initialContent?: string) => {
   
   // Content update handler for server updates (already saved)
   const updateContentFromServer = useCallback(
-    (newContent: string) => {
+    (newContent: string, revision?: number) => {
       const now = Date.now();
       const updateDocument = useDocumentManagerStore.getState().updateDocument;
-      updateDocument(pageId, {
+      const updates: Partial<DocumentState> = {
         content: newContent,
         isDirty: false,
         lastSaved: now,
-        lastUpdateTime: now, // Update timestamp for server updates too
-      });
+        lastUpdateTime: now,
+      };
+      if (revision !== undefined) updates.revision = revision;
+      updateDocument(pageId, updates);
     },
     [pageId]
   );

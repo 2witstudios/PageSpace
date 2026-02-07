@@ -26,7 +26,26 @@ function makeFile(name: string, type = 'image/png'): File {
 }
 
 describe('useImageAttachments', () => {
+  let revokedUrls: string[];
+  let createdUrls: string[];
+
   beforeEach(() => {
+    revokedUrls = [];
+    createdUrls = [];
+
+    // Mock URL.createObjectURL and revokeObjectURL
+    vi.stubGlobal('URL', {
+      ...globalThis.URL,
+      createObjectURL: vi.fn((_blob: Blob) => {
+        const url = `blob:mock-${createdUrls.length}`;
+        createdUrls.push(url);
+        return url;
+      }),
+      revokeObjectURL: vi.fn((url: string) => {
+        revokedUrls.push(url);
+      }),
+    });
+
     // Default mock: resolve with a resize result
     mockResizeImageForVision.mockImplementation((file: File) =>
       Promise.resolve({
@@ -77,7 +96,7 @@ describe('useImageAttachments', () => {
     expect(result.current.attachments).toHaveLength(0);
   });
 
-  it('given removeFile called, should remove the attachment', async () => {
+  it('given removeFile called, should remove the attachment and revoke blob URL', async () => {
     const { result } = renderHook(() => useImageAttachments());
 
     await act(async () => {
@@ -92,9 +111,10 @@ describe('useImageAttachments', () => {
     });
 
     expect(result.current.attachments).toHaveLength(0);
+    expect(revokedUrls.length).toBeGreaterThan(0);
   });
 
-  it('given clearFiles called, should remove all attachments', async () => {
+  it('given clearFiles called, should remove all attachments and revoke all blob URLs', async () => {
     const { result } = renderHook(() => useImageAttachments());
 
     await act(async () => {
@@ -111,6 +131,7 @@ describe('useImageAttachments', () => {
     });
 
     expect(result.current.attachments).toHaveLength(0);
+    expect(revokedUrls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('given max limit reached, should not add more and show toast', async () => {
@@ -151,7 +172,7 @@ describe('useImageAttachments', () => {
     expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('Added 2 of 4'));
   });
 
-  it('given resize failure, should remove the failed attachment', async () => {
+  it('given resize failure, should remove the failed attachment and revoke its blob URL', async () => {
     mockResizeImageForVision.mockRejectedValueOnce(new Error('Canvas error'));
 
     const { result } = renderHook(() => useImageAttachments());
@@ -164,6 +185,8 @@ describe('useImageAttachments', () => {
 
     // The failed attachment should have been removed
     expect(result.current.attachments).toHaveLength(0);
+    // The blob URL created for the failed attachment should have been revoked
+    expect(revokedUrls.length).toBeGreaterThan(0);
   });
 
   it('given getFilesForSend called with processed attachments, should return file parts', async () => {
@@ -183,4 +206,16 @@ describe('useImageAttachments', () => {
     expect(files[0].filename).toBe('photo.png');
   });
 
+  it('given unmount, should revoke all blob URLs', async () => {
+    const { result, unmount } = renderHook(() => useImageAttachments());
+
+    await act(async () => {
+      await result.current.addFiles([makeFile('a.png'), makeFile('b.png')]);
+    });
+
+    unmount();
+
+    // All created blob URLs should be revoked
+    expect(revokedUrls.length).toBeGreaterThan(0);
+  });
 });

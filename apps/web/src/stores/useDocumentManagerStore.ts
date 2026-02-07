@@ -8,6 +8,7 @@ export interface DocumentState {
   lastSaved: number;
   lastUpdateTime: number; // Timestamp of last content update
   saveTimeout?: NodeJS.Timeout;
+  revision?: number; // Server revision for optimistic locking
 }
 
 export interface DocumentManagerState {

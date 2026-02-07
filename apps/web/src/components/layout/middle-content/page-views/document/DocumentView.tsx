@@ -71,7 +71,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content);
+        updateContentFromServer(updatedPage.content, updatedPage.revision);
       }
     } catch (error) {
       console.error('Failed to refresh document:', error);
@@ -165,7 +165,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
             // Only update if content actually changed and we're not currently editing
             // Note: This uses closure over documentState, which is acceptable here
             if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-              updateContentFromServer(updatedPage.content);
+              updateContentFromServer(updatedPage.content, updatedPage.revision);
             }
           }
         } catch (error) {
