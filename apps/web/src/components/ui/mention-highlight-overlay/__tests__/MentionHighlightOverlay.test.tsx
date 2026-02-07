@@ -1,23 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 import type { TrackedMention } from '@/hooks/useMentionTracker';
 
-const { mockNavigateToPage } = vi.hoisted(() => ({
-  mockNavigateToPage: vi.fn(),
-}));
-
-vi.mock('@/hooks/usePageNavigation', () => ({
-  usePageNavigation: () => ({ navigateToPage: mockNavigateToPage }),
-}));
-
 import { MentionHighlightOverlay } from '../MentionHighlightOverlay';
 
 describe('MentionHighlightOverlay', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   describe('text rendering', () => {
     it('given plain text with no mentions, should render text in spans', () => {
       render(<MentionHighlightOverlay value="hello world" mentions={[]} />);
@@ -39,7 +27,7 @@ describe('MentionHighlightOverlay', () => {
 
       const mention = screen.getByText('@My Page');
       expect(mention).toBeInTheDocument();
-      expect(mention).toHaveClass('font-semibold', 'text-primary');
+      expect(mention).toHaveClass('text-primary', 'underline');
     });
 
     it('given a single user mention, should render formatted @label', () => {
@@ -50,7 +38,7 @@ describe('MentionHighlightOverlay', () => {
 
       const mention = screen.getByText('@Alice');
       expect(mention).toBeInTheDocument();
-      expect(mention).toHaveClass('font-semibold', 'text-primary');
+      expect(mention).toHaveClass('text-primary', 'underline');
     });
 
     it('given mixed content with multiple mention types, should render all segments correctly', () => {
@@ -84,80 +72,6 @@ describe('MentionHighlightOverlay', () => {
 
       expect(screen.getByText('@First')).toBeInTheDocument();
       expect(screen.getByText('@Second')).toBeInTheDocument();
-    });
-  });
-
-  describe('page mention interaction', () => {
-    it('given a page mention, should have role="link" and pointer-events-auto', () => {
-      const mentions: TrackedMention[] = [
-        { start: 0, end: 8, label: 'My Page', id: 'abc123', type: 'page' },
-      ];
-      render(<MentionHighlightOverlay value="@My Page" mentions={mentions} />);
-
-      const mention = screen.getByRole('link', { hidden: true });
-      expect(mention).toHaveClass('pointer-events-auto');
-    });
-
-    it('given a page mention mousedown, should call navigateToPage with correct id', () => {
-      const mentions: TrackedMention[] = [
-        { start: 0, end: 8, label: 'My Page', id: 'abc123', type: 'page' },
-      ];
-      render(<MentionHighlightOverlay value="@My Page" mentions={mentions} />);
-
-      const mention = screen.getByRole('link', { hidden: true });
-      // fireEvent.mouseDown is needed since the handler is onMouseDown, not onClick
-      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-      Object.defineProperty(event, 'preventDefault', { value: vi.fn() });
-      Object.defineProperty(event, 'stopPropagation', { value: vi.fn() });
-      mention.dispatchEvent(event);
-
-      expect(mockNavigateToPage).toHaveBeenCalledWith('abc123');
-      expect(event.preventDefault).toHaveBeenCalled();
-      expect(event.stopPropagation).toHaveBeenCalled();
-    });
-
-    it('given multiple page mentions, should navigate to correct id for each', () => {
-      const mentions: TrackedMention[] = [
-        { start: 0, end: 6, label: 'First', id: 'id1', type: 'page' },
-        { start: 11, end: 18, label: 'Second', id: 'id2', type: 'page' },
-      ];
-      render(
-        <MentionHighlightOverlay value="@First and @Second" mentions={mentions} />
-      );
-
-      const links = screen.getAllByRole('link', { hidden: true });
-      expect(links).toHaveLength(2);
-
-      // Click first mention
-      const event1 = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-      links[0].dispatchEvent(event1);
-      expect(mockNavigateToPage).toHaveBeenCalledWith('id1');
-
-      // Click second mention
-      const event2 = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-      links[1].dispatchEvent(event2);
-      expect(mockNavigateToPage).toHaveBeenCalledWith('id2');
-    });
-  });
-
-  describe('user mention interaction', () => {
-    it('given a user mention, should NOT have role="link"', () => {
-      const mentions: TrackedMention[] = [
-        { start: 0, end: 6, label: 'Alice', id: 'user1', type: 'user' },
-      ];
-      render(<MentionHighlightOverlay value="@Alice" mentions={mentions} />);
-
-      expect(screen.queryByRole('link', { hidden: true })).not.toBeInTheDocument();
-    });
-
-    it('given a user mention, should NOT have pointer-events-auto class', () => {
-      const mentions: TrackedMention[] = [
-        { start: 0, end: 6, label: 'Alice', id: 'user1', type: 'user' },
-      ];
-      render(<MentionHighlightOverlay value="@Alice" mentions={mentions} />);
-
-      const mention = screen.getByText('@Alice');
-      expect(mention).not.toHaveClass('pointer-events-auto');
     });
   });
 

@@ -2,7 +2,6 @@
 
 import React, { forwardRef } from 'react';
 import { cn } from '@/lib/utils';
-import { usePageNavigation } from '@/hooks/usePageNavigation';
 import type { TrackedMention } from '@/hooks/useMentionTracker';
 
 interface MentionHighlightOverlayProps {
@@ -15,7 +14,7 @@ interface MentionHighlightOverlayProps {
 }
 
 /**
- * MentionHighlightOverlay renders text with @mentions as formatted bold links.
+ * MentionHighlightOverlay renders text with @mentions as colored, underlined spans.
  *
  * It is designed to sit on top of a textarea with transparent text,
  * mirroring the exact same layout so that the formatted mentions
@@ -30,8 +29,6 @@ export const MentionHighlightOverlay = forwardRef<
   HTMLDivElement,
   MentionHighlightOverlayProps
 >(({ value, mentions, className }, ref) => {
-  const { navigateToPage } = usePageNavigation();
-
   const renderFormattedText = (
     text: string,
     trackedMentions: TrackedMention[]
@@ -56,32 +53,14 @@ export const MentionHighlightOverlay = forwardRef<
       // Render the mention as a styled inline element
       const mentionText = text.slice(mention.start, mention.end);
 
-      if (mention.type === 'page') {
-        elements.push(
-          <span
-            key={`mention-${mention.start}`}
-            role="link"
-            tabIndex={-1}
-            className="font-semibold text-primary cursor-pointer hover:underline pointer-events-auto"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              navigateToPage(mention.id);
-            }}
-          >
-            {mentionText}
-          </span>
-        );
-      } else {
-        elements.push(
-          <span
-            key={`mention-${mention.start}`}
-            className="font-semibold text-primary"
-          >
-            {mentionText}
-          </span>
-        );
-      }
+      elements.push(
+        <span
+          key={`mention-${mention.start}`}
+          className="text-primary underline decoration-primary/50"
+        >
+          {mentionText}
+        </span>
+      );
 
       lastIndex = mention.end;
     }
