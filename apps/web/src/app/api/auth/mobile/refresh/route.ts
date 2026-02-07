@@ -14,7 +14,7 @@ import {
 import { hashToken, getTokenPrefix, sessionService } from '@pagespace/lib/auth';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/server';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, appendSessionCookie } from '@/lib/auth';
 
 const refreshSchema = z.object({
   deviceToken: z.string().min(1, 'Device token is required'),
@@ -161,17 +161,16 @@ export async function POST(req: Request) {
     }
 
     // Return session token (device-token-only pattern - no refreshToken)
+    const headers = new Headers();
+    headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+    headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
+    appendSessionCookie(headers, sessionToken);
+
     return Response.json({
       sessionToken,
       csrfToken,
       deviceToken: activeDeviceToken,
-    }, {
-      status: 200,
-      headers: {
-        'X-RateLimit-Limit': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
-        'X-RateLimit-Remaining': String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts),
-      },
-    });
+    }, { status: 200, headers });
 
   } catch (error) {
     loggers.auth.error('Mobile token refresh error', error as Error);
