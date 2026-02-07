@@ -79,6 +79,13 @@ export const pulseSummaries = pgTable('pulse_summaries', {
       recentOperations: string[]; // Brief descriptions
     };
     chatHighlights?: string[]; // Relevant chat snippets
+    calendar?: {
+      happeningNow: number;
+      upcomingToday: number;
+      tomorrow: number;
+      pendingInvites: number;
+      events: { title: string; startAt: string }[];
+    };
   }>(),
 
   // AI generation metadata

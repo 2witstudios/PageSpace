@@ -169,11 +169,17 @@ export async function GET(req: Request) {
       unreadCount = unreadResult?.count ?? 0;
     }
 
-    // Calendar events today
+    // Calendar events today - respect visibility settings
     const calendarVisibility = driveIds.length > 0
       ? or(
           and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId)),
-          inArray(calendarEvents.driveId, driveIds)
+          and(
+            inArray(calendarEvents.driveId, driveIds),
+            or(
+              eq(calendarEvents.visibility, 'DRIVE'),
+              eq(calendarEvents.createdById, userId)
+            )
+          )
         )
       : and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId));
 

@@ -23,19 +23,17 @@ import {
   userMentions,
   pagePermissions,
   chatMessages,
-  calendarEvents,
-  eventAttendees,
   eq,
   and,
   or,
   lt,
-  lte,
   gte,
   ne,
   desc,
   inArray,
   isNull,
 } from '@pagespace/db';
+import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   resolveStackedVersionContent,
@@ -49,66 +47,7 @@ import {
 import { readPageContent, loggers } from '@pagespace/lib/server';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { validateCronRequest } from '@/lib/auth/cron-auth';
-
-// System prompt for generating pulse summaries
-const PULSE_SYSTEM_PROMPT = `You're a thoughtful workspace companion - like a colleague who sits nearby and notices things. You have deep awareness of what's happening in the user's workspace, but you're NOT a status reporter.
-
-YOUR PERSONALITY:
-- Warm, observant, genuinely interested in the person
-- You notice patterns, not just events
-- You have opinions and make suggestions
-- Sometimes you're encouraging, sometimes you're gently prodding
-- You're comfortable with silence when there's nothing meaningful to say
-
-WHAT YOU HAVE ACCESS TO:
-You can see workspace activity, content diffs, messages, tasks, calendar events, and your previous conversations. Use this as CONTEXT to inform what you say - but don't just report it back.
-
-DEDUPLICATION - CRITICAL:
-Check "previousPulses" for what you've already said. NEVER repeat yourself. If you mentioned something before, it's old news - find something fresh or say something different entirely.
-
-TYPES OF MESSAGES YOU MIGHT SEND:
-
-1. OBSERVATIONS (notice patterns, not just events)
-   - "You've been heads-down on the API docs for a few days now - deep work mode?"
-   - "Looks like the team's been busy while you were away"
-   - "Sarah seems to be making good progress on that budget analysis"
-
-2. GENTLE NUDGES (helpful, not naggy)
-   - "That task from last week is still hanging around..."
-   - "Sarah's DM from yesterday might be worth a look"
-   - "The roadmap doc has some new stuff if you haven't seen it"
-
-3. ENCOURAGEMENT
-   - "Solid progress on the sprint this week"
-   - "The quiet is nice - good time to focus"
-   - "You knocked out 3 tasks yesterday, nice"
-
-4. QUESTIONS (genuine curiosity)
-   - "Ready to dive into those Q2 plans?"
-   - "How's the API migration going?"
-
-5. SIMPLE PRESENCE (when there's nothing specific)
-   - "All quiet. Enjoy the focus time."
-   - "Nothing urgent on the radar"
-   - Just a friendly check-in vibe
-
-6. CALENDAR AWARENESS (time-sensitive context)
-   - "You've got a team sync in an hour - might be a good time to prep"
-   - "Looks like a meeting-heavy afternoon ahead"
-   - "Sarah invited you to a design review tomorrow - haven't RSVPed yet"
-
-WHAT NOT TO DO:
-- Don't list what changed like a changelog
-- Don't say "X updated Y" repeatedly
-- Don't start every message with a greeting
-- Don't manufacture importance when things are calm
-- Don't repeat ANYTHING from previous pulses
-- Don't sound like a notification system
-
-READING CONTEXT:
-When you see content diffs, understand WHAT was written, not just that something changed. But you don't need to report every change - pick what's actually interesting or relevant.
-
-Keep it to 1-3 sentences. Sound like a person, not a bot.`;
+import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
 export async function POST(req: Request) {
   // Validate cron secret + internal network origin
@@ -662,109 +601,13 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
   // ========================================
   const endOfTomorrow = new Date(endOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-  // Get events the user can see: personal events + drive events
-  const calendarVisibility = driveIds.length > 0
-    ? or(
-        and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId)),
-        inArray(calendarEvents.driveId, driveIds)
-      )
-    : and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId));
-
-  const upcomingCalendarEvents = await db
-    .select({
-      id: calendarEvents.id,
-      title: calendarEvents.title,
-      location: calendarEvents.location,
-      startAt: calendarEvents.startAt,
-      endAt: calendarEvents.endAt,
-      allDay: calendarEvents.allDay,
-      driveId: calendarEvents.driveId,
-    })
-    .from(calendarEvents)
-    .where(
-      and(
-        eq(calendarEvents.isTrashed, false),
-        gte(calendarEvents.endAt, now),
-        lt(calendarEvents.startAt, endOfTomorrow),
-        calendarVisibility
-      )
-    )
-    .orderBy(calendarEvents.startAt)
-    .limit(15);
-
-  // Get events user is invited to via attendees table
-  const attendeeEventRows = await db
-    .select({
-      id: calendarEvents.id,
-      title: calendarEvents.title,
-      location: calendarEvents.location,
-      startAt: calendarEvents.startAt,
-      endAt: calendarEvents.endAt,
-      allDay: calendarEvents.allDay,
-      driveId: calendarEvents.driveId,
-      rsvpStatus: eventAttendees.status,
-    })
-    .from(eventAttendees)
-    .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
-    .where(
-      and(
-        eq(eventAttendees.userId, userId),
-        eq(calendarEvents.isTrashed, false),
-        gte(calendarEvents.endAt, now),
-        lt(calendarEvents.startAt, endOfTomorrow),
-      )
-    )
-    .orderBy(calendarEvents.startAt)
-    .limit(15);
-
-  // Pending RSVP invites (future events user hasn't responded to)
-  const pendingRsvps = await db
-    .select({
-      eventTitle: calendarEvents.title,
-      startAt: calendarEvents.startAt,
-      allDay: calendarEvents.allDay,
-    })
-    .from(eventAttendees)
-    .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
-    .where(
-      and(
-        eq(eventAttendees.userId, userId),
-        eq(eventAttendees.status, 'PENDING'),
-        eq(calendarEvents.isTrashed, false),
-        gte(calendarEvents.startAt, now),
-      )
-    )
-    .orderBy(calendarEvents.startAt)
-    .limit(5);
-
-  // Merge and deduplicate events
-  const seenEventIds = new Set<string>();
-  const allCalendarEvents: Array<{
-    title: string;
-    location: string | null;
-    startAt: Date;
-    endAt: Date;
-    allDay: boolean;
-  }> = [];
-
-  for (const event of [...upcomingCalendarEvents, ...attendeeEventRows]) {
-    if (seenEventIds.has(event.id)) continue;
-    seenEventIds.add(event.id);
-    allCalendarEvents.push({
-      title: event.title,
-      location: event.location,
-      startAt: event.startAt,
-      endAt: event.endAt,
-      allDay: event.allDay,
-    });
-  }
-
-  allCalendarEvents.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
-
-  // Categorize events
-  const happeningNow = allCalendarEvents.filter(e => e.startAt <= now && e.endAt > now);
-  const upcomingToday = allCalendarEvents.filter(e => e.startAt > now && e.startAt < endOfToday);
-  const tomorrowEvents = allCalendarEvents.filter(e => e.startAt >= endOfToday && e.startAt < endOfTomorrow);
+  const calendarContext = await fetchCalendarContext({
+    userId, driveIds, now, endOfToday, endOfTomorrow,
+  });
+  const { happeningNow, upcomingToday } = calendarContext;
+  const tomorrowEvents = calendarContext.tomorrow;
+  const pendingRsvps = calendarContext.pendingInvites;
+  const allCalendarEvents = calendarContext.allEvents;
 
   // ========================================
   // BUILD THE RICH CONTEXT WITH DIFFS
