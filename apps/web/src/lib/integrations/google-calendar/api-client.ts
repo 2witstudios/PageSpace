@@ -132,16 +132,40 @@ export const buildEventsListUrl = (
 };
 
 /**
+ * Request body type for creating/updating Google Calendar events.
+ * Matches the Google Calendar API Events resource structure.
+ */
+export interface GoogleEventWriteBody {
+  summary?: string;
+  description?: string;
+  location?: string;
+  start?: GoogleEventDateTime;
+  end?: GoogleEventDateTime;
+  recurrence?: string[];
+  visibility?: 'default' | 'public' | 'private' | 'confidential';
+  colorId?: string;
+  status?: 'confirmed' | 'tentative' | 'cancelled';
+}
+
+/**
  * IO function: Make authenticated request to Google Calendar API
  */
 const makeGoogleApiRequest = async <T>(
   url: string,
-  accessToken: string
+  accessToken: string,
+  options: { method?: string; body?: unknown } = {}
 ): Promise<GoogleApiResult<T>> => {
   try {
     const response = await fetch(url, {
+      method: options.method || 'GET',
       headers: buildAuthHeader(accessToken),
+      body: options.body ? JSON.stringify(options.body) : undefined,
     });
+
+    // DELETE returns 204 No Content on success
+    if (response.status === 204) {
+      return { success: true, data: {} as T };
+    }
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -255,4 +279,63 @@ export const listEvents = async (
   } while (pageToken);
 
   return { success: true, data: { events, nextSyncToken } };
+};
+
+/**
+ * Pure function: Build single event URL
+ */
+export const buildEventUrl = (calendarId: string, eventId: string): string => {
+  return `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+};
+
+/**
+ * Pure function: Build event insert URL
+ */
+export const buildEventInsertUrl = (calendarId: string): string => {
+  return `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events`;
+};
+
+/**
+ * IO function: Create an event on Google Calendar
+ */
+export const createGoogleEvent = async (
+  accessToken: string,
+  calendarId: string,
+  event: GoogleEventWriteBody
+): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
+  const url = buildEventInsertUrl(calendarId);
+  return makeGoogleApiRequest<GoogleCalendarEvent>(url, accessToken, {
+    method: 'POST',
+    body: event,
+  });
+};
+
+/**
+ * IO function: Update an event on Google Calendar
+ */
+export const updateGoogleEvent = async (
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+  event: GoogleEventWriteBody
+): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
+  const url = buildEventUrl(calendarId, eventId);
+  return makeGoogleApiRequest<GoogleCalendarEvent>(url, accessToken, {
+    method: 'PATCH',
+    body: event,
+  });
+};
+
+/**
+ * IO function: Delete an event on Google Calendar
+ */
+export const deleteGoogleEvent = async (
+  accessToken: string,
+  calendarId: string,
+  eventId: string
+): Promise<GoogleApiResult<Record<string, never>>> => {
+  const url = buildEventUrl(calendarId, eventId);
+  return makeGoogleApiRequest<Record<string, never>>(url, accessToken, {
+    method: 'DELETE',
+  });
 };

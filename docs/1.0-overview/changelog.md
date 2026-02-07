@@ -1,3 +1,27 @@
+## 2026-02-07
+
+### Google Calendar Two-Way Sync
+
+Google Calendar integration now supports bidirectional sync. Events created, edited, or deleted in PageSpace can push back to Google Calendar, and Google-synced events are no longer locked as read-only.
+
+#### Changes
+- **OAuth scope upgrade**: `calendar.readonly` → `calendar.events` for read/write access (existing users must reconnect)
+- **Push-to-Google service**: New `push-service.ts` handles create, update, and delete operations against the Google Calendar API
+- **Two-way sync toggle**: New card in Google Calendar settings lets users enable/disable bidirectional sync
+- **Settings API route**: `PATCH /api/integrations/google-calendar/settings` to update connection preferences
+- **Editable Google events**: When two-way sync is on, events synced from Google become editable in PageSpace; edits push back
+- **Fire-and-forget push**: Event create/update/delete routes push to Google asynchronously without blocking the response
+- **API client write functions**: `createGoogleEvent`, `updateGoogleEvent`, `deleteGoogleEvent` added to the Google Calendar API client
+- **Reverse event transform**: PageSpace events convert back to Google Calendar format (recurrence rules, colors, visibility, dates)
+
+#### Notes
+- Two-way sync defaults to OFF for new connections (opt-in via settings toggle)
+- Toggling the setting bulk-updates all existing synced events' read-only status
+- Events originally synced from Google are never re-pushed (prevents duplicates)
+- Push failures are logged but don't block the local operation
+
+---
+
 ## 2026-02-06
 
 ### Security Audit - Dependency Updates

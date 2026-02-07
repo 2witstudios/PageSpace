@@ -7,7 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle, RefreshCw, ExternalLink, ArrowUpDown } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { toast } from "sonner";
 
@@ -52,6 +53,7 @@ export default function GoogleCalendarSettingsPage() {
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [togglingSync, setTogglingSync] = useState(false);
 
   const error = searchParams.get("error");
   const justConnected = searchParams.get("connected") === "true";
@@ -180,6 +182,34 @@ export default function GoogleCalendarSettingsPage() {
     }
   };
 
+  const handleToggleTwoWaySync = async (enabled: boolean) => {
+    setTogglingSync(true);
+    try {
+      const response = await fetchWithAuth("/api/integrations/google-calendar/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markAsReadOnly: !enabled }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        toast.error(data.error || "Failed to update setting");
+        return;
+      }
+
+      toast.success(enabled
+        ? "Two-way sync enabled. Events created here will push to Google."
+        : "Two-way sync disabled. Google events are now read-only."
+      );
+      await fetchStatus();
+    } catch (err) {
+      console.error("Failed to toggle sync:", err);
+      toast.error("Failed to update setting");
+    } finally {
+      setTogglingSync(false);
+    }
+  };
+
   const formatLastSync = (dateStr: string | null) => {
     if (!dateStr) return "Never";
     const date = new Date(dateStr);
@@ -264,7 +294,7 @@ export default function GoogleCalendarSettingsPage() {
           <div>
             <h1 className="text-2xl font-bold">Google Calendar</h1>
             <p className="text-muted-foreground">
-              Import events from Google Calendar
+              Sync events with Google Calendar
             </p>
           </div>
         </div>
@@ -389,7 +419,8 @@ export default function GoogleCalendarSettingsPage() {
                   <ul className="list-disc list-inside space-y-1 ml-2">
                     <li>AI can see your real availability</li>
                     <li>Schedule around existing commitments</li>
-                    <li>No manual event recreation</li>
+                    <li>Events sync both ways with two-way sync</li>
+                    <li>Edit Google events directly in PageSpace</li>
                   </ul>
                 </div>
                 <Button
@@ -413,6 +444,45 @@ export default function GoogleCalendarSettingsPage() {
           </CardContent>
         </Card>
 
+        {/* Two-Way Sync Card */}
+        {connection && isActiveConnection && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-lg">Two-Way Sync</CardTitle>
+              </div>
+              <CardDescription>
+                Control how events flow between PageSpace and Google Calendar
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Push events to Google</p>
+                    <p className="text-sm text-muted-foreground">
+                      Events created or edited in PageSpace will sync to Google Calendar.
+                      Google-synced events become editable.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={!connection.markAsReadOnly}
+                    onCheckedChange={handleToggleTwoWaySync}
+                    disabled={togglingSync}
+                  />
+                </div>
+                {!connection.markAsReadOnly && (
+                  <div className="rounded-md bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400">
+                    Two-way sync is active. Events you create, edit, or delete in PageSpace
+                    will be reflected in Google Calendar.
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Info Card */}
         <Card className="bg-muted/50">
           <CardContent className="pt-6">
@@ -421,8 +491,9 @@ export default function GoogleCalendarSettingsPage() {
               <div className="text-sm text-muted-foreground">
                 <p className="font-medium mb-1">Privacy & Data</p>
                 <p>
-                  PageSpace imports event details (titles, times, locations, descriptions, and
-                  recurrence rules) from your calendar using read-only access. Your calendar data
+                  PageSpace syncs event details (titles, times, locations, descriptions, and
+                  recurrence rules) with your calendar. When two-way sync is enabled, events
+                  created in PageSpace will also appear in Google Calendar. Your calendar data
                   is stored encrypted, never shared with third parties, and never used for
                   advertising. You can disconnect at any time.
                 </p>

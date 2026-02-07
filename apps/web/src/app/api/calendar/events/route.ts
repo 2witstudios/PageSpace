@@ -17,6 +17,7 @@ import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -394,6 +395,11 @@ export async function POST(request: Request) {
       operation: 'created',
       userId,
       attendeeIds: [userId, ...(data.attendeeIds ?? [])],
+    });
+
+    // Push to Google Calendar (fire-and-forget, don't block response)
+    pushEventToGoogle(userId, event.id).catch((err) => {
+      loggers.api.error('Background push to Google failed:', err as Error);
     });
 
     return NextResponse.json(completeEvent, { status: 201 });

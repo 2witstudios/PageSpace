@@ -11,11 +11,12 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const GOOGLE_READ_ONLY_ERROR =
-  'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
+  'This event is synced from Google Calendar and is read-only. Enable two-way sync in Settings to edit Google events here.';
 
 // Schema for updating an event
 const updateEventSchema = z.object({
@@ -260,6 +261,11 @@ export async function PATCH(
       attendeeIds: attendees.map(a => a.userId),
     });
 
+    // Push update to Google Calendar (fire-and-forget)
+    pushEventUpdateToGoogle(userId, eventId).catch((err) => {
+      loggers.api.error('Background push update to Google failed:', err as Error);
+    });
+
     return NextResponse.json(completeEvent);
   } catch (error) {
     loggers.api.error('Error updating calendar event:', error as Error);
@@ -318,6 +324,11 @@ export async function DELETE(
       .select({ userId: eventAttendees.userId })
       .from(eventAttendees)
       .where(eq(eventAttendees.eventId, eventId));
+
+    // Delete from Google Calendar first (before soft-delete, so we still have the Google IDs)
+    pushEventDeleteToGoogle(userId, eventId).catch((err) => {
+      loggers.api.error('Background push delete to Google failed:', err as Error);
+    });
 
     // Soft delete the event
     await db

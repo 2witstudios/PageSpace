@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: callbackUrl,
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/calendar.readonly',
+      scope: 'https://www.googleapis.com/auth/calendar.events',
       access_type: 'offline', // Required for refresh token
       prompt: 'consent', // Force consent to get refresh token
       include_granted_scopes: 'true', // Incremental auth
