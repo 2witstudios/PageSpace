@@ -26,26 +26,7 @@ function makeFile(name: string, type = 'image/png'): File {
 }
 
 describe('useImageAttachments', () => {
-  let revokedUrls: string[];
-  let createdUrls: string[];
-
   beforeEach(() => {
-    revokedUrls = [];
-    createdUrls = [];
-
-    // Mock URL.createObjectURL and revokeObjectURL
-    vi.stubGlobal('URL', {
-      ...globalThis.URL,
-      createObjectURL: vi.fn((_blob: Blob) => {
-        const url = `blob:mock-${createdUrls.length}`;
-        createdUrls.push(url);
-        return url;
-      }),
-      revokeObjectURL: vi.fn((url: string) => {
-        revokedUrls.push(url);
-      }),
-    });
-
     // Default mock: resolve with a resize result
     mockResizeImageForVision.mockImplementation((file: File) =>
       Promise.resolve({
@@ -96,7 +77,7 @@ describe('useImageAttachments', () => {
     expect(result.current.attachments).toHaveLength(0);
   });
 
-  it('given removeFile called, should remove the attachment and revoke blob URL', async () => {
+  it('given removeFile called, should remove the attachment', async () => {
     const { result } = renderHook(() => useImageAttachments());
 
     await act(async () => {
@@ -111,10 +92,9 @@ describe('useImageAttachments', () => {
     });
 
     expect(result.current.attachments).toHaveLength(0);
-    expect(revokedUrls.length).toBeGreaterThan(0);
   });
 
-  it('given clearFiles called, should remove all attachments and revoke all blob URLs', async () => {
+  it('given clearFiles called, should remove all attachments', async () => {
     const { result } = renderHook(() => useImageAttachments());
 
     await act(async () => {
@@ -196,27 +176,11 @@ describe('useImageAttachments', () => {
     });
 
     const files = result.current.getFilesForSend();
-    expect(files.length).toBeGreaterThanOrEqual(0);
-
-    // If files are available (resize completed), verify structure
-    if (files.length > 0) {
-      expect(files[0].type).toBe('file');
-      expect(files[0].url).toContain('data:');
-      expect(files[0].mediaType).toBeDefined();
-      expect(files[0].filename).toBe('photo.png');
-    }
+    expect(files).toHaveLength(1);
+    expect(files[0].type).toBe('file');
+    expect(files[0].url).toContain('data:');
+    expect(files[0].mediaType).toBeDefined();
+    expect(files[0].filename).toBe('photo.png');
   });
 
-  it('given unmount, should revoke all blob URLs', async () => {
-    const { result, unmount } = renderHook(() => useImageAttachments());
-
-    await act(async () => {
-      await result.current.addFiles([makeFile('a.png'), makeFile('b.png')]);
-    });
-
-    unmount();
-
-    // All created blob URLs should be revoked
-    expect(revokedUrls.length).toBeGreaterThan(0);
-  });
 });
