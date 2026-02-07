@@ -8,6 +8,8 @@ import {
   dmConversations,
   pages,
   driveMembers,
+  calendarEvents,
+  eventAttendees,
   eq,
   and,
   or,
@@ -17,6 +19,7 @@ import {
   desc,
   count,
   inArray,
+  isNull,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 
@@ -48,6 +51,10 @@ export type PulseResponse = {
     pages: {
       updatedToday: number;
       updatedThisWeek: number;
+    };
+    calendar: {
+      upcomingToday: number;
+      pendingInvites: number;
     };
   };
 
@@ -162,6 +169,45 @@ export async function GET(req: Request) {
       unreadCount = unreadResult?.count ?? 0;
     }
 
+    // Calendar events today - respect visibility settings
+    const calendarVisibility = driveIds.length > 0
+      ? or(
+          and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId)),
+          and(
+            inArray(calendarEvents.driveId, driveIds),
+            or(
+              eq(calendarEvents.visibility, 'DRIVE'),
+              eq(calendarEvents.createdById, userId)
+            )
+          )
+        )
+      : and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId));
+
+    const [upcomingTodayResult] = await db
+      .select({ count: count() })
+      .from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.isTrashed, false),
+          gte(calendarEvents.startAt, now),
+          lt(calendarEvents.startAt, endOfToday),
+          calendarVisibility
+        )
+      );
+
+    const [pendingInvitesResult] = await db
+      .select({ count: count() })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(eventAttendees.status, 'PENDING'),
+          eq(calendarEvents.isTrashed, false),
+          gte(calendarEvents.startAt, now),
+        )
+      );
+
     // Pages updated
     let pagesUpdatedToday = 0;
     let pagesUpdatedThisWeek = 0;
@@ -224,6 +270,10 @@ export async function GET(req: Request) {
         pages: {
           updatedToday: pagesUpdatedToday,
           updatedThisWeek: pagesUpdatedThisWeek,
+        },
+        calendar: {
+          upcomingToday: upcomingTodayResult?.count ?? 0,
+          pendingInvites: pendingInvitesResult?.count ?? 0,
         },
       },
       shouldRefresh,
