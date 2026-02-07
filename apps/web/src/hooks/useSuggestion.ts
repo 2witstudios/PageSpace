@@ -17,6 +17,10 @@ export interface UseSuggestionProps {
   popupPlacement?: 'top' | 'bottom';
   appendSpace?: boolean;
   triggerPattern?: RegExp;
+  /** Tracked mention ranges in display text — used for position-based existing-mention detection */
+  mentionRanges?: Array<{ start: number; end: number }>;
+  /** Called when a mention is inserted via suggestion, before onValueChange */
+  onMentionInserted?: (mention: { label: string; id: string; type: MentionType; start: number; end: number }) => void;
 }
 
 export interface UseSuggestionResult {
@@ -46,6 +50,8 @@ export function useSuggestion({
   popupPlacement = 'bottom',
   appendSpace = true,
   triggerPattern,
+  mentionRanges,
+  onMentionInserted,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
 
@@ -80,6 +86,8 @@ export function useSuggestion({
 
   // Track when we're temporarily disabling mention detection after insertion
   const suppressMentionDetection = useRef(false);
+  // Track the @ position that was dismissed via Escape, to prevent reopening
+  const dismissedTriggerRef = useRef<number | null>(null);
 
   const suggestion = useSuggestionCore({
     driveId: driveId || null,
@@ -111,10 +119,23 @@ export function useSuggestion({
 
       const insertion = appendSpace ? `${mentionText} ` : mentionText;
       const newValue = `${textBeforeMention}${insertion}${textAfterCursor}`;
-      
+
       // Temporarily suppress mention detection to avoid interference
       suppressMentionDetection.current = true;
-      
+
+      // Notify tracker about the new mention before changing the value
+      if (onMentionInserted) {
+        const mentionStart = textBeforeMention.length;
+        const mentionEnd = mentionStart + mentionText.length;
+        onMentionInserted({
+          label: selectedSuggestion.label,
+          id: selectedSuggestion.id,
+          type: selectedSuggestion.type,
+          start: mentionStart,
+          end: mentionEnd,
+        });
+      }
+
       onValueChange(newValue);
 
       // Set cursor position after the mention synchronously
@@ -159,16 +180,28 @@ export function useSuggestion({
     const mentionTriggerIndex = textBeforeCursor.lastIndexOf(trigger);
 
     if (mentionTriggerIndex !== -1 && (mentionTriggerIndex === 0 || effectiveTriggerPattern.test(textBeforeCursor[mentionTriggerIndex - 1]))) {
+      // Skip if this trigger was dismissed by Escape
+      if (dismissedTriggerRef.current === mentionTriggerIndex) {
+        return;
+      }
+      // Clear dismissal if the user starts a NEW @ trigger at a different position
+      if (dismissedTriggerRef.current !== null && mentionTriggerIndex !== dismissedTriggerRef.current) {
+        dismissedTriggerRef.current = null;
+      }
+
       const textAfterTrigger = textBeforeCursor.substring(mentionTriggerIndex + 1);
-      
-      // Check if this @ is part of an existing mention by looking for patterns that indicate a completed mention
-      // Patterns to detect: @username (followed by space or end), @[label](id), @[label](id:type)
+
+      // Position-based: check if this @ falls inside a tracked mention range
+      const isInTrackedMention = mentionRanges?.some(
+        (m) => mentionTriggerIndex >= m.start && mentionTriggerIndex < m.end
+      ) ?? false;
+
+      // Fallback regex for non-tracked contexts (e.g. markdown format in documents)
       const existingMentionPatterns = [
-        /^[^\s\[\]]+\s/, // @username followed by space (completed simple mention)
-        /^\[[^\]]+\]\([^)]+\)/, // @[label](id) or @[label](id:type) (markdown-style mention)
+        /^\[[^\]]+\]\([^)]+\)/, // @[label](id:type) — markdown-style mention
       ];
-      
-      const isPartOfExistingMention = existingMentionPatterns.some(pattern => 
+
+      const isPartOfExistingMention = isInTrackedMention || existingMentionPatterns.some(pattern =>
         pattern.test(textAfterTrigger)
       );
       
@@ -225,7 +258,8 @@ export function useSuggestion({
     getSelectionStart,
     variant,
     popupPlacement,
-    effectiveTriggerPattern
+    effectiveTriggerPattern,
+    mentionRanges,
   ]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -263,16 +297,22 @@ export function useSuggestion({
         }
         break;
 
-      case 'Escape':
+      case 'Escape': {
         e.preventDefault();
         e.stopPropagation();
+        // Record the trigger position so we don't reopen for this @
+        const val = getValue();
+        const cPos = getSelectionStart();
+        const textBefore = val.substring(0, cPos);
+        dismissedTriggerRef.current = textBefore.lastIndexOf(trigger);
         close();
         break;
+      }
 
       default:
         break;
     }
-  }, [context, suggestion.actions, popupPlacement]);
+  }, [context, suggestion.actions, popupPlacement, getValue, getSelectionStart, trigger]);
 
   return {
     handleKeyDown,

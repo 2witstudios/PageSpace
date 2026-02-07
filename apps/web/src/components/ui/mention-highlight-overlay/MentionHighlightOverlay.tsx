@@ -3,16 +3,13 @@
 import React, { forwardRef } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
-
-/**
- * Regex matching the markdown-typed mention format: @[Label](id:type)
- * Captures: [1] label, [2] id, [3] type (page|user)
- */
-const MENTION_REGEX = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
+import { TrackedMention } from '@/lib/mentions/mentionDisplayUtils';
 
 interface MentionHighlightOverlayProps {
-  /** Raw text value containing @[label](id:type) mentions */
+  /** Display text (no markdown IDs) */
   value: string;
+  /** Tracked mention positions in the display text */
+  mentions: TrackedMention[];
   /** Additional class names applied to the overlay container */
   className?: string;
 }
@@ -29,59 +26,58 @@ interface MentionHighlightOverlayProps {
 export const MentionHighlightOverlay = forwardRef<
   HTMLDivElement,
   MentionHighlightOverlayProps
->(({ value, className }, ref) => {
+>(({ value, mentions, className }, ref) => {
   const { navigateToPage } = usePageNavigation();
 
-  const renderFormattedText = (text: string): React.ReactNode[] => {
+  const renderFormattedText = (
+    text: string,
+    tracked: TrackedMention[]
+  ): React.ReactNode[] => {
     const elements: React.ReactNode[] = [];
     let lastIndex = 0;
-    let match: RegExpExecArray | null;
 
-    // Reset regex state
-    MENTION_REGEX.lastIndex = 0;
+    // Sort by position to process left-to-right
+    const sorted = [...tracked].sort((a, b) => a.start - b.start);
 
-    while ((match = MENTION_REGEX.exec(text)) !== null) {
-      const [fullMatch, label, id, type] = match;
-
+    for (const mention of sorted) {
       // Add preceding plain text
-      if (match.index > lastIndex) {
+      if (mention.start > lastIndex) {
         elements.push(
           <span key={`text-${lastIndex}`}>
-            {text.slice(lastIndex, match.index)}
+            {text.slice(lastIndex, mention.start)}
           </span>
         );
       }
 
       // Render the mention as a styled inline element
-      if (type === 'page') {
+      if (mention.type === 'page') {
         elements.push(
           <span
-            key={`mention-${match.index}`}
+            key={`mention-${mention.start}`}
             role="link"
             tabIndex={-1}
             className="font-semibold text-primary cursor-pointer hover:underline pointer-events-auto"
             onMouseDown={(e) => {
-              // Use mousedown so the textarea doesn't lose focus from a full click
               e.preventDefault();
               e.stopPropagation();
-              navigateToPage(id);
+              navigateToPage(mention.id);
             }}
           >
-            @{label}
+            {text.slice(mention.start, mention.end)}
           </span>
         );
       } else {
         elements.push(
           <span
-            key={`mention-${match.index}`}
+            key={`mention-${mention.start}`}
             className="font-semibold text-primary"
           >
-            @{label}
+            {text.slice(mention.start, mention.end)}
           </span>
         );
       }
 
-      lastIndex = match.index + fullMatch.length;
+      lastIndex = mention.end;
     }
 
     // Add any remaining plain text
@@ -108,7 +104,7 @@ export const MentionHighlightOverlay = forwardRef<
         className
       )}
     >
-      {renderFormattedText(value)}
+      {renderFormattedText(value, mentions)}
     </div>
   );
 });
