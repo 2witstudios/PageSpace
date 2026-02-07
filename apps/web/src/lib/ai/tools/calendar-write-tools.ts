@@ -17,8 +17,6 @@ import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone } fro
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
-const GOOGLE_READ_ONLY_ERROR =
-  'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
 
 /**
  * Parse a date string that can be either ISO 8601 or natural language.
@@ -60,14 +58,6 @@ async function canEditEvent(
   userId: string,
   event: typeof calendarEvents.$inferSelect
 ): Promise<{ canEdit: boolean; reason?: string }> {
-  // Check if event is synced from Google and marked read-only
-  if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-    return {
-      canEdit: false,
-      reason: 'This event is synced from Google Calendar and is read-only. You can manage it in Google Calendar.',
-    };
-  }
-
   // Check if user is the creator
   if (event.createdById !== userId) {
     return {
@@ -621,13 +611,6 @@ export const calendarWriteTools = {
           };
         }
 
-        if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-          return {
-            success: false,
-            error: GOOGLE_READ_ONLY_ERROR,
-          };
-        }
-
         // Verify user is an attendee
         const attendee = await db.query.eventAttendees.findFirst({
           where: and(eq(eventAttendees.eventId, eventId), eq(eventAttendees.userId, userId)),
@@ -725,13 +708,6 @@ export const calendarWriteTools = {
           return {
             success: false,
             error: 'Event not found.',
-          };
-        }
-
-        if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-          return {
-            success: false,
-            error: GOOGLE_READ_ONLY_ERROR,
           };
         }
 
@@ -874,13 +850,6 @@ export const calendarWriteTools = {
           return {
             success: false,
             error: 'Event not found.',
-          };
-        }
-
-        if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-          return {
-            success: false,
-            error: GOOGLE_READ_ONLY_ERROR,
           };
         }
 

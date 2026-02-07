@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
+import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { decrypt } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
@@ -63,21 +63,6 @@ export async function POST(request: Request) {
         updatedAt: new Date(),
       })
       .where(eq(googleCalendarConnections.userId, userId));
-
-    // Mark all synced events as no longer syncing
-    // They remain in the calendar but won't be updated anymore
-    await db
-      .update(calendarEvents)
-      .set({
-        googleSyncReadOnly: false, // Allow editing now that sync is off
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(calendarEvents.createdById, userId),
-          eq(calendarEvents.syncedFromGoogle, true)
-        )
-      );
 
     loggers.auth.info('Google Calendar disconnected', { userId });
 

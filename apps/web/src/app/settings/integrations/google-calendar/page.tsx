@@ -25,7 +25,6 @@ interface ConnectionStatus {
     googleEmail: string;
     selectedCalendars: string[];
     syncFrequencyMinutes: number;
-    markAsReadOnly: boolean;
     targetDriveId: string | null;
     lastSyncAt: string | null;
     lastSyncError: string | null;

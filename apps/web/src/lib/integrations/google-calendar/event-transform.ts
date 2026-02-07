@@ -246,7 +246,6 @@ export const transformGoogleEventToPageSpace = (
     userId: string;
     driveId: string | null;
     googleCalendarId: string;
-    markAsReadOnly: boolean;
   }
 ): Omit<NewCalendarEvent, 'createdAt' | 'updatedAt'> => {
   const start = parseGoogleDateTime(googleEvent.start);
@@ -309,7 +308,7 @@ export const transformGoogleEventToPageSpace = (
     googleCalendarId: context.googleCalendarId,
     syncedFromGoogle: true,
     lastGoogleSync: new Date(),
-    googleSyncReadOnly: context.markAsReadOnly,
+    googleSyncReadOnly: false,
   };
 };
 

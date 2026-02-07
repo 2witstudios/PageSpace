@@ -188,6 +188,7 @@ export async function GET(req: Request) {
           googleAccountId,
           status: 'active',
           statusMessage: null,
+          markAsReadOnly: false,
           updatedAt: new Date(),
         },
       });
