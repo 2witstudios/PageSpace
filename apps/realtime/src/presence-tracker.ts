@@ -9,22 +9,20 @@
  * "who is viewing what" with display metadata.
  */
 
-export interface PresenceUser {
-  userId: string;
-  socketId: string;
-  name: string;
-  avatarUrl: string | null;
-}
+import type { PresenceViewer } from '@pagespace/lib/client-safe';
+
+// Re-export for convenience
+export type { PresenceViewer };
 
 export interface PagePresenceInfo {
   pageId: string;
   driveId: string;
-  viewers: PresenceUser[];
+  viewers: PresenceViewer[];
 }
 
 export class PresenceTracker {
-  // pageId → Map<socketId, PresenceUser>
-  private pageViewers = new Map<string, Map<string, PresenceUser>>();
+  // pageId → Map<socketId, PresenceViewer>
+  private pageViewers = new Map<string, Map<string, PresenceViewer>>();
 
   // socketId → Set<pageId> (for cleanup on disconnect)
   private socketToPages = new Map<string, Set<string>>();
@@ -39,8 +37,8 @@ export class PresenceTracker {
   addViewer(
     pageId: string,
     driveId: string,
-    user: PresenceUser
-  ): PresenceUser[] {
+    user: PresenceViewer
+  ): PresenceViewer[] {
     // Track page → drive mapping
     this.pageToDrive.set(pageId, driveId);
 
@@ -63,7 +61,7 @@ export class PresenceTracker {
    * Remove a user from viewing a page (by socketId).
    * Returns the updated viewer list, or null if the page has no viewers.
    */
-  removeViewer(socketId: string, pageId: string): PresenceUser[] | null {
+  removeViewer(socketId: string, pageId: string): PresenceViewer[] | null {
     const viewers = this.pageViewers.get(pageId);
     if (viewers) {
       viewers.delete(socketId);
@@ -124,7 +122,7 @@ export class PresenceTracker {
   /**
    * Get all current viewers of a page.
    */
-  getViewers(pageId: string): PresenceUser[] {
+  getViewers(pageId: string): PresenceViewer[] {
     const viewers = this.pageViewers.get(pageId);
     if (!viewers) return [];
     return Array.from(viewers.values());
@@ -149,9 +147,9 @@ export class PresenceTracker {
    * Deduplicate viewers by userId (a user may have multiple tabs/sockets).
    * Returns one entry per user, preferring the most recent socket.
    */
-  getUniqueViewers(pageId: string): PresenceUser[] {
+  getUniqueViewers(pageId: string): PresenceViewer[] {
     const viewers = this.getViewers(pageId);
-    const byUser = new Map<string, PresenceUser>();
+    const byUser = new Map<string, PresenceViewer>();
     for (const viewer of viewers) {
       byUser.set(viewer.userId, viewer);
     }

@@ -1,25 +1,24 @@
 import { useEffect, useRef } from 'react';
 import { useSocket } from './useSocket';
 import { useAuth } from './useAuth';
-import { usePresenceStore } from '@/stores/usePresenceStore';
-import type { PresencePageViewersPayload } from '@/lib/websocket';
 
 /**
  * Hook that manages page presence - announces when the current user
- * is viewing a page and listens for viewer updates.
+ * is viewing a page by emitting join/leave events via Socket.IO.
  *
  * Place this in the component that renders when a user is actively viewing a page
  * (e.g., the content header or page view). When the component unmounts (user
  * navigates away), it automatically announces departure.
  *
+ * Note: Viewer state updates are handled by usePageTreeSocket which listens
+ * for presence:page_viewers events on the drive room and updates usePresenceStore.
+ *
  * @param pageId - The page being viewed
- * @returns Current viewers of this page (excluding the current user)
  */
 export function usePagePresence(pageId: string | null | undefined) {
   const socket = useSocket();
   const socketId = socket?.id;
   const { user } = useAuth();
-  const setPageViewers = usePresenceStore((state) => state.setPageViewers);
   const currentPageRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -42,18 +41,7 @@ export function usePagePresence(pageId: string | null | undefined) {
     // Join the new page's presence
     socket.emit('presence:join_page', { pageId });
 
-    // Listen for viewer updates on this specific page
-    const handleViewers = (data: PresencePageViewersPayload) => {
-      if (data.pageId === pageId) {
-        setPageViewers(data.pageId, data.viewers);
-      }
-    };
-
-    socket.on('presence:page_viewers', handleViewers);
-
     return () => {
-      socket.off('presence:page_viewers', handleViewers);
-
       // Leave presence when unmounting
       if (socket.connected && currentPageRef.current === pageId) {
         socket.emit('presence:leave_page', { pageId });

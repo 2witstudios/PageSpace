@@ -4,9 +4,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { PresenceTracker, type PresenceUser } from '../presence-tracker';
+import { PresenceTracker, type PresenceViewer } from '../presence-tracker';
 
-const createUser = (overrides: Partial<PresenceUser> = {}): PresenceUser => ({
+const createUser = (overrides: Partial<PresenceViewer> = {}): PresenceViewer => ({
   userId: 'user-1',
   socketId: 'socket-1',
   name: 'Alice',

@@ -1,5 +1,18 @@
 import { PageType, PermissionAction } from './utils/enums';
 
+// Presence types for real-time "who is viewing this page" indicators
+export interface PresenceViewer {
+  userId: string;
+  socketId: string;
+  name: string;
+  avatarUrl: string | null;
+}
+
+export interface PresencePageViewersPayload {
+  pageId: string;
+  viewers: PresenceViewer[];
+}
+
 export type ProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'visual';
 export type ExtractionMethod = 'text' | 'ocr' | 'hybrid' | 'visual' | 'none';
 

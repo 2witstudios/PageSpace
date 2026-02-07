@@ -123,6 +123,7 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
 
   // Handle presence viewer updates from the drive room
   const setPageViewers = usePresenceStore((state) => state.setPageViewers);
+  const clearAllPresence = usePresenceStore((state) => state.clearAll);
   const handlePresenceUpdate = useCallback((data: PresencePageViewersPayload) => {
     setPageViewers(data.pageId, data.viewers);
   }, [setPageViewers]);
@@ -150,6 +151,10 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     // Listen for presence updates (who is viewing which pages in this drive)
     socket.on('presence:page_viewers', handlePresenceUpdate);
 
+    // Clear stale presence data on socket disconnect (server won't deliver updates)
+    const handleDisconnect = () => { clearAllPresence(); };
+    socket.on('disconnect', handleDisconnect);
+
     // Cleanup function
     return () => {
       console.log('🌳 usePageTreeSocket: Cleaning up listeners for drive:', driveId);
@@ -164,6 +169,7 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
         socket.off(event, handlePageEvent);
       });
       socket.off('presence:page_viewers', handlePresenceUpdate);
+      socket.off('disconnect', handleDisconnect);
 
       // Clear any pending debounced revalidation
       if (revalidationTimeoutRef.current) {

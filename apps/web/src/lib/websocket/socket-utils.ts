@@ -112,18 +112,8 @@ export interface InboxEventPayload {
   unreadCount?: number;
 }
 
-// Presence types for "who is viewing this page" indicators
-export interface PresenceViewer {
-  userId: string;
-  socketId: string;
-  name: string;
-  avatarUrl: string | null;
-}
-
-export interface PresencePageViewersPayload {
-  pageId: string;
-  viewers: PresenceViewer[];
-}
+// Presence types - re-export from shared lib
+export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/client-safe';
 
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
 

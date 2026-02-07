@@ -150,10 +150,10 @@ function ViewerAvatar({
  * Compact inline version for use in the sidebar page tree.
  * Shows smaller avatars with no tooltip wrapper needed (the parent handles hover).
  */
-export function PageViewersInline({ pageId, maxVisible = 3 }: { pageId: string; maxVisible?: number }) {
+export function PageViewersInline({ pageId, maxVisible = 3 }: { pageId: string | null | undefined; maxVisible?: number }) {
   const { user } = useAuth();
   const pageViewers = usePresenceStore((state) =>
-    state.pageViewers.get(pageId)
+    pageId ? state.pageViewers.get(pageId) : undefined
   );
 
   const otherViewers = useMemo(() => {

@@ -1,6 +1,8 @@
 /**
  * usePagePresence Hook Tests
  * Tests for the hook that manages page viewing presence via Socket.IO.
+ * This hook emits join/leave events only - viewer state updates are
+ * handled by usePageTreeSocket.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
@@ -8,10 +10,9 @@ import { renderHook } from '@testing-library/react';
 import { createMockSocket } from '@/test/socket-mocks';
 
 // Create hoisted mocks
-const { mockUseAuth, mockGetSocket, mockSetPageViewers } = vi.hoisted(() => ({
+const { mockUseAuth, mockGetSocket } = vi.hoisted(() => ({
   mockUseAuth: vi.fn(),
   mockGetSocket: vi.fn<() => ReturnType<typeof createMockSocket> | null>(() => null),
-  mockSetPageViewers: vi.fn(),
 }));
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -20,12 +21,6 @@ vi.mock('@/hooks/useAuth', () => ({
 
 vi.mock('@/hooks/useSocket', () => ({
   useSocket: () => mockGetSocket(),
-}));
-
-vi.mock('@/stores/usePresenceStore', () => ({
-  usePresenceStore: (selector: (state: { setPageViewers: typeof mockSetPageViewers }) => unknown) => {
-    return selector({ setPageViewers: mockSetPageViewers });
-  },
 }));
 
 import { usePagePresence } from '../usePagePresence';
@@ -99,37 +94,14 @@ describe('usePagePresence', () => {
     });
   });
 
-  describe('listening for viewer updates', () => {
-    it('given a presence:page_viewers event for the current page, should update the store', () => {
-      renderHook(() => usePagePresence('page-1'));
-
-      // Simulate server broadcasting viewer update
-      const viewerData = {
-        pageId: 'page-1',
-        viewers: [{ userId: 'user-2', socketId: 'socket-2', name: 'Bob', avatarUrl: null }],
-      };
-      mockSocket._trigger('presence:page_viewers', viewerData);
-
-      expect(mockSetPageViewers).toHaveBeenCalledWith('page-1', viewerData.viewers);
-    });
-
-    it('given a presence:page_viewers event for a different page, should not update the store', () => {
-      renderHook(() => usePagePresence('page-1'));
-
-      mockSocket._trigger('presence:page_viewers', {
-        pageId: 'page-other',
-        viewers: [{ userId: 'user-2', socketId: 'socket-2', name: 'Bob', avatarUrl: null }],
-      });
-
-      expect(mockSetPageViewers).not.toHaveBeenCalled();
-    });
-
-    it('given unmount, should remove the event listener', () => {
+  describe('event listener management', () => {
+    it('given mount and unmount, should not register any socket listeners', () => {
       const { unmount } = renderHook(() => usePagePresence('page-1'));
 
-      unmount();
+      // usePagePresence should only emit, not listen (usePageTreeSocket handles listening)
+      expect(mockSocket.on).not.toHaveBeenCalled();
 
-      expect(mockSocket.off).toHaveBeenCalledWith('presence:page_viewers', expect.any(Function));
+      unmount();
     });
   });
 });

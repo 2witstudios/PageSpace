@@ -27,7 +27,7 @@ vi.mock('@/stores/usePresenceStore', () => ({
 vi.mock('@radix-ui/react-tooltip', () => ({
   Provider: ({ children }: { children: React.ReactNode }) => children,
   Root: ({ children }: { children: React.ReactNode }) => children,
-  Trigger: ({ children, asChild, ...props }: { children: React.ReactNode; asChild?: boolean }) => (
+  Trigger: ({ children, asChild: _asChild, ...props }: { children: React.ReactNode; asChild?: boolean }) => (
     <span {...props}>{children}</span>
   ),
   Content: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
