@@ -165,17 +165,18 @@ export default function GoogleCalendarSettingsPage() {
         setAvailableCalendars(calendars);
 
         // Replace 'primary' alias with actual primary calendar ID to prevent duplicates
-        setSelectedCalendarIds((prev) => {
-          if (!prev.includes("primary")) return prev;
-          const primaryCal = calendars.find((c) => c.primary);
-          if (!primaryCal) return prev;
-          const corrected = prev
-            .map((id) => (id === "primary" ? primaryCal.id : id))
-            .filter((id, i, arr) => arr.indexOf(id) === i);
-          // Persist asynchronously (safe — no return value dependency)
-          saveCalendarSelection(corrected);
-          return corrected;
-        });
+        const primaryCal = calendars.find((c) => c.primary);
+        if (primaryCal) {
+          setSelectedCalendarIds((prev) => {
+            if (!prev.includes("primary")) return prev;
+            const corrected = prev
+              .map((id) => (id === "primary" ? primaryCal.id : id))
+              .filter((id, i, arr) => arr.indexOf(id) === i);
+            // Schedule persistence outside the updater to avoid side effects
+            queueMicrotask(() => saveCalendarSelection(corrected));
+            return corrected;
+          });
+        }
       }
     } catch (err) {
       console.error("Failed to fetch calendars:", err);
