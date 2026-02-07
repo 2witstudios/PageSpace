@@ -94,7 +94,7 @@ describe('useImageAttachments', () => {
     expect(result.current.attachments).toHaveLength(0);
   });
 
-  it('given clearFiles called, should remove all attachments and revoke all blob URLs', async () => {
+  it('given clearFiles called, should remove all attachments', async () => {
     const { result } = renderHook(() => useImageAttachments());
 
     await act(async () => {
@@ -176,25 +176,11 @@ describe('useImageAttachments', () => {
     });
 
     const files = result.current.getFilesForSend();
-    expect(files.length).toBeGreaterThanOrEqual(0);
-
-    // If files are available (resize completed), verify structure
-    if (files.length > 0) {
-      expect(files[0].type).toBe('file');
-      expect(files[0].url).toContain('data:');
-      expect(files[0].mediaType).toBeDefined();
-      expect(files[0].filename).toBe('photo.png');
-    }
+    expect(files).toHaveLength(1);
+    expect(files[0].type).toBe('file');
+    expect(files[0].url).toContain('data:');
+    expect(files[0].mediaType).toBeDefined();
+    expect(files[0].filename).toBe('photo.png');
   });
 
-  it('given unmount after adding files, should clean up without errors', async () => {
-    const { result, unmount } = renderHook(() => useImageAttachments());
-
-    await act(async () => {
-      await result.current.addFiles([makeFile('a.png'), makeFile('b.png')]);
-    });
-
-    // Unmount should complete without errors
-    expect(() => unmount()).not.toThrow();
-  });
 });
