@@ -14,7 +14,7 @@ interface MentionHighlightOverlayProps {
 }
 
 /**
- * MentionHighlightOverlay renders text with @mentions as formatted bold links.
+ * MentionHighlightOverlay renders text with @mentions as colored, underlined spans.
  *
  * It is designed to sit on top of a textarea with transparent text,
  * mirroring the exact same layout so that the formatted mentions
@@ -56,7 +56,7 @@ export const MentionHighlightOverlay = forwardRef<
       elements.push(
         <span
           key={`mention-${mention.start}`}
-          className="font-semibold text-primary"
+          className="text-primary underline decoration-primary/50"
         >
           {mentionText}
         </span>
