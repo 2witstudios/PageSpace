@@ -41,6 +41,7 @@ import { Projection } from "@/lib/tree/sortable-tree";
 import { cn } from "@/lib/utils";
 import { useSortable } from "@dnd-kit/sortable";
 import { useMultiSelectStore, SelectedPageInfo } from "@/stores/useMultiSelectStore";
+import { PageViewersInline } from "@/components/common/PageViewers";
 
 export type DropPosition = "before" | "after" | "inside" | null;
 
@@ -348,6 +349,9 @@ export function PageTreeItem({
               >
                 {item.title}
               </Link>
+
+              {/* Currently viewing indicators */}
+              <PageViewersInline pageId={item.id} />
 
               {/* Action Button - Add child */}
               <div

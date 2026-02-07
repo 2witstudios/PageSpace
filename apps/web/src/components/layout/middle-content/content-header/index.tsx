@@ -17,6 +17,8 @@ import { ExportDropdown } from './ExportDropdown';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
+import { usePagePresence } from '@/hooks/usePagePresence';
+import { PageViewers } from '@/components/common/PageViewers';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -72,6 +74,9 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   const pageIsFile = page ? isFilePage(page.type) : false;
   const showSaveStatus = (pageIsDocument || pageIsSheet) && !isMobile;
 
+  // Track and display presence (who else is viewing this page)
+  usePagePresence(pageId);
+
   // Handle file download
   const handleDownload = useCallback(async () => {
     if (!page || !pageIsFile) return;
@@ -123,6 +128,7 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
               {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
             </Button>
           )}
+          <PageViewers pageId={pageId} />
           <ShareDialog pageId={pageId} />
           {children}
         </div>

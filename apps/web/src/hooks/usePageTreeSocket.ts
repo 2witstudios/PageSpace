@@ -1,7 +1,8 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { usePageTree } from './usePageTree';
 import { useSocket } from './useSocket';
-import { PageEventPayload } from '@/lib/websocket';
+import { PageEventPayload, PresencePageViewersPayload } from '@/lib/websocket';
+import { usePresenceStore } from '@/stores/usePresenceStore';
 
 /**
  * Enhanced version of usePageTree that listens for real-time page events
@@ -120,10 +121,17 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     debouncedRevalidate();
   }, [debouncedRevalidate, handleContentUpdatedEvent]);
 
+  // Handle presence viewer updates from the drive room
+  const setPageViewers = usePresenceStore((state) => state.setPageViewers);
+  const clearAllPresence = usePresenceStore((state) => state.clearAll);
+  const handlePresenceUpdate = useCallback((data: PresencePageViewersPayload) => {
+    setPageViewers(data.pageId, data.viewers);
+  }, [setPageViewers]);
+
   // Set up Socket.IO listeners for the current drive
   useEffect(() => {
     currentDriveRef.current = driveId;
-    
+
     if (!socket || !driveId) {
       return;
     }
@@ -132,28 +140,40 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
 
     // Join the drive room to receive page events (using drive ID)
     socket.emit('join_drive', driveId);
-    
+
     // Listen for page events
     const events = ['page:created', 'page:updated', 'page:moved', 'page:trashed', 'page:restored', 'page:content-updated'];
-    
+
     events.forEach(event => {
       socket.on(event, handlePageEvent);
     });
 
+    // Listen for presence updates (who is viewing which pages in this drive)
+    socket.on('presence:page_viewers', handlePresenceUpdate);
+
+    // Clear stale presence data on socket disconnect (server won't deliver updates)
+    const handleDisconnect = () => { clearAllPresence(); };
+    socket.on('disconnect', handleDisconnect);
+
     // Cleanup function
     return () => {
       console.log('🌳 usePageTreeSocket: Cleaning up listeners for drive:', driveId);
-      
+
       // Leave the drive room (using drive ID)
       if (driveId) {
         socket.emit('leave_drive', driveId);
       }
-      
+
       // Remove all event listeners
       events.forEach(event => {
         socket.off(event, handlePageEvent);
       });
-      
+      socket.off('presence:page_viewers', handlePresenceUpdate);
+      socket.off('disconnect', handleDisconnect);
+
+      // Clear stale presence from previous drive
+      clearAllPresence();
+
       // Clear any pending debounced revalidation
       if (revalidationTimeoutRef.current) {
         clearTimeout(revalidationTimeoutRef.current);
@@ -161,7 +181,7 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socketId, driveId, handlePageEvent]); // socket intentionally omitted - only depends on ID for stability
+  }, [socketId, driveId, handlePageEvent, handlePresenceUpdate, clearAllPresence]); // socket intentionally omitted - only depends on ID for stability
 
   // Clean up timeout on unmount
   useEffect(() => {

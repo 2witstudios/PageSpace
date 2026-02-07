@@ -4,17 +4,19 @@ import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissio
 import { sessionService } from '@pagespace/lib/auth';
 import { verifyBroadcastSignature } from '@pagespace/lib/broadcast-auth';
 import * as dotenv from 'dotenv';
-import { db, eq, gt, and, or, dmConversations, socketTokens } from '@pagespace/db';
+import { db, eq, gt, and, or, dmConversations, socketTokens, users, userProfiles, pages } from '@pagespace/db';
 import {
   validatePageId,
   validateDriveId,
   validateConversationId,
+  validatePresencePagePayload,
   emitValidationError,
 } from './validation';
 import { loggers } from '@pagespace/lib/logger-config';
 import { createHash } from 'crypto';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
+import { presenceTracker, type PresenceViewer } from './presence-tracker';
 
 dotenv.config({ path: '../../.env' });
 
@@ -369,8 +371,35 @@ interface AuthSocket extends Socket {
   data: {
     user?: {
       id: string;
+      name: string;
+      avatarUrl: string | null;
     };
   };
+}
+
+/**
+ * Look up user display metadata (name, avatar) and store on socket.data.
+ * Called once per connection to avoid repeated DB queries during presence joins.
+ */
+async function populateUserMetadata(socket: AuthSocket): Promise<void> {
+  const userId = socket.data.user?.id;
+  if (!userId) return;
+
+  try {
+    const [userResult, profileResult] = await Promise.all([
+      db.select({ name: users.name, image: users.image }).from(users).where(eq(users.id, userId)).limit(1),
+      db.select({ displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
+    ]);
+
+    const name = profileResult[0]?.displayName || userResult[0]?.name || 'Unknown';
+    const avatarUrl = profileResult[0]?.avatarUrl || userResult[0]?.image || null;
+
+    socket.data.user = { id: userId, name, avatarUrl };
+  } catch (error) {
+    loggers.realtime.error('Error populating user metadata', error as Error, { userId });
+    // Keep the basic user data (just id) - presence will work with fallback name
+    socket.data.user = { id: userId, name: 'Unknown', avatarUrl: null };
+  }
 }
 
 io.use(async (socket: AuthSocket, next) => {
@@ -412,7 +441,8 @@ io.use(async (socket: AuthSocket, next) => {
   if (token.startsWith('ps_sock_')) {
     const socketAuth = await validateSocketToken(token);
     if (socketAuth) {
-      socket.data.user = { id: socketAuth.userId };
+      socket.data.user = { id: socketAuth.userId, name: 'Unknown', avatarUrl: null };
+      await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: socketAuth.userId });
       return next();
     }
@@ -429,7 +459,8 @@ io.use(async (socket: AuthSocket, next) => {
         return next(new Error('Authentication error: Invalid or expired session.'));
       }
 
-      socket.data.user = { id: sessionClaims.userId };
+      socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via session token', { userId: sessionClaims.userId });
       return next();
     } catch (error) {
@@ -717,7 +748,126 @@ io.on('connection', (socket: AuthSocket) => {
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
+  // Presence tracking: join a page as a viewer
+  socket.on('presence:join_page', async (payload: unknown) => {
+    if (!user?.id) return;
+
+    const pageValidation = validatePresencePagePayload(payload);
+    if (!pageValidation.ok) {
+      emitValidationError(socket, 'presence:join_page', pageValidation.error);
+      return;
+    }
+    const pageId = pageValidation.value;
+
+    try {
+      // Verify the user has access to this page
+      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      if (!accessLevel) {
+        loggers.realtime.warn('Presence denied: no page access', { userId: user.id, pageId });
+        return;
+      }
+
+      // Look up the page's driveId (user metadata is cached on socket.data from connection)
+      const [pageResult] = await db
+        .select({ driveId: pages.driveId })
+        .from(pages)
+        .where(eq(pages.id, pageId))
+        .limit(1);
+
+      if (!pageResult) {
+        loggers.realtime.warn('Presence: page not found', { pageId });
+        return;
+      }
+
+      const driveId = pageResult.driveId;
+
+      const presenceUser: PresenceViewer = {
+        userId: user.id,
+        socketId: socket.id,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+      };
+
+      presenceTracker.addViewer(pageId, driveId, presenceUser);
+      const uniqueViewers = presenceTracker.getUniqueViewers(pageId);
+
+      // Broadcast to the page room (for the content header)
+      io.to(pageId).emit('presence:page_viewers', {
+        pageId,
+        viewers: uniqueViewers,
+      });
+
+      // Broadcast to the drive room (for the sidebar page tree)
+      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+        pageId,
+        viewers: uniqueViewers,
+      });
+
+      loggers.realtime.debug('User joined page presence', {
+        userId: user.id,
+        pageId,
+        viewerCount: uniqueViewers.length,
+      });
+    } catch (error) {
+      loggers.realtime.error('Error joining page presence', error as Error, { pageId });
+    }
+  });
+
+  // Presence tracking: leave a page
+  socket.on('presence:leave_page', (payload: unknown) => {
+    if (!user?.id) return;
+
+    const pageValidation = validatePresencePagePayload(payload);
+    if (!pageValidation.ok) {
+      emitValidationError(socket, 'presence:leave_page', pageValidation.error);
+      return;
+    }
+    const pageId = pageValidation.value;
+
+    const driveId = presenceTracker.getDriveId(pageId);
+    presenceTracker.removeViewer(socket.id, pageId);
+    const uniqueViewers = presenceTracker.getUniqueViewers(pageId);
+
+    // Broadcast updated viewer list to page room
+    io.to(pageId).emit('presence:page_viewers', {
+      pageId,
+      viewers: uniqueViewers,
+    });
+
+    // Broadcast to drive room if we know the driveId
+    if (driveId) {
+      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+        pageId,
+        viewers: uniqueViewers,
+      });
+    }
+
+    loggers.realtime.debug('User left page presence', {
+      userId: user.id,
+      pageId,
+      viewerCount: uniqueViewers.length,
+    });
+  });
+
   socket.on('disconnect', (reason) => {
+    // Clean up presence tracking and broadcast updates for affected pages
+    const affectedPages = presenceTracker.removeSocket(socket.id);
+    for (const { pageId, driveId } of affectedPages) {
+      const uniqueViewers = presenceTracker.getUniqueViewers(pageId);
+
+      io.to(pageId).emit('presence:page_viewers', {
+        pageId,
+        viewers: uniqueViewers,
+      });
+
+      if (driveId) {
+        io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+          pageId,
+          viewers: uniqueViewers,
+        });
+      }
+    }
+
     // Unregister socket from registry (cleans up all room tracking)
     socketRegistry.unregisterSocket(socket.id);
     loggers.realtime.info('User disconnected', { socketId: socket.id, reason });

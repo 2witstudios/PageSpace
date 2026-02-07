@@ -87,6 +87,18 @@ export const validateConversationId = (input: unknown): ValidationResult<string>
 };
 
 /**
+ * Validates a presence payload containing { pageId: string }.
+ * Extracts and validates the pageId from the object payload.
+ * Returns Result type - never throws
+ */
+export const validatePresencePagePayload = (input: unknown): ValidationResult<string> => {
+  if (!input || typeof input !== 'object' || !('pageId' in input)) {
+    return { ok: false, error: 'Invalid payload: pageId required' };
+  }
+  return validatePageId((input as { pageId: string }).pageId);
+};
+
+/**
  * Socket type for validation error emission
  */
 interface SocketLike {
