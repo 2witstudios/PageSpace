@@ -7,7 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import {
+  ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle,
+  RefreshCw, ExternalLink, CalendarDays
+} from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { toast } from "sonner";
 
@@ -15,7 +20,7 @@ interface ConnectionStatus {
   connected: boolean;
   connection: {
     id: string;
-    status: "active" | "expired" | "error" | "disconnected" | "pending" | "revoked";
+    status: "active" | "expired" | "error" | "disconnected";
     statusMessage: string | null;
     googleEmail: string;
     selectedCalendars: string[];
@@ -27,6 +32,18 @@ interface ConnectionStatus {
     createdAt: string;
     updatedAt: string;
   } | null;
+  syncedEventCount: number;
+}
+
+interface GoogleCalendar {
+  id: string;
+  summary: string;
+  description: string | null;
+  timeZone: string | null;
+  backgroundColor: string | null;
+  foregroundColor: string | null;
+  primary: boolean;
+  accessRole: string;
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -53,34 +70,55 @@ export default function GoogleCalendarSettingsPage() {
   const [disconnecting, setDisconnecting] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Calendar picker state
+  const [availableCalendars, setAvailableCalendars] = useState<GoogleCalendar[]>([]);
+  const [loadingCalendars, setLoadingCalendars] = useState(false);
+  const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>([]);
+
   const error = searchParams.get("error");
   const justConnected = searchParams.get("connected") === "true";
   const connection = status?.connection ?? null;
   const connectionStatus = connection?.status;
   const isActiveConnection = connectionStatus === "active";
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/status");
       if (response.ok) {
         const data = await response.json();
         setStatus(data);
+        if (data.connection) {
+          setSelectedCalendarIds(data.connection.selectedCalendars || ["primary"]);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch status:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const fetchCalendars = useCallback(async () => {
+    setLoadingCalendars(true);
+    try {
+      const response = await fetchWithAuth("/api/integrations/google-calendar/calendars");
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableCalendars(data.calendars || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch calendars:", err);
+    } finally {
+      setLoadingCalendars(false);
+    }
+  }, []);
 
   const handleSync = useCallback(async (silent = false) => {
     setSyncing(true);
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/sync", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
       });
 
       const data = await response.json();
@@ -108,18 +146,51 @@ export default function GoogleCalendarSettingsPage() {
     } finally {
       setSyncing(false);
     }
-  }, []);
+  }, [fetchStatus]);
+
+  // Save calendar selection immediately when toggled
+  const saveCalendarSelection = useCallback(async (newSelection: string[]) => {
+    try {
+      const response = await fetchWithAuth("/api/integrations/google-calendar/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selectedCalendars: newSelection }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        toast.error(data.error || "Failed to update calendars");
+        // Revert on failure
+        if (connection) {
+          setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
+        }
+        return;
+      }
+
+      // Trigger a sync so the newly selected calendar's events appear immediately
+      handleSync(true);
+    } catch (err) {
+      console.error("Failed to save calendar selection:", err);
+      if (connection) {
+        setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
+      }
+    }
+  }, [connection, handleSync]);
 
   useEffect(() => {
     fetchStatus();
-  }, []);
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    if (isActiveConnection) {
+      fetchCalendars();
+    }
+  }, [isActiveConnection, fetchCalendars]);
 
   useEffect(() => {
     if (justConnected) {
       toast.success("Google Calendar connected successfully!");
-      // Trigger initial sync
       handleSync(true);
-      // Clean up URL
       router.replace("/settings/integrations/google-calendar");
     }
   }, [justConnected, router, handleSync]);
@@ -129,12 +200,8 @@ export default function GoogleCalendarSettingsPage() {
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/connect", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          returnUrl: "/settings/integrations/google-calendar",
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ returnUrl: "/settings/integrations/google-calendar" }),
       });
 
       if (!response.ok) {
@@ -144,7 +211,6 @@ export default function GoogleCalendarSettingsPage() {
       }
 
       const { url } = await response.json();
-      // Redirect to Google OAuth
       window.location.href = url;
     } catch (err) {
       console.error("Failed to connect:", err);
@@ -159,9 +225,7 @@ export default function GoogleCalendarSettingsPage() {
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/disconnect", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
       });
 
       if (!response.ok) {
@@ -171,6 +235,7 @@ export default function GoogleCalendarSettingsPage() {
       }
 
       toast.success("Google Calendar disconnected");
+      setAvailableCalendars([]);
       await fetchStatus();
     } catch (err) {
       console.error("Failed to disconnect:", err);
@@ -178,6 +243,21 @@ export default function GoogleCalendarSettingsPage() {
     } finally {
       setDisconnecting(false);
     }
+  };
+
+  const toggleCalendar = (calendarId: string) => {
+    const prev = selectedCalendarIds;
+    const next = prev.includes(calendarId)
+      ? prev.filter((id) => id !== calendarId)
+      : [...prev, calendarId];
+
+    if (next.length === 0) {
+      toast.error("At least one calendar must be selected");
+      return;
+    }
+
+    setSelectedCalendarIds(next);
+    saveCalendarSelection(next);
   };
 
   const formatLastSync = (dateStr: string | null) => {
@@ -222,20 +302,6 @@ export default function GoogleCalendarSettingsPage() {
             Error
           </Badge>
         );
-      case "pending":
-        return (
-          <Badge variant="secondary">
-            <AlertCircle className="h-3 w-3 mr-1" />
-            Pending
-          </Badge>
-        );
-      case "revoked":
-        return (
-          <Badge variant="destructive">
-            <XCircle className="h-3 w-3 mr-1" />
-            Revoked
-          </Badge>
-        );
       default:
         return (
           <Badge variant="secondary">
@@ -264,7 +330,7 @@ export default function GoogleCalendarSettingsPage() {
           <div>
             <h1 className="text-2xl font-bold">Google Calendar</h1>
             <p className="text-muted-foreground">
-              Import events from Google Calendar
+              Two-way sync with Google Calendar
             </p>
           </div>
         </div>
@@ -284,12 +350,9 @@ export default function GoogleCalendarSettingsPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">Connection Status</CardTitle>
+              <CardTitle className="text-lg">Connection</CardTitle>
               {!loading && getStatusBadge()}
             </div>
-            <CardDescription>
-              Connect your Google Calendar to import events
-            </CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -300,17 +363,21 @@ export default function GoogleCalendarSettingsPage() {
             ) : connection ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Connected as</span>
+                  <span className="text-sm text-muted-foreground">Account</span>
                   <span className="font-medium">{connection.googleEmail}</span>
                 </div>
-                {connection.lastSyncAt && (
-                  <div className="flex items-center justify-between py-2 border-b">
-                    <span className="text-sm text-muted-foreground">Last synced</span>
-                    <span className="text-sm">
-                      {formatLastSync(connection.lastSyncAt)}
-                    </span>
-                  </div>
-                )}
+                <div className="flex items-center justify-between py-2 border-b">
+                  <span className="text-sm text-muted-foreground">Last synced</span>
+                  <span className="text-sm">
+                    {formatLastSync(connection.lastSyncAt)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b">
+                  <span className="text-sm text-muted-foreground">Events</span>
+                  <span className="text-sm font-medium">
+                    {status?.syncedEventCount ?? 0} synced
+                  </span>
+                </div>
                 {connection.lastSyncError && (
                   <Alert variant="destructive">
                     <AlertCircle className="h-4 w-4" />
@@ -387,9 +454,10 @@ export default function GoogleCalendarSettingsPage() {
                 <div className="text-sm text-muted-foreground">
                   <p className="mb-3">Benefits of connecting:</p>
                   <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li>Two-way sync keeps both calendars in sync</li>
                     <li>AI can see your real availability</li>
-                    <li>Schedule around existing commitments</li>
-                    <li>No manual event recreation</li>
+                    <li>Changes appear instantly</li>
+                    <li>Automatic attendee matching</li>
                   </ul>
                 </div>
                 <Button
@@ -413,6 +481,63 @@ export default function GoogleCalendarSettingsPage() {
           </CardContent>
         </Card>
 
+        {/* Calendar Selection Card - only shown when connected */}
+        {isActiveConnection && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-muted-foreground" />
+                <CardTitle className="text-lg">Calendars</CardTitle>
+              </div>
+              <CardDescription>
+                Choose which calendars to keep in sync
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loadingCalendars ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-full" />
+                </div>
+              ) : availableCalendars.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No calendars found. Try reconnecting.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {availableCalendars.map((cal) => (
+                    <div key={cal.id} className="flex items-center space-x-3">
+                      <Checkbox
+                        id={`cal-${cal.id}`}
+                        checked={selectedCalendarIds.includes(cal.id)}
+                        onCheckedChange={() => toggleCalendar(cal.id)}
+                      />
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        {cal.backgroundColor && (
+                          <div
+                            className="w-3 h-3 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: cal.backgroundColor }}
+                          />
+                        )}
+                        <Label
+                          htmlFor={`cal-${cal.id}`}
+                          className="text-sm font-medium cursor-pointer truncate"
+                        >
+                          {cal.summary}
+                          {cal.primary && (
+                            <span className="ml-1.5 text-xs text-muted-foreground">(primary)</span>
+                          )}
+                        </Label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Info Card */}
         <Card className="bg-muted/50">
           <CardContent className="pt-6">
@@ -421,10 +546,10 @@ export default function GoogleCalendarSettingsPage() {
               <div className="text-sm text-muted-foreground">
                 <p className="font-medium mb-1">Privacy & Data</p>
                 <p>
-                  PageSpace imports event details (titles, times, locations, descriptions, and
-                  recurrence rules) from your calendar using read-only access. Your calendar data
-                  is stored encrypted, never shared with third parties, and never used for
-                  advertising. You can disconnect at any time.
+                  PageSpace syncs event details (titles, times, locations, descriptions,
+                  attendees, and conference links) with your Google Calendar using two-way
+                  access. Your calendar data is stored encrypted, never shared with third
+                  parties, and never used for advertising. You can disconnect at any time.
                 </p>
               </div>
             </div>

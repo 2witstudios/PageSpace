@@ -62,6 +62,34 @@ export interface GoogleCalendarEvent {
   eventType?: 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation';
 }
 
+export interface GoogleCalendarListEntry {
+  id: string;
+  summary: string;
+  description?: string;
+  timeZone?: string;
+  colorId?: string;
+  backgroundColor?: string;
+  foregroundColor?: string;
+  selected?: boolean;
+  primary?: boolean;
+  accessRole: 'freeBusyReader' | 'reader' | 'writer' | 'owner';
+}
+
+export interface GoogleCalendarListResponse {
+  kind: 'calendar#calendarList';
+  etag: string;
+  nextPageToken?: string;
+  items: GoogleCalendarListEntry[];
+}
+
+export interface GoogleWatchResponse {
+  kind: 'api#channel';
+  id: string;
+  resourceId: string;
+  resourceUri: string;
+  expiration: string; // milliseconds since epoch as string
+}
+
 export interface GoogleEventsListResponse {
   kind: 'calendar#events';
   etag: string;
@@ -255,4 +283,256 @@ export const listEvents = async (
   } while (pageToken);
 
   return { success: true, data: { events, nextSyncToken } };
+};
+
+/**
+ * IO function: List all calendars the user has access to
+ */
+export const listCalendars = async (
+  accessToken: string
+): Promise<GoogleApiResult<GoogleCalendarListEntry[]>> => {
+  const url = `${GOOGLE_CALENDAR_API_BASE}/users/me/calendarList`;
+  const result = await makeGoogleApiRequest<GoogleCalendarListResponse>(url, accessToken);
+
+  if (!result.success) return result;
+  return { success: true, data: result.data.items };
+};
+
+/**
+ * IO function: Set up push notifications (watch) for a calendar
+ *
+ * Google will POST notifications to the webhookUrl when events change.
+ * Channels expire after the given ttlSeconds (max ~30 days).
+ */
+export const watchCalendar = async (
+  accessToken: string,
+  calendarId: string,
+  webhookUrl: string,
+  channelId: string,
+  ttlSeconds: number = 7 * 24 * 3600, // 7 days default
+  channelToken?: string
+): Promise<GoogleApiResult<GoogleWatchResponse>> => {
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/watch`;
+  const expiration = Date.now() + ttlSeconds * 1000;
+
+  try {
+    const body: Record<string, unknown> = {
+      id: channelId,
+      type: 'web_hook',
+      address: webhookUrl,
+      expiration,
+    };
+    if (channelToken) {
+      body.token = channelToken;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildAuthHeader(accessToken),
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      loggers.api.warn('Google Calendar watch API error', {
+        status: response.status,
+        error: errorBody.slice(0, 500),
+      });
+      return {
+        success: false,
+        error: `Watch API error: ${response.status}`,
+        statusCode: response.status,
+        requiresReauth: response.status === 401 || response.status === 403,
+      };
+    }
+
+    const data = await response.json();
+    return { success: true, data: data as GoogleWatchResponse };
+  } catch (error) {
+    loggers.api.error('Google Calendar watch request failed', error as Error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+};
+
+/**
+ * IO function: Stop push notifications for a channel
+ */
+export const stopChannel = async (
+  accessToken: string,
+  channelId: string,
+  resourceId: string
+): Promise<GoogleApiResult<void>> => {
+  const url = 'https://www.googleapis.com/calendar/v3/channels/stop';
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildAuthHeader(accessToken),
+      body: JSON.stringify({ id: channelId, resourceId }),
+    });
+
+    if (!response.ok && response.status !== 404) {
+      // 404 means channel already expired/stopped, which is fine
+      const errorBody = await response.text();
+      loggers.api.warn('Google Calendar stop channel error', {
+        status: response.status,
+        error: errorBody.slice(0, 500),
+      });
+      return {
+        success: false,
+        error: `Stop channel error: ${response.status}`,
+        statusCode: response.status,
+      };
+    }
+
+    return { success: true, data: undefined };
+  } catch (error) {
+    loggers.api.error('Google Calendar stop channel failed', error as Error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+};
+
+/**
+ * IO function: Create an event on Google Calendar (for two-way sync)
+ */
+export const createGoogleEvent = async (
+  accessToken: string,
+  calendarId: string,
+  event: {
+    summary: string;
+    description?: string;
+    location?: string;
+    start: GoogleEventDateTime;
+    end: GoogleEventDateTime;
+    attendees?: Array<{ email: string }>;
+  }
+): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildAuthHeader(accessToken),
+      body: JSON.stringify(event),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      loggers.api.warn('Google Calendar create event error', {
+        status: response.status,
+        error: errorBody.slice(0, 500),
+      });
+      return {
+        success: false,
+        error: `Create event error: ${response.status}`,
+        statusCode: response.status,
+        requiresReauth: response.status === 401 || response.status === 403,
+      };
+    }
+
+    const data = await response.json();
+    return { success: true, data: data as GoogleCalendarEvent };
+  } catch (error) {
+    loggers.api.error('Google Calendar create event failed', error as Error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+};
+
+/**
+ * IO function: Update an event on Google Calendar (for two-way sync)
+ */
+export const updateGoogleEvent = async (
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+  event: {
+    summary?: string;
+    description?: string;
+    location?: string;
+    start?: GoogleEventDateTime;
+    end?: GoogleEventDateTime;
+    attendees?: Array<{ email: string }>;
+  }
+): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: buildAuthHeader(accessToken),
+      body: JSON.stringify(event),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      loggers.api.warn('Google Calendar update event error', {
+        status: response.status,
+        error: errorBody.slice(0, 500),
+      });
+      return {
+        success: false,
+        error: `Update event error: ${response.status}`,
+        statusCode: response.status,
+        requiresReauth: response.status === 401 || response.status === 403,
+      };
+    }
+
+    const data = await response.json();
+    return { success: true, data: data as GoogleCalendarEvent };
+  } catch (error) {
+    loggers.api.error('Google Calendar update event failed', error as Error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+};
+
+/**
+ * IO function: Delete an event on Google Calendar (for two-way sync)
+ */
+export const deleteGoogleEvent = async (
+  accessToken: string,
+  calendarId: string,
+  eventId: string
+): Promise<GoogleApiResult<void>> => {
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: buildAuthHeader(accessToken),
+    });
+
+    if (!response.ok && response.status !== 404 && response.status !== 410) {
+      const errorBody = await response.text();
+      loggers.api.warn('Google Calendar delete event error', {
+        status: response.status,
+        error: errorBody.slice(0, 500),
+      });
+      return {
+        success: false,
+        error: `Delete event error: ${response.status}`,
+        statusCode: response.status,
+        requiresReauth: response.status === 401 || response.status === 403,
+      };
+    }
+
+    return { success: true, data: undefined };
+  } catch (error) {
+    loggers.api.error('Google Calendar delete event failed', error as Error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
 };

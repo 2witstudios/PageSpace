@@ -519,6 +519,13 @@
       "when": 1770406537095,
       "tag": "0073_open_gorilla_man",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1770440353809,
+      "tag": "0074_wakeful_vulture",
+      "breakpoints": true
     }
   ]
 }

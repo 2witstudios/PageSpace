@@ -83,6 +83,52 @@ export const mapGoogleVisibility = (
 };
 
 /**
+ * Pure function: Map event color considering event type and color ID
+ *
+ * Event types like focusTime and outOfOffice get semantic colors
+ * unless the user has set a specific Google color override.
+ */
+export const mapEventColor = (event: GoogleCalendarEvent): string => {
+  // If user set a specific color in Google, respect it
+  if (event.colorId) return mapGoogleColor(event.colorId);
+
+  // Semantic colors based on event type
+  if (event.eventType === 'focusTime') return 'focus';
+  if (event.eventType === 'outOfOffice') return 'personal';
+
+  return 'default';
+};
+
+/**
+ * Pure function: Extract the best conference/meeting link from a Google event
+ *
+ * Prefers conferenceData entry points over the legacy hangoutLink field.
+ */
+export const extractConferenceLink = (event: GoogleCalendarEvent): string | null => {
+  // Try conferenceData first (newer, more detailed)
+  if (event.conferenceData && typeof event.conferenceData === 'object') {
+    const confData = event.conferenceData as {
+      entryPoints?: Array<{ entryPointType?: string; uri?: string }>;
+    };
+    if (confData.entryPoints && Array.isArray(confData.entryPoints)) {
+      // Prefer video entry point, then more
+      const video = confData.entryPoints.find((ep) => ep.entryPointType === 'video');
+      if (video?.uri) return video.uri;
+      // Fall back to any entry point with a URI
+      const any = confData.entryPoints.find((ep) => ep.uri);
+      if (any?.uri) return any.uri;
+    }
+  }
+
+  // Fall back to legacy hangoutLink
+  if (event.hangoutLink) {
+    return event.hangoutLink;
+  }
+
+  return null;
+};
+
+/**
  * Pure function: Sanitize HTML description to plain text
  *
  * Google Calendar descriptions can contain HTML. We strip tags
@@ -233,15 +279,25 @@ export const transformGoogleEventToPageSpace = (
 
     // Visibility and appearance
     visibility: mapGoogleVisibility(googleEvent.visibility),
-    color: mapGoogleColor(googleEvent.colorId),
+    color: mapEventColor(googleEvent),
 
-    // Metadata
+    // Metadata (includes conference links and attendee data for mapping)
     metadata: {
       googleHtmlLink: googleEvent.htmlLink,
       googleCreator: googleEvent.creator?.email,
       googleOrganizer: googleEvent.organizer?.email,
       googleStatus: googleEvent.status,
       googleEventType: googleEvent.eventType,
+      conferenceLink: extractConferenceLink(googleEvent),
+      conferenceData: googleEvent.conferenceData ?? null,
+      googleAttendees: googleEvent.attendees?.map((a) => ({
+        email: a.email,
+        displayName: a.displayName,
+        responseStatus: a.responseStatus,
+        optional: a.optional,
+        organizer: a.organizer,
+        self: a.self,
+      })) ?? null,
     },
 
     // Soft delete
@@ -274,8 +330,9 @@ export const shouldSyncEvent = (event: GoogleCalendarEvent): boolean => {
     return false;
   }
 
-  // Skip out-of-office and working location events (optional)
-  if (event.eventType === 'outOfOffice' || event.eventType === 'workingLocation') {
+  // Skip working location events (no meaningful time block)
+  // focusTime and outOfOffice are synced for availability checking
+  if (event.eventType === 'workingLocation') {
     return false;
   }
 

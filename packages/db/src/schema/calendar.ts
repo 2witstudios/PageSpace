@@ -173,6 +173,14 @@ export const googleCalendarConnections = pgTable('google_calendar_connections', 
   lastSyncError: text('lastSyncError'),
   syncCursor: text('syncCursor'), // Google's sync token for incremental sync
 
+  // Push notification webhook state (per-calendar channels stored as JSONB)
+  // Shape: Record<calendarId, { channelId: string; resourceId: string; expiration: string }>
+  webhookChannels: jsonb('webhookChannels').$type<Record<string, {
+    channelId: string;
+    resourceId: string;
+    expiration: string;
+  }>>(),
+
   // Audit timestamps
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

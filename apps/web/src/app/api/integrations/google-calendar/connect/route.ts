@@ -14,7 +14,7 @@ const connectSchema = z.object({
 
 /**
  * Initiates Google Calendar OAuth flow.
- * Requests calendar.readonly scope for importing calendar events.
+ * Requests full calendar read/write scope for two-way sync.
  * User must be authenticated before connecting calendar.
  */
 export async function POST(req: Request) {
@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
       redirect_uri: callbackUrl,
       response_type: 'code',
-      scope: 'https://www.googleapis.com/auth/calendar.readonly',
+      scope: 'https://www.googleapis.com/auth/calendar',
       access_type: 'offline', // Required for refresh token
       prompt: 'consent', // Force consent to get refresh token
       include_granted_scopes: 'true', // Incremental auth
@@ -114,7 +114,6 @@ export async function POST(req: Request) {
 
     loggers.auth.info('Google Calendar OAuth initiated', {
       userId,
-      email: user.email,
       clientIP,
     });
 

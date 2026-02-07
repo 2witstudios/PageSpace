@@ -173,7 +173,7 @@ export async function GET(req: Request) {
         statusMessage: null,
         selectedCalendars: ['primary'], // Default to primary calendar
         syncFrequencyMinutes: 15,
-        markAsReadOnly: true,
+        markAsReadOnly: false, // Two-way sync enabled by default
         lastSyncAt: null,
         lastSyncError: null,
         syncCursor: null,

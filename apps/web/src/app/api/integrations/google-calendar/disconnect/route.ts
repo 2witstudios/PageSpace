@@ -3,6 +3,7 @@ import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespa
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { decrypt } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
+import { unregisterWebhookChannels } from '@/lib/integrations/google-calendar/sync-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -29,9 +30,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Try to revoke the Google token (best effort)
+    // Try to revoke the Google token and unregister webhooks (best effort)
     try {
       const accessToken = await decrypt(connection.accessToken);
+
+      // Unregister webhook channels before revoking token
+      await unregisterWebhookChannels(userId, accessToken).catch(() => {});
+
       await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
