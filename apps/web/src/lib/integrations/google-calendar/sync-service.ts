@@ -507,13 +507,13 @@ const upsertEvent = async (
     });
 
     if (nearDuplicate) {
-      // Link the existing local event to this Google event instead of creating a duplicate
+      // Link the existing local event to this Google event instead of creating a duplicate.
+      // Keep syncedFromGoogle=false so the push service continues to push local edits back.
       await db
         .update(calendarEvents)
         .set({
           googleEventId: googleEvent.id,
           googleCalendarId: calendarId,
-          syncedFromGoogle: true,
           googleSyncReadOnly: false,
           lastGoogleSync: new Date(),
           updatedAt: new Date(),
