@@ -5,11 +5,15 @@
  * Handles both initial full sync and incremental updates.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
+import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, inArray } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
-import { listEvents, type GoogleCalendarEvent } from './api-client';
+import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
+import { createId } from '@paralleldrive/cuid2';
+
+type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
+type WebhookChannels = Record<string, WebhookChannel>;
 
 export interface SyncResult {
   success: boolean;
@@ -149,6 +153,14 @@ export const syncGoogleCalendar = async (
       eventsCreated: result.eventsCreated,
       eventsUpdated: result.eventsUpdated,
       eventsDeleted: result.eventsDeleted,
+    });
+
+    // Register/renew webhook push notification channels (non-blocking best effort)
+    registerWebhookChannels(userId, accessToken, calendarsToSync).catch((err) => {
+      loggers.api.warn('Failed to register webhook channels after sync', {
+        userId,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
     });
 
     return result;
@@ -346,6 +358,9 @@ const upsertEvent = async (
       })
       .where(eq(calendarEvents.id, existingEvent.id));
 
+    // Map Google attendees to PageSpace users
+    await mapAttendeesToUsers(existingEvent.id, googleEvent.attendees);
+
     return { action: 'updated' };
   }
 
@@ -369,7 +384,184 @@ const upsertEvent = async (
     return { action: 'skipped' };
   }
 
+  // Map Google attendees to PageSpace users for newly created event
+  await mapAttendeesToUsers(inserted[0].id, googleEvent.attendees);
+
   return { action: 'created' };
+};
+
+/**
+ * Register or renew webhook push notification channels for all selected calendars.
+ * Channels expire after ~7 days, so they need periodic renewal.
+ */
+export const registerWebhookChannels = async (
+  userId: string,
+  accessToken: string,
+  calendarsToSync: string[]
+): Promise<void> => {
+  const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL;
+  if (!baseUrl) {
+    loggers.api.warn('Cannot register webhooks: WEB_APP_URL not configured');
+    return;
+  }
+
+  const webhookUrl = `${baseUrl}/api/integrations/google-calendar/webhook`;
+
+  // Get existing channels
+  const connection = await db.query.googleCalendarConnections.findFirst({
+    where: eq(googleCalendarConnections.userId, userId),
+    columns: { webhookChannels: true },
+  });
+
+  const existingChannels: WebhookChannels = (connection?.webhookChannels as WebhookChannels) || {};
+  const updatedChannels: WebhookChannels = {};
+  const now = Date.now();
+
+  for (const calendarId of calendarsToSync) {
+    const existing = existingChannels[calendarId];
+
+    // Skip if channel exists and won't expire within 1 hour
+    if (existing && parseInt(existing.expiration) > now + 3600 * 1000) {
+      updatedChannels[calendarId] = existing;
+      continue;
+    }
+
+    // Stop old channel if it exists (best effort)
+    if (existing) {
+      await stopChannel(accessToken, existing.channelId, existing.resourceId).catch(() => {
+        // Ignore errors stopping old channels
+      });
+    }
+
+    // Create new watch channel
+    const channelId = createId();
+    const result = await watchCalendar(accessToken, calendarId, webhookUrl, channelId);
+
+    if (result.success) {
+      updatedChannels[calendarId] = {
+        channelId,
+        resourceId: result.data.resourceId,
+        expiration: result.data.expiration,
+      };
+      loggers.api.info('Google Calendar webhook registered', { userId, calendarId, channelId });
+    } else {
+      loggers.api.warn('Failed to register Google Calendar webhook', {
+        userId,
+        calendarId,
+        error: result.error,
+      });
+      // Keep old channel if registration failed but it hasn't expired
+      if (existing && parseInt(existing.expiration) > now) {
+        updatedChannels[calendarId] = existing;
+      }
+    }
+  }
+
+  // Remove channels for calendars no longer selected
+  for (const calId of Object.keys(existingChannels)) {
+    if (!calendarsToSync.includes(calId) && existingChannels[calId]) {
+      await stopChannel(accessToken, existingChannels[calId].channelId, existingChannels[calId].resourceId).catch(() => {});
+    }
+  }
+
+  // Persist updated channels
+  await db
+    .update(googleCalendarConnections)
+    .set({
+      webhookChannels: updatedChannels,
+      updatedAt: new Date(),
+    })
+    .where(eq(googleCalendarConnections.userId, userId));
+};
+
+/**
+ * Unregister all webhook channels for a user (called on disconnect).
+ */
+export const unregisterWebhookChannels = async (
+  userId: string,
+  accessToken: string
+): Promise<void> => {
+  const connection = await db.query.googleCalendarConnections.findFirst({
+    where: eq(googleCalendarConnections.userId, userId),
+    columns: { webhookChannels: true },
+  });
+
+  const channels = (connection?.webhookChannels as WebhookChannels) || {};
+
+  for (const calId of Object.keys(channels)) {
+    await stopChannel(accessToken, channels[calId].channelId, channels[calId].resourceId).catch(() => {});
+  }
+
+  await db
+    .update(googleCalendarConnections)
+    .set({
+      webhookChannels: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(googleCalendarConnections.userId, userId));
+};
+
+/**
+ * Map Google event attendees to PageSpace users by email and persist as eventAttendees.
+ * Only maps attendees that have a matching PageSpace user account.
+ */
+const mapAttendeesToUsers = async (
+  eventId: string,
+  googleAttendees: GoogleEventAttendee[] | undefined
+): Promise<void> => {
+  if (!googleAttendees || googleAttendees.length === 0) return;
+
+  // Collect unique attendee emails
+  const emails = [...new Set(googleAttendees.map((a) => a.email.toLowerCase()))];
+  if (emails.length === 0) return;
+
+  // Look up PageSpace users by email (batch query)
+  const matchedUsers = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(inArray(users.email, emails));
+
+  if (matchedUsers.length === 0) return;
+
+  // Build a map of email → userId for fast lookup
+  const emailToUserId = new Map(matchedUsers.map((u) => [u.email.toLowerCase(), u.id]));
+
+  // Map Google response status to PageSpace attendee status
+  const statusMap: Record<string, 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE'> = {
+    needsAction: 'PENDING',
+    accepted: 'ACCEPTED',
+    declined: 'DECLINED',
+    tentative: 'TENTATIVE',
+  };
+
+  // Build attendee records
+  const attendeeValues = googleAttendees
+    .filter((a) => emailToUserId.has(a.email.toLowerCase()))
+    .map((a) => ({
+      id: createId(),
+      eventId,
+      userId: emailToUserId.get(a.email.toLowerCase())!,
+      status: statusMap[a.responseStatus || 'needsAction'] || ('PENDING' as const),
+      isOrganizer: a.organizer ?? false,
+      isOptional: a.optional ?? false,
+    }));
+
+  if (attendeeValues.length === 0) return;
+
+  // Upsert attendees (update status if already exists)
+  for (const attendee of attendeeValues) {
+    await db
+      .insert(eventAttendees)
+      .values(attendee)
+      .onConflictDoUpdate({
+        target: [eventAttendees.eventId, eventAttendees.userId],
+        set: {
+          status: attendee.status,
+          isOrganizer: attendee.isOrganizer,
+          isOptional: attendee.isOptional,
+        },
+      });
+  }
 };
 
 /**

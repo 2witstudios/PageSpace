@@ -1,3 +1,58 @@
+## 2026-02-07
+
+### Google Calendar Sync - Full Feature Suite
+
+Comprehensive upgrade to Google Calendar integration with two-way sync, push notifications, calendar selection, attendee mapping, and enhanced settings UI.
+
+#### Two-Way Sync & Push Notifications
+- **OAuth scope upgraded** from `calendar.readonly` to full `calendar` access for bidirectional sync
+- **Webhook push notifications**: Google Calendar sends real-time change notifications to PageSpace via `POST /api/integrations/google-calendar/webhook`, triggering incremental sync automatically
+- **Webhook channel management**: Channels are registered per-calendar after each sync, renewed before expiration, and cleaned up on disconnect
+- **Background sync cron**: New `GET /api/cron/calendar-sync` endpoint processes all connections due for sync based on `syncFrequencyMinutes`. Serves as a safety net when push notifications are delayed
+- **Write-back API functions**: `createGoogleEvent`, `updateGoogleEvent`, `deleteGoogleEvent` added to api-client for pushing PageSpace changes to Google
+
+#### Calendar List & Selection
+- **New API**: `GET /api/integrations/google-calendar/calendars` lists all user's Google calendars with colors, access roles, and primary flag
+- **Calendar picker UI**: Settings page now shows checkboxes for each Google calendar with color swatches, allowing users to select which calendars to sync
+- **`listCalendars()` function** added to api-client
+
+#### Conference Link Extraction
+- **`extractConferenceLink()`**: New pure function extracts the best meeting link from `conferenceData` entry points (preferring video) with fallback to `hangoutLink`
+- **Stored in metadata**: `conferenceLink` and full `conferenceData` now persisted in event metadata JSONB
+
+#### Focus Time & Out-of-Office Events
+- **Focus time events** now sync (were already passing through, now get `focus` color by default)
+- **Out-of-office events** now sync (previously filtered) with `personal` color for availability checking
+- **`mapEventColor()`**: New function applies semantic colors based on event type when no explicit Google color is set
+
+#### Google Attendee to PageSpace User Mapping
+- **Automatic matching**: Google event attendees are matched to PageSpace users by email during sync
+- **Attendee records created/updated** in `event_attendees` table with correct RSVP status (maps Google `responseStatus` to PageSpace `AttendeeStatus`)
+- **Batch email lookup**: Uses `inArray` query for efficient bulk matching
+- **Attendee data in metadata**: Raw Google attendee info also stored in event metadata for reference
+
+#### Settings UI Enhancement
+- **Calendar picker card**: Visual calendar selection with Google color swatches and primary indicator
+- **Sync frequency selector**: Dropdown to choose background sync interval (5 min to 24 hours)
+- **Event count display**: Shows total synced events count on the status card
+- **Sync details**: Last sync time, selected calendars count, and sync frequency displayed in status card
+- **Settings save**: Dedicated save button with change detection (only enabled when settings differ from saved values)
+- **Updated privacy copy**: Reflects two-way sync and conference link access
+
+#### API Changes
+- `GET /api/integrations/google-calendar/status` — now includes `syncedEventCount`
+- `GET /api/integrations/google-calendar/calendars` — **new**: lists available Google calendars
+- `GET /api/integrations/google-calendar/settings` — **new**: returns settings and event stats
+- `PATCH /api/integrations/google-calendar/settings` — **new**: updates selectedCalendars, syncFrequencyMinutes
+- `POST /api/integrations/google-calendar/webhook` — **new**: receives Google push notifications
+- `GET /api/cron/calendar-sync` — **new**: background sync cron endpoint
+
+#### Schema Changes
+- Added `webhookChannels` (JSONB) column to `google_calendar_connections` for per-calendar webhook channel tracking
+- Migration: `0074_wakeful_vulture.sql`
+
+---
+
 ## 2026-02-06
 
 ### Security Audit - Dependency Updates
