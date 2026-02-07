@@ -178,13 +178,11 @@ describe('useDocument dirty flag integration', () => {
       });
 
       // Assert: fetchWithAuth called with expectedRevision in body
-      expect(fetchWithAuth).toHaveBeenCalledWith(
-        `/api/pages/${pageId}`,
-        expect.objectContaining({
-          method: 'PATCH',
-          body: expect.stringContaining('"expectedRevision":7'),
-        }),
-      );
+      const call = vi.mocked(fetchWithAuth).mock.calls[0];
+      expect(call[0]).toBe(`/api/pages/${pageId}`);
+      const opts = call[1] as { method: string; body: string };
+      expect(opts.method).toBe('PATCH');
+      expect(JSON.parse(opts.body)).toMatchObject({ expectedRevision: 7 });
     });
   });
 

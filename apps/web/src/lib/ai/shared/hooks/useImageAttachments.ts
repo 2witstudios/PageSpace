@@ -89,29 +89,25 @@ export function useImageAttachments() {
   }, []);
 
   const removeFile = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const target = prev.find((a) => a.id === id);
-      if (target) {
-        URL.revokeObjectURL(target.previewUrl);
-        blobUrlsRef.current.delete(target.previewUrl);
-      }
-      return prev.filter((a) => a.id !== id);
-    });
+    const target = attachmentsRef.current.find((a) => a.id === id);
+    if (target) {
+      URL.revokeObjectURL(target.previewUrl);
+      blobUrlsRef.current.delete(target.previewUrl);
+    }
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
   const clearFiles = useCallback(() => {
-    setAttachments((prev) => {
-      prev.forEach((a) => {
-        URL.revokeObjectURL(a.previewUrl);
-        blobUrlsRef.current.delete(a.previewUrl);
-      });
-      return [];
+    attachmentsRef.current.forEach((a) => {
+      URL.revokeObjectURL(a.previewUrl);
+      blobUrlsRef.current.delete(a.previewUrl);
     });
+    setAttachments([]);
   }, []);
 
   /**
    * Convert attachments to FileUIPart[] for sending via AI SDK.
-   * Waits for any pending resizes to complete.
+   * Only includes attachments that have finished processing.
    * Returns array of { type: 'file', url: dataUrl, mediaType, filename }.
    */
   const getFilesForSend = useCallback((): Array<{

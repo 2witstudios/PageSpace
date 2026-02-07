@@ -140,7 +140,9 @@ export const useDocumentSaving = (pageId: string) => {
         const savedPage = await response.json();
 
         // Update stored revision from server response
-        useDocumentManagerStore.getState().updateDocument(pageId, { revision: savedPage.revision });
+        if (savedPage.revision !== undefined) {
+          useDocumentManagerStore.getState().updateDocument(pageId, { revision: savedPage.revision });
+        }
 
         // Only mark as saved if NO updates happened since save started
         // This prevents showing "Saved" when user typed during the save

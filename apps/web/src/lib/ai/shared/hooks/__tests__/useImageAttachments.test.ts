@@ -131,6 +131,7 @@ describe('useImageAttachments', () => {
     });
 
     expect(result.current.attachments).toHaveLength(0);
+    expect(revokedUrls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('given max limit reached, should not add more and show toast', async () => {
