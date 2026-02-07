@@ -1,7 +1,11 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
+import { verifyWebhookToken } from '@/lib/integrations/google-calendar/webhook-token';
+
+type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
+type WebhookChannels = Record<string, WebhookChannel>;
 
 /**
  * POST /api/integrations/google-calendar/webhook
@@ -14,15 +18,17 @@ import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-serv
  * - X-Goog-Resource-ID: The resource ID of the watched resource
  * - X-Goog-Resource-State: 'sync' (initial) or 'exists' (change detected)
  * - X-Goog-Message-Number: Sequential message number
+ * - X-Goog-Channel-Token: Secret token we provided during watch registration
  *
- * No authentication needed (Google doesn't send auth headers) but we validate
- * the channel ID against our stored webhook channels.
+ * We validate the channel token (HMAC) first, then match the channelId
+ * against our stored webhook channels as a secondary check.
  */
 export async function POST(request: Request) {
   try {
     const channelId = request.headers.get('X-Goog-Channel-ID') || request.headers.get('x-goog-channel-id');
     const resourceId = request.headers.get('X-Goog-Resource-ID') || request.headers.get('x-goog-resource-id');
     const resourceState = request.headers.get('X-Goog-Resource-State') || request.headers.get('x-goog-resource-state');
+    const channelToken = request.headers.get('X-Goog-Channel-Token') || request.headers.get('x-goog-channel-token');
 
     if (!channelId || !resourceId) {
       loggers.api.warn('Google Calendar webhook: missing channel or resource ID');
@@ -35,28 +41,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    // Look up which user this webhook belongs to by matching channelId in webhookChannels JSONB
-    // We need to search all connections for a matching channel
-    const connections = await db.query.googleCalendarConnections.findMany({
-      where: eq(googleCalendarConnections.status, 'active'),
-      columns: {
-        userId: true,
-        webhookChannels: true,
-      },
-    });
+    // Primary auth: validate HMAC token if present
+    const tokenUserId = channelToken ? verifyWebhookToken(channelToken) : null;
 
-    // Find the connection that owns this channel
-    let matchedUserId: string | null = null;
-    for (const conn of connections) {
-      const channels = conn.webhookChannels;
-      if (!channels) continue;
-      for (const calId of Object.keys(channels)) {
-        if (channels[calId].channelId === channelId && channels[calId].resourceId === resourceId) {
-          matchedUserId = conn.userId;
-          break;
+    let matchedUserId: string | null = tokenUserId;
+
+    // If token auth didn't resolve a userId, fall back to channel lookup
+    if (!matchedUserId) {
+      const connections = await db.query.googleCalendarConnections.findMany({
+        where: eq(googleCalendarConnections.status, 'active'),
+        columns: {
+          userId: true,
+          webhookChannels: true,
+        },
+      });
+
+      for (const conn of connections) {
+        const channels = conn.webhookChannels;
+        if (!channels || typeof channels !== 'object') continue;
+        const typedChannels = channels as WebhookChannels;
+        for (const calId of Object.keys(typedChannels)) {
+          const ch = typedChannels[calId];
+          if (ch?.channelId === channelId && ch?.resourceId === resourceId) {
+            matchedUserId = conn.userId;
+            break;
+          }
         }
+        if (matchedUserId) break;
       }
-      if (matchedUserId) break;
     }
 
     if (!matchedUserId) {
@@ -71,11 +83,13 @@ export async function POST(request: Request) {
       resourceState,
     });
 
-    // Trigger incremental sync for this user (non-blocking)
-    // We don't await this - return 200 immediately to Google
-    syncGoogleCalendar(matchedUserId).catch((error) => {
-      loggers.api.error('Google Calendar webhook sync failed', error as Error, {
-        userId: matchedUserId,
+    // Use after() to ensure sync runs to completion even after response is sent
+    const userId = matchedUserId;
+    after(() => {
+      syncGoogleCalendar(userId).catch((error) => {
+        loggers.api.error('Google Calendar webhook sync failed', error as Error, {
+          userId,
+        });
       });
     });
 

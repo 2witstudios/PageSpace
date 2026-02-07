@@ -20,7 +20,7 @@ interface ConnectionStatus {
   connected: boolean;
   connection: {
     id: string;
-    status: "active" | "expired" | "error" | "disconnected" | "pending" | "revoked";
+    status: "active" | "expired" | "error" | "disconnected";
     statusMessage: string | null;
     googleEmail: string;
     selectedCalendars: string[];
@@ -81,7 +81,7 @@ export default function GoogleCalendarSettingsPage() {
   const connectionStatus = connection?.status;
   const isActiveConnection = connectionStatus === "active";
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/status");
       if (response.ok) {
@@ -96,7 +96,7 @@ export default function GoogleCalendarSettingsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const fetchCalendars = useCallback(async () => {
     setLoadingCalendars(true);
@@ -146,10 +146,10 @@ export default function GoogleCalendarSettingsPage() {
     } finally {
       setSyncing(false);
     }
-  }, []);
+  }, [fetchStatus]);
 
   // Save calendar selection immediately when toggled
-  const saveCalendarSelection = async (newSelection: string[]) => {
+  const saveCalendarSelection = useCallback(async (newSelection: string[]) => {
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/settings", {
         method: "PATCH",
@@ -175,11 +175,11 @@ export default function GoogleCalendarSettingsPage() {
         setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
       }
     }
-  };
+  }, [connection, handleSync]);
 
   useEffect(() => {
     fetchStatus();
-  }, []);
+  }, [fetchStatus]);
 
   useEffect(() => {
     if (isActiveConnection) {
@@ -246,21 +246,18 @@ export default function GoogleCalendarSettingsPage() {
   };
 
   const toggleCalendar = (calendarId: string) => {
-    setSelectedCalendarIds((prev) => {
-      const next = prev.includes(calendarId)
-        ? prev.filter((id) => id !== calendarId)
-        : [...prev, calendarId];
+    const prev = selectedCalendarIds;
+    const next = prev.includes(calendarId)
+      ? prev.filter((id) => id !== calendarId)
+      : [...prev, calendarId];
 
-      // Don't allow deselecting everything
-      if (next.length === 0) {
-        toast.error("At least one calendar must be selected");
-        return prev;
-      }
+    if (next.length === 0) {
+      toast.error("At least one calendar must be selected");
+      return;
+    }
 
-      // Save immediately - feels magical, no save button needed
-      saveCalendarSelection(next);
-      return next;
-    });
+    setSelectedCalendarIds(next);
+    saveCalendarSelection(next);
   };
 
   const formatLastSync = (dateStr: string | null) => {
@@ -303,20 +300,6 @@ export default function GoogleCalendarSettingsPage() {
           <Badge variant="destructive">
             <XCircle className="h-3 w-3 mr-1" />
             Error
-          </Badge>
-        );
-      case "pending":
-        return (
-          <Badge variant="secondary">
-            <AlertCircle className="h-3 w-3 mr-1" />
-            Pending
-          </Badge>
-        );
-      case "revoked":
-        return (
-          <Badge variant="destructive">
-            <XCircle className="h-3 w-3 mr-1" />
-            Revoked
           </Badge>
         );
       default:

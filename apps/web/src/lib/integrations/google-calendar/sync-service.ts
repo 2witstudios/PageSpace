@@ -5,12 +5,13 @@
  * Handles both initial full sync and incremental updates.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, inArray } from '@pagespace/db';
+import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, inArray, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
 import { createId } from '@paralleldrive/cuid2';
+import { generateWebhookToken } from './webhook-token';
 
 type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
 type WebhookChannels = Record<string, WebhookChannel>;
@@ -433,9 +434,10 @@ export const registerWebhookChannels = async (
       });
     }
 
-    // Create new watch channel
+    // Create new watch channel with HMAC token for authentication
     const channelId = createId();
-    const result = await watchCalendar(accessToken, calendarId, webhookUrl, channelId);
+    const webhookToken = generateWebhookToken(userId);
+    const result = await watchCalendar(accessToken, calendarId, webhookUrl, channelId, 7 * 24 * 3600, webhookToken);
 
     if (result.success) {
       updatedChannels[calendarId] = {
@@ -515,11 +517,11 @@ const mapAttendeesToUsers = async (
   const emails = [...new Set(googleAttendees.map((a) => a.email.toLowerCase()))];
   if (emails.length === 0) return;
 
-  // Look up PageSpace users by email (batch query)
+  // Look up PageSpace users by email (case-insensitive batch query)
   const matchedUsers = await db
     .select({ id: users.id, email: users.email })
     .from(users)
-    .where(inArray(users.email, emails));
+    .where(inArray(sql`lower(${users.email})`, emails));
 
   if (matchedUsers.length === 0) return;
 
@@ -548,20 +550,22 @@ const mapAttendeesToUsers = async (
 
   if (attendeeValues.length === 0) return;
 
-  // Upsert attendees (update status if already exists)
-  for (const attendee of attendeeValues) {
-    await db
-      .insert(eventAttendees)
-      .values(attendee)
-      .onConflictDoUpdate({
-        target: [eventAttendees.eventId, eventAttendees.userId],
-        set: {
-          status: attendee.status,
-          isOrganizer: attendee.isOrganizer,
-          isOptional: attendee.isOptional,
-        },
-      });
-  }
+  // Upsert attendees in a single transaction to reduce connection overhead
+  await db.transaction(async (tx) => {
+    for (const attendee of attendeeValues) {
+      await tx
+        .insert(eventAttendees)
+        .values(attendee)
+        .onConflictDoUpdate({
+          target: [eventAttendees.eventId, eventAttendees.userId],
+          set: {
+            status: attendee.status,
+            isOrganizer: attendee.isOrganizer,
+            isOptional: attendee.isOptional,
+          },
+        });
+    }
+  });
 };
 
 /**

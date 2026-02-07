@@ -309,21 +309,27 @@ export const watchCalendar = async (
   calendarId: string,
   webhookUrl: string,
   channelId: string,
-  ttlSeconds: number = 7 * 24 * 3600 // 7 days default
+  ttlSeconds: number = 7 * 24 * 3600, // 7 days default
+  channelToken?: string
 ): Promise<GoogleApiResult<GoogleWatchResponse>> => {
   const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/watch`;
   const expiration = Date.now() + ttlSeconds * 1000;
 
   try {
+    const body: Record<string, unknown> = {
+      id: channelId,
+      type: 'web_hook',
+      address: webhookUrl,
+      expiration,
+    };
+    if (channelToken) {
+      body.token = channelToken;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
       headers: buildAuthHeader(accessToken),
-      body: JSON.stringify({
-        id: channelId,
-        type: 'web_hook',
-        address: webhookUrl,
-        expiration,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
