@@ -104,14 +104,28 @@ export default function GoogleCalendarSettingsPage() {
       const response = await fetchWithAuth("/api/integrations/google-calendar/calendars");
       if (response.ok) {
         const data = await response.json();
-        setAvailableCalendars(data.calendars || []);
+        const calendars: GoogleCalendar[] = data.calendars || [];
+        setAvailableCalendars(calendars);
+
+        // Replace 'primary' alias with actual primary calendar ID to prevent duplicates
+        setSelectedCalendarIds((prev) => {
+          if (!prev.includes("primary")) return prev;
+          const primaryCal = calendars.find((c) => c.primary);
+          if (!primaryCal) return prev;
+          const next = prev
+            .map((id) => (id === "primary" ? primaryCal.id : id))
+            .filter((id, i, arr) => arr.indexOf(id) === i);
+          // Persist the fixed selection
+          saveCalendarSelection(next);
+          return next;
+        });
       }
     } catch (err) {
       console.error("Failed to fetch calendars:", err);
     } finally {
       setLoadingCalendars(false);
     }
-  }, []);
+  }, [saveCalendarSelection]);
 
   const handleSync = useCallback(async (silent = false) => {
     setSyncing(true);

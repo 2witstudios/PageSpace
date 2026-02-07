@@ -411,9 +411,12 @@ export const createGoogleEvent = async (
     start: GoogleEventDateTime;
     end: GoogleEventDateTime;
     attendees?: Array<{ email: string }>;
+    visibility?: 'default' | 'public' | 'private' | 'confidential';
+    colorId?: string;
+    recurrence?: string[];
   }
 ): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
-  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events`;
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=none`;
 
   try {
     const response = await fetch(url, {
@@ -461,9 +464,12 @@ export const updateGoogleEvent = async (
     start?: GoogleEventDateTime;
     end?: GoogleEventDateTime;
     attendees?: Array<{ email: string }>;
+    visibility?: 'default' | 'public' | 'private' | 'confidential';
+    colorId?: string;
+    recurrence?: string[];
   }
 ): Promise<GoogleApiResult<GoogleCalendarEvent>> => {
-  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=none`;
 
   try {
     const response = await fetch(url, {
@@ -505,7 +511,7 @@ export const deleteGoogleEvent = async (
   calendarId: string,
   eventId: string
 ): Promise<GoogleApiResult<void>> => {
-  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+  const url = `${GOOGLE_CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=none`;
 
   try {
     const response = await fetch(url, {

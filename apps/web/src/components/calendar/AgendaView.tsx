@@ -47,7 +47,11 @@ export function AgendaView({ currentDate, events, tasks, handlers, showGoogleCal
     return monthDays
       .map((day) => ({
         date: day,
-        events: getEventsForDay(events, day),
+        events: getEventsForDay(events, day).sort((a, b) => {
+          if (a.allDay && !b.allDay) return -1;
+          if (!a.allDay && b.allDay) return 1;
+          return new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+        }),
         tasks: getTasksForDay(tasks, day),
       }))
       .filter((group) => group.events.length > 0 || group.tasks.length > 0);

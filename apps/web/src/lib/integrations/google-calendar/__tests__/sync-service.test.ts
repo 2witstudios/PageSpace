@@ -178,6 +178,7 @@ describe('syncGoogleCalendar', () => {
       syncCursor: null,
       targetDriveId: null,
       markAsReadOnly: true,
+      googleEmail: 'user@gmail.com',
     });
 
     const { syncGoogleCalendar } = await import('../sync-service');
@@ -210,6 +211,7 @@ describe('syncGoogleCalendar', () => {
       targetDriveId: null,
       markAsReadOnly: true,
       webhookChannels: null,
+      googleEmail: 'user@gmail.com',
     });
     mockListEvents.mockResolvedValue({
       success: true,
@@ -269,6 +271,7 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
       targetDriveId: null,
       markAsReadOnly: true,
       webhookChannels: null,
+      googleEmail: 'user@gmail.com',
     });
     mockListEvents.mockResolvedValue({
       success: true,
@@ -294,11 +297,12 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
     });
     mockFindFirst.mockResolvedValue({
       status: 'active',
-      selectedCalendars: ['primary'],
-      syncCursor: JSON.stringify({ primary: 'existing-token' }),
+      selectedCalendars: ['user@gmail.com'],
+      syncCursor: JSON.stringify({ 'user@gmail.com': 'existing-token' }),
       targetDriveId: null,
       markAsReadOnly: true,
       webhookChannels: null,
+      googleEmail: 'user@gmail.com',
     });
     mockListEvents.mockResolvedValue({
       success: true,
@@ -318,7 +322,7 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
 
     // Verify listEvents was called with the existing sync token
     assert({
-      given: 'valid JSON syncCursor with primary token',
+      given: 'valid JSON syncCursor with calendar token',
       should: 'pass sync token to listEvents',
       actual: mockListEvents.mock.calls[0][2]?.syncToken,
       expected: 'existing-token',
@@ -337,6 +341,7 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
       targetDriveId: null,
       markAsReadOnly: true,
       webhookChannels: null,
+      googleEmail: 'user@gmail.com',
     });
     mockListEvents.mockResolvedValue({
       success: true,
@@ -377,6 +382,7 @@ describe('syncGoogleCalendar error handling', () => {
       targetDriveId: null,
       markAsReadOnly: true,
       webhookChannels: null,
+      googleEmail: 'user@gmail.com',
     });
 
     // First call returns 410 (expired sync token), second succeeds

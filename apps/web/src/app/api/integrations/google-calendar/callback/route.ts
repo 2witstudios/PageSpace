@@ -171,7 +171,7 @@ export async function GET(req: Request) {
         googleAccountId,
         status: 'active',
         statusMessage: null,
-        selectedCalendars: ['primary'], // Default to primary calendar
+        selectedCalendars: [googleEmail], // Use actual email, not 'primary' alias
         syncFrequencyMinutes: 15,
         markAsReadOnly: false, // Two-way sync enabled by default
         lastSyncAt: null,
