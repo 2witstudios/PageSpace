@@ -171,7 +171,7 @@ describe('useImageAttachments', () => {
     expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('Added 2 of 4'));
   });
 
-  it('given resize failure, should remove the failed attachment', async () => {
+  it('given resize failure, should remove the failed attachment and revoke its blob URL', async () => {
     mockResizeImageForVision.mockRejectedValueOnce(new Error('Canvas error'));
 
     const { result } = renderHook(() => useImageAttachments());
@@ -184,6 +184,8 @@ describe('useImageAttachments', () => {
 
     // The failed attachment should have been removed
     expect(result.current.attachments).toHaveLength(0);
+    // The blob URL created for the failed attachment should have been revoked
+    expect(revokedUrls.length).toBeGreaterThan(0);
   });
 
   it('given getFilesForSend called with processed attachments, should return file parts', async () => {
@@ -196,15 +198,11 @@ describe('useImageAttachments', () => {
     });
 
     const files = result.current.getFilesForSend();
-    expect(files.length).toBeGreaterThanOrEqual(0);
-
-    // If files are available (resize completed), verify structure
-    if (files.length > 0) {
-      expect(files[0].type).toBe('file');
-      expect(files[0].url).toContain('data:');
-      expect(files[0].mediaType).toBeDefined();
-      expect(files[0].filename).toBe('photo.png');
-    }
+    expect(files).toHaveLength(1);
+    expect(files[0].type).toBe('file');
+    expect(files[0].url).toContain('data:');
+    expect(files[0].mediaType).toBeDefined();
+    expect(files[0].filename).toBe('photo.png');
   });
 
   it('given unmount, should revoke all blob URLs', async () => {
