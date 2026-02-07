@@ -18,6 +18,17 @@ import { MessageReactions, type Reaction } from '@/components/layout/middle-cont
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import {
+  type AttachmentMeta,
+  type FileRelation,
+  isImageAttachment,
+  getFileId,
+  getAttachmentName,
+  getAttachmentMimeType,
+  getAttachmentSize,
+  formatFileSize,
+  hasAttachment,
+} from '@/lib/attachment-utils';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -26,13 +37,6 @@ const fetcher = async (url: string) => {
   }
   return response.json();
 };
-
-interface AttachmentMeta {
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
-}
 
 interface MessageWithUser {
   id: string;
@@ -51,29 +55,7 @@ interface MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
-  file?: {
-    id: string;
-    mimeType: string | null;
-    sizeBytes: number;
-  } | null;
-}
-
-function isImageAttachment(m: MessageWithUser): boolean {
-  if (m.attachmentMeta?.mimeType?.startsWith('image/')) return true;
-  if (m.file?.mimeType?.startsWith('image/')) return true;
-  return false;
-}
-
-function getFileId(m: MessageWithUser): string | null {
-  return m.fileId || m.file?.id || null;
-}
-
-function getAttachmentName(m: MessageWithUser): string {
-  return m.attachmentMeta?.originalName || 'Attachment';
-}
-
-function getAttachmentSize(m: MessageWithUser): number | null {
-  return m.attachmentMeta?.size ?? m.file?.sizeBytes ?? null;
+  file?: FileRelation | null;
 }
 
 interface Page {
@@ -434,7 +416,7 @@ export default function InboxChannelPage() {
                     </div>
                   )}
                   {/* File attachment */}
-                  {(m.attachmentMeta || m.file) && getFileId(m) && (
+                  {hasAttachment(m) && (
                     <div className="mt-2">
                       {isImageAttachment(m) ? (
                         <a
@@ -456,9 +438,9 @@ export default function InboxChannelPage() {
                           className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
                         >
                           <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-                            {(m.attachmentMeta?.mimeType || m.file?.mimeType || '').includes('pdf') ? (
+                            {getAttachmentMimeType(m).includes('pdf') ? (
                               <FileText className="h-5 w-5 text-red-500" />
-                            ) : (m.attachmentMeta?.mimeType || m.file?.mimeType || '').includes('document') || (m.attachmentMeta?.mimeType || m.file?.mimeType || '').includes('word') ? (
+                            ) : getAttachmentMimeType(m).includes('document') || getAttachmentMimeType(m).includes('word') ? (
                               <FileText className="h-5 w-5 text-blue-500" />
                             ) : (
                               <FileIcon className="h-5 w-5 text-muted-foreground" />
@@ -468,11 +450,7 @@ export default function InboxChannelPage() {
                             <p className="text-sm font-medium truncate">{getAttachmentName(m)}</p>
                             {getAttachmentSize(m) != null && (
                               <p className="text-xs text-muted-foreground">
-                                {getAttachmentSize(m)! < 1024
-                                  ? `${getAttachmentSize(m)} B`
-                                  : getAttachmentSize(m)! < 1024 * 1024
-                                  ? `${(getAttachmentSize(m)! / 1024).toFixed(1)} KB`
-                                  : `${(getAttachmentSize(m)! / (1024 * 1024)).toFixed(1)} MB`}
+                                {formatFileSize(getAttachmentSize(m)!)}
                               </p>
                             )}
                           </div>
