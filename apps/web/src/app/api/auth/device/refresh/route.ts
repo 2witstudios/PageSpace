@@ -235,7 +235,7 @@ export async function POST(req: Request) {
 
     // Desktop needs a session cookie so Next.js middleware allows page route requests.
     // Desktop primarily uses Bearer tokens for API calls, but middleware checks cookies.
-    if (deviceRecord.platform === 'desktop') {
+    if (deviceRecord.platform === 'desktop' || deviceRecord.platform === 'ios') {
       appendSessionCookie(headers, sessionToken);
     }
 

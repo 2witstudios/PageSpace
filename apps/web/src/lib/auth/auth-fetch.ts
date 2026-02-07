@@ -48,6 +48,9 @@ class AuthFetch {
   private lastSuccessfulRefresh: number | null = null;
   private readonly REFRESH_COOLDOWN_MS = 5000; // 5 seconds cooldown after successful refresh
 
+  // Timeout for bearer token retrieval (IPC/Keychain) to prevent hung requests on cold start
+  private readonly TOKEN_RETRIEVAL_TIMEOUT_MS = 3000;
+
   // Platform storage abstraction for cross-platform auth
   private storage: PlatformStorage | null = null;
 
@@ -265,9 +268,7 @@ class AuthFetch {
     if (storage.usesBearer()) {
       // Bearer token authentication (Desktop, iOS, Android)
       try {
-        const sessionToken = storage.platform === 'desktop'
-          ? await this.getSessionFromElectron()
-          : await storage.getSessionToken();
+        const sessionToken = await this.getSessionTokenWithTimeout(storage, url);
         if (sessionToken) {
           headers = {
             ...headers,
@@ -917,6 +918,32 @@ class AuthFetch {
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
+    }
+  }
+
+  /**
+   * Gets session token with a timeout to prevent hung requests on cold start.
+   * On Desktop, IPC calls to Electron can hang if the main process is busy.
+   * On iOS, Keychain access can hang during app launch.
+   * If timeout fires, returns null so the request proceeds without auth → 401 → SWR retry handles recovery.
+   */
+  private async getSessionTokenWithTimeout(storage: PlatformStorage, url: string): Promise<string | null> {
+    const tokenPromise = storage.platform === 'desktop'
+      ? this.getSessionFromElectron()
+      : storage.getSessionToken();
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => {
+        this.logger.warn(`${storage.platform}: Session token retrieval timed out after ${this.TOKEN_RETRIEVAL_TIMEOUT_MS}ms`, { url });
+        resolve(null);
+      }, this.TOKEN_RETRIEVAL_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([tokenPromise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId!);
     }
   }
 
