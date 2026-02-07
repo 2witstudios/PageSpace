@@ -140,7 +140,6 @@ export const getActiveConnection = async (
       eq(googleCalendarConnections.status, 'active')
     ),
     columns: {
-      markAsReadOnly: true,
       selectedCalendars: true,
       googleEmail: true,
     },
@@ -156,7 +155,7 @@ export const getActiveConnection = async (
 
   return {
     connected: true,
-    pushEnabled: !connection.markAsReadOnly,
+    pushEnabled: true,
     targetCalendarId,
   };
 };

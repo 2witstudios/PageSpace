@@ -10,7 +10,6 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 const settingsSchema = z.object({
   selectedCalendars: z.array(z.string()).min(1, 'At least one calendar must be selected').optional(),
   syncFrequencyMinutes: z.number().min(5).max(1440).optional(), // 5 min to 24 hours
-  markAsReadOnly: z.boolean().optional(),
   targetDriveId: z.string().nullable().optional(),
 });
 
@@ -29,7 +28,6 @@ export async function GET(request: Request) {
       columns: {
         selectedCalendars: true,
         syncFrequencyMinutes: true,
-        markAsReadOnly: true,
         targetDriveId: true,
         lastSyncAt: true,
       },
@@ -55,7 +53,6 @@ export async function GET(request: Request) {
       settings: {
         selectedCalendars: connection.selectedCalendars,
         syncFrequencyMinutes: connection.syncFrequencyMinutes,
-        markAsReadOnly: connection.markAsReadOnly,
         targetDriveId: connection.targetDriveId,
       },
       stats: {
@@ -108,7 +105,6 @@ export async function PATCH(request: Request) {
     const setValues: Record<string, unknown> = { updatedAt: new Date() };
     if (updates.selectedCalendars !== undefined) setValues.selectedCalendars = updates.selectedCalendars;
     if (updates.syncFrequencyMinutes !== undefined) setValues.syncFrequencyMinutes = updates.syncFrequencyMinutes;
-    if (updates.markAsReadOnly !== undefined) setValues.markAsReadOnly = updates.markAsReadOnly;
     if (updates.targetDriveId !== undefined) setValues.targetDriveId = updates.targetDriveId;
 
     await db

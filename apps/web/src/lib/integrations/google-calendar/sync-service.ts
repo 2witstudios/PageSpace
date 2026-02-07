@@ -5,7 +5,7 @@
  * Handles both initial full sync and incremental updates.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, inArray, sql } from '@pagespace/db';
+import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, isNull, inArray, sql, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
@@ -92,7 +92,6 @@ export const syncGoogleCalendar = async (
         status: true,
         selectedCalendars: true,
         targetDriveId: true,
-        markAsReadOnly: true,
         syncCursor: true,
         googleEmail: true,
         webhookChannels: true,
@@ -108,6 +107,9 @@ export const syncGoogleCalendar = async (
       result.error = `Connection is ${connection.status}`;
       return result;
     }
+
+    // One-time cleanup: fix legacy read-only flags and alias mismatches
+    await cleanupLegacyData(userId, connection.googleEmail);
 
     // Resolve 'primary' alias to actual email to prevent duplicates
     const rawCalendars = connection.selectedCalendars || ['primary'];
@@ -135,7 +137,7 @@ export const syncGoogleCalendar = async (
         accessToken,
         calendarId,
         connection.targetDriveId,
-        connection.markAsReadOnly,
+        false, // Two-way sync: always editable
         calendarSyncToken,
         timeMin,
         timeMax
@@ -209,6 +211,84 @@ export const syncGoogleCalendar = async (
     }
 
     return result;
+  }
+};
+
+/**
+ * Fix legacy data from when read-only mode was the default.
+ * Idempotent: runs every sync but is a no-op after first run.
+ */
+const cleanupLegacyData = async (userId: string, googleEmail: string | null): Promise<void> => {
+  // 1. Fix connection: ensure markAsReadOnly is false
+  await db
+    .update(googleCalendarConnections)
+    .set({ markAsReadOnly: false, updatedAt: new Date() })
+    .where(and(
+      eq(googleCalendarConnections.userId, userId),
+      eq(googleCalendarConnections.markAsReadOnly, true)
+    ));
+
+  // 2. Fix events: ensure all synced events are editable
+  await db
+    .update(calendarEvents)
+    .set({ googleSyncReadOnly: false, updatedAt: new Date() })
+    .where(and(
+      eq(calendarEvents.createdById, userId),
+      eq(calendarEvents.googleSyncReadOnly, true)
+    ));
+
+  // 3. Fix "primary" alias: update to resolved email so lookups match
+  if (googleEmail) {
+    await db
+      .update(calendarEvents)
+      .set({ googleCalendarId: googleEmail, updatedAt: new Date() })
+      .where(and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.googleCalendarId, 'primary')
+      ));
+  }
+
+  // 4. Deduplicate: find events with same googleEventId but different googleCalendarId
+  //    and soft-delete the older duplicate
+  const duplicateResult = await db.execute<{
+    google_event_id: string;
+    cnt: string;
+  }>(sql`
+    SELECT "googleEventId" as google_event_id, COUNT(*) as cnt
+    FROM calendar_events
+    WHERE "createdById" = ${userId}
+      AND "googleEventId" IS NOT NULL
+      AND "isTrashed" = false
+    GROUP BY "googleEventId"
+    HAVING COUNT(*) > 1
+  `);
+
+  for (const row of duplicateResult.rows) {
+    const googleEventId = row.google_event_id;
+    // Find all copies, keep the newest one
+    const copies = await db
+      .select({ id: calendarEvents.id })
+      .from(calendarEvents)
+      .where(and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.googleEventId, googleEventId),
+        eq(calendarEvents.isTrashed, false)
+      ))
+      .orderBy(desc(calendarEvents.updatedAt));
+
+    if (copies.length > 1) {
+      const idsToTrash = copies.slice(1).map(c => c.id);
+      await db
+        .update(calendarEvents)
+        .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+        .where(inArray(calendarEvents.id, idsToTrash));
+
+      loggers.api.info('Deduplicated Google Calendar events', {
+        userId,
+        googleEventId,
+        removedCount: idsToTrash.length,
+      });
+    }
   }
 };
 
@@ -305,8 +385,8 @@ const upsertEvent = async (
   targetDriveId: string | null,
   markAsReadOnly: boolean
 ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'skipped' }> => {
-  // Check if event already exists
-  const existingEvent = await db.query.calendarEvents.findFirst({
+  // Check if event already exists — two-step lookup to handle alias mismatches
+  let existingEvent = await db.query.calendarEvents.findFirst({
     where: and(
       eq(calendarEvents.createdById, userId),
       eq(calendarEvents.googleEventId, googleEvent.id),
@@ -318,8 +398,36 @@ const upsertEvent = async (
       title: true,
       startAt: true,
       endAt: true,
+      googleCalendarId: true,
     },
   });
+
+  // Fallback: match by googleEventId alone (covers old "primary" alias records)
+  if (!existingEvent) {
+    existingEvent = await db.query.calendarEvents.findFirst({
+      where: and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.googleEventId, googleEvent.id),
+        eq(calendarEvents.isTrashed, false)
+      ),
+      columns: {
+        id: true,
+        lastGoogleSync: true,
+        title: true,
+        startAt: true,
+        endAt: true,
+        googleCalendarId: true,
+      },
+    });
+
+    // Fix the stale calendarId so future lookups hit the exact match
+    if (existingEvent && existingEvent.googleCalendarId !== calendarId) {
+      await db
+        .update(calendarEvents)
+        .set({ googleCalendarId: calendarId, updatedAt: new Date() })
+        .where(eq(calendarEvents.id, existingEvent.id));
+    }
+  }
 
   // Handle cancelled/deleted events
   if (googleEvent.status === 'cancelled') {
@@ -369,6 +477,7 @@ const upsertEvent = async (
         metadata: pageSpaceEvent.metadata,
         isTrashed: pageSpaceEvent.isTrashed,
         trashedAt: pageSpaceEvent.trashedAt,
+        googleSyncReadOnly: false,
         lastGoogleSync: new Date(),
         updatedAt: new Date(),
       })
@@ -378,6 +487,43 @@ const upsertEvent = async (
     await mapAttendeesToUsers(existingEvent.id, googleEvent.attendees);
 
     return { action: 'updated' };
+  }
+
+  // Near-duplicate check: catch race condition where push created the event locally
+  // but hasn't stored the googleEventId yet (webhook sync arrives first)
+  if (pageSpaceEvent.title && pageSpaceEvent.startAt) {
+    const startWindow = new Date(pageSpaceEvent.startAt.getTime() - 60_000); // 1 min before
+    const endWindow = new Date(pageSpaceEvent.startAt.getTime() + 60_000);   // 1 min after
+    const nearDuplicate = await db.query.calendarEvents.findFirst({
+      where: and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.syncedFromGoogle, false),
+        isNull(calendarEvents.googleEventId),
+        eq(calendarEvents.title, pageSpaceEvent.title),
+        eq(calendarEvents.isTrashed, false),
+        sql`${calendarEvents.startAt} >= ${startWindow}`,
+        sql`${calendarEvents.startAt} <= ${endWindow}`
+      ),
+      columns: { id: true },
+    });
+
+    if (nearDuplicate) {
+      // Link the existing local event to this Google event instead of creating a duplicate
+      await db
+        .update(calendarEvents)
+        .set({
+          googleEventId: googleEvent.id,
+          googleCalendarId: calendarId,
+          syncedFromGoogle: true,
+          googleSyncReadOnly: false,
+          lastGoogleSync: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(calendarEvents.id, nearDuplicate.id));
+
+      await mapAttendeesToUsers(nearDuplicate.id, googleEvent.attendees);
+      return { action: 'updated' };
+    }
   }
 
   // Create new event
@@ -434,6 +580,12 @@ export const registerWebhookChannels = async (
   const now = Date.now();
 
   for (const calendarId of calendarsToSync) {
+    // Skip special Google calendars (holidays, contacts, etc.) that don't support push
+    if (calendarId.includes('#') && calendarId.includes('@group.v.calendar.google.com')) {
+      loggers.api.info('Skipping webhook for special calendar', { userId, calendarId });
+      continue;
+    }
+
     const existing = existingChannels[calendarId];
 
     // Skip if channel exists and won't expire within 1 hour
