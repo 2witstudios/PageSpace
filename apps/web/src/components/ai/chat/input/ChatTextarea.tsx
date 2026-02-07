@@ -11,11 +11,12 @@ import {
 import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
 import { useMentionOverlay } from '@/hooks/useMentionOverlay';
+import { useMentionTracker } from '@/hooks/useMentionTracker';
 
 export interface ChatTextareaProps {
-  /** Current input value */
+  /** Current input value (markdown format with @[label](id:type) mentions) */
   value: string;
-  /** Input change handler */
+  /** Input change handler (receives markdown format) */
   onChange: (value: string) => void;
   /** Send message handler (triggered on Enter without Shift) */
   onSend: () => void;
@@ -66,20 +67,32 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     ref
   ) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const { overlayRef, hasMentions, handleScroll } = useMentionOverlay(textareaRef, value);
     const context = useSuggestionContext();
     // Track IME composition state to prevent accidental sends during predictive text
     const [isComposing, setIsComposing] = useState(false);
 
+    // Convert between markdown (parent) and display text (textarea)
+    const {
+      displayText,
+      mentions,
+      hasMentions,
+      handleDisplayTextChange,
+      registerMention,
+    } = useMentionTracker(value, onChange);
+
+    const { overlayRef, handleScroll } = useMentionOverlay(textareaRef, hasMentions);
+
     const suggestion = useSuggestion({
       inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
-      onValueChange: onChange,
+      onValueChange: handleDisplayTextChange,
       trigger: '@',
       driveId,
       crossDrive,
-      mentionFormat: 'markdown-typed',
+      mentionFormat: 'label',
       variant: 'chat',
       popupPlacement,
+      mentionRanges: mentions,
+      onMentionInserted: registerMention,
     });
 
     useImperativeHandle(ref, () => ({
@@ -131,7 +144,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
           ref={textareaRef}
-          value={value}
+          value={displayText}
           onChange={(e) => suggestion.handleValueChange(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
@@ -162,7 +175,8 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
         {hasMentions && (
           <MentionHighlightOverlay
             ref={overlayRef}
-            value={value}
+            value={displayText}
+            mentions={mentions}
             className={cn(
               'px-3 py-2 text-base md:text-sm',
               'text-foreground',

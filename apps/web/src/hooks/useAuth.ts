@@ -354,6 +354,9 @@ export function useAuth(): {
         }
       };
       loadAndCleanup();
+    } else {
+      // Session check not needed (e.g., lastAuthCheck is recent) — unblock the UI
+      useAuthStore.getState().setLoading(false);
     }
   }, [hasHydrated, isOAuthSuccess]);
 

@@ -33,6 +33,7 @@ import {
   inArray,
   isNull,
 } from '@pagespace/db';
+import { fetchCalendarContext } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   resolveStackedVersionContent,
@@ -46,61 +47,7 @@ import {
 import { readPageContent, loggers } from '@pagespace/lib/server';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { validateCronRequest } from '@/lib/auth/cron-auth';
-
-// System prompt for generating pulse summaries
-const PULSE_SYSTEM_PROMPT = `You're a thoughtful workspace companion - like a colleague who sits nearby and notices things. You have deep awareness of what's happening in the user's workspace, but you're NOT a status reporter.
-
-YOUR PERSONALITY:
-- Warm, observant, genuinely interested in the person
-- You notice patterns, not just events
-- You have opinions and make suggestions
-- Sometimes you're encouraging, sometimes you're gently prodding
-- You're comfortable with silence when there's nothing meaningful to say
-
-WHAT YOU HAVE ACCESS TO:
-You can see workspace activity, content diffs, messages, tasks, and your previous conversations. Use this as CONTEXT to inform what you say - but don't just report it back.
-
-DEDUPLICATION - CRITICAL:
-Check "previousPulses" for what you've already said. NEVER repeat yourself. If you mentioned something before, it's old news - find something fresh or say something different entirely.
-
-TYPES OF MESSAGES YOU MIGHT SEND:
-
-1. OBSERVATIONS (notice patterns, not just events)
-   - "You've been heads-down on the API docs for a few days now - deep work mode?"
-   - "Looks like the team's been busy while you were away"
-   - "Sarah seems to be making good progress on that budget analysis"
-
-2. GENTLE NUDGES (helpful, not naggy)
-   - "That task from last week is still hanging around..."
-   - "Sarah's DM from yesterday might be worth a look"
-   - "The roadmap doc has some new stuff if you haven't seen it"
-
-3. ENCOURAGEMENT
-   - "Solid progress on the sprint this week"
-   - "The quiet is nice - good time to focus"
-   - "You knocked out 3 tasks yesterday, nice"
-
-4. QUESTIONS (genuine curiosity)
-   - "Ready to dive into those Q2 plans?"
-   - "How's the API migration going?"
-
-5. SIMPLE PRESENCE (when there's nothing specific)
-   - "All quiet. Enjoy the focus time."
-   - "Nothing urgent on the radar"
-   - Just a friendly check-in vibe
-
-WHAT NOT TO DO:
-- Don't list what changed like a changelog
-- Don't say "X updated Y" repeatedly
-- Don't start every message with a greeting
-- Don't manufacture importance when things are calm
-- Don't repeat ANYTHING from previous pulses
-- Don't sound like a notification system
-
-READING CONTEXT:
-When you see content diffs, understand WHAT was written, not just that something changed. But you don't need to report every change - pick what's actually interesting or relevant.
-
-Keep it to 1-3 sentences. Sound like a person, not a bot.`;
+import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 
 export async function POST(req: Request) {
   // Validate cron secret + internal network origin
@@ -650,6 +597,19 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
     .limit(5);
 
   // ========================================
+  // 10. CALENDAR EVENTS
+  // ========================================
+  const endOfTomorrow = new Date(endOfToday.getTime() + 24 * 60 * 60 * 1000);
+
+  const calendarContext = await fetchCalendarContext({
+    userId, driveIds, now, endOfToday, endOfTomorrow,
+  });
+  const { happeningNow, upcomingToday } = calendarContext;
+  const tomorrowEvents = calendarContext.tomorrow;
+  const pendingRsvps = calendarContext.pendingInvites;
+  const allCalendarEvents = calendarContext.allEvents;
+
+  // ========================================
   // BUILD THE RICH CONTEXT WITH DIFFS
   // ========================================
   const contextData = {
@@ -727,6 +687,31 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       recentlyCompleted: recentlyCompletedTasks.map(t => ({
         title: t.title,
         completedAt: t.completedAt?.toISOString(),
+      })),
+    },
+
+    calendar: {
+      happeningNow: happeningNow.map(e => ({
+        title: e.title,
+        location: e.location || undefined,
+        endAt: e.endAt.toISOString(),
+      })),
+      upcomingToday: upcomingToday.map(e => ({
+        title: e.title,
+        location: e.location || undefined,
+        startAt: e.startAt.toISOString(),
+        endAt: e.endAt.toISOString(),
+        allDay: e.allDay,
+      })),
+      tomorrow: tomorrowEvents.map(e => ({
+        title: e.title,
+        location: e.location || undefined,
+        startAt: e.startAt.toISOString(),
+        allDay: e.allDay,
+      })),
+      pendingInvites: pendingRsvps.map(r => ({
+        title: r.eventTitle,
+        startAt: r.startAt.toISOString(),
       })),
     },
 
@@ -842,6 +827,16 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       activity: {
         collaboratorNames: [...new Set(contextData.activitySummary.map(a => a.person))],
         recentOperations: contextData.activitySummary.slice(0, 5).map(a => `${a.person} edited "${a.page}"`),
+      },
+      calendar: {
+        happeningNow: happeningNow.length,
+        upcomingToday: upcomingToday.length,
+        tomorrow: tomorrowEvents.length,
+        pendingInvites: pendingRsvps.length,
+        events: allCalendarEvents.slice(0, 5).map(e => ({
+          title: e.title,
+          startAt: e.startAt.toISOString(),
+        })),
       },
     },
     aiProvider: providerResult.provider,

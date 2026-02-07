@@ -38,6 +38,8 @@ export function useBreadcrumbs(pageId: string | null) {
       onSuccess: () => {
         hasLoadedRef.current = true;
       },
+      errorRetryCount: 3,
+      errorRetryInterval: 2000,
     }
   );
 

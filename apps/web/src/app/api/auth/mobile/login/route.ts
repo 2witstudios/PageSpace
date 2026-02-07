@@ -167,7 +167,7 @@ export async function POST(req: Request) {
     // allows page route requests (middleware checks for session cookie presence).
     // Desktop primarily uses Bearer tokens for API calls, but the initial page load
     // and hard refreshes go through middleware which requires a cookie.
-    if (platform === 'desktop') {
+    if (platform === 'desktop' || platform === 'ios') {
       headers.append('Set-Cookie', createSessionCookie(sessionToken));
     }
 
