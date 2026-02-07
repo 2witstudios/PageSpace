@@ -13,6 +13,7 @@ const {
   mockCacheDelete,
   mockSWRState,
   mockIsAnyEditing,
+  mockAuthState,
 } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockMutate: vi.fn(),
@@ -22,6 +23,11 @@ const {
     error: undefined as unknown,
   },
   mockIsAnyEditing: vi.fn(() => false),
+  mockAuthState: {
+    hasHydrated: true,
+    isLoading: false,
+    isAuthenticated: true,
+  },
 }));
 
 // Mock dependencies with hoisted mocks
@@ -36,6 +42,10 @@ vi.mock('@/stores/useEditingStore', () => ({
     }),
   },
   isEditingActive: () => mockIsAnyEditing(),
+}));
+
+vi.mock('@/stores/useAuthStore', () => ({
+  useAuthStore: (selector: (state: typeof mockAuthState) => unknown) => selector(mockAuthState),
 }));
 
 vi.mock('@/lib/tree/tree-utils', () => ({
@@ -92,6 +102,9 @@ describe('usePageTree', () => {
     mockSWRState.data = undefined;
     mockSWRState.error = undefined;
     mockIsAnyEditing.mockReturnValue(false);
+    mockAuthState.hasHydrated = true;
+    mockAuthState.isLoading = false;
+    mockAuthState.isAuthenticated = true;
   });
 
   afterEach(() => {

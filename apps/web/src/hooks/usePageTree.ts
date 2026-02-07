@@ -4,6 +4,7 @@ import { mergeChildren } from '@/lib/tree/tree-utils';
 import { Page } from '@pagespace/lib/client';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 type User = {
   id: string;
@@ -65,6 +66,10 @@ const fetcher = async (url: string) => {
 };
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
+  const hasHydrated = useAuthStore((state) => state.hasHydrated);
+  const isAuthLoading = useAuthStore((state) => state.isLoading);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
   // Track if initial data has been loaded to avoid blocking first fetch
   const hasLoadedRef = useRef(false);
 
@@ -73,7 +78,10 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     hasLoadedRef.current = false;
   }, [driveId, trashView]);
 
-  const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
+  const shouldFetch = !!driveId && hasHydrated && !isAuthLoading && isAuthenticated;
+  const swrKey = shouldFetch
+    ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`)
+    : null;
   const { data, error, mutate, isValidating } = useSWR<TreePage[]>(
     swrKey,
     fetcher,
@@ -167,7 +175,7 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   return {
     tree: data ?? [],
-    isLoading: !error && !data && !!driveId,
+    isLoading: !error && !data && !!driveId && (!hasHydrated || isAuthLoading || isAuthenticated),
     isError: error,
     isValidating,
     mutate,
