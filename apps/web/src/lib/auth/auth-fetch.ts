@@ -931,15 +931,20 @@ class AuthFetch {
     const tokenPromise = storage.platform === 'desktop'
       ? this.getSessionFromElectron()
       : storage.getSessionToken();
-    return Promise.race([
-      tokenPromise,
-      new Promise<null>((resolve) => {
-        setTimeout(() => {
-          this.logger.warn(`${storage.platform}: Session token retrieval timed out after ${this.TOKEN_RETRIEVAL_TIMEOUT_MS}ms`, { url });
-          resolve(null);
-        }, this.TOKEN_RETRIEVAL_TIMEOUT_MS);
-      }),
-    ]);
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => {
+        this.logger.warn(`${storage.platform}: Session token retrieval timed out after ${this.TOKEN_RETRIEVAL_TIMEOUT_MS}ms`, { url });
+        resolve(null);
+      }, this.TOKEN_RETRIEVAL_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([tokenPromise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId!);
+    }
   }
 
   /**
