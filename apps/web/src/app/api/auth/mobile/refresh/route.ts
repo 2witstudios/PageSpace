@@ -31,7 +31,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { deviceToken, deviceId } = validation.data;
+    const { deviceToken, deviceId, platform } = validation.data;
 
     const clientIP = getClientIP(req);
 
@@ -164,7 +164,12 @@ export async function POST(req: Request) {
     const headers = new Headers();
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
-    appendSessionCookie(headers, sessionToken);
+
+    // Set session cookie for desktop/iOS so Next.js middleware allows page route requests.
+    // These platforms primarily use Bearer tokens for API calls, but middleware checks cookies.
+    if (platform === 'desktop' || platform === 'ios') {
+      appendSessionCookie(headers, sessionToken);
+    }
 
     return Response.json({
       sessionToken,
