@@ -63,8 +63,10 @@ vi.mock('@pagespace/db', () => ({
   },
   eq: vi.fn(),
   and: vi.fn(),
+  isNull: vi.fn(),
   inArray: vi.fn(),
   sql: vi.fn(),
+  desc: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -177,7 +179,7 @@ describe('syncGoogleCalendar', () => {
       selectedCalendars: ['primary'],
       syncCursor: null,
       targetDriveId: null,
-      markAsReadOnly: true,
+      markAsReadOnly: false,
       googleEmail: 'user@gmail.com',
     });
 
@@ -209,7 +211,7 @@ describe('syncGoogleCalendar', () => {
       selectedCalendars: ['primary'],
       syncCursor: null,
       targetDriveId: null,
-      markAsReadOnly: true,
+      markAsReadOnly: false,
       webhookChannels: null,
       googleEmail: 'user@gmail.com',
     });
@@ -269,7 +271,7 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
       selectedCalendars: ['primary'],
       syncCursor: null,
       targetDriveId: null,
-      markAsReadOnly: true,
+      markAsReadOnly: false,
       webhookChannels: null,
       googleEmail: 'user@gmail.com',
     });
@@ -300,7 +302,7 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
       selectedCalendars: ['user@gmail.com'],
       syncCursor: JSON.stringify({ 'user@gmail.com': 'existing-token' }),
       targetDriveId: null,
-      markAsReadOnly: true,
+      markAsReadOnly: false,
       webhookChannels: null,
       googleEmail: 'user@gmail.com',
     });
@@ -339,7 +341,7 @@ describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
       selectedCalendars: ['primary'],
       syncCursor: 'not-json-string',
       targetDriveId: null,
-      markAsReadOnly: true,
+      markAsReadOnly: false,
       webhookChannels: null,
       googleEmail: 'user@gmail.com',
     });
@@ -380,7 +382,7 @@ describe('syncGoogleCalendar error handling', () => {
       selectedCalendars: ['cal-1'],
       syncCursor: JSON.stringify({ 'cal-1': 'old-token' }),
       targetDriveId: null,
-      markAsReadOnly: true,
+      markAsReadOnly: false,
       webhookChannels: null,
       googleEmail: 'user@gmail.com',
     });

@@ -83,7 +83,7 @@ export const calendarEvents = pgTable('calendar_events', {
   googleCalendarId: text('googleCalendarId'),    // Which Google calendar this came from
   syncedFromGoogle: boolean('syncedFromGoogle').default(false).notNull(), // true = imported from Google
   lastGoogleSync: timestamp('lastGoogleSync', { mode: 'date', withTimezone: true }), // Last sync timestamp
-  googleSyncReadOnly: boolean('googleSyncReadOnly').default(true), // Prevent editing if synced
+  googleSyncReadOnly: boolean('googleSyncReadOnly').default(false), // Two-way sync: always editable
 
   // Audit timestamps
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -166,7 +166,7 @@ export const googleCalendarConnections = pgTable('google_calendar_connections', 
   targetDriveId: text('targetDriveId').references(() => drives.id, { onDelete: 'set null' }),
   selectedCalendars: jsonb('selectedCalendars').$type<string[]>().default([]), // Google calendar IDs
   syncFrequencyMinutes: integer('syncFrequencyMinutes').default(15).notNull(),
-  markAsReadOnly: boolean('markAsReadOnly').default(true).notNull(),
+  markAsReadOnly: boolean('markAsReadOnly').default(false).notNull(),
 
   // Sync state
   lastSyncAt: timestamp('lastSyncAt', { mode: 'date', withTimezone: true }),

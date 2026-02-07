@@ -95,6 +95,7 @@ export const syncGoogleCalendar = async (
         syncCursor: true,
         googleEmail: true,
         webhookChannels: true,
+        markAsReadOnly: true,
       },
     });
 
@@ -109,7 +110,11 @@ export const syncGoogleCalendar = async (
     }
 
     // One-time cleanup: fix legacy read-only flags and alias mismatches
-    await cleanupLegacyData(userId, connection.googleEmail);
+    // Only runs for connections that still have the old markAsReadOnly=true default.
+    // After first run, cleanupLegacyData sets markAsReadOnly=false, so subsequent syncs skip it.
+    if (connection.markAsReadOnly) {
+      await cleanupLegacyData(userId, connection.googleEmail);
+    }
 
     // Resolve 'primary' alias to actual email to prevent duplicates
     const rawCalendars = connection.selectedCalendars || ['primary'];
@@ -137,7 +142,6 @@ export const syncGoogleCalendar = async (
         accessToken,
         calendarId,
         connection.targetDriveId,
-        false, // Two-way sync: always editable
         calendarSyncToken,
         timeMin,
         timeMax
@@ -300,7 +304,6 @@ const syncCalendar = async (
   accessToken: string,
   calendarId: string,
   targetDriveId: string | null,
-  markAsReadOnly: boolean,
   syncToken: string | undefined | null,
   timeMin: Date,
   timeMax: Date
@@ -333,7 +336,6 @@ const syncCalendar = async (
         accessToken,
         calendarId,
         targetDriveId,
-        markAsReadOnly,
         undefined, // No sync token - this guarantees no further 410 fallback
         timeMin,
         timeMax
@@ -363,8 +365,7 @@ const syncCalendar = async (
       userId,
       googleEvent,
       calendarId,
-      targetDriveId,
-      markAsReadOnly
+      targetDriveId
     );
 
     if (eventResult.action === 'created') result.eventsCreated++;
@@ -382,8 +383,7 @@ const upsertEvent = async (
   userId: string,
   googleEvent: GoogleCalendarEvent,
   calendarId: string,
-  targetDriveId: string | null,
-  markAsReadOnly: boolean
+  targetDriveId: string | null
 ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'skipped' }> => {
   // Check if event already exists — two-step lookup to handle alias mismatches
   let existingEvent = await db.query.calendarEvents.findFirst({
@@ -451,7 +451,6 @@ const upsertEvent = async (
     userId,
     driveId: targetDriveId,
     googleCalendarId: calendarId,
-    markAsReadOnly,
   });
 
   if (existingEvent) {

@@ -526,6 +526,13 @@
       "when": 1770440353809,
       "tag": "0074_wakeful_vulture",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1770504232853,
+      "tag": "0075_opposite_starhawk",
+      "breakpoints": true
     }
   ]
 }
