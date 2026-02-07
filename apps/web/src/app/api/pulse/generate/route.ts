@@ -24,14 +24,18 @@ import {
   userMentions,
   pagePermissions,
   chatMessages,
+  calendarEvents,
+  eventAttendees,
   eq,
   and,
   or,
   lt,
+  lte,
   gte,
   ne,
   desc,
   inArray,
+  isNull,
 } from '@pagespace/db';
 import {
   groupActivitiesForDiff,
@@ -59,7 +63,7 @@ YOUR PERSONALITY:
 - You're comfortable with silence when there's nothing meaningful to say
 
 WHAT YOU HAVE ACCESS TO:
-You can see workspace activity, content diffs, messages, tasks, and your previous conversations. Use this as CONTEXT to inform what you say - but don't just report it back.
+You can see workspace activity, content diffs, messages, tasks, calendar events, and your previous conversations. Use this as CONTEXT to inform what you say - but don't just report it back.
 
 DEDUPLICATION - CRITICAL:
 Check "previousPulses" for what you've already said. NEVER repeat yourself. If you mentioned something before, it's old news - find something fresh or say something different entirely.
@@ -89,6 +93,11 @@ TYPES OF MESSAGES YOU MIGHT SEND:
    - "All quiet. Enjoy the focus time."
    - "Nothing urgent on the radar"
    - Just a friendly check-in vibe
+
+6. CALENDAR AWARENESS (time-sensitive context)
+   - "You've got a team sync in an hour - might be a good time to prep"
+   - "Looks like a meeting-heavy afternoon ahead"
+   - "Sarah invited you to a design review tomorrow - haven't RSVPed yet"
 
 WHAT NOT TO DO:
 - Don't list what changed like a changelog
@@ -530,6 +539,115 @@ export async function POST(req: Request) {
       .limit(5);
 
     // ========================================
+    // 10. CALENDAR EVENTS
+    // ========================================
+    const endOfTomorrow = new Date(endOfToday.getTime() + 24 * 60 * 60 * 1000);
+
+    // Get events the user can see: personal events + drive events
+    const calendarVisibility = driveIds.length > 0
+      ? or(
+          and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId)),
+          inArray(calendarEvents.driveId, driveIds)
+        )
+      : and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId));
+
+    const upcomingCalendarEvents = await db
+      .select({
+        id: calendarEvents.id,
+        title: calendarEvents.title,
+        location: calendarEvents.location,
+        startAt: calendarEvents.startAt,
+        endAt: calendarEvents.endAt,
+        allDay: calendarEvents.allDay,
+        driveId: calendarEvents.driveId,
+      })
+      .from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.isTrashed, false),
+          gte(calendarEvents.endAt, now),
+          lt(calendarEvents.startAt, endOfTomorrow),
+          calendarVisibility
+        )
+      )
+      .orderBy(calendarEvents.startAt)
+      .limit(15);
+
+    // Get events user is invited to via attendees table
+    const attendeeEventRows = await db
+      .select({
+        id: calendarEvents.id,
+        title: calendarEvents.title,
+        location: calendarEvents.location,
+        startAt: calendarEvents.startAt,
+        endAt: calendarEvents.endAt,
+        allDay: calendarEvents.allDay,
+        driveId: calendarEvents.driveId,
+        rsvpStatus: eventAttendees.status,
+      })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(calendarEvents.isTrashed, false),
+          gte(calendarEvents.endAt, now),
+          lt(calendarEvents.startAt, endOfTomorrow),
+        )
+      )
+      .orderBy(calendarEvents.startAt)
+      .limit(15);
+
+    // Pending RSVP invites (future events user hasn't responded to)
+    const pendingRsvps = await db
+      .select({
+        eventTitle: calendarEvents.title,
+        startAt: calendarEvents.startAt,
+        allDay: calendarEvents.allDay,
+      })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(eventAttendees.status, 'PENDING'),
+          eq(calendarEvents.isTrashed, false),
+          gte(calendarEvents.startAt, now),
+        )
+      )
+      .orderBy(calendarEvents.startAt)
+      .limit(5);
+
+    // Merge and deduplicate events
+    const seenEventIds = new Set<string>();
+    const allCalendarEvents: Array<{
+      title: string;
+      location: string | null;
+      startAt: Date;
+      endAt: Date;
+      allDay: boolean;
+    }> = [];
+
+    for (const event of [...upcomingCalendarEvents, ...attendeeEventRows]) {
+      if (seenEventIds.has(event.id)) continue;
+      seenEventIds.add(event.id);
+      allCalendarEvents.push({
+        title: event.title,
+        location: event.location,
+        startAt: event.startAt,
+        endAt: event.endAt,
+        allDay: event.allDay,
+      });
+    }
+
+    allCalendarEvents.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+
+    // Categorize events
+    const happeningNow = allCalendarEvents.filter(e => e.startAt <= now && e.endAt > now);
+    const upcomingToday = allCalendarEvents.filter(e => e.startAt > now && e.startAt < endOfToday);
+    const tomorrowEvents = allCalendarEvents.filter(e => e.startAt >= endOfToday && e.startAt < endOfTomorrow);
+
+    // ========================================
     // BUILD THE RICH CONTEXT WITH DIFFS
     // ========================================
     const contextData = {
@@ -594,6 +712,31 @@ export async function POST(req: Request) {
       tasks: {
         overdue: overdueTasks.map(t => ({ title: t.title, priority: t.priority })),
         dueToday: todayTasks.map(t => ({ title: t.title, priority: t.priority })),
+      },
+
+      calendar: {
+        happeningNow: happeningNow.map(e => ({
+          title: e.title,
+          location: e.location || undefined,
+          endAt: e.endAt.toISOString(),
+        })),
+        upcomingToday: upcomingToday.map(e => ({
+          title: e.title,
+          location: e.location || undefined,
+          startAt: e.startAt.toISOString(),
+          endAt: e.endAt.toISOString(),
+          allDay: e.allDay,
+        })),
+        tomorrow: tomorrowEvents.map(e => ({
+          title: e.title,
+          location: e.location || undefined,
+          startAt: e.startAt.toISOString(),
+          allDay: e.allDay,
+        })),
+        pendingInvites: pendingRsvps.map(r => ({
+          title: r.eventTitle,
+          startAt: r.startAt.toISOString(),
+        })),
       },
 
       // Previous pulses for deduplication - DO NOT repeat this information
@@ -703,6 +846,16 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
         activity: {
           collaboratorNames: [...new Set(contextData.activitySummary.map(a => a.person))],
           recentOperations: contextData.activitySummary.slice(0, 5).map(a => `${a.person} edited "${a.page}"`),
+        },
+        calendar: {
+          happeningNow: happeningNow.length,
+          upcomingToday: upcomingToday.length,
+          tomorrow: tomorrowEvents.length,
+          pendingInvites: pendingRsvps.length,
+          events: allCalendarEvents.slice(0, 5).map(e => ({
+            title: e.title,
+            startAt: e.startAt.toISOString(),
+          })),
         },
       },
       aiProvider: providerResult.provider,
