@@ -74,7 +74,7 @@ describe('PresenceTracker', () => {
       const viewers = tracker.removeViewer('socket-1', 'page-1');
 
       expect(viewers).toHaveLength(1);
-      expect(viewers![0].userId).toBe('user-2');
+      expect(viewers[0].userId).toBe('user-2');
     });
 
     it('given the last viewer leaving, should return empty array', () => {
@@ -84,6 +84,15 @@ describe('PresenceTracker', () => {
       const viewers = tracker.removeViewer('socket-1', 'page-1');
 
       expect(viewers).toEqual([]);
+    });
+
+    it('given the last viewer leaving via removeViewer, should clean up pageToDrive cache', () => {
+      const user = createUser();
+
+      tracker.addViewer('page-1', 'drive-1', user);
+      tracker.removeViewer('socket-1', 'page-1');
+
+      expect(tracker.getDriveId('page-1')).toBeUndefined();
     });
 
     it('given removing a viewer from a page they never joined, should return empty', () => {

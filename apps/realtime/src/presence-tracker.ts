@@ -59,14 +59,15 @@ export class PresenceTracker {
 
   /**
    * Remove a user from viewing a page (by socketId).
-   * Returns the updated viewer list, or null if the page has no viewers.
+   * Returns the updated viewer list for the page.
    */
-  removeViewer(socketId: string, pageId: string): PresenceViewer[] | null {
+  removeViewer(socketId: string, pageId: string): PresenceViewer[] {
     const viewers = this.pageViewers.get(pageId);
     if (viewers) {
       viewers.delete(socketId);
       if (viewers.size === 0) {
         this.pageViewers.delete(pageId);
+        this.pageToDrive.delete(pageId);
       }
     }
 

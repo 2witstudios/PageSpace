@@ -5,7 +5,7 @@
  * handled by usePageTreeSocket.
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { createMockSocket } from '@/test/socket-mocks';
 
@@ -34,11 +34,7 @@ describe('usePagePresence', () => {
     mockSocket.connected = true;
     mockSocket.id = 'test-socket-123';
     mockUseAuth.mockReturnValue({ user: { id: 'user-1', name: 'Alice' } });
-    mockGetSocket.mockReturnValue(mockSocket as unknown as ReturnType<typeof createMockSocket>);
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
+    mockGetSocket.mockReturnValue(mockSocket);
   });
 
   describe('joining presence', () => {

@@ -148,7 +148,7 @@ function ViewerAvatar({
 
 /**
  * Compact inline version for use in the sidebar page tree.
- * Shows smaller avatars with no tooltip wrapper needed (the parent handles hover).
+ * Shows smaller avatars with a single shared tooltip listing all viewers.
  */
 export function PageViewersInline({ pageId, maxVisible = 3 }: { pageId: string | null | undefined; maxVisible?: number }) {
   const { user } = useAuth();

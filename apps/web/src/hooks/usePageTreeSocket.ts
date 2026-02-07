@@ -171,6 +171,9 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
       socket.off('presence:page_viewers', handlePresenceUpdate);
       socket.off('disconnect', handleDisconnect);
 
+      // Clear stale presence from previous drive
+      clearAllPresence();
+
       // Clear any pending debounced revalidation
       if (revalidationTimeoutRef.current) {
         clearTimeout(revalidationTimeoutRef.current);
@@ -178,7 +181,7 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socketId, driveId, handlePageEvent, handlePresenceUpdate]); // socket intentionally omitted - only depends on ID for stability
+  }, [socketId, driveId, handlePageEvent, handlePresenceUpdate, clearAllPresence]); // socket intentionally omitted - only depends on ID for stability
 
   // Clean up timeout on unmount
   useEffect(() => {
