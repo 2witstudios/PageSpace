@@ -15,17 +15,20 @@ import { Lock, FileIcon, FileText, Download } from 'lucide-react';
 import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import {
+  type AttachmentMeta,
+  type FileRelation,
+  isImageAttachment,
+  getFileId,
+  getAttachmentName,
+  getAttachmentMimeType,
+  getAttachmentSize,
+  formatFileSize,
+  hasAttachment,
+} from '@/lib/attachment-utils';
 
 interface ChannelViewProps {
   page: TreePage;
-}
-
-// Attachment metadata stored in the database
-interface AttachmentMeta {
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
 }
 
 // Extended message type with reactions and file attachment
@@ -33,11 +36,7 @@ interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
-  file?: {
-    id: string;
-    mimeType: string | null;
-    sizeBytes: number;
-  } | null;
+  file?: FileRelation | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -347,46 +346,43 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </div>
                               )}
                               {/* File attachment */}
-                              {m.attachmentMeta && (
+                              {hasAttachment(m) && (
                                 <div className="mt-2">
-                                  {m.attachmentMeta.mimeType.startsWith('image/') ? (
+                                  {isImageAttachment(m) ? (
                                     <a
-                                      href={`/api/files/${m.fileId}/view?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                                      href={`/api/files/${getFileId(m)}/view?filename=${encodeURIComponent(getAttachmentName(m))}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="block max-w-sm"
                                     >
                                       {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
                                       <img
-                                        src={`/api/files/${m.fileId}/view`}
-                                        alt={m.attachmentMeta.originalName}
+                                        src={`/api/files/${getFileId(m)}/view`}
+                                        alt={getAttachmentName(m)}
                                         className="rounded-lg max-h-64 object-contain border border-border/50"
-                                        loading="lazy"
                                       />
                                     </a>
                                   ) : (
                                     <a
-                                      href={`/api/files/${m.fileId}/download?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                                      href={`/api/files/${getFileId(m)}/download?filename=${encodeURIComponent(getAttachmentName(m))}`}
                                       className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
                                     >
                                       <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-                                        {m.attachmentMeta.mimeType.includes('pdf') ? (
+                                        {getAttachmentMimeType(m).includes('pdf') ? (
                                           <FileText className="h-5 w-5 text-red-500" />
-                                        ) : m.attachmentMeta.mimeType.includes('document') || m.attachmentMeta.mimeType.includes('word') ? (
+                                        ) : getAttachmentMimeType(m).includes('document') || getAttachmentMimeType(m).includes('word') ? (
                                           <FileText className="h-5 w-5 text-blue-500" />
                                         ) : (
                                           <FileIcon className="h-5 w-5 text-muted-foreground" />
                                         )}
                                       </div>
                                       <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium truncate">{m.attachmentMeta.originalName}</p>
-                                        <p className="text-xs text-muted-foreground">
-                                          {m.attachmentMeta.size < 1024
-                                            ? `${m.attachmentMeta.size} B`
-                                            : m.attachmentMeta.size < 1024 * 1024
-                                            ? `${(m.attachmentMeta.size / 1024).toFixed(1)} KB`
-                                            : `${(m.attachmentMeta.size / (1024 * 1024)).toFixed(1)} MB`}
-                                        </p>
+                                        <p className="text-sm font-medium truncate">{getAttachmentName(m)}</p>
+                                        {getAttachmentSize(m) != null && (
+                                          <p className="text-xs text-muted-foreground">
+                                            {formatFileSize(getAttachmentSize(m)!)}
+                                          </p>
+                                        )}
                                       </div>
                                       <Download className="h-4 w-4 text-muted-foreground shrink-0" />
                                     </a>
