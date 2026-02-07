@@ -32,12 +32,11 @@ Comprehensive upgrade to Google Calendar integration with two-way sync, push not
 - **Attendee data in metadata**: Raw Google attendee info also stored in event metadata for reference
 
 #### Settings UI Enhancement
-- **Calendar picker card**: Visual calendar selection with Google color swatches and primary indicator
-- **Sync frequency selector**: Dropdown to choose background sync interval (5 min to 24 hours)
-- **Event count display**: Shows total synced events count on the status card
-- **Sync details**: Last sync time, selected calendars count, and sync frequency displayed in status card
-- **Settings save**: Dedicated save button with change detection (only enabled when settings differ from saved values)
+- **Calendar picker card**: Visual calendar selection with Google color swatches and primary indicator. Changes save and sync instantly on toggle - no save button needed
+- **Event count display**: Shows total synced events count on the connection card
+- **Clean connection card**: Account, last synced, and event count - no configuration clutter
 - **Updated privacy copy**: Reflects two-way sync and conference link access
+- **No sync frequency UI**: Push notifications make sync feel instant; the background cron is invisible infrastructure, not a user setting
 
 #### API Changes
 - `GET /api/integrations/google-calendar/status` — now includes `syncedEventCount`

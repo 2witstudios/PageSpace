@@ -9,11 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import {
   ArrowLeft, Calendar, CheckCircle2, XCircle, AlertCircle,
-  RefreshCw, ExternalLink, Settings, CalendarDays
+  RefreshCw, ExternalLink, CalendarDays
 } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { toast } from "sonner";
@@ -62,15 +60,6 @@ const ERROR_MESSAGES: Record<string, string> = {
   unexpected: "An unexpected error occurred. Please try again.",
 };
 
-const SYNC_FREQUENCY_OPTIONS = [
-  { value: "5", label: "Every 5 minutes" },
-  { value: "15", label: "Every 15 minutes" },
-  { value: "30", label: "Every 30 minutes" },
-  { value: "60", label: "Every hour" },
-  { value: "360", label: "Every 6 hours" },
-  { value: "1440", label: "Every 24 hours" },
-];
-
 export default function GoogleCalendarSettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -80,15 +69,11 @@ export default function GoogleCalendarSettingsPage() {
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
 
   // Calendar picker state
   const [availableCalendars, setAvailableCalendars] = useState<GoogleCalendar[]>([]);
   const [loadingCalendars, setLoadingCalendars] = useState(false);
   const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>([]);
-
-  // Settings state
-  const [syncFrequency, setSyncFrequency] = useState("15");
 
   const error = searchParams.get("error");
   const justConnected = searchParams.get("connected") === "true";
@@ -104,7 +89,6 @@ export default function GoogleCalendarSettingsPage() {
         setStatus(data);
         if (data.connection) {
           setSelectedCalendarIds(data.connection.selectedCalendars || ["primary"]);
-          setSyncFrequency(String(data.connection.syncFrequencyMinutes || 15));
         }
       }
     } catch (err) {
@@ -164,36 +148,32 @@ export default function GoogleCalendarSettingsPage() {
     }
   }, []);
 
-  const handleSaveSettings = async () => {
-    if (selectedCalendarIds.length === 0) {
-      toast.error("Select at least one calendar");
-      return;
-    }
-
-    setSavingSettings(true);
+  // Save calendar selection immediately when toggled
+  const saveCalendarSelection = async (newSelection: string[]) => {
     try {
       const response = await fetchWithAuth("/api/integrations/google-calendar/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          selectedCalendars: selectedCalendarIds,
-          syncFrequencyMinutes: parseInt(syncFrequency, 10),
-        }),
+        body: JSON.stringify({ selectedCalendars: newSelection }),
       });
 
       if (!response.ok) {
         const data = await response.json();
-        toast.error(data.error || "Failed to save settings");
+        toast.error(data.error || "Failed to update calendars");
+        // Revert on failure
+        if (connection) {
+          setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
+        }
         return;
       }
 
-      toast.success("Settings saved");
-      await fetchStatus();
+      // Trigger a sync so the newly selected calendar's events appear immediately
+      handleSync(true);
     } catch (err) {
-      console.error("Failed to save settings:", err);
-      toast.error("Failed to save settings");
-    } finally {
-      setSavingSettings(false);
+      console.error("Failed to save calendar selection:", err);
+      if (connection) {
+        setSelectedCalendarIds(connection.selectedCalendars || ["primary"]);
+      }
     }
   };
 
@@ -266,11 +246,21 @@ export default function GoogleCalendarSettingsPage() {
   };
 
   const toggleCalendar = (calendarId: string) => {
-    setSelectedCalendarIds((prev) =>
-      prev.includes(calendarId)
+    setSelectedCalendarIds((prev) => {
+      const next = prev.includes(calendarId)
         ? prev.filter((id) => id !== calendarId)
-        : [...prev, calendarId]
-    );
+        : [...prev, calendarId];
+
+      // Don't allow deselecting everything
+      if (next.length === 0) {
+        toast.error("At least one calendar must be selected");
+        return prev;
+      }
+
+      // Save immediately - feels magical, no save button needed
+      saveCalendarSelection(next);
+      return next;
+    });
   };
 
   const formatLastSync = (dateStr: string | null) => {
@@ -338,11 +328,6 @@ export default function GoogleCalendarSettingsPage() {
     }
   };
 
-  const hasSettingsChanged = connection && (
-    JSON.stringify(selectedCalendarIds) !== JSON.stringify(connection.selectedCalendars) ||
-    syncFrequency !== String(connection.syncFrequencyMinutes)
-  );
-
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
       <div className="mb-8">
@@ -382,12 +367,9 @@ export default function GoogleCalendarSettingsPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">Connection Status</CardTitle>
+              <CardTitle className="text-lg">Connection</CardTitle>
               {!loading && getStatusBadge()}
             </div>
-            <CardDescription>
-              Connect your Google Calendar to sync events both ways
-            </CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -398,7 +380,7 @@ export default function GoogleCalendarSettingsPage() {
             ) : connection ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Connected as</span>
+                  <span className="text-sm text-muted-foreground">Account</span>
                   <span className="font-medium">{connection.googleEmail}</span>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
@@ -408,21 +390,9 @@ export default function GoogleCalendarSettingsPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Synced events</span>
+                  <span className="text-sm text-muted-foreground">Events</span>
                   <span className="text-sm font-medium">
-                    {status?.syncedEventCount ?? 0}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Calendars</span>
-                  <span className="text-sm">
-                    {connection.selectedCalendars?.length || 0} selected
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b">
-                  <span className="text-sm text-muted-foreground">Sync frequency</span>
-                  <span className="text-sm">
-                    {SYNC_FREQUENCY_OPTIONS.find(o => o.value === String(connection.syncFrequencyMinutes))?.label || `Every ${connection.syncFrequencyMinutes} min`}
+                    {status?.syncedEventCount ?? 0} synced
                   </span>
                 </div>
                 {connection.lastSyncError && (
@@ -503,7 +473,7 @@ export default function GoogleCalendarSettingsPage() {
                   <ul className="list-disc list-inside space-y-1 ml-2">
                     <li>Two-way sync keeps both calendars in sync</li>
                     <li>AI can see your real availability</li>
-                    <li>Real-time updates via push notifications</li>
+                    <li>Changes appear instantly</li>
                     <li>Automatic attendee matching</li>
                   </ul>
                 </div>
@@ -534,10 +504,10 @@ export default function GoogleCalendarSettingsPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <CalendarDays className="h-5 w-5 text-muted-foreground" />
-                <CardTitle className="text-lg">Calendar Selection</CardTitle>
+                <CardTitle className="text-lg">Calendars</CardTitle>
               </div>
               <CardDescription>
-                Choose which Google calendars to sync with PageSpace
+                Choose which calendars to keep in sync
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -549,7 +519,7 @@ export default function GoogleCalendarSettingsPage() {
                 </div>
               ) : availableCalendars.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No calendars found. Try refreshing.
+                  No calendars found. Try reconnecting.
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -581,63 +551,6 @@ export default function GoogleCalendarSettingsPage() {
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Sync Settings Card - only shown when connected */}
-        {isActiveConnection && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Settings className="h-5 w-5 text-muted-foreground" />
-                <CardTitle className="text-lg">Sync Settings</CardTitle>
-              </div>
-              <CardDescription>
-                Configure how often PageSpace syncs with Google Calendar.
-                Real-time push notifications handle most updates instantly;
-                the background sync acts as a safety net.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="sync-frequency">Background sync frequency</Label>
-                <Select value={syncFrequency} onValueChange={setSyncFrequency}>
-                  <SelectTrigger id="sync-frequency" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SYNC_FREQUENCY_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Push notifications provide near-instant updates. This interval
-                  is a fallback if notifications are delayed.
-                </p>
-              </div>
-
-              <Separator />
-
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  disabled={savingSettings || !hasSettingsChanged}
-                  onClick={handleSaveSettings}
-                >
-                  {savingSettings ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    "Save Settings"
-                  )}
-                </Button>
-              </div>
             </CardContent>
           </Card>
         )}
