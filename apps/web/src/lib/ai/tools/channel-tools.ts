@@ -5,6 +5,7 @@ import {
   canUserViewPage,
   loggers,
   getActorInfo,
+  logMessageActivity,
 } from '@pagespace/lib/server';
 import { db, channelMessages, channelReadStatus, pages, driveMembers, eq, and } from '@pagespace/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
@@ -116,6 +117,32 @@ export const channelTools = {
           .onConflictDoUpdate({
             target: [channelReadStatus.userId, channelReadStatus.channelId],
             set: { lastReadAt: new Date() },
+          });
+
+        // Log activity for audit trail (fire-and-forget)
+        const toolContext = context as ToolExecutionContext;
+        getActorInfo(userId)
+          .then(actorInfo => {
+            logMessageActivity(userId, 'create', {
+              id: createdMessage.id,
+              pageId: channelId,
+              driveId: channel.driveId,
+              conversationType: 'channel',
+            }, actorInfo, {
+              newContent: content.trim(),
+              isAiGenerated: true,
+              aiProvider: toolContext.aiProvider ?? 'unknown',
+              aiModel: toolContext.aiModel ?? 'unknown',
+              aiConversationId: toolContext.conversationId,
+              metadata: {
+                senderType: senderIdentity.senderType,
+                senderName: senderIdentity.senderName,
+                agentPageId: senderIdentity.agentPageId,
+              },
+            });
+          })
+          .catch(() => {
+            channelLogger.warn('Failed to get actor info for activity logging');
           });
 
         // Fetch the complete message with user info for broadcasting

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, channelReadStatus, db, eq, asc, files, pages, driveMembers } from '@pagespace/db';
+import { channelMessages, channelReadStatus, db, eq, and, asc, files, pages, driveMembers } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -34,7 +34,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   const messages = await db.query.channelMessages.findMany({
-    where: eq(channelMessages.pageId, pageId),
+    where: and(eq(channelMessages.pageId, pageId), eq(channelMessages.isActive, true)),
     with: {
       user: {
         columns: {

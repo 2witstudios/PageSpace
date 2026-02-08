@@ -1,0 +1,1 @@
+ALTER TABLE "channel_messages" ADD COLUMN "isActive" boolean DEFAULT true NOT NULL;
