@@ -85,10 +85,12 @@ vi.mock('@pagespace/lib/server', () => ({
 import { db } from '@pagespace/db';
 import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring';
+import { loggers } from '@pagespace/lib/server';
 
 const mockDb = vi.mocked(db);
 const mockPreviewRollback = vi.mocked(previewRollback);
 const mockExecuteRollback = vi.mocked(executeRollback);
+const mockLoggers = vi.mocked(loggers);
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -333,6 +335,49 @@ describe('ai-undo-service', () => {
       expect(result.messagesDeleted).toBe(2);
       expect(result.activitiesRolledBack).toBe(0);
       expect(executeRollback).not.toHaveBeenCalled();
+    });
+
+    it('logs debug message for secondary table soft-delete', async () => {
+      const mockMessage = createMockMessage();
+
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1) {
+              return [{ id: 'msg_1' }];
+            }
+            return {
+              orderBy: vi.fn().mockResolvedValue([]),
+            };
+          }),
+        }),
+      }));
+
+      mockDb.transaction.mockImplementation(async (callback) => {
+        const tx = {
+          update: vi.fn().mockReturnValue({
+            set: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue(undefined),
+            }),
+          }),
+        };
+        await callback(tx);
+      });
+
+      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+
+      expect(mockLoggers.api.debug).toHaveBeenCalledWith(
+        '[AiUndo:Execute] Soft-deleting from secondary table',
+        expect.objectContaining({
+          secondaryTable: 'messages',
+          conversationId: mockConversationId,
+        })
+      );
     });
 
     it('logs conversation undo with correct mode', async () => {

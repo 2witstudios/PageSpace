@@ -534,6 +534,10 @@ export async function executeAiUndo(
       // Also update secondary table to catch any orphaned messages
       // This handles edge cases where conversationId exists in both tables
       const secondaryTable = preview.source === 'page_chat' ? messages : chatMessages;
+      loggers.api.debug('[AiUndo:Execute] Soft-deleting from secondary table', {
+        secondaryTable: preview.source === 'page_chat' ? 'messages' : 'chatMessages',
+        conversationId,
+      });
       await tx
         .update(secondaryTable)
         .set({ isActive: false })
