@@ -28,7 +28,7 @@ class AuthFetch {
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
-  private sessionCache: { token: string | null; timestamp: number } | null = null;
+  private sessionCache: { token: string } | null = null;
   private sessionFetchPromise: Promise<string | null> | null = null;
   private readonly SESSION_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
   private authClearedCleanup: (() => void) | null = null;
@@ -981,7 +981,11 @@ class AuthFetch {
           }
         }
 
-        this.sessionCache = { token, timestamp: Date.now() };
+        if (token) {
+          this.sessionCache = { token };
+        } else {
+          this.logger.debug('Session token is null after IPC — not caching to allow future re-checks');
+        }
         return token;
       } finally {
         this.sessionFetchPromise = null;
@@ -1005,7 +1009,7 @@ class AuthFetch {
    * to avoid a redundant IPC roundtrip when fetchWithAuth runs shortly after.
    */
   warmSessionCache(token: string): void {
-    this.sessionCache = { token, timestamp: Date.now() };
+    this.sessionCache = { token };
   }
 
   /**
