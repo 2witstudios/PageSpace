@@ -22,9 +22,6 @@ export * from './content/page-type-validators';
 // Sheet utilities (safe - pure JavaScript functions)
 export * from './sheets';
 
-// Page content parsing (safe - no server dependencies)
-export * from './content/page-content-parser';
-
 // Browser-safe format bytes utility
 export function formatBytes(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
