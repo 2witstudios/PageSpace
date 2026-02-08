@@ -1,4 +1,4 @@
-import { eq, or } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
   users,
@@ -175,30 +175,27 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
   return unique;
 }
 
-export async function collectUserPages(database: DB, userId: string): Promise<UserPageExport[]> {
-  // Get all drives the user has access to
-  const userDrives = await collectUserDrives(database, userId);
-  const driveIds = userDrives.map(d => d.id);
+export async function collectUserPages(
+  database: DB,
+  userId: string,
+  preloadedDriveIds?: string[],
+): Promise<UserPageExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
 
   if (driveIds.length === 0) return [];
 
-  const result: UserPageExport[] = [];
-  for (const driveId of driveIds) {
-    const drivePages = await database
-      .select({
-        id: pages.id,
-        title: pages.title,
-        type: pages.type,
-        content: pages.content,
-        driveId: pages.driveId,
-        createdAt: pages.createdAt,
-        updatedAt: pages.updatedAt,
-      })
-      .from(pages)
-      .where(eq(pages.driveId, driveId));
-    result.push(...drivePages);
-  }
-  return result;
+  return database
+    .select({
+      id: pages.id,
+      title: pages.title,
+      type: pages.type,
+      content: pages.content,
+      driveId: pages.driveId,
+      createdAt: pages.createdAt,
+      updatedAt: pages.updatedAt,
+    })
+    .from(pages)
+    .where(inArray(pages.driveId, driveIds));
 }
 
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
@@ -355,37 +352,50 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
     .from(taskLists)
     .where(eq(taskLists.userId, userId));
 
-  const result: UserTaskExport[] = [];
+  if (lists.length === 0) return [];
 
-  for (const list of lists) {
-    const items = await database
-      .select({
-        id: taskItems.id,
-        title: taskItems.title,
-        status: taskItems.status,
-        priority: taskItems.priority,
-        createdAt: taskItems.createdAt,
-      })
-      .from(taskItems)
-      .where(eq(taskItems.taskListId, list.id));
+  const listIds = lists.map(l => l.id);
+  const allItems = await database
+    .select({
+      id: taskItems.id,
+      title: taskItems.title,
+      status: taskItems.status,
+      priority: taskItems.priority,
+      taskListId: taskItems.taskListId,
+      createdAt: taskItems.createdAt,
+    })
+    .from(taskItems)
+    .where(inArray(taskItems.taskListId, listIds));
 
-    result.push({
-      listId: list.id,
-      listTitle: list.title,
-      items,
-    });
+  const itemsByList = new Map<string, typeof allItems>();
+  for (const item of allItems) {
+    const existing = itemsByList.get(item.taskListId) ?? [];
+    existing.push(item);
+    itemsByList.set(item.taskListId, existing);
   }
 
-  return result;
+  return lists.map(list => ({
+    listId: list.id,
+    listTitle: list.title,
+    items: (itemsByList.get(list.id) ?? []).map(item => ({
+      id: item.id,
+      title: item.title,
+      status: item.status,
+      priority: item.priority,
+      createdAt: item.createdAt,
+    })),
+  }));
 }
 
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
 
-  const [userDrives, userPages, userMessages, userFiles, activity, aiUsage, tasks] = await Promise.all([
-    collectUserDrives(database, userId),
-    collectUserPages(database, userId),
+  const userDrives = await collectUserDrives(database, userId);
+  const driveIds = userDrives.map(d => d.id);
+
+  const [userPages, userMessages, userFiles, activity, aiUsage, tasks] = await Promise.all([
+    collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
     collectUserActivity(database, userId),

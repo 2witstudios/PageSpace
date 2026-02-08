@@ -1,7 +1,6 @@
-import { eq, sql, and, isNull } from 'drizzle-orm';
+import { eq, sql, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { files, filePages } from '@pagespace/db';
-import { channelMessages } from '@pagespace/db';
+import { files } from '@pagespace/db';
 
 export interface OrphanedFile {
   id: string;
@@ -75,13 +74,9 @@ export async function isFileOrphaned(database: DB, fileId: string): Promise<bool
 export async function deleteFileRecords(database: DB, fileIds: string[]): Promise<number> {
   if (fileIds.length === 0) return 0;
 
-  let deleted = 0;
-  for (const id of fileIds) {
-    const result = await database
-      .delete(files)
-      .where(eq(files.id, id))
-      .returning({ id: files.id });
-    deleted += result.length;
-  }
-  return deleted;
+  const result = await database
+    .delete(files)
+    .where(inArray(files.id, fileIds))
+    .returning({ id: files.id });
+  return result.length;
 }
