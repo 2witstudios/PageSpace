@@ -356,6 +356,83 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
   });
 
   // ============================================
+  // Force flag
+  // ============================================
+
+  describe('force flag', () => {
+    it('forwards force: true to executeAiUndo', async () => {
+      mockExecuteAiUndo.mockResolvedValue({
+        success: true,
+        messagesDeleted: 3,
+        activitiesRolledBack: 1,
+        errors: [],
+      });
+
+      const response = await POST(
+        createPostRequest({ mode: 'messages_and_changes', force: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(200);
+      expect(executeAiUndo).toHaveBeenCalledWith(
+        mockMessageId,
+        mockUserId,
+        'messages_and_changes',
+        expect.any(Object),
+        expect.objectContaining({ force: true })
+      );
+    });
+
+    it('still enforces auth when force: true', async () => {
+      mockAuth.mockResolvedValue(mockAuthError(401));
+
+      const response = await POST(
+        createPostRequest({ mode: 'messages_and_changes', force: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(401);
+      expect(executeAiUndo).not.toHaveBeenCalled();
+    });
+
+    it('forwards force: true even when preview has conflicts', async () => {
+      mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview({
+        activitiesAffected: [
+          createAiUndoActivity({
+            preview: createActionPreview({ hasConflict: true, requiresForce: true }),
+          }),
+        ],
+      }));
+      mockExecuteAiUndo.mockResolvedValue({
+        success: true,
+        messagesDeleted: 2,
+        activitiesRolledBack: 1,
+        errors: [],
+      });
+
+      const response = await POST(
+        createPostRequest({ mode: 'messages_and_changes', force: true }),
+        { params: mockParams }
+      );
+
+      expect(response.status).toBe(200);
+      expect(executeAiUndo).toHaveBeenCalledWith(
+        mockMessageId,
+        mockUserId,
+        'messages_and_changes',
+        expect.objectContaining({
+          activitiesAffected: expect.arrayContaining([
+            expect.objectContaining({
+              preview: expect.objectContaining({ hasConflict: true }),
+            }),
+          ]),
+        }),
+        expect.objectContaining({ force: true })
+      );
+    });
+  });
+
+  // ============================================
   // Authorization
   // ============================================
 
