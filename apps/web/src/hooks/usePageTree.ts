@@ -65,32 +65,43 @@ const fetcher = async (url: string) => {
 };
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
-  // Track if initial data has been loaded to avoid blocking first fetch
-  const hasLoadedRef = useRef(false);
-
-  // Reset loaded status when driveId or trashView changes to ensure fresh pages can load even during editing
-  useEffect(() => {
-    hasLoadedRef.current = false;
-  }, [driveId, trashView]);
-
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
   const { data, error, mutate, isValidating } = useSWR<TreePage[]>(
     swrKey,
     fetcher,
     {
-      // Only pause revalidation after initial load - never block the first fetch
-      // Use isAnyEditing() to allow tree updates during AI streaming (not just isEditingActive/isAnyActive)
-      isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
-      onSuccess: () => {
-        hasLoadedRef.current = true;
-      },
       // Retry failed requests up to 3 times with increasing delay
       errorRetryCount: 3,
       errorRetryInterval: 2000,
+      revalidateOnFocus: false,
       revalidateOnReconnect: true,
     }
   );
   const { cache } = useSWRConfig();
+
+  // Self-healing: detect when SWR gets stuck (valid key, no data, no error, not fetching).
+  // On desktop/Capacitor, async token retrieval in fetchWithAuth can cause SWR to lose track
+  // of in-flight fetches during React re-renders from auth state settling. When stuck, we
+  // perform the same cache.delete + mutate that the manual retry button does.
+  const stuckRetryCount = useRef(0);
+
+  useEffect(() => {
+    stuckRetryCount.current = 0;
+  }, [swrKey]);
+
+  useEffect(() => {
+    if (!swrKey || data || error || isValidating) return;
+    if (stuckRetryCount.current >= 2) return;
+
+    const timeoutId = setTimeout(() => {
+      stuckRetryCount.current += 1;
+      console.log(`[usePageTree] SWR appears stuck — auto-retrying (${stuckRetryCount.current}/2)`);
+      cache.delete(swrKey);
+      mutate();
+    }, 3000);
+
+    return () => clearTimeout(timeoutId);
+  }, [swrKey, data, error, isValidating, cache, mutate]);
 
   const [childLoadingMap, setChildLoadingMap] = useState<Record<string, boolean>>({});
 

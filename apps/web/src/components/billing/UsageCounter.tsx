@@ -11,7 +11,6 @@ import type { UsageEventPayload } from '@/lib/websocket';
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 
@@ -45,13 +44,9 @@ export function UsageCounter() {
   const getSocket = useSocketStore((state) => state.getSocket);
   const { showBilling } = useBillingVisibility();
 
-  // Check if any editing or streaming is active (state-based)
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
-
   const { data: usage, error, mutate } = useSWR<UsageData>('/api/subscriptions/usage', fetcher, {
     refreshInterval: 0, // Disabled - rely on Socket.IO for real-time updates
     revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
-    isPaused: () => isAnyActive, // Pause revalidation during editing/streaming
   });
 
   const isPro = usage?.subscriptionTier === 'pro';

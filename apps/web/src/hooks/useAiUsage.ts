@@ -1,7 +1,6 @@
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getContextWindow } from '@pagespace/lib/ai-monitoring';
-import { useEditingStore } from '@/stores/useEditingStore';
 
 /**
  * AI Usage data structure - separates billing from context metrics
@@ -82,8 +81,6 @@ const fetcher = async (url: string) => {
  * @param refreshInterval - Optional refresh interval in milliseconds (default: 15000ms)
  */
 export function useAiUsage(conversationId: string | null | undefined, refreshInterval = 15000) {
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
-
   const swrKey = conversationId
     ? `/api/ai/global/${encodeURIComponent(conversationId)}/usage`
     : null;
@@ -92,7 +89,6 @@ export function useAiUsage(conversationId: string | null | undefined, refreshInt
     swrKey,
     fetcher,
     {
-      isPaused: () => isAnyActive,
       refreshInterval,
       revalidateOnFocus: false,
       dedupingInterval: 2000,
@@ -142,8 +138,6 @@ export function useAiUsage(conversationId: string | null | undefined, refreshInt
  * Hook for fetching AI usage data for a specific page (across all conversations)
  */
 export function usePageAiUsage(pageId: string | null | undefined, refreshInterval = 15000) {
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
-
   const swrKey = pageId
     ? `/api/pages/${encodeURIComponent(pageId)}/ai-usage`
     : null;
@@ -152,7 +146,6 @@ export function usePageAiUsage(pageId: string | null | undefined, refreshInterva
     swrKey,
     fetcher,
     {
-      isPaused: () => isAnyActive,
       refreshInterval,
       revalidateOnFocus: false,
       dedupingInterval: 2000,
