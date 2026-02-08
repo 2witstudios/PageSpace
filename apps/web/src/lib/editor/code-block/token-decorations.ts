@@ -1,4 +1,4 @@
-import type { ThemedToken, FontStyle } from 'shiki';
+import type { ThemedToken } from 'shiki';
 import { Decoration } from '@tiptap/pm/view';
 
 export interface DecorationSpec {
@@ -7,7 +7,7 @@ export interface DecorationSpec {
   style: string;
 }
 
-function fontStyleToCss(fontStyle: FontStyle | undefined): string {
+function fontStyleToCss(fontStyle: number | undefined): string {
   if (!fontStyle) return '';
   const parts: string[] = [];
   // FontStyle bit flags: 1=italic, 2=bold, 4=underline

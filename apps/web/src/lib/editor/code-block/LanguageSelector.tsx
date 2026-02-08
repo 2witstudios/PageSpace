@@ -45,7 +45,7 @@ export function LanguageSelector({ node, updateAttributes }: NodeViewProps) {
           </option>
         ))}
       </select>
-      <NodeViewContent as="code" className={node.attrs.language ? `language-${node.attrs.language}` : ''} />
+      <NodeViewContent<"code"> as="code" className={node.attrs.language ? `language-${node.attrs.language}` : ''} />
     </NodeViewWrapper>
   );
 }
