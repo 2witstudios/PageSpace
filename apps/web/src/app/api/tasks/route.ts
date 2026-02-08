@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
 import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -102,10 +102,14 @@ export async function GET(request: Request) {
         );
       }
 
+      const scopeError = checkMCPDriveScope(auth, params.driveId);
+      if (scopeError) return scopeError;
+
       driveIds = [params.driveId];
     } else {
       // User context: get all accessible drive IDs
       driveIds = await getDriveIdsForUser(userId);
+      driveIds = filterDrivesByMCPScope(auth, driveIds);
 
       // Optional drive filter for user context
       if (params.driveId) {
@@ -115,6 +119,8 @@ export async function GET(request: Request) {
             { status: 403 }
           );
         }
+        const driveIdScopeError = checkMCPDriveScope(auth, params.driveId);
+        if (driveIdScopeError) return driveIdScopeError;
         driveIds = [params.driveId];
       }
     }

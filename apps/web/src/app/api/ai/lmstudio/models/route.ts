@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { getUserLMStudioSettings } from '@/lib/ai/core';
-import { validateExternalURL } from '@pagespace/lib/security';
+import { validateLocalProviderURL } from '@pagespace/lib/security';
 
 /**
  * GET /api/ai/lmstudio/models
@@ -26,13 +26,12 @@ export async function GET(request: Request) {
     }
 
     // SECURITY: Validate URL to prevent SSRF attacks
-    try {
-      await validateExternalURL(lmstudioSettings.baseUrl);
-    } catch (error) {
+    const urlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
+    if (!urlValidation.valid) {
       loggers.ai.warn('SSRF protection: blocked LM Studio URL', {
         userId,
         baseUrl: lmstudioSettings.baseUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: urlValidation.error,
       });
       return NextResponse.json({
         success: false,

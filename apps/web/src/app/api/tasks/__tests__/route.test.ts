@@ -72,6 +72,8 @@ vi.mock('@pagespace/lib', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(() => null),
+  filterDrivesByMCPScope: vi.fn((_auth: unknown, driveIds: string[]) => driveIds),
 }));
 
 import { db } from '@pagespace/db';

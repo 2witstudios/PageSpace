@@ -11,7 +11,7 @@ import {
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -184,6 +184,9 @@ export async function POST(request: Request) {
       loggers.ai.warn('AI Chat API: No chatId provided');
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 });
     }
+
+    const mcpScopeError = await checkMCPPageScope(authResult, chatId);
+    if (mcpScopeError) return mcpScopeError;
 
     // Ensure userId and chatId are defined
     if (!userId) {
