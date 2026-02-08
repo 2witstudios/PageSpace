@@ -1,7 +1,6 @@
 import { useRef, useEffect } from 'react';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { isEditingActive } from '@/stores/useEditingStore';
 
 interface BreadcrumbItem {
   id: string;
@@ -21,27 +20,39 @@ const fetcher = async (url: string) => {
 };
 
 export function useBreadcrumbs(pageId: string | null) {
-  // Track if initial data has been loaded to avoid blocking first fetch
-  const hasLoadedRef = useRef(false);
-
-  // Reset loaded status when pageId changes to ensure fresh pages can load even during editing
-  useEffect(() => {
-    hasLoadedRef.current = false;
-  }, [pageId]);
-
-  const { data, error } = useSWR<BreadcrumbItem[]>(
-    pageId ? `/api/pages/${pageId}/breadcrumbs` : null,
+  const swrKey = pageId ? `/api/pages/${pageId}/breadcrumbs` : null;
+  const { data, error, mutate, isValidating } = useSWR<BreadcrumbItem[]>(
+    swrKey,
     fetcher,
     {
-      // Only pause revalidation after initial load - never block the first fetch
-      isPaused: () => hasLoadedRef.current && isEditingActive(),
-      onSuccess: () => {
-        hasLoadedRef.current = true;
-      },
+      revalidateOnFocus: false,
       errorRetryCount: 3,
       errorRetryInterval: 2000,
     }
   );
+  const { cache } = useSWRConfig();
+
+  // Self-healing: detect when SWR gets stuck (valid key, no data, no error, not fetching).
+  // Same fix as usePageTree — clears SWR cache and re-triggers fetch.
+  const stuckRetryCount = useRef(0);
+
+  useEffect(() => {
+    stuckRetryCount.current = 0;
+  }, [swrKey]);
+
+  useEffect(() => {
+    if (!swrKey || data || error || isValidating) return;
+    if (stuckRetryCount.current >= 2) return;
+
+    const timeoutId = setTimeout(() => {
+      stuckRetryCount.current += 1;
+      console.log(`[useBreadcrumbs] SWR appears stuck — auto-retrying (${stuckRetryCount.current}/2)`);
+      cache.delete(swrKey);
+      mutate();
+    }, 3000);
+
+    return () => clearTimeout(timeoutId);
+  }, [swrKey, data, error, isValidating, cache, mutate]);
 
   return {
     breadcrumbs: data,

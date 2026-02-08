@@ -22,6 +22,7 @@ import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
 import { useDeviceTier } from "@/hooks/useDeviceTier";
 import { cn } from "@/lib/utils";
 import { useTabSync } from "@/hooks/useTabSync";
+import { useEditingStore } from "@/stores/useEditingStore";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import {
@@ -82,6 +83,12 @@ function Layout({ children }: LayoutProps) {
 
   // Keep tab store in sync for both CenterPanel routes and full-page dashboard routes.
   useTabSync();
+
+  // Clear stale editing sessions on app initialization (defense-in-depth for Capacitor/Electron
+  // where the app may have been killed while editing was active and Zustand cached state)
+  useEffect(() => {
+    useEditingStore.getState().clearAllSessions();
+  }, []);
 
   useEffect(() => {
     if (!isSheetBreakpoint) {
