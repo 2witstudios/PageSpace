@@ -31,23 +31,26 @@ export async function POST(request: Request) {
     }
 
     // Try to revoke the Google token and unregister webhooks (best effort)
-    try {
-      const accessToken = await decrypt(connection.accessToken);
+    // Skip if tokens are already cleared from a prior disconnect
+    if (connection.accessToken !== 'REVOKED') {
+      try {
+        const accessToken = await decrypt(connection.accessToken);
 
-      // Unregister webhook channels before revoking token
-      await unregisterWebhookChannels(userId, accessToken).catch(() => {});
+        // Unregister webhook channels before revoking token
+        await unregisterWebhookChannels(userId, accessToken).catch(() => {});
 
-      await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
-      loggers.auth.info('Google Calendar token revoked', { userId });
-    } catch (error) {
-      // Log but don't fail - token might already be expired/revoked
-      loggers.auth.warn('Failed to revoke Google token (continuing with disconnect)', {
-        userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+        await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        loggers.auth.info('Google Calendar token revoked', { userId });
+      } catch (error) {
+        // Log but don't fail - token might already be expired/revoked
+        loggers.auth.warn('Failed to revoke Google token (continuing with disconnect)', {
+          userId,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
 
     // Update connection status to disconnected
