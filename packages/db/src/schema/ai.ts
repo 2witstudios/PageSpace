@@ -23,3 +23,22 @@ export const userAiSettingsRelations = relations(userAiSettings, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+export const aiProviderConsents = pgTable('ai_provider_consents', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').notNull(),
+  consentedAt: timestamp('consentedAt', { mode: 'date' }).defaultNow().notNull(),
+  revokedAt: timestamp('revokedAt', { mode: 'date' }),
+}, (table) => {
+  return {
+    userProviderConsentUnique: unique('user_provider_consent_unique').on(table.userId, table.provider),
+  }
+});
+
+export const aiProviderConsentsRelations = relations(aiProviderConsents, ({ one }) => ({
+  user: one(users, {
+    fields: [aiProviderConsents.userId],
+    references: [users.id],
+  }),
+}));

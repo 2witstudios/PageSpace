@@ -77,6 +77,8 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { parseConsentError } from '@/lib/ai/shared/error-messages';
+import { CloudProviderConsentDialog } from '@/components/ai/consent/CloudProviderConsentDialog';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -134,6 +136,7 @@ const GlobalAssistantView: React.FC = () => {
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+  const [consentProvider, setConsentProvider] = useState<string | null>(null);
 
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
@@ -276,6 +279,11 @@ const GlobalAssistantView: React.FC = () => {
       transport: agentTransport,
       experimental_throttle: 100,
       onError: (error: Error) => {
+        const provider = parseConsentError(error.message);
+        if (provider) {
+          setConsentProvider(provider);
+          return;
+        }
         console.error('Agent Chat error:', error);
       },
     };
@@ -315,6 +323,15 @@ const GlobalAssistantView: React.FC = () => {
   const isStreaming = status === 'submitted' || status === 'streaming';
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
+
+  // Detect consent errors from global mode (onError is in GlobalChatContext)
+  useEffect(() => {
+    if (!error) return;
+    const provider = parseConsentError(error.message);
+    if (provider) {
+      setConsentProvider(provider);
+    }
+  }, [error]);
 
   useEffect(() => {
     latestAgentMessagesRef.current = agentMessages;
@@ -651,6 +668,65 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage,
   ]);
 
+  // Handle consent grant — call API, dismiss dialog, retry last message
+  const handleConsentGrant = useCallback(async () => {
+    if (!consentProvider) return;
+    try {
+      await fetchWithAuth('/api/ai/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: consentProvider }),
+      });
+      setConsentProvider(null);
+      setShowError(false);
+      // Retry: extract last user message and resend
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg && currentConversationId) {
+        const textParts = lastUserMsg.parts?.filter((p) => p.type === 'text') || [];
+        const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+        if (text) {
+          const requestBody = selectedAgent
+            ? {
+                chatId: selectedAgent.id,
+                conversationId: currentConversationId,
+                selectedProvider: agentSelectedProvider,
+                selectedModel: agentSelectedModel,
+                isReadOnly,
+                webSearchEnabled,
+                mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+              }
+            : {
+                isReadOnly,
+                webSearchEnabled,
+                showPageTree,
+                locationContext: locationContext || undefined,
+                selectedProvider: currentProvider,
+                selectedModel: currentModel,
+                mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+              };
+          sendMessage({ text }, { body: requestBody });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to grant consent:', err);
+    }
+  }, [
+    consentProvider,
+    messages,
+    currentConversationId,
+    selectedAgent,
+    agentSelectedProvider,
+    agentSelectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    mcpToolSchemas,
+    sendMessage,
+  ]);
+
   // Track last AI response for voice mode TTS
   useEffect(() => {
     if (!isVoiceModeEnabled || isStreaming) return;
@@ -844,6 +920,12 @@ const GlobalAssistantView: React.FC = () => {
             )}
           />
         )}
+      />
+
+      <CloudProviderConsentDialog
+        provider={consentProvider}
+        onConsent={handleConsentGrant}
+        onCancel={() => setConsentProvider(null)}
       />
     </div>
   );

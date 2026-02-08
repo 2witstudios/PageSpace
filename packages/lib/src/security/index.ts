@@ -41,6 +41,7 @@ export {
 // SSRF prevention (URL validation)
 export {
   validateExternalURL,
+  validateLocalProviderURL,
   safeFetch,
   isBlockedIP,
   type URLValidationResult,

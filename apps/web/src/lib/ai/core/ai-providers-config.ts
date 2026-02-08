@@ -437,3 +437,21 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
   // Users shouldn't see the underlying model names (GLM, Claude, GPT, etc.)
   return 'PageSpace AI';
 }
+
+/**
+ * Providers that don't send data to external third parties.
+ * These are either managed by PageSpace or run locally.
+ */
+export const CONSENT_EXEMPT_PROVIDERS = new Set([
+  'pagespace',
+  'ollama',
+  'lmstudio',
+]);
+
+/**
+ * Check if a provider requires user consent before use.
+ * Local and PageSpace-managed providers are exempt.
+ */
+export function requiresConsent(provider: string): boolean {
+  return !CONSENT_EXEMPT_PROVIDERS.has(provider);
+}

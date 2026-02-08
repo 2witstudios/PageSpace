@@ -1,5 +1,5 @@
 {
-  "id": "52d3466a-cf23-468c-93bb-75510b1b559d",
+  "id": "f9525f51-07f4-455c-b6aa-83f4d2733986",
   "prevId": "611c520c-ccaa-4427-b781-faa10c7c7115",
   "version": "7",
   "dialect": "postgresql",
@@ -3758,6 +3758,70 @@
       },
       "uniqueConstraints": {}
     },
+    "public.ai_provider_consents": {
+      "name": "ai_provider_consents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consentedAt": {
+          "name": "consentedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ai_provider_consents_userId_users_id_fk": {
+          "name": "ai_provider_consents_userId_users_id_fk",
+          "tableFrom": "ai_provider_consents",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "user_provider_consent_unique": {
+          "name": "user_provider_consent_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "userId",
+            "provider"
+          ]
+        }
+      }
+    },
     "public.user_ai_settings": {
       "name": "user_ai_settings",
       "schema": "",
@@ -5442,12 +5506,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
         "context_messages": {
           "name": "context_messages",
           "type": "jsonb",
@@ -5618,21 +5676,6 @@
           "columns": [
             {
               "expression": "context_size",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_ai_usage_expires_at": {
-          "name": "idx_ai_usage_expires_at",
-          "columns": [
-            {
-              "expression": "expires_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
