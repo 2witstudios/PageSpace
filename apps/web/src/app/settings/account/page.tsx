@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
+import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
@@ -81,6 +81,10 @@ export default function AccountPage() {
   const [isOwnershipDialogOpen, setIsOwnershipDialogOpen] = useState(false);
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
+
+  // Data export state
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportCooldown, setExportCooldown] = useState<string | null>(null);
 
   // Devices state
   const { devices, refetch: refetchDevices } = useDevices();
@@ -261,6 +265,49 @@ export default function AccountPage() {
       toast.error(error instanceof Error ? error.message : "Failed to send verification email");
     } finally {
       setIsResendingVerification(false);
+    }
+  };
+
+  const handleDataExport = async () => {
+    setIsExporting(true);
+    try {
+      const response = await fetchWithAuth('/api/account/export');
+
+      if (response.status === 429) {
+        const retryAfter = parseInt(response.headers.get('Retry-After') || '0', 10);
+        const hours = Math.floor(retryAfter / 3600);
+        const minutes = Math.ceil((retryAfter % 3600) / 60);
+        const parts: string[] = [];
+        if (hours > 0) parts.push(`${hours} hour${hours !== 1 ? 's' : ''}`);
+        if (minutes > 0) parts.push(`${minutes} minute${minutes !== 1 ? 's' : ''}`);
+        const timeStr = parts.join(' and ') || 'a few moments';
+        setExportCooldown(timeStr);
+        toast.error('Export limit reached. Please try again later.');
+        return;
+      }
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to export data');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pagespace-data-export-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setExportCooldown(null);
+      toast.success('Your data export has been downloaded.');
+    } catch (error) {
+      console.error('Data export error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to export data');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -643,6 +690,43 @@ export default function AccountPage() {
             <span className="text-muted-foreground">Account ID:</span>
             <span className="font-mono text-xs">{user.id}</span>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Data & Privacy */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Data & Privacy</CardTitle>
+          <CardDescription>Download a copy of all your data stored in PageSpace</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Export a ZIP archive containing your profile information, drives, pages, messages, files, AI conversations, connections, and activity logs.
+          </p>
+          {exportCooldown && (
+            <Alert>
+              <Clock className="h-4 w-4" />
+              <AlertDescription>
+                You can request another export in {exportCooldown}.
+              </AlertDescription>
+            </Alert>
+          )}
+          <Button
+            onClick={handleDataExport}
+            disabled={isExporting}
+          >
+            {isExporting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Preparing Export...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-4 w-4" />
+                Download My Data
+              </>
+            )}
+          </Button>
         </CardContent>
       </Card>
 

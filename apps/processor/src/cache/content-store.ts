@@ -510,6 +510,56 @@ export class ContentStore {
     }
   }
 
+  async deleteOriginal(contentHash: string): Promise<boolean> {
+    let normalizedHash: string;
+    try {
+      normalizedHash = this.normalizeContentHash(contentHash);
+    } catch (error) {
+      if (error instanceof InvalidContentHashError) {
+        return false;
+      }
+      throw error;
+    }
+
+    const dir = this.getOriginalDir(normalizedHash);
+    assertPathWithin(dir, this.storagePath);
+    try {
+      await fs.rm(dir, { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async deleteCache(contentHash: string): Promise<boolean> {
+    let normalizedHash: string;
+    try {
+      normalizedHash = this.normalizeContentHash(contentHash);
+    } catch (error) {
+      if (error instanceof InvalidContentHashError) {
+        return false;
+      }
+      throw error;
+    }
+
+    const dir = this.getCacheDir(normalizedHash);
+    assertPathWithin(dir, this.cachePath);
+    try {
+      await fs.rm(dir, { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async deleteOriginalAndCache(contentHash: string): Promise<{ originalDeleted: boolean; cacheDeleted: boolean }> {
+    const [originalDeleted, cacheDeleted] = await Promise.all([
+      this.deleteOriginal(contentHash),
+      this.deleteCache(contentHash),
+    ]);
+    return { originalDeleted, cacheDeleted };
+  }
+
   async cleanupOldCache(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
     let deletedCount = 0;
     const now = Date.now();
