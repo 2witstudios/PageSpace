@@ -2,11 +2,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import {
   canUserEditPage,
+  canUserViewPage,
   loggers,
   getActorInfo,
-  pageRepository,
 } from '@pagespace/lib/server';
-import { db, channelMessages, pages, driveMembers, eq, sql } from '@pagespace/db';
+import { db, channelMessages, channelReadStatus, pages, driveMembers, eq, and } from '@pagespace/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { type ToolExecutionContext } from '../core';
@@ -63,8 +63,14 @@ export const channelTools = {
       }
 
       try {
-        // Verify the channel exists
-        const channel = await pageRepository.findById(channelId);
+        // Verify the channel exists and load drive relations for broadcast
+        const channel = await db.query.pages.findFirst({
+          where: and(eq(pages.id, channelId), eq(pages.isTrashed, false)),
+          columns: { id: true, title: true, type: true, driveId: true },
+          with: {
+            drive: { columns: { ownerId: true } },
+          },
+        });
         if (!channel) {
           throw new Error(`Channel with ID "${channelId}" not found`);
         }
@@ -104,12 +110,13 @@ export const channelTools = {
           .returning();
 
         // Update sender's read status
-        await db.execute(sql`
-          INSERT INTO channel_read_status ("userId", "channelId", "lastReadAt")
-          VALUES (${userId}, ${channelId}, NOW())
-          ON CONFLICT ("userId", "channelId")
-          DO UPDATE SET "lastReadAt" = NOW()
-        `);
+        await db
+          .insert(channelReadStatus)
+          .values({ userId, channelId, lastReadAt: new Date() })
+          .onConflictDoUpdate({
+            target: [channelReadStatus.userId, channelReadStatus.channelId],
+            set: { lastReadAt: new Date() },
+          });
 
         // Fetch the complete message with user info for broadcasting
         const newMessage = await db.query.channelMessages.findFirst({
@@ -152,21 +159,13 @@ export const channelTools = {
 
         // Broadcast inbox updates to channel members
         try {
-          const channelPage = await db.query.pages.findFirst({
-            where: eq(pages.id, channelId),
-            columns: { driveId: true, title: true },
-            with: {
-              drive: { columns: { ownerId: true } },
-            },
-          });
-
-          if (channelPage?.driveId) {
+          if (channel.driveId) {
             const members = await db.query.driveMembers.findMany({
-              where: eq(driveMembers.driveId, channelPage.driveId),
+              where: eq(driveMembers.driveId, channel.driveId),
               columns: { userId: true },
             });
 
-            const driveOwnerId = channelPage.drive?.ownerId;
+            const driveOwnerId = channel.drive?.ownerId;
             const memberUserIds = new Set(members.map(m => m.userId));
             if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
               members.push({ userId: driveOwnerId });
@@ -181,7 +180,7 @@ export const channelTools = {
                 .filter(m => m.userId !== userId)
                 .map(async member => ({
                   userId: member.userId,
-                  canView: await canUserEditPage(member.userId, channelId),
+                  canView: await canUserViewPage(member.userId, channelId),
                 }))
             );
 
@@ -192,7 +191,7 @@ export const channelTools = {
                   operation: 'channel_updated',
                   type: 'channel',
                   id: channelId,
-                  driveId: channelPage.driveId,
+                  driveId: channel.driveId,
                   lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
                   lastMessagePreview: messagePreview,
                   lastMessageSender: senderIdentity.senderName,

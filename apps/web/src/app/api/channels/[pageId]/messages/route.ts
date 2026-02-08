@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, db, eq, asc, files, pages, driveMembers, sql } from '@pagespace/db';
+import { channelMessages, channelReadStatus, db, eq, asc, files, pages, driveMembers } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -111,12 +111,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }).returning();
 
   // Update sender's read status - sending a message means they've read the channel
-  await db.execute(sql`
-    INSERT INTO channel_read_status ("userId", "channelId", "lastReadAt")
-    VALUES (${userId}, ${pageId}, NOW())
-    ON CONFLICT ("userId", "channelId")
-    DO UPDATE SET "lastReadAt" = NOW()
-  `);
+  await db
+    .insert(channelReadStatus)
+    .values({ userId, channelId: pageId, lastReadAt: new Date() })
+    .onConflictDoUpdate({
+      target: [channelReadStatus.userId, channelReadStatus.channelId],
+      set: { lastReadAt: new Date() },
+    });
 
   const newMessage = await db.query.channelMessages.findFirst({
       where: eq(channelMessages.id, createdMessage.id),

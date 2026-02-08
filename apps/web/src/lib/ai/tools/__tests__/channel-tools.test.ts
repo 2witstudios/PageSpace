@@ -13,22 +13,25 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       channelMessages: { findFirst: vi.fn() },
+      pages: { findFirst: vi.fn() },
     },
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
+        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
       }),
     }),
-    execute: vi.fn().mockResolvedValue(undefined),
   },
   channelMessages: {},
-  pages: {},
+  channelReadStatus: { userId: 'userId', channelId: 'channelId' },
+  pages: { id: 'id', isTrashed: 'isTrashed' },
   eq: vi.fn(),
-  sql: vi.fn(),
+  and: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
+  canUserViewPage: vi.fn(),
   getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
@@ -42,9 +45,6 @@ vi.mock('@pagespace/lib/server', () => ({
         debug: vi.fn(),
       })),
     },
-  },
-  pageRepository: {
-    findById: vi.fn(),
   },
 }));
 
@@ -68,12 +68,14 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { channelTools } from '../channel-tools';
-import { canUserEditPage, pageRepository, getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage, getActorInfo } from '@pagespace/lib/server';
+import { db } from '@pagespace/db';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
-const mockPageRepo = vi.mocked(pageRepository);
 const mockGetActorInfo = vi.mocked(getActorInfo);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockPagesFindFirst = db.query.pages.findFirst as any;
 
 // Helper to safely extract result from tool execution (handles AsyncIterable union)
 type ToolResult = Record<string, unknown>;
@@ -106,7 +108,7 @@ describe('channel-tools', () => {
     });
 
     it('throws error when channel not found', async () => {
-      mockPageRepo.findById.mockResolvedValue(null);
+      mockPagesFindFirst.mockResolvedValue(null);
 
       const context = {
         toolCallId: '1', messages: [],
@@ -120,11 +122,11 @@ describe('channel-tools', () => {
         )
       ).rejects.toThrow('Channel with ID "non-existent" not found');
 
-      expect(mockPageRepo.findById).toHaveBeenCalledWith('non-existent');
+      expect(mockPagesFindFirst).toHaveBeenCalled();
     });
 
     it('returns error when page is not a CHANNEL type', async () => {
-      mockPageRepo.findById.mockResolvedValue({
+      mockPagesFindFirst.mockResolvedValue({
         id: 'page-1',
         title: 'A Document',
         type: 'DOCUMENT',
@@ -153,7 +155,7 @@ describe('channel-tools', () => {
     });
 
     it('throws error when user lacks edit permission', async () => {
-      mockPageRepo.findById.mockResolvedValue({
+      mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
         title: 'General',
         type: 'CHANNEL',
@@ -182,7 +184,7 @@ describe('channel-tools', () => {
     });
 
     it('sends message as global assistant with user name', async () => {
-      mockPageRepo.findById.mockResolvedValue({
+      mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
         title: 'General',
         type: 'CHANNEL',
@@ -220,7 +222,7 @@ describe('channel-tools', () => {
     });
 
     it('sends message as page agent with agent title', async () => {
-      mockPageRepo.findById.mockResolvedValue({
+      mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
         title: 'General',
         type: 'CHANNEL',
@@ -258,7 +260,7 @@ describe('channel-tools', () => {
     });
 
     it('defaults to global_assistant when chatSource is not provided', async () => {
-      mockPageRepo.findById.mockResolvedValue({
+      mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
         title: 'General',
         type: 'CHANNEL',
