@@ -893,6 +893,26 @@ describe('persist partialize behavior', () => {
     }
   });
 
+  it('given user with email set, email should NOT be included in persisted state', () => {
+    useAuthStore.setState({
+      user: {
+        id: 'user-123',
+        name: 'Test User',
+        email: 'test@example.com',
+        image: null,
+        emailVerified: null,
+      },
+    });
+
+    const stored = mockLocalStorage.getItem('auth-storage');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      expect(parsed.state.user.email).toBeUndefined();
+      expect(parsed.state.user.id).toBe('user-123');
+      expect(parsed.state.user.name).toBe('Test User');
+    }
+  });
+
   it('given authAttemptTimestamps populated, should NOT be included in persisted state', () => {
     const timestamps = [Date.now(), Date.now() - 1000];
     useAuthStore.setState({ authAttemptTimestamps: timestamps });

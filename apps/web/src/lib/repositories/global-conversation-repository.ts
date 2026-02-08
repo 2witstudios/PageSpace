@@ -3,7 +3,7 @@
  * Isolates database operations from route handlers for testability.
  */
 
-import { db, conversations, messages, aiUsageLogs, eq, and, desc, sql } from '@pagespace/db';
+import { db, conversations, messages, aiUsageLogs, eq, and, desc, sql, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
 // Types
@@ -430,5 +430,50 @@ export const globalConversationRepository = {
       .from(aiUsageLogs)
       .where(eq(aiUsageLogs.conversationId, conversationId))
       .orderBy(desc(aiUsageLogs.timestamp));
+  },
+
+  /**
+   * Permanently delete a message from the database
+   */
+  async hardDeleteMessage(messageId: string): Promise<void> {
+    await db
+      .delete(messages)
+      .where(eq(messages.id, messageId));
+  },
+
+  /**
+   * Purge soft-deleted messages older than the cutoff date.
+   * Returns the number of rows removed.
+   */
+  async purgeInactiveMessages(olderThan: Date): Promise<number> {
+    const result = await db
+      .delete(messages)
+      .where(
+        and(
+          eq(messages.isActive, false),
+          lt(messages.createdAt, olderThan)
+        )
+      )
+      .returning({ id: messages.id });
+
+    return result.length;
+  },
+
+  /**
+   * Purge soft-deleted conversations older than the cutoff date.
+   * Returns the number of rows removed.
+   */
+  async purgeInactiveConversations(olderThan: Date): Promise<number> {
+    const result = await db
+      .delete(conversations)
+      .where(
+        and(
+          eq(conversations.isActive, false),
+          lt(conversations.updatedAt, olderThan)
+        )
+      )
+      .returning({ id: conversations.id });
+
+    return result.length;
   },
 };

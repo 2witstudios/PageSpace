@@ -75,6 +75,7 @@ vi.mock('@pagespace/lib/auth', () => ({
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
     }),
   },
+  BCRYPT_COST: 12,
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({

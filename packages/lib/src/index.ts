@@ -78,12 +78,16 @@ export * from './auth/oauth-types';
 export * from './logging/logger';
 export * from './logging/logger-config';
 export * from './logging/logger-database';
+export * from './logging/ai-usage-purge';
 
 // Monitoring and tracking utilities (server-only)
 export * from './monitoring/ai-monitoring';
 export * from './monitoring/activity-tracker';
 export * from './monitoring/activity-logger';
 export * from './monitoring/hash-chain-verifier';
+
+// Audit utilities (server-only)
+export * from './audit/security-audit-chain-verifier';
 
 // Repository seams (server-only)
 export * from './repositories';

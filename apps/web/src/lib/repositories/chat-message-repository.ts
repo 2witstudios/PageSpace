@@ -4,7 +4,7 @@
  * enabling proper unit testing of routes without ORM chain mocking.
  */
 
-import { db, chatMessages, eq, and } from '@pagespace/db';
+import { db, chatMessages, eq, and, lt } from '@pagespace/db';
 
 // Types for repository operations
 export interface ChatMessage {
@@ -108,6 +108,33 @@ export const chatMessageRepository = {
       .update(chatMessages)
       .set({ isActive: false })
       .where(eq(chatMessages.id, messageId));
+  },
+
+  /**
+   * Permanently delete a message from the database
+   */
+  async hardDeleteMessage(messageId: string): Promise<void> {
+    await db
+      .delete(chatMessages)
+      .where(eq(chatMessages.id, messageId));
+  },
+
+  /**
+   * Purge soft-deleted messages older than the cutoff date.
+   * Returns the number of rows removed.
+   */
+  async purgeInactiveMessages(olderThan: Date): Promise<number> {
+    const result = await db
+      .delete(chatMessages)
+      .where(
+        and(
+          eq(chatMessages.isActive, false),
+          lt(chatMessages.createdAt, olderThan)
+        )
+      )
+      .returning({ id: chatMessages.id });
+
+    return result.length;
   },
 };
 
