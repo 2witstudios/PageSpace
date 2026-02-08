@@ -39,6 +39,7 @@ export interface AiUndoPreview {
     resourceTitle: string | null;
     pageId?: string | null;
     driveId?: string | null;
+    metadata?: Record<string, unknown> | null;
     preview: ActivityActionPreview;
   }[];
   warnings: string[];
@@ -315,6 +316,7 @@ export async function previewAiUndo(
         resourceTitle: activity.resourceTitle,
         pageId: activity.pageId,
         driveId: activity.driveId,
+        metadata: activity.metadata as Record<string, unknown> | null,
         preview,
       });
 

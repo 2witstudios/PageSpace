@@ -36,4 +36,11 @@ export interface ToolExecutionContext {
   agentChain?: string[];            // Full chain: [rootAgentId, ...intermediates, currentAgentId]
   requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
   agentCallDepth?: number;          // Depth of agent call chain (0 = direct user request)
+
+  // Chat source identification - determines sender identity for channel messages
+  chatSource?: {
+    type: 'global' | 'page';
+    agentPageId?: string;   // For page agents: the AI_CHAT page ID
+    agentTitle?: string;    // For page agents: the agent display name
+  };
 }

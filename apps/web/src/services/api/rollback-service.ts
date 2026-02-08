@@ -5,7 +5,7 @@
  * Allows users to restore resources to previous states based on activity logs.
  */
 
-import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db';
+import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, channelMessages, eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db';
 import type { ActivityAction, ActivityActionPreview, ActivityActionResult, ActivityChangeSummary } from '@/types/activity-actions';
 import {
   canUserRollback,
@@ -1444,8 +1444,9 @@ async function previewActivityAction(
   } else if (activity.resourceType === 'message') {
     const metadata = activity.metadata as Record<string, unknown> | null;
     const conversationType = metadata?.conversationType as string | undefined;
-    const isGlobal = !activity.pageId || conversationType === 'global';
-    const table = isGlobal ? messages : chatMessages;
+    const isChannel = conversationType === 'channel';
+    const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
+    const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
 
     const currentMessage = await db
       .select()
@@ -2421,10 +2422,12 @@ async function rollbackMessageChange(
   const metadata = activity.metadata as Record<string, unknown> | null;
   const conversationType = metadata?.conversationType as string | undefined;
 
-  // Determine which table to update based on pageId or conversationType
-  // If pageId exists, it's a page chat. If not, it's likely a global chat.
-  const isGlobal = !activity.pageId || conversationType === 'global';
-  const table = isGlobal ? messages : chatMessages;
+  // Determine which table to update based on conversationType
+  // Channel messages use the channelMessages table; global uses messages; page uses chatMessages
+  const isChannel = conversationType === 'channel';
+  const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
+  const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
+  const tableLabel = isChannel ? 'channel' : isGlobal ? 'global' : 'page';
 
   switch (activity.operation) {
     case 'create': {
@@ -2434,7 +2437,7 @@ async function rollbackMessageChange(
         .set({ isActive: false })
         .where(eq(table.id, messageId));
 
-      loggers.api.info(`[RollbackService] Deactivated message that was created (${isGlobal ? 'global' : 'page'})`, {
+      loggers.api.info(`[RollbackService] Deactivated message that was created (${tableLabel})`, {
         messageId,
         pageId: activity.pageId,
       });
@@ -2449,15 +2452,24 @@ async function rollbackMessageChange(
         throw new Error('No previous content found for message rollback');
       }
 
-      await database
-        .update(table)
-        .set({
-          content: previousContent,
-          editedAt: null,
-        })
-        .where(eq(table.id, messageId));
+      if (isChannel) {
+        // channelMessages doesn't have editedAt - just restore content
+        await database
+          .update(channelMessages)
+          .set({ content: previousContent })
+          .where(eq(channelMessages.id, messageId));
+      } else {
+        const msgTable = isGlobal ? messages : chatMessages;
+        await database
+          .update(msgTable)
+          .set({
+            content: previousContent,
+            editedAt: null,
+          })
+          .where(eq(msgTable.id, messageId));
+      }
 
-      loggers.api.info(`[RollbackService] Restored previous message content (${isGlobal ? 'global' : 'page'})`, {
+      loggers.api.info(`[RollbackService] Restored previous message content (${tableLabel})`, {
         messageId,
         pageId: activity.pageId,
       });
@@ -2472,7 +2484,7 @@ async function rollbackMessageChange(
         .set({ isActive: true })
         .where(eq(table.id, messageId));
 
-      loggers.api.info(`[RollbackService] Restored deleted message (${isGlobal ? 'global' : 'page'})`, {
+      loggers.api.info(`[RollbackService] Restored deleted message (${tableLabel})`, {
         messageId,
         pageId: activity.pageId,
       });
@@ -2976,8 +2988,9 @@ async function redoMessageChange(
 ): Promise<Record<string, unknown>> {
   const metadata = activity.metadata as Record<string, unknown> | null;
   const conversationType = metadata?.conversationType as string | undefined;
-  const isGlobal = !activity.pageId || conversationType === 'global';
-  const table = isGlobal ? messages : chatMessages;
+  const isChannel = conversationType === 'channel';
+  const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
+  const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
 
   const updateData: Record<string, unknown> = {};
 
@@ -2988,7 +3001,9 @@ async function redoMessageChange(
         throw new Error('No message content to apply');
       }
       updateData.content = content;
-      updateData.editedAt = new Date();
+      if (!isChannel) {
+        updateData.editedAt = new Date();
+      }
       break;
     }
 

@@ -18,6 +18,7 @@ import {
   kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { db } from '@pagespace/db';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -189,6 +190,32 @@ export async function POST(
           name: activity.resourceTitle ?? undefined,
         })
       );
+    } else if (activity.resourceType === 'message' && activity.pageId) {
+      const activityMeta = activity.metadata as Record<string, unknown> | null;
+      if (activityMeta?.conversationType === 'channel' && process.env.INTERNAL_REALTIME_URL) {
+        // Rolling back a create → the message was deactivated, notify deletion
+        // Rolling back an update or delete → content changed, clients should refetch
+        const event = activity.operation === 'create' ? 'message_deleted' : 'channel_refresh';
+        const payload = activity.operation === 'create'
+          ? { messageId: activity.resourceId }
+          : { channelId: activity.pageId };
+        try {
+          const requestBody = JSON.stringify({
+            channelId: activity.pageId,
+            event,
+            payload,
+          });
+          await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+            method: 'POST',
+            headers: createSignedBroadcastHeaders(requestBody),
+            body: requestBody,
+          });
+        } catch (error) {
+          loggers.api.error('[Rollback:Route] Failed to broadcast channel update', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     loggers.api.debug('[Rollback:Route] Broadcast sent', {
       resourceType: activity.resourceType,

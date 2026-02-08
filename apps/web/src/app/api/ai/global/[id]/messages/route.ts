@@ -806,7 +806,8 @@ MENTION PROCESSING:
             aiModel: currentModel,
             conversationId,
             locationContext,
-            modelCapabilities: getModelCapabilities(currentModel, currentProvider)
+            modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
+            chatSource: { type: 'global' as const },
           },
           maxRetries: 20,
           onAbort: () => {

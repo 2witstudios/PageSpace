@@ -1080,7 +1080,7 @@ export function logFileActivity(
  */
 export function logMessageActivity(
   userId: string,
-  operation: 'message_update' | 'message_delete',
+  operation: 'create' | 'message_update' | 'message_delete',
   message: {
     id: string;
     pageId: string;
@@ -1095,6 +1095,7 @@ export function logMessageActivity(
     aiProvider?: string;
     aiModel?: string;
     aiConversationId?: string;
+    metadata?: Record<string, unknown>;
   }
 ): void {
   logActivity({
@@ -1113,6 +1114,7 @@ export function logMessageActivity(
     aiModel: options?.aiModel,
     aiConversationId: options?.aiConversationId,
     metadata: {
+      ...options?.metadata,
       conversationType: message.conversationType,
     },
   }).catch(() => {

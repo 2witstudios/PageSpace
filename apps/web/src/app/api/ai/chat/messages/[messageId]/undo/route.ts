@@ -7,6 +7,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -193,9 +194,10 @@ export async function POST(
       );
     }
 
-    // Broadcast real-time updates for affected pages
+    // Broadcast real-time updates for affected pages and channels
     if (mode === 'messages_and_changes') {
       const broadcastedPages = new Set<string>();
+      const broadcastedChannels = new Set<string>();
       for (const activity of preview.activitiesAffected) {
         if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
           // Deduplicate broadcasts for same page
@@ -212,10 +214,35 @@ export async function POST(
               })
             );
           }
+        } else if (activity.resourceType === 'message' && activity.pageId) {
+          const activityMeta = activity.metadata as Record<string, unknown> | null;
+          if (activityMeta?.conversationType === 'channel' && !broadcastedChannels.has(activity.pageId)) {
+            broadcastedChannels.add(activity.pageId);
+            // Broadcast channel update so clients refresh the message list
+            if (process.env.INTERNAL_REALTIME_URL) {
+              try {
+                const requestBody = JSON.stringify({
+                  channelId: activity.pageId,
+                  event: 'message_deleted',
+                  payload: { messageId: activity.resourceId },
+                });
+                await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+                  method: 'POST',
+                  headers: createSignedBroadcastHeaders(requestBody),
+                  body: requestBody,
+                });
+              } catch (error) {
+                loggers.api.error('[AiUndo:Route] Failed to broadcast channel update', {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+          }
         }
       }
       loggers.api.debug('[AiUndo:Route] Broadcasts sent', {
         pageCount: broadcastedPages.size,
+        channelCount: broadcastedChannels.size,
       });
     }
 
