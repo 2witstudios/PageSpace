@@ -467,8 +467,8 @@ export async function executeAiUndo(
               activityId: activity.id,
               reason: activityPreview.reason,
             });
-            if (!force || !activityPreview.requiresForce) {
-              // Non-rollbackable items abort the entire transaction
+            const canForceOverride = force && activityPreview.requiresForce;
+            if (!canForceOverride) {
               throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activityPreview.reason}`);
             }
           }

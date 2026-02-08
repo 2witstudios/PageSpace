@@ -539,6 +539,94 @@ describe('ai-undo-service', () => {
       expect(result.errors[0]).toContain('Cannot undo create on New Thing');
     });
 
+    it('proceeds when force=true and requiresForce=true', async () => {
+      const mockMessage = createMockMessage();
+      const mockActivities = [
+        createMockActivity({ id: 'act_1', operation: 'update' }),
+      ];
+
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1 || selectCallCount === 3) {
+              return [{ id: 'msg_1' }];
+            }
+            return {
+              orderBy: vi.fn().mockResolvedValue(mockActivities),
+            };
+          }),
+        }),
+      }));
+
+      mockPreviewRollback.mockResolvedValue(
+        createMockPreview({ canExecute: false, requiresForce: true, hasConflict: true, reason: 'Resource modified' })
+      );
+      mockExecuteRollback.mockResolvedValue({ success: true });
+
+      mockDb.transaction.mockImplementation(async (callback) => {
+        const tx = {
+          update: vi.fn().mockReturnValue({
+            set: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue(undefined),
+            }),
+          }),
+        };
+        await callback(tx);
+      });
+
+      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes', undefined, { force: true });
+
+      expect(result.success).toBe(true);
+      expect(result.activitiesRolledBack).toBe(1);
+    });
+
+    it('throws when force=true but requiresForce=false', async () => {
+      const mockMessage = createMockMessage();
+      const mockActivities = [
+        createMockActivity({ id: 'act_1', operation: 'create', resourceTitle: 'New Item' }),
+      ];
+
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1 || selectCallCount === 3) {
+              return [{ id: 'msg_1' }];
+            }
+            return {
+              orderBy: vi.fn().mockResolvedValue(mockActivities),
+            };
+          }),
+        }),
+      }));
+
+      mockPreviewRollback.mockResolvedValue(
+        createMockPreview({ canExecute: false, requiresForce: false, reason: "Cannot rollback 'create'" })
+      );
+
+      mockDb.transaction.mockImplementation(async (callback) => {
+        try {
+          await callback({});
+        } catch (e) {
+          throw e;
+        }
+      });
+
+      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_and_changes', undefined, { force: true });
+
+      expect(result.success).toBe(false);
+      expect(result.errors[0]).toContain('Cannot undo create on New Item');
+    });
+
     it('logs conversation undo with rolled back activity IDs', async () => {
       const mockMessage = createMockMessage();
       const mockActivities = [createMockActivity({ id: 'act_1' })];
