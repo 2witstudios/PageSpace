@@ -29,10 +29,7 @@ class AuthFetch {
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
   private sessionCache: { token: string | null; timestamp: number } | null = null;
-  // Desktop session cache TTL reduced from 30s to 5s to minimize staleness risk
-  // This is critical for desktop where token rotation after refresh was causing
-  // stale token usage when the cache held old tokens
-  private readonly SESSION_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
+  private sessionFetchPromise: Promise<string | null> | null = null;
   private readonly SESSION_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
   private authClearedCleanup: (() => void) | null = null;
   private initialized = false;
@@ -438,7 +435,7 @@ class AuthFetch {
     // This prevents the race condition where:
     // 1. doRefresh() completes and stores new session
     // 2. Original request retries with getSessionFromElectron()
-    // 3. Cache still contains OLD session token (5s TTL)
+    // 3. Cache still contains OLD session token
     // 4. Retry uses stale token → 401 → infinite loop
     // By clearing cache here, retry will read fresh session from storage
     this.clearSessionCache();
@@ -948,36 +945,50 @@ class AuthFetch {
   }
 
   /**
-   * Gets session token from Electron with caching to avoid excessive IPC calls.
-   * Cache is valid for 5 seconds to balance performance and freshness.
+   * Gets session token from Electron with permanent caching.
+   * Cache is invalidated explicitly via clearSessionCache() (called on logout,
+   * token refresh, suspend/resume, auth:cleared IPC). No TTL - identical to
+   * how cookies work on web (present until explicitly removed).
+   * Concurrent IPC calls are deduplicated via sessionFetchPromise.
    * @returns Session token string or null if not authenticated
    */
   private async getSessionFromElectron(): Promise<string | null> {
-    const now = Date.now();
-
-    // Return cached token if still valid
-    if (this.sessionCache && (now - this.sessionCache.timestamp) < this.SESSION_CACHE_TTL) {
+    // Return cached token if available (no TTL - invalidated explicitly)
+    if (this.sessionCache) {
       return this.sessionCache.token;
     }
 
-    if (!window.electron) return null;
+    const electron = window.electron;
+    if (!electron) return null;
 
-    // Fetch fresh token from Electron
-    let token = await window.electron.auth.getSessionToken();
-
-    // DEFENSIVE FIX: If null, retry once after brief delay
-    // This handles async timing issues where storage hasn't completed yet
-    if (!token) {
-      await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
-      token = await window.electron.auth.getSessionToken();
-
-      if (token) {
-        this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
-      }
+    // Deduplicate concurrent IPC calls (e.g., multiple SWR hooks firing at once)
+    if (this.sessionFetchPromise) {
+      return this.sessionFetchPromise;
     }
 
-    this.sessionCache = { token, timestamp: now };
-    return token;
+    this.sessionFetchPromise = (async () => {
+      try {
+        let token = await electron.auth.getSessionToken();
+
+        // DEFENSIVE FIX: If null, retry once after brief delay
+        // This handles async timing issues where storage hasn't completed yet
+        if (!token) {
+          await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
+          token = await electron.auth.getSessionToken();
+
+          if (token) {
+            this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
+          }
+        }
+
+        this.sessionCache = { token, timestamp: Date.now() };
+        return token;
+      } finally {
+        this.sessionFetchPromise = null;
+      }
+    })();
+
+    return this.sessionFetchPromise;
   }
 
   /**

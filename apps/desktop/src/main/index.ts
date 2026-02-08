@@ -34,6 +34,19 @@ let suspendTime: number | null = null; // Track when system was suspended
 
 let cachedMachineId: string | null = null;
 
+// In-memory session cache. Preloaded on startup, updated on store/clear.
+// Eliminates Keychain reads from the IPC hot path.
+let cachedSession: StoredAuthSession | null | undefined = undefined;
+
+async function preloadAuthSession(): Promise<void> {
+  try {
+    cachedSession = await loadAuthSession();
+  } catch (error) {
+    logger.error('[Auth] Failed to preload session', { error });
+    cachedSession = null;
+  }
+}
+
 function getMachineIdentifier(): string {
   if (cachedMachineId) {
     return cachedMachineId;
@@ -560,30 +573,34 @@ ipcMain.handle('window:is-maximized', () => {
 
 // Auth IPC handlers
 /**
- * Retrieves the current session token from secure storage.
+ * Retrieves the current session token from in-memory cache (preloaded on startup).
+ * Falls back to Keychain only if cache is uninitialized (undefined).
  * @returns Session token string (ps_sess_*) or null if not authenticated
  */
 ipcMain.handle('auth:get-session-token', async () => {
-  const storedSession = await loadAuthSession();
-  return storedSession?.sessionToken ?? null;
+  if (cachedSession === undefined) cachedSession = await loadAuthSession();
+  return cachedSession?.sessionToken ?? null;
 });
 
 ipcMain.handle('auth:get-session', async () => {
-  return loadAuthSession();
+  if (cachedSession === undefined) cachedSession = await loadAuthSession();
+  return cachedSession ?? null;
 });
 
 ipcMain.handle('auth:store-session', async (_event, sessionData: StoredAuthSession) => {
   await saveAuthSession(sessionData);
+  cachedSession = sessionData;
   return { success: true };
 });
 
 /**
- * Clears authentication data from secure storage and cookies.
+ * Clears authentication data from secure storage, memory cache, and cookies.
  * Called during logout to ensure clean state.
  */
 ipcMain.handle('auth:clear-auth', async () => {
   try {
     await clearAuthSession();
+    cachedSession = null;
     await session.defaultSession.clearStorageData({
       storages: ['cookies'],
     });
@@ -775,6 +792,10 @@ function setupPowerMonitor(): void {
 
     isSuspended = false;
 
+    // Invalidate main process session cache and proactively reload from Keychain
+    cachedSession = undefined;
+    preloadAuthSession();
+
     // Notify renderer to resume auth and force token refresh
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('power:resume', {
@@ -829,6 +850,9 @@ function setupPowerMonitor(): void {
 
 // App lifecycle
 app.whenReady().then(async () => {
+  // Preload auth session into memory so IPC handlers return instantly
+  await preloadAuthSession();
+
   // Initialize MCP manager
   try {
     const mcpManager = getMCPManager();
@@ -1004,11 +1028,13 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     }
 
     // Store tokens securely in OS keychain (validated above)
-    await saveAuthSession({
+    const sessionData = {
       sessionToken: tokens.sessionToken,
       csrfToken: tokens.csrfToken,
       deviceToken: tokens.deviceToken,
-    });
+    };
+    await saveAuthSession(sessionData);
+    cachedSession = sessionData;
 
     // Propagate the session cookie into the BrowserWindow's cookie jar.
     // The exchange endpoint returns Set-Cookie, but main-process fetch doesn't
