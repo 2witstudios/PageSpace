@@ -25,8 +25,8 @@ export async function POST(req: Request) {
     }
 
     // Check password length
-    if (newPassword.length < 8) {
-      return Response.json({ error: 'Password must be at least 8 characters long' }, { status: 400 });
+    if (newPassword.length < 12) {
+      return Response.json({ error: 'Password must be at least 12 characters long' }, { status: 400 });
     }
 
     // Get user with password

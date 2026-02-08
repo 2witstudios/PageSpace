@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
+import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions';
 
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
     const action = searchParams.get('action') || 'list';
 
     if (action === 'test-db') {
-      // Test basic database connectivity (no data exposed)
+      // Intentionally no page-level auth — only tests DB connectivity, exposes no page data
       loggers.api.debug('🔗 Debug: Testing database connectivity...', {});
 
       try {
@@ -101,7 +102,7 @@ export async function GET(request: Request) {
         role: msg.role,
         contentLength: msg.content?.length || 0,
         createdAt: msg.createdAt,
-        content: msg.content?.substring(0, 100) + (msg.content?.length > 100 ? '...' : '')
+        content: (msg.content ?? '').substring(0, 100) + ((msg.content ?? '').length > 100 ? '...' : '')
       }))
     });
 
@@ -147,13 +148,13 @@ export async function POST(request: Request) {
     // Create test messages if none provided
     const messagesToSave = testMessages || [
       {
-        id: 'test-user-' + Date.now(),
+        id: createId(),
         role: 'user',
         parts: [{ type: 'text', text: 'Test user message from debug endpoint' }],
         createdAt: new Date()
       },
       {
-        id: 'test-assistant-' + Date.now(),
+        id: createId(),
         role: 'assistant',
         parts: [{ type: 'text', text: 'Test assistant response from debug endpoint' }],
         createdAt: new Date()
@@ -166,7 +167,7 @@ export async function POST(request: Request) {
     const messageRecords = messagesToSave.map((msg: TestMessage) => ({
       id: msg.id,
       pageId,
-      userId: 'debug-user',
+      userId: auth.userId,
       role: msg.role,
       content: msg.parts?.find(p => p.type === 'text')?.text || '',
       toolCalls: null,

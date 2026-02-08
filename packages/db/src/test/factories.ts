@@ -10,6 +10,7 @@ export const factories = {
       id: createId(),
       name: faker.person.fullName(),
       email: faker.internet.email(),
+      // Must match BCRYPT_COST (12) from @pagespace/lib/auth/constants — can't import due to circular dep (db ← lib)
       password: await bcrypt.hash('password123', 12),
       emailVerified: new Date(),
       provider: 'email' as const,
