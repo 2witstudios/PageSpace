@@ -155,3 +155,7 @@ playground.xcworkspace
 .auto-claude/
 .auto-claude-status
 .claude_settings.json
+
+# Git worktrees
+.worktrees/
+.codename-grove/
