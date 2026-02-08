@@ -821,7 +821,7 @@ export async function POST(request: Request) {
                 } : undefined,
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
-              modelCapabilities: getModelCapabilities(currentModel, currentProvider),
+              modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
               chatSource: {
                 type: 'page' as const,
                 agentPageId: chatId,

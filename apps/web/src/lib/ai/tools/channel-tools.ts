@@ -139,7 +139,7 @@ export const channelTools = {
         });
 
         // Broadcast to real-time channel
-        if (process.env.INTERNAL_REALTIME_URL) {
+        if (process.env.INTERNAL_REALTIME_URL && newMessage) {
           try {
             const requestBody = JSON.stringify({
               channelId,
