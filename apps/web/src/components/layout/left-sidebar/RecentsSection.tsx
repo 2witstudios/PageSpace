@@ -21,6 +21,7 @@ import {
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useCapacitor } from "@/hooks/useCapacitor";
+import { useIsTablet } from "@/hooks/useDeviceTier";
 import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
@@ -56,8 +57,9 @@ export default function RecentsSection() {
   const recentsCollapsed = useLayoutStore((state) => state.recentsCollapsed);
   const setRecentsCollapsed = useLayoutStore((state) => state.setRecentsCollapsed);
   const createTab = useTabsStore((state) => state.createTab);
-  const { isNative, isIPad } = useCapacitor();
-  const hideTabActions = isNative && !isIPad;
+  const { isNative } = useCapacitor();
+  const isTablet = useIsTablet();
+  const hideTabActions = isNative && !isTablet;
 
   const { data, isLoading, error } = useSWR<{ recents: RecentPage[] }>(
     "/api/user/recents?limit=8",

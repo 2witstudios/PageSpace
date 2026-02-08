@@ -26,6 +26,7 @@ import {
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useCapacitor } from "@/hooks/useCapacitor";
+import { useIsTablet } from "@/hooks/useDeviceTier";
 import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { cn } from "@/lib/utils";
@@ -41,8 +42,9 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const createTab = useTabsStore((state) => state.createTab);
-  const { isNative, isIPad } = useCapacitor();
-  const hideTabActions = isNative && !isIPad;
+  const { isNative } = useCapacitor();
+  const isTablet = useIsTablet();
+  const hideTabActions = isNative && !isTablet;
 
   const { driveId: driveIdParams } = params;
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;

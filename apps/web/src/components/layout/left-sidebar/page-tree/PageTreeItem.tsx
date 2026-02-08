@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useCapacitor } from "@/hooks/useCapacitor";
+import { useIsTablet } from "@/hooks/useDeviceTier";
 import { TreePage } from "@/hooks/usePageTree";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
@@ -110,8 +111,9 @@ export function PageTreeItem({
   const { addFavorite, removeFavorite, isFavorite } = useFavorites();
   const createTab = useTabsStore((state) => state.createTab);
   const isTouchDevice = useTouchDevice();
-  const { isNative, isIPad } = useCapacitor();
-  const hideTabActions = isNative && !isIPad;
+  const { isNative } = useCapacitor();
+  const isTablet = useIsTablet();
+  const hideTabActions = isNative && !isTablet;
   const hasChildren = item.children && item.children.length > 0;
   const driveId = params.driveId as string;
 

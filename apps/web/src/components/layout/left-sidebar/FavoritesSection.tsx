@@ -23,6 +23,7 @@ import { useFavorites } from "@/hooks/useFavorites";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useCapacitor } from "@/hooks/useCapacitor";
+import { useIsTablet } from "@/hooks/useDeviceTier";
 import { cn } from "@/lib/utils";
 import type { PageType } from "@pagespace/lib/client-safe";
 import { toast } from "sonner";
@@ -35,8 +36,9 @@ export default function FavoritesSection() {
   const favoritesCollapsed = useLayoutStore((state) => state.favoritesCollapsed);
   const setFavoritesCollapsed = useLayoutStore((state) => state.setFavoritesCollapsed);
   const createTab = useTabsStore((state) => state.createTab);
-  const { isNative, isIPad } = useCapacitor();
-  const hideTabActions = isNative && !isIPad;
+  const { isNative } = useCapacitor();
+  const isTablet = useIsTablet();
+  const hideTabActions = isNative && !isTablet;
 
   useEffect(() => {
     if (!isSynced) {
