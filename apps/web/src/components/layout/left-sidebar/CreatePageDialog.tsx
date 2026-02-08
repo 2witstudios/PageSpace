@@ -182,6 +182,7 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
                   <SelectItem value="CANVAS">Canvas</SelectItem>
                   <SelectItem value="SHEET">Sheet</SelectItem>
                   <SelectItem value="TASK_LIST">Task List</SelectItem>
+                  <SelectItem value="CODE">Code</SelectItem>
                   <SelectItem value="FILE">File Upload</SelectItem>
                 </SelectContent>
               </Select>
