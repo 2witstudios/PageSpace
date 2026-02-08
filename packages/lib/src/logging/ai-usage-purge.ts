@@ -5,7 +5,7 @@
  * and user-scoped deletion for account removal.
  */
 
-import { db, aiUsageLogs, lt, eq } from '@pagespace/db';
+import { db, aiUsageLogs, lt, eq, and, or, isNotNull } from '@pagespace/db';
 
 /**
  * Anonymize prompt/completion text for logs older than the cutoff date.
@@ -15,7 +15,12 @@ export async function anonymizeAiUsageContent(olderThan: Date): Promise<number> 
   const result = await db
     .update(aiUsageLogs)
     .set({ prompt: null, completion: null })
-    .where(lt(aiUsageLogs.timestamp, olderThan))
+    .where(
+      and(
+        lt(aiUsageLogs.timestamp, olderThan),
+        or(isNotNull(aiUsageLogs.prompt), isNotNull(aiUsageLogs.completion))
+      )
+    )
     .returning({ id: aiUsageLogs.id });
 
   return result.length;

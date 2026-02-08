@@ -28,6 +28,9 @@ vi.mock('@pagespace/db', () => ({
   },
   lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
+  and: vi.fn((...conditions) => ({ type: 'and', conditions })),
+  or: vi.fn((...conditions) => ({ type: 'or', conditions })),
+  isNotNull: vi.fn((field) => ({ type: 'isNotNull', field })),
 }));
 
 import {
