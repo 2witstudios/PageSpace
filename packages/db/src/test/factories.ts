@@ -10,7 +10,7 @@ export const factories = {
       id: createId(),
       name: faker.person.fullName(),
       email: faker.internet.email(),
-      password: await bcrypt.hash('password123', 10),
+      password: await bcrypt.hash('password123', 12),
       emailVerified: new Date(),
       provider: 'email' as const,
       tokenVersion: 0,
