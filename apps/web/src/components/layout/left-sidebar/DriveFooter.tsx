@@ -41,7 +41,8 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const createTab = useTabsStore((state) => state.createTab);
-  const { isNative } = useCapacitor();
+  const { isNative, isIPad } = useCapacitor();
+  const hideTabActions = isNative && !isIPad;
 
   const { driveId: driveIdParams } = params;
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
@@ -118,7 +119,7 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
               <Link
                 href={action.href}
                 onClick={(e) => handleLinkClick(e, action.href)}
-                onAuxClick={isNative ? undefined : (e) => {
+                onAuxClick={hideTabActions ? undefined : (e) => {
                   if (e.button === 1) {
                     e.preventDefault();
                     handleOpenInNewTab(action.href);
@@ -135,8 +136,8 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
               </Link>
             );
 
-            // On native apps, don't show the context menu with "Open in new tab"
-            if (isNative) {
+            // On native phone apps, don't show the context menu with "Open in new tab"
+            if (hideTabActions) {
               return <div key={action.label}>{linkElement}</div>;
             }
 

@@ -35,7 +35,8 @@ export default function FavoritesSection() {
   const favoritesCollapsed = useLayoutStore((state) => state.favoritesCollapsed);
   const setFavoritesCollapsed = useLayoutStore((state) => state.setFavoritesCollapsed);
   const createTab = useTabsStore((state) => state.createTab);
-  const { isNative } = useCapacitor();
+  const { isNative, isIPad } = useCapacitor();
+  const hideTabActions = isNative && !isIPad;
 
   useEffect(() => {
     if (!isSynced) {
@@ -115,7 +116,7 @@ export default function FavoritesSection() {
                   onNavigate={(e) => handleNavigate(href, favorite.itemType, e)}
                   onOpenInNewTab={() => handleOpenInNewTab(href)}
                   onRemove={() => handleRemoveFavorite(favorite.id)}
-                  isNative={isNative}
+                  hideTabActions={hideTabActions}
                 />
               );
             })}
@@ -145,10 +146,10 @@ interface FavoriteItemProps {
   onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
   onOpenInNewTab: () => void;
   onRemove: () => void;
-  isNative: boolean;
+  hideTabActions: boolean;
 }
 
-function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative }: FavoriteItemProps) {
+function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, hideTabActions }: FavoriteItemProps) {
   const [isHovered, setIsHovered] = useState(false);
 
   const title =
@@ -167,7 +168,7 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative
     >
       <button
         onClick={onNavigate}
-        onAuxClick={isNative ? undefined : (e) => {
+        onAuxClick={hideTabActions ? undefined : (e) => {
           if (e.button === 1) {
             e.preventDefault();
             onOpenInNewTab();
@@ -212,7 +213,7 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, isNative
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
-          {!isNative && (
+          {!hideTabActions && (
             <DropdownMenuItem onSelect={onOpenInNewTab}>
               <ExternalLink className="mr-2 h-4 w-4" />
               Open in new tab

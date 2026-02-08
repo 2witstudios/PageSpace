@@ -56,7 +56,8 @@ export default function RecentsSection() {
   const recentsCollapsed = useLayoutStore((state) => state.recentsCollapsed);
   const setRecentsCollapsed = useLayoutStore((state) => state.setRecentsCollapsed);
   const createTab = useTabsStore((state) => state.createTab);
-  const { isNative } = useCapacitor();
+  const { isNative, isIPad } = useCapacitor();
+  const hideTabActions = isNative && !isIPad;
 
   const { data, isLoading, error } = useSWR<{ recents: RecentPage[] }>(
     "/api/user/recents?limit=8",
@@ -129,7 +130,7 @@ export default function RecentsSection() {
                 page={page}
                 onNavigate={(e) => handleNavigate(page, e)}
                 onOpenInNewTab={() => handleOpenInNewTab(page)}
-                isNative={isNative}
+                hideTabActions={hideTabActions}
               />
             ))}
           </div>
@@ -143,14 +144,14 @@ interface RecentItemProps {
   page: RecentPage;
   onNavigate: (e: MouseEvent<HTMLButtonElement>) => void;
   onOpenInNewTab: () => void;
-  isNative: boolean;
+  hideTabActions: boolean;
 }
 
-function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemProps) {
+function RecentItem({ page, onNavigate, onOpenInNewTab, hideTabActions }: RecentItemProps) {
   const content = (
     <button
       onClick={onNavigate}
-      onAuxClick={isNative ? undefined : (e) => {
+      onAuxClick={hideTabActions ? undefined : (e) => {
         if (e.button === 1) {
           e.preventDefault();
           onOpenInNewTab();
@@ -173,8 +174,8 @@ function RecentItem({ page, onNavigate, onOpenInNewTab, isNative }: RecentItemPr
     </button>
   );
 
-  // On native apps, don't show the context menu with "Open in new tab"
-  if (isNative) {
+  // On native phone apps, don't show the context menu with "Open in new tab"
+  if (hideTabActions) {
     return content;
   }
 
