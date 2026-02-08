@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     if (!result.success) {
       return NextResponse.json(
         {
-          error: result.error || 'Sync failed',
+          error: result.error || 'Sync could not be completed. Please try again later.',
           eventsCreated: result.eventsCreated,
           eventsUpdated: result.eventsUpdated,
           eventsDeleted: result.eventsDeleted,

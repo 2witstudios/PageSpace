@@ -121,13 +121,14 @@ export const syncGoogleCalendar = async (
       await cleanupLegacyData(userId, connection.googleEmail);
     }
 
-    // Resolve 'primary' alias to actual email to prevent duplicates
+    // Resolve 'primary' alias to actual email for storage keys (deduplication)
     const rawCalendars = connection.selectedCalendars || ['primary'];
     const resolvedCalendars = rawCalendars.map(id =>
       id === 'primary' ? (connection.googleEmail || 'primary') : id
     );
     const calendarsToSync = [...new Set(resolvedCalendars)];
     const accessToken = tokenResult.accessToken;
+    const googleEmail = connection.googleEmail;
 
     // Determine time range for sync
     const now = new Date();
@@ -142,9 +143,14 @@ export const syncGoogleCalendar = async (
       // Use per-calendar sync token for incremental sync if available and not forcing full sync
       const calendarSyncToken = !options.fullSync ? syncCursors[calendarId] : undefined;
 
+      // Use 'primary' alias for Google API calls when the calendar matches the user's email.
+      // Some Google Workspace configurations return 404 when using the email as a calendar ID.
+      const apiCalendarId = (googleEmail && calendarId === googleEmail) ? 'primary' : calendarId;
+
       const calendarResult = await syncCalendar(
         userId,
         accessToken,
+        apiCalendarId,
         calendarId,
         connection.targetDriveId,
         calendarSyncToken,
@@ -183,7 +189,7 @@ export const syncGoogleCalendar = async (
     });
 
     // Register/renew webhook push notification channels (non-blocking best effort)
-    registerWebhookChannels(userId, accessToken, calendarsToSync).catch((err) => {
+    registerWebhookChannels(userId, accessToken, calendarsToSync, googleEmail).catch((err) => {
       loggers.api.warn('Failed to register webhook channels after sync', {
         userId,
         error: err instanceof Error ? err.message : 'Unknown error',
@@ -192,19 +198,23 @@ export const syncGoogleCalendar = async (
 
     return result;
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const rawMessage = error instanceof Error ? error.message : 'Unknown error';
     const requiresReauth = error instanceof Error && (error as Error & { requiresReauth?: boolean }).requiresReauth === true;
-    result.error = errorMessage;
+    // Store a user-friendly error message, not raw API details
+    const userMessage = requiresReauth
+      ? 'Calendar permissions may have been revoked — please reconnect'
+      : 'Sync could not be completed — please try again later';
+    result.error = userMessage;
 
-    loggers.api.error('Google Calendar sync failed', error as Error, { userId });
+    loggers.api.error('Google Calendar sync failed', error as Error, { userId, rawMessage });
 
     if (requiresReauth) {
       // Permission or auth error — mark connection so UI can prompt reconnection
-      await updateConnectionStatus(userId, 'error', 'Calendar permissions may have been revoked - please reconnect');
+      await updateConnectionStatus(userId, 'error', userMessage);
       await db
         .update(googleCalendarConnections)
         .set({
-          lastSyncError: errorMessage,
+          lastSyncError: userMessage,
           updatedAt: new Date(),
         })
         .where(eq(googleCalendarConnections.userId, userId));
@@ -213,7 +223,7 @@ export const syncGoogleCalendar = async (
       await db
         .update(googleCalendarConnections)
         .set({
-          lastSyncError: errorMessage,
+          lastSyncError: userMessage,
           updatedAt: new Date(),
         })
         .where(eq(googleCalendarConnections.userId, userId));
@@ -306,11 +316,15 @@ const cleanupLegacyData = async (userId: string, googleEmail: string | null): Pr
 
 /**
  * Sync a single calendar's events.
+ *
+ * @param apiCalendarId - Calendar ID for Google API calls (e.g., 'primary')
+ * @param storageCalendarId - Calendar ID for database storage (e.g., user's email)
  */
 const syncCalendar = async (
   userId: string,
   accessToken: string,
-  calendarId: string,
+  apiCalendarId: string,
+  storageCalendarId: string,
   targetDriveId: string | null,
   syncToken: string | undefined | null,
   timeMin: Date,
@@ -328,8 +342,8 @@ const syncCalendar = async (
     syncCursor: undefined as string | undefined,
   };
 
-  // Fetch events from Google
-  const listResult = await listEvents(accessToken, calendarId, {
+  // Fetch events from Google using the API calendar ID
+  const listResult = await listEvents(accessToken, apiCalendarId, {
     syncToken: syncToken ?? undefined,
     timeMin: syncToken ? undefined : timeMin, // Don't use time range with sync token
     timeMax: syncToken ? undefined : timeMax,
@@ -338,16 +352,26 @@ const syncCalendar = async (
   if (!listResult.success) {
     // If sync token is invalid, fall back to full sync (only if we were using a sync token)
     if (listResult.statusCode === 410 && syncToken) {
-      loggers.api.info('Sync token expired, performing full sync', { userId, calendarId: maskIdentifier(calendarId) });
+      loggers.api.info('Sync token expired, performing full sync', { userId, calendarId: maskIdentifier(storageCalendarId) });
       return syncCalendar(
         userId,
         accessToken,
-        calendarId,
+        apiCalendarId,
+        storageCalendarId,
         targetDriveId,
         undefined, // No sync token - this guarantees no further 410 fallback
         timeMin,
         timeMax
       );
+    }
+
+    // Calendar not found — skip gracefully instead of failing the entire sync
+    if (listResult.statusCode === 404) {
+      loggers.api.warn('Calendar not found, skipping', {
+        userId,
+        calendarId: maskIdentifier(storageCalendarId),
+      });
+      return result;
     }
 
     // Propagate permission/auth errors so the caller can update connection status
@@ -364,6 +388,7 @@ const syncCalendar = async (
   result.syncCursor = nextSyncToken;
 
   // Process each event — isolate failures so one bad event doesn't abort the sync
+  // Use storageCalendarId for database operations (deduplication, lookups)
   for (const googleEvent of events) {
     if (!shouldSyncEvent(googleEvent)) {
       continue;
@@ -373,7 +398,7 @@ const syncCalendar = async (
       const eventResult = await upsertEvent(
         userId,
         googleEvent,
-        calendarId,
+        storageCalendarId,
         targetDriveId
       );
 
@@ -383,7 +408,7 @@ const syncCalendar = async (
     } catch (err) {
       loggers.api.warn('Failed to sync individual calendar event, skipping', {
         userId,
-        calendarId,
+        calendarId: storageCalendarId,
         googleEventId: googleEvent.id,
         error: err instanceof Error ? err.message : 'Unknown error',
       });
@@ -605,7 +630,8 @@ const upsertEvent = async (
 export const registerWebhookChannels = async (
   userId: string,
   accessToken: string,
-  calendarsToSync: string[]
+  calendarsToSync: string[],
+  googleEmail?: string | null
 ): Promise<void> => {
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL;
   if (!baseUrl) {
@@ -648,9 +674,11 @@ export const registerWebhookChannels = async (
     }
 
     // Create new watch channel with HMAC token for authentication
+    // Use 'primary' alias for the user's primary calendar (same as sync)
+    const apiCalendarId = (googleEmail && calendarId === googleEmail) ? 'primary' : calendarId;
     const channelId = createId();
     const webhookToken = generateWebhookToken(userId);
-    const result = await watchCalendar(accessToken, calendarId, webhookUrl, channelId, 7 * 24 * 3600, webhookToken);
+    const result = await watchCalendar(accessToken, apiCalendarId, webhookUrl, channelId, 7 * 24 * 3600, webhookToken);
 
     if (result.success) {
       updatedChannels[calendarId] = {
