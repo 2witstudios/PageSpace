@@ -7,30 +7,12 @@
  * - /admin/global-prompt/GlobalPromptClient.tsx
  */
 
-export interface JsonSchemaProperty {
-  type: string;
-  description?: string;
-  enum?: string[];
-  items?: JsonSchemaProperty;
-  properties?: Record<string, JsonSchemaProperty>;
-  required?: string[];
-  default?: unknown;
-  optional?: boolean;
-}
+// Re-export shared schema types from canonical locations
+export type { JsonSchemaProperty, JsonSchema, ToolSchemaInfo } from '../core/schema-introspection';
+export type { ToolDefinition } from '../core/complete-request-builder';
 
-export interface JsonSchema {
-  type: string;
-  properties: Record<string, JsonSchemaProperty>;
-  required: string[];
-  description?: string;
-}
-
-export interface ToolSchemaInfo {
-  name: string;
-  description: string;
-  parameters: JsonSchema;
-  tokenEstimate: number;
-}
+import type { ToolSchemaInfo } from '../core/schema-introspection';
+import type { ToolDefinition } from '../core/complete-request-builder';
 
 export interface PromptSection {
   name: string;
@@ -38,12 +20,6 @@ export interface PromptSection {
   source: string;
   lines?: string;
   tokens: number;
-}
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  parameters: JsonSchema;
 }
 
 export interface CompleteAIRequest {

@@ -44,11 +44,8 @@ export function getAttachmentSize(m: MessageWithAttachment): number | null {
   return m.attachmentMeta?.size ?? m.file?.sizeBytes ?? null;
 }
 
-export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+/** @deprecated Use formatBytes from @/lib/utils instead */
+export { formatBytes as formatFileSize } from '@/lib/utils';
 
 export function hasAttachment(m: MessageWithAttachment): boolean {
   return !!(m.attachmentMeta || m.file) && getFileId(m) !== null;

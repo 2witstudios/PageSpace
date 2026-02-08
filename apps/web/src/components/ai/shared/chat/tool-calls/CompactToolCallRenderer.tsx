@@ -29,46 +29,16 @@ import { SearchResultsRenderer, type SearchResult } from './SearchResultsRendere
 import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
 import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
+import {
+  type ToolPart,
+  safeJsonParse,
+  formatToolName,
+  countPages,
+  flattenActivityGroups,
+} from './toolCallUtils';
 
-interface ToolPart {
-  type: string;
-  toolName?: string;
-  toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
-  input?: unknown;
-  output?: unknown;
-  errorText?: string;
-}
-
-interface CompactToolCallRendererProps {
-  part: ToolPart;
-}
-
-// Helper function to count pages in tree structure (moved outside component)
-const countPages = (items: TreeItem[]): number => {
-  return items.reduce((count, item) => {
-    return count + 1 + (item.children ? countPages(item.children) : 0);
-  }, 0);
-};
-
-// Helper for safe JSON parsing
-const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof value === 'object' && value !== null) {
-    return value as Record<string, unknown>;
-  }
-  return null;
-};
-
-// Tool name mapping (moved outside component to avoid recreation)
-const TOOL_NAME_MAP: Record<string, string> = {
-  'ask_agent': 'Ask Agent',
+// Compact-specific short name overrides for the condensed view
+const COMPACT_TOOL_NAMES: Record<string, string> = {
   'list_drives': 'List Drives',
   'list_pages': 'List Pages',
   'read_page': 'Read',
@@ -78,8 +48,12 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'trash': 'Trash',
   'restore': 'Restore',
   'move_page': 'Move',
-  'list_trash': 'List Trash'
+  'list_trash': 'List Trash',
 };
+
+interface CompactToolCallRendererProps {
+  part: ToolPart;
+}
 
 // Internal renderer component with hooks
 const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function CompactToolCallRendererInternal({ part, toolName }) {
@@ -144,12 +118,9 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     }
   }, [state, error]);
 
-  // Memoize formatted tool name
+  // Memoize formatted tool name (compact-specific short names take priority)
   const formattedToolName = useMemo(() => {
-    return TOOL_NAME_MAP[toolName] || toolName
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    return COMPACT_TOOL_NAMES[toolName] || formatToolName(toolName);
   }, [toolName]);
 
   // Memoize descriptive title
@@ -575,43 +546,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
           }>;
         }>;
 
-        const opToAction = (op: string): 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'renamed' => {
-          switch (op) {
-            case 'create': return 'created';
-            case 'update': return 'updated';
-            case 'delete': case 'trash': return 'deleted';
-            case 'restore': return 'restored';
-            case 'move': case 'reorder': return 'moved';
-            case 'rename': return 'renamed';
-            default: return 'updated';
-          }
-        };
-
-        const flatActivities: ActivityItem[] = [];
-        for (const group of driveGroups) {
-          for (const activity of group.activities) {
-            const actor = actors[activity.actor];
-            flatActivities.push({
-              id: activity.id,
-              action: opToAction(activity.op),
-              pageId: activity.pageId || undefined,
-              pageTitle: activity.title || undefined,
-              pageType: activity.res === 'page' ? undefined : activity.res,
-              driveId: group.drive.id,
-              driveName: group.drive.name,
-              actorName: actor?.name || actor?.email || undefined,
-              timestamp: activity.ts,
-              summary: activity.ai ? `AI-generated (${activity.ai})` : undefined,
-            });
-          }
-        }
-
-        flatActivities.sort((a, b) => {
-          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-          return timeB - timeA;
-        });
-
+        const flatActivities = flattenActivityGroups(driveGroups, actors);
         const meta = result.meta as { window?: string } | undefined;
         const period = meta?.window ? `Last ${meta.window}` : undefined;
 

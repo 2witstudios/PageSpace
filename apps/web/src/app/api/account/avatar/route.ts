@@ -2,32 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
 
+import { PROCESSOR_URL } from '@/lib/processor-config';
+import { createAvatarServiceToken } from '@/lib/auth/avatar-service';
+
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
 // Allowed image types
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-
-// Processor service URL
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
-const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
-
-async function createAvatarServiceToken(
-  userId: string,
-  expirationTime: string
-): Promise<{ token: string }> {
-  // createUserServiceToken validates that the user is accessing their own resources
-  const { token } = await createUserServiceToken(
-    userId,
-    REQUIRED_AVATAR_SCOPES,
-    expirationTime
-  );
-  return { token };
-}
 
 export async function POST(request: NextRequest) {
   try {

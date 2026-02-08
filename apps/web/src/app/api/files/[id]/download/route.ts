@@ -11,7 +11,7 @@ interface RouteParams {
   }>;
 }
 
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+import { PROCESSOR_URL } from '@/lib/processor-config';
 
 /**
  * Fetch a file from the processor and return it as a download

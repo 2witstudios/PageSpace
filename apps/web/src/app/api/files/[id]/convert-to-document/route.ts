@@ -6,6 +6,7 @@ import mammoth from 'mammoth';
 import { createId } from '@paralleldrive/cuid2';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logFileActivity, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { PROCESSOR_URL } from '@/lib/processor-config';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -78,7 +79,6 @@ export async function POST(
     }
 
     // Fetch file from processor service using content hash
-    const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
     const contentHash = filePage.filePath; // filePath stores the content hash
 
     console.log('[Convert] Fetching file from processor:', {

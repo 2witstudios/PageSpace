@@ -16,35 +16,19 @@ import { SearchResultsRenderer, type SearchResult } from './SearchResultsRendere
 import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
 import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
-
-interface ToolPart {
-  type: string;
-  toolName?: string;
-  toolCallId?: string;
-  state?: 'input-streaming' | 'input-available' | 'output-available' | 'output-error' | 'done' | 'streaming';
-  input?: unknown;
-  output?: unknown;
-  errorText?: string;
-}
+import {
+  type ToolPart,
+  safeJsonParse as safeJsonParseBase,
+  formatToolName,
+  flattenActivityGroups,
+} from './toolCallUtils';
 
 interface ToolCallRendererProps {
   part: ToolPart;
 }
 
-// Helper for safe JSON parsing
-const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return { raw: value };
-    }
-  }
-  if (typeof value === 'object' && value !== null) {
-    return value as Record<string, unknown>;
-  }
-  return null;
-};
+// This renderer uses 'raw' fallback for unparseable strings
+const safeJsonParse = (value: unknown) => safeJsonParseBase(value, 'raw');
 
 // Helper to parse list_pages paths format into tree structure
 // Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
@@ -125,44 +109,7 @@ const parsePathsToTree = (paths: string[], _driveId?: string): TreeItem[] => {
   return buildTreeFromParsed(parsedPages, 1, []);
 };
 
-// Tool name mapping
-const TOOL_NAME_MAP: Record<string, string> = {
-  // Drive tools
-  'list_drives': 'Workspaces',
-  'create_drive': 'Create Workspace',
-  'rename_drive': 'Rename Workspace',
-  'update_drive_context': 'Update Context',
-  // Page read tools
-  'list_pages': 'Pages',
-  'read_page': 'Read Page',
-  'list_trash': 'Trash',
-  'list_conversations': 'Conversations',
-  'read_conversation': 'Conversation',
-  // Page write tools
-  'replace_lines': 'Edit Document',
-  'create_page': 'Create Page',
-  'rename_page': 'Rename Page',
-  'trash': 'Move to Trash',
-  'restore': 'Restore',
-  'move_page': 'Move Page',
-  'edit_sheet_cells': 'Edit Sheet',
-  // Search tools
-  'regex_search': 'Search',
-  'glob_search': 'Find Pages',
-  'multi_drive_search': 'Search All',
-  // Task tools
-  'update_task': 'Update Task',
-  'get_assigned_tasks': 'Assigned Tasks',
-  // Agent tools
-  'update_agent_config': 'Configure Agent',
-  'list_agents': 'Agents',
-  'multi_drive_list_agents': 'All Agents',
-  'ask_agent': 'Ask Agent',
-  // Web search
-  'web_search': 'Web Search',
-  // Activity
-  'get_activity': 'Activity',
-};
+// TOOL_NAME_MAP and formatToolName imported from ./toolCallUtils
 
 // Internal renderer component with hooks
 const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function ToolCallRendererInternal({ part, toolName }) {
@@ -193,9 +140,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
   }, [output]);
 
   // Memoize formatted tool name
-  const formattedToolName = useMemo(() => {
-    return TOOL_NAME_MAP[toolName] || toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  }, [toolName]);
+  const formattedToolName = useMemo(() => formatToolName(toolName), [toolName]);
 
   // Memoize descriptive title
   const descriptiveTitle = useMemo(() => {
@@ -575,48 +520,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
           stats: { total: number; byOp: Record<string, number>; aiCount: number };
         }>;
 
-        // Map operation names to action types
-        const opToAction = (op: string): 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'commented' | 'renamed' => {
-          switch (op) {
-            case 'create': return 'created';
-            case 'update': return 'updated';
-            case 'delete':
-            case 'trash': return 'deleted';
-            case 'restore': return 'restored';
-            case 'move':
-            case 'reorder': return 'moved';
-            case 'rename': return 'renamed';
-            default: return 'updated';
-          }
-        };
-
-        // Flatten grouped activities
-        const flatActivities: ActivityItem[] = [];
-        for (const group of driveGroups) {
-          for (const activity of group.activities) {
-            const actor = actors[activity.actor];
-            flatActivities.push({
-              id: activity.id,
-              action: opToAction(activity.op),
-              pageId: activity.pageId || undefined,
-              pageTitle: activity.title || undefined,
-              pageType: activity.res === 'page' ? undefined : activity.res,
-              driveId: group.drive.id,
-              driveName: group.drive.name,
-              actorName: actor?.name || actor?.email || undefined,
-              timestamp: activity.ts,
-              summary: activity.ai ? `AI-generated (${activity.ai})` : undefined,
-            });
-          }
-        }
-
-        // Sort by timestamp descending
-        flatActivities.sort((a, b) => {
-          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-          return timeB - timeA;
-        });
-
+        const flatActivities = flattenActivityGroups(driveGroups, actors);
         const meta = parsedOutput.meta as { window?: string } | undefined;
         const period = meta?.window ? `Last ${meta.window}` : undefined;
 

@@ -3,7 +3,7 @@ import { db, pages, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken, canUserViewPage } from '@pagespace/lib';
 
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+import { PROCESSOR_URL } from '@/lib/processor-config';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 export async function GET(

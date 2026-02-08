@@ -2,8 +2,9 @@ import { users, db, eq } from '@pagespace/db';
 import { createHash } from 'crypto';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { PROCESSOR_URL } from '@/lib/processor-config';
+import { createAvatarServiceToken } from '@/lib/auth/avatar-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -114,9 +115,6 @@ export async function PATCH(req: Request) {
   }
 }
 
-// Processor service URL
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
 /**
  * Create an anonymized identifier for GDPR-compliant audit trail preservation.
  * Uses a deterministic hash so the same user ID always produces the same anonymized ID.
@@ -124,21 +122,6 @@ const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 function createAnonymizedActorEmail(userId: string): string {
   const hash = createHash('sha256').update(userId).digest('hex').slice(0, 12);
   return `deleted_user_${hash}`;
-}
-
-const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
-
-async function createAvatarServiceToken(
-  userId: string,
-  expirationTime: string
-): Promise<{ token: string }> {
-  // createUserServiceToken validates that the user is accessing their own resources
-  const { token } = await createUserServiceToken(
-    userId,
-    REQUIRED_AVATAR_SCOPES,
-    expirationTime
-  );
-  return { token };
 }
 
 export async function DELETE(req: Request) {

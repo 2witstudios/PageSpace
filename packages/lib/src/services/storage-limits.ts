@@ -1,5 +1,6 @@
 import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
 import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
+import { formatBytes } from '../utils/format';
 
 export interface StorageQuota {
   userId: string;
@@ -353,15 +354,7 @@ function getWarningLevel(percent: number): 'none' | 'warning' | 'critical' {
   return 'none';
 }
 
-/**
- * Format bytes to human-readable string
- */
-export function formatBytes(bytes: number): string {
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  if (bytes === 0) return '0 B';
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${Math.round(bytes / Math.pow(1024, i) * 100) / 100} ${sizes[i]}`;
-}
+export { formatBytes } from '../utils/format';
 
 /**
  * Parse human-readable size to bytes

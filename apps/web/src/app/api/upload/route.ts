@@ -30,8 +30,7 @@ interface FileMetadata {
   [key: string]: string | number | boolean | undefined;
 }
 
-// Processor service URL
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+import { PROCESSOR_URL } from '@/lib/processor-config';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

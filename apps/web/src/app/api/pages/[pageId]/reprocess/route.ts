@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, pages, eq } from '@pagespace/db';
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+import { PROCESSOR_URL } from '@/lib/processor-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken } from '@pagespace/lib';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
