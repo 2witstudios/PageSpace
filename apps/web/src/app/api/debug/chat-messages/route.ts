@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -13,6 +14,10 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  */
 
 export async function GET(request: Request) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
   try {
     loggers.api.debug('🔍 Debug: GET /api/debug/chat-messages', {});
 
@@ -24,13 +29,13 @@ export async function GET(request: Request) {
     const action = searchParams.get('action') || 'list';
 
     if (action === 'test-db') {
-      // Test basic database connectivity
+      // Test basic database connectivity (no data exposed)
       loggers.api.debug('🔗 Debug: Testing database connectivity...', {});
-      
+
       try {
         const result = await db.select().from(chatMessages).limit(1);
         loggers.api.debug('✅ Debug: Database connection successful', {});
-        
+
         return NextResponse.json({
           success: true,
           message: 'Database connectivity test passed',
@@ -47,9 +52,13 @@ export async function GET(request: Request) {
     }
 
     if (!pageId) {
-      return NextResponse.json({ 
-        error: 'pageId is required for listing messages' 
+      return NextResponse.json({
+        error: 'pageId is required for listing messages'
       }, { status: 400 });
+    }
+
+    if (!await canUserViewPage(auth.userId, pageId)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     loggers.api.debug('📋 Debug: Listing messages for pageId:', { pageId });
@@ -113,6 +122,10 @@ interface TestMessage {
 }
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
   try {
     loggers.api.debug('🧪 Debug: POST /api/debug/chat-messages - Manual save test', {});
 
@@ -122,9 +135,13 @@ export async function POST(request: Request) {
     const { pageId, testMessages }: { pageId: string; testMessages?: TestMessage[] } = await request.json();
 
     if (!pageId) {
-      return NextResponse.json({ 
-        error: 'pageId is required' 
+      return NextResponse.json({
+        error: 'pageId is required'
       }, { status: 400 });
+    }
+
+    if (!await canUserEditPage(auth.userId, pageId)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     // Create test messages if none provided
