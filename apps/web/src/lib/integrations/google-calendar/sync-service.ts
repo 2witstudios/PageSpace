@@ -7,6 +7,7 @@
 
 import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, isNull, inArray, sql, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { maskIdentifier } from '@/lib/logging/mask';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
@@ -337,7 +338,7 @@ const syncCalendar = async (
   if (!listResult.success) {
     // If sync token is invalid, fall back to full sync (only if we were using a sync token)
     if (listResult.statusCode === 410 && syncToken) {
-      loggers.api.info('Sync token expired, performing full sync', { userId, calendarId });
+      loggers.api.info('Sync token expired, performing full sync', { userId, calendarId: maskIdentifier(calendarId) });
       return syncCalendar(
         userId,
         accessToken,
@@ -627,7 +628,7 @@ export const registerWebhookChannels = async (
   for (const calendarId of calendarsToSync) {
     // Skip special Google calendars (holidays, contacts, etc.) that don't support push
     if (calendarId.includes('#') && calendarId.includes('@group.v.calendar.google.com')) {
-      loggers.api.info('Skipping webhook for special calendar', { userId, calendarId });
+      loggers.api.info('Skipping webhook for special calendar', { userId, calendarId: maskIdentifier(calendarId) });
       continue;
     }
 
@@ -657,11 +658,11 @@ export const registerWebhookChannels = async (
         resourceId: result.data.resourceId,
         expiration: result.data.expiration,
       };
-      loggers.api.info('Google Calendar webhook registered', { userId, calendarId, channelId });
+      loggers.api.info('Google Calendar webhook registered', { userId, calendarId: maskIdentifier(calendarId), channelId });
     } else {
       loggers.api.warn('Failed to register Google Calendar webhook', {
         userId,
-        calendarId,
+        calendarId: maskIdentifier(calendarId),
         error: result.error,
       });
       // Keep old channel if registration failed but it hasn't expired
