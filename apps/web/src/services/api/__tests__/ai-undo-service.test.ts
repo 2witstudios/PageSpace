@@ -687,6 +687,19 @@ describe('ai-undo-service', () => {
       expect(result.messagesDeleted).toBe(1);
     });
 
+    it('returns success without side effects when message already inactive (idempotent)', async () => {
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(
+        createMockMessage({ isActive: false })
+      );
+
+      const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+
+      expect(result.success).toBe(true);
+      expect(result.messagesDeleted).toBe(0);
+      expect(result.activitiesRolledBack).toBe(0);
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+    });
+
     it('handles page without driveId (global assistant)', async () => {
       const mockMessage = createMockMessage();
 

@@ -395,8 +395,12 @@ export async function executeAiUndo(
       };
     }
 
-    // Idempotency check: if message is already inactive, return success
-    // This prevents duplicate rollbacks on network retries or double-clicks
+    /**
+     * Idempotency contract: an inactive message represents an already-achieved
+     * end-state. Returning success with zero counts lets callers (route handlers,
+     * retries, double-click guards) treat repeated calls as no-ops rather than
+     * errors — matching standard HTTP idempotency semantics.
+     */
     if (!message) {
       loggers.api.debug('[AiUndo:Execute] Aborting - message not found');
       return {
