@@ -20,7 +20,7 @@ const LANGUAGES = [
   { value: 'yaml', label: 'YAML' },
 ] as const;
 
-export function LanguageSelector({ node, updateAttributes, extension }: NodeViewProps) {
+export function LanguageSelector({ node, updateAttributes }: NodeViewProps) {
   const currentLanguage = node.attrs.language || '';
 
   const handleChange = useCallback(
