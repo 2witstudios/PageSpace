@@ -16,6 +16,9 @@ function getHighlighter(): Promise<Highlighter> {
     highlighterPromise = createHighlighter({
       themes: ['one-light', 'one-dark-pro'],
       langs: [sudolangGrammar],
+    }).catch((err) => {
+      highlighterPromise = null;
+      throw err;
     });
   }
   return highlighterPromise;
