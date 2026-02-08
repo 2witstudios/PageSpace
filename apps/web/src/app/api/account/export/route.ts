@@ -55,18 +55,19 @@ export async function GET(request: Request) {
     const archive = archiver('zip', { zlib: { level: 6 } });
     const dateStr = new Date().toISOString().split('T')[0];
 
-    // Create a ReadableStream from the archiver
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-
-    archive.on('data', (chunk: Buffer) => {
-      writer.write(chunk);
-    });
-    archive.on('end', () => {
-      writer.close();
-    });
-    archive.on('error', (err: Error) => {
-      writer.abort(err);
+    // Bridge Node Readable → Web ReadableStream
+    const readable = new ReadableStream({
+      start(controller) {
+        archive.on('data', (chunk: Buffer) => {
+          controller.enqueue(new Uint8Array(chunk));
+        });
+        archive.on('end', () => {
+          controller.close();
+        });
+        archive.on('error', (err: Error) => {
+          controller.error(err);
+        });
+      },
     });
 
     // Add JSON files to archive

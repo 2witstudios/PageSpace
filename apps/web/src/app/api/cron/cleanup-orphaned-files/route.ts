@@ -52,10 +52,17 @@ export async function GET(request: Request) {
       // Extract content hash from storagePath (format: /storage/<contentHash>/original or just the hash)
       const contentHash = orphan.storagePath.split('/').filter(Boolean).find(segment =>
         /^[a-f0-9]{64}$/i.test(segment)
-      ) ?? orphan.id;
+      );
+
+      if (!contentHash) {
+        console.warn(`[Cron] Orphan ${orphan.id} has malformed storagePath (no valid content hash): ${orphan.storagePath}`);
+        failedPhysicalDeletes.push(orphan.id);
+        continue;
+      }
 
       try {
         const { token } = await createDriveServiceToken(
+          'system',
           orphan.driveId,
           FILE_DELETE_SCOPES,
           '30s',
@@ -66,6 +73,7 @@ export async function GET(request: Request) {
           headers: {
             'Authorization': `Bearer ${token}`,
           },
+          signal: AbortSignal.timeout(10_000),
         });
 
         if (response.ok) {

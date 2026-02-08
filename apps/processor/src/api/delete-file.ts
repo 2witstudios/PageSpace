@@ -1,8 +1,8 @@
-import { Router } from 'express';
+import { Router, type Router as RouterType } from 'express';
 import { contentStore } from '../server';
 import { isValidContentHash } from '../cache/content-store';
 
-const router = Router();
+const router: RouterType = Router();
 
 /**
  * DELETE /:contentHash
@@ -23,6 +23,15 @@ router.delete('/:contentHash', async (req, res) => {
       `[delete-file] contentHash=${contentHash} originalDeleted=${originalDeleted} cacheDeleted=${cacheDeleted}`
     );
 
+    if (!originalDeleted && !cacheDeleted) {
+      return res.status(404).json({
+        success: false,
+        contentHash,
+        originalDeleted,
+        cacheDeleted,
+      });
+    }
+
     return res.json({
       success: true,
       contentHash,
@@ -37,4 +46,4 @@ router.delete('/:contentHash', async (req, res) => {
   }
 });
 
-export const deleteFileRouter = router;
+export const deleteFileRouter: RouterType = router;
