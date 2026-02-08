@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createHighlighter, type Highlighter } from 'shiki';
+import { createHighlighter, type Highlighter, type BundledLanguage } from 'shiki';
 import { sudolangGrammar } from '../sudolang-grammar';
 
 let highlighter: Highlighter;
@@ -12,7 +12,7 @@ let highlighter: Highlighter;
  */
 function getAllScopes(code: string): string[] {
   const result = highlighter.codeToTokens(code, {
-    lang: 'sudolang',
+    lang: 'sudolang' as BundledLanguage,
     theme: 'one-light',
     includeExplanation: true,
   });
