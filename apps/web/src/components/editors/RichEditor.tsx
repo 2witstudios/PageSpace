@@ -12,6 +12,7 @@ import { TextStyleKit } from '@tiptap/extension-text-style';
 import { TableKit } from '@tiptap/extension-table';
 import { PageMention } from '@/lib/editor/tiptap-mention-config';
 import { PaginationPlus } from '@/lib/editor/pagination';
+import { CodeBlockShiki } from '@/lib/editor/code-block';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 
 interface RichEditorProps {
@@ -44,7 +45,9 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         link: {
           openOnClick: true,
         },
+        codeBlock: false,
       }),
+      CodeBlockShiki,
       Markdown,
       ...(readOnly ? [] : [Placeholder.configure({
         placeholder: 'Start writing...',
