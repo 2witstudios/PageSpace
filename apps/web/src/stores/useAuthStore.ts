@@ -560,7 +560,6 @@ export const useAuthStore = create<AuthState>()(
         user: state.user ? {
           id: state.user.id,
           name: state.user.name,
-          email: state.user.email,
           image: state.user.image,
           emailVerified: state.user.emailVerified,
         } : null,

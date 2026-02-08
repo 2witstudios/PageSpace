@@ -1,6 +1,7 @@
 import { users, deviceTokens, db, eq, and, isNull } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { loggers } from '@pagespace/lib/server';
+import { BCRYPT_COST } from '@pagespace/lib/auth';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -24,8 +25,8 @@ export async function POST(req: Request) {
     }
 
     // Check password length
-    if (newPassword.length < 8) {
-      return Response.json({ error: 'Password must be at least 8 characters long' }, { status: 400 });
+    if (newPassword.length < 12) {
+      return Response.json({ error: 'Password must be at least 12 characters long' }, { status: 400 });
     }
 
     // Get user with password
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
     }
 
     // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_COST);
 
     // Update password and increment token version to invalidate existing sessions
     await db

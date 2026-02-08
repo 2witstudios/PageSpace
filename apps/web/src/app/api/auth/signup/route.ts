@@ -1,7 +1,7 @@
 import { users, userAiSettings, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
-import { sessionService, SESSION_DURATION_MS } from '@pagespace/lib/auth';
+import { sessionService, SESSION_DURATION_MS, BCRYPT_COST } from '@pagespace/lib/auth';
 import { createNotification } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -150,7 +150,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'User with this email already exists' }, { status: 409 });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
 
     const user = await db.insert(users).values({
       id: createId(),
