@@ -21,6 +21,9 @@ export * from './rollback-permissions';
 // Export enforced auth context
 export * from './enforced-context';
 
+// Export file-level access control
+export * from './file-access';
+
 // Export zero-trust permission mutations (NEW - replaces grantPagePermissions/revokePagePermissions)
 export * from './permission-mutations';
 export * from './schemas';

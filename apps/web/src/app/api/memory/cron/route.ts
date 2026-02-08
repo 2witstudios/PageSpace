@@ -14,8 +14,8 @@
  *
  * Paying users only: 'pro', 'founder', 'business' subscription tiers
  *
- * Security: CRON_SECRET Bearer token + internal network origin check
- * Trigger via: curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/memory/cron
+ * Security: HMAC-signed cron requests (via cron-curl) + internal network origin check
+ * Trigger via: cron-curl POST http://web:3000/api/memory/cron
  */
 
 import { NextResponse } from 'next/server';
@@ -31,7 +31,7 @@ import {
   isNull,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   evaluateAndIntegrate,
@@ -46,7 +46,7 @@ const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
   // Validate cron secret + internal network origin
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

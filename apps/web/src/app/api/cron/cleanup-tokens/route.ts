@@ -1,6 +1,6 @@
 import { cleanupExpiredDeviceTokens } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
  * Cron endpoint to cleanup expired device tokens
@@ -11,14 +11,14 @@ import { validateCronRequest } from '@/lib/auth/cron-auth';
  * the database tidy and prevents unbounded growth.
  *
  * Authentication:
- * - Primary: CRON_SECRET Bearer token (timing-safe comparison)
+ * - Primary: HMAC-signed cron requests (via cron-curl)
  * - Defense-in-depth: internal network origin check
  *
  * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/cleanup-tokens
+ * cron-curl GET http://web:3000/api/cron/cleanup-tokens
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

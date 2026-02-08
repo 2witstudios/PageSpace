@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { db, pages, files, eq } from '@pagespace/db';
 import { PageType, canUserViewPage, isFilePage, createPageServiceToken, createDriveServiceToken } from '@pagespace/lib';
-import { isUserDriveMember } from '@pagespace/lib/permissions';
+import { canUserAccessFile } from '@pagespace/lib/permissions';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 
 interface RouteParams {
@@ -118,8 +118,8 @@ export async function GET(
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
-    // Check if user has access to the drive that owns this file (owner or member)
-    const hasAccess = await isUserDriveMember(user.id, file.driveId);
+    // Check file access: page-level for linked files, drive membership for unlinked
+    const hasAccess = await canUserAccessFile(user.id, file.id, file.driveId);
     if (!hasAccess) {
       return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
     }
