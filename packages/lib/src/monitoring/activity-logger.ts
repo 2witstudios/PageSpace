@@ -1114,8 +1114,8 @@ export function logMessageActivity(
     aiModel: options?.aiModel,
     aiConversationId: options?.aiConversationId,
     metadata: {
-      conversationType: message.conversationType,
       ...options?.metadata,
+      conversationType: message.conversationType,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity

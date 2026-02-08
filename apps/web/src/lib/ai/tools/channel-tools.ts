@@ -1,8 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions';
 import {
-  canUserEditPage,
-  canUserViewPage,
   loggers,
   getActorInfo,
   logMessageActivity,

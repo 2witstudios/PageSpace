@@ -29,9 +29,12 @@ vi.mock('@pagespace/db', () => ({
   and: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/server', () => ({
+vi.mock('@pagespace/lib/permissions', () => ({
   canUserEditPage: vi.fn(),
   canUserViewPage: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/server', () => ({
   getActorInfo: vi.fn().mockResolvedValue({
     actorEmail: 'test@example.com',
     actorDisplayName: 'Test User',
@@ -68,7 +71,8 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { channelTools } from '../channel-tools';
-import { canUserEditPage, getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage } from '@pagespace/lib/permissions';
+import { getActorInfo } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import type { ToolExecutionContext } from '../../core';
 

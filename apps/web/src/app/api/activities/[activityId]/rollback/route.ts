@@ -193,11 +193,17 @@ export async function POST(
     } else if (activity.resourceType === 'message' && activity.pageId) {
       const activityMeta = activity.metadata as Record<string, unknown> | null;
       if (activityMeta?.conversationType === 'channel' && process.env.INTERNAL_REALTIME_URL) {
+        // Rolling back a create → the message was deactivated, notify deletion
+        // Rolling back an update or delete → content changed, clients should refetch
+        const event = activity.operation === 'create' ? 'message_deleted' : 'channel_refresh';
+        const payload = activity.operation === 'create'
+          ? { messageId: activity.resourceId }
+          : { channelId: activity.pageId };
         try {
           const requestBody = JSON.stringify({
             channelId: activity.pageId,
-            event: 'message_deleted',
-            payload: { messageId: activity.resourceId },
+            event,
+            payload,
           });
           await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
             method: 'POST',

@@ -1444,8 +1444,9 @@ async function previewActivityAction(
   } else if (activity.resourceType === 'message') {
     const metadata = activity.metadata as Record<string, unknown> | null;
     const conversationType = metadata?.conversationType as string | undefined;
-    const isGlobal = !activity.pageId || conversationType === 'global';
-    const table = isGlobal ? messages : chatMessages;
+    const isChannel = conversationType === 'channel';
+    const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
+    const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
 
     const currentMessage = await db
       .select()
