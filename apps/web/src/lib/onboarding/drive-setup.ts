@@ -384,6 +384,8 @@ Edit this page. Add your own headings, lists, and notes. Documents support rich 
     content: '',
     systemPrompt: PLANNING_ASSISTANT_SYSTEM_PROMPT,
     agentDefinition: 'Helps plan workspace structure, organize projects, and break down ideas into actionable steps.',
+    aiProvider: 'pagespace',
+    aiModel: 'glm-4.5-air',
     enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
     includePageTree: true,
     pageTreeScope: 'drive',
