@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, googleCalendarConnections, eq, and, or, lt, isNull, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
 
 /**
@@ -18,7 +18,7 @@ import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-serv
  * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/calendar-sync
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

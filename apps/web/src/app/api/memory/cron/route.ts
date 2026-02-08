@@ -31,7 +31,7 @@ import {
   isNull,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   evaluateAndIntegrate,
@@ -46,7 +46,7 @@ const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
   // Validate cron secret + internal network origin
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }
