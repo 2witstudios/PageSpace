@@ -108,7 +108,12 @@ export default function GoogleCalendarSettingsPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        if (!silent) toast.error(data.error || "Sync failed");
+        if (!silent) {
+          const message = (data.error && !/^(API error|Error:)/i.test(data.error))
+            ? data.error
+            : "Sync could not be completed. Please try again later.";
+          toast.error(message);
+        }
         return;
       }
 
@@ -389,7 +394,9 @@ export default function GoogleCalendarSettingsPage() {
                   <Alert variant="destructive">
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription>
-                      Last sync failed: {connection.lastSyncError}
+                      {/^(API error|Error:|fetch failed|ECONNREFUSED)/i.test(connection.lastSyncError)
+                        ? "Last sync could not be completed. Please try again later."
+                        : `Last sync failed: ${connection.lastSyncError}`}
                     </AlertDescription>
                   </Alert>
                 )}

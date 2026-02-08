@@ -198,6 +198,14 @@ const makeGoogleApiRequest = async <T>(
         };
       }
 
+      if (response.status === 404) {
+        return {
+          success: false,
+          error: 'Calendar not found',
+          statusCode: 404,
+        };
+      }
+
       return {
         success: false,
         error: `API error: ${response.status}`,
