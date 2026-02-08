@@ -16,7 +16,7 @@
  * which encode internal query order. Consider introducing a chat-message-repository
  * seam to improve testability and refactor-resistance.
  */
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   previewAiUndo,
   executeAiUndo,
@@ -86,6 +86,10 @@ import { db } from '@pagespace/db';
 import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring';
 
+const mockDb = vi.mocked(db);
+const mockPreviewRollback = vi.mocked(previewRollback);
+const mockExecuteRollback = vi.mocked(executeRollback);
+
 // Test fixtures
 const mockUserId = 'user_123';
 const mockMessageId = 'msg_123';
@@ -143,7 +147,7 @@ describe('ai-undo-service', () => {
 
   describe('previewAiUndo', () => {
     it('returns null when message not found', async () => {
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(null);
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(null);
 
       const result = await previewAiUndo('nonexistent', mockUserId);
 
@@ -158,10 +162,10 @@ describe('ai-undo-service', () => {
         { id: 'msg_3' },
       ];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue(mockAffectedMessages),
         }),
@@ -169,7 +173,7 @@ describe('ai-undo-service', () => {
 
       // For activities query (second db.select call)
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -199,11 +203,11 @@ describe('ai-undo-service', () => {
         createMockActivity({ id: 'act_2', operation: 'create' }),
       ];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -218,7 +222,7 @@ describe('ai-undo-service', () => {
       }));
 
       // Mock preview for each activity
-      (previewRollback as Mock)
+      mockPreviewRollback
         .mockResolvedValueOnce(createMockPreview({ canExecute: true }))
         .mockResolvedValueOnce(createMockPreview({ canExecute: false, reason: 'Cannot rollback create' }));
 
@@ -236,11 +240,11 @@ describe('ai-undo-service', () => {
         createMockActivity({ id: 'act_1', operation: 'create', resourceTitle: 'New Page' }),
       ];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -254,7 +258,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue(
+      mockPreviewRollback.mockResolvedValue(
         createMockPreview({
           canExecute: false,
           reason: "Cannot rollback 'create' operations",
@@ -268,7 +272,7 @@ describe('ai-undo-service', () => {
     });
 
     it('returns null on error', async () => {
-      (db.query.chatMessages.findFirst as Mock).mockRejectedValue(new Error('DB error'));
+      mockDb.query.chatMessages.findFirst.mockRejectedValue(new Error('DB error'));
 
       const result = await previewAiUndo(mockMessageId, mockUserId);
 
@@ -282,7 +286,7 @@ describe('ai-undo-service', () => {
 
   describe('executeAiUndo - messages_only mode', () => {
     it('returns failure when message not found', async () => {
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(null);
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(null);
 
       const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
@@ -293,11 +297,11 @@ describe('ai-undo-service', () => {
     it('soft-deletes messages without rolling back activities', async () => {
       const mockMessage = createMockMessage();
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -312,7 +316,7 @@ describe('ai-undo-service', () => {
       }));
 
       // Mock transaction
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -334,10 +338,10 @@ describe('ai-undo-service', () => {
     it('logs conversation undo with correct mode', async () => {
       const mockMessage = createMockMessage();
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue([{ id: 'msg_1' }]),
         }),
@@ -345,7 +349,7 @@ describe('ai-undo-service', () => {
 
       // Override for activities query
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -359,7 +363,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -398,11 +402,11 @@ describe('ai-undo-service', () => {
         createMockActivity({ id: 'act_2' }),
       ];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -416,10 +420,10 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue(createMockPreview({ canExecute: true }));
-      (executeRollback as Mock).mockResolvedValue({ success: true });
+      mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
+      mockExecuteRollback.mockResolvedValue({ success: true });
 
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -444,11 +448,11 @@ describe('ai-undo-service', () => {
         createMockActivity({ id: 'act_2' }),
       ];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -462,13 +466,13 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue(createMockPreview({ canExecute: true }));
-      (executeRollback as Mock)
+      mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
+      mockExecuteRollback
         .mockResolvedValueOnce({ success: true })
         .mockResolvedValueOnce({ success: false, message: 'Rollback failed' });
 
       // Transaction should abort on failure
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -495,11 +499,11 @@ describe('ai-undo-service', () => {
         createMockActivity({ id: 'act_1', operation: 'create', resourceTitle: 'New Thing' }),
       ];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -513,14 +517,14 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue(
+      mockPreviewRollback.mockResolvedValue(
         createMockPreview({
           canExecute: false,
           reason: "Cannot rollback 'create' operations",
         })
       );
 
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {};
         try {
           await callback(tx);
@@ -539,11 +543,11 @@ describe('ai-undo-service', () => {
       const mockMessage = createMockMessage();
       const mockActivities = [createMockActivity({ id: 'act_1' })];
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -557,10 +561,10 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (previewRollback as Mock).mockResolvedValue(createMockPreview({ canExecute: true }));
-      (executeRollback as Mock).mockResolvedValue({ success: true });
+      mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
+      mockExecuteRollback.mockResolvedValue({ success: true });
 
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -593,7 +597,7 @@ describe('ai-undo-service', () => {
 
   describe('error handling', () => {
     it('returns failure on unexpected error', async () => {
-      (db.query.chatMessages.findFirst as Mock).mockRejectedValue(new Error('Unexpected error'));
+      mockDb.query.chatMessages.findFirst.mockRejectedValue(new Error('Unexpected error'));
 
       const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
@@ -604,10 +608,10 @@ describe('ai-undo-service', () => {
     it('handles transaction error gracefully', async () => {
       const mockMessage = createMockMessage();
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             return [{ id: 'msg_1' }];
@@ -617,7 +621,7 @@ describe('ai-undo-service', () => {
 
       // Override for activities
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -631,7 +635,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (db.transaction as Mock).mockRejectedValue(new Error('Transaction failed'));
+      mockDb.transaction.mockRejectedValue(new Error('Transaction failed'));
 
       const result = await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
 
@@ -648,11 +652,11 @@ describe('ai-undo-service', () => {
     it('handles message with no subsequent messages', async () => {
       const mockMessage = createMockMessage();
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: mockDriveId });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;
@@ -666,7 +670,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      (db.transaction as Mock).mockImplementation(async (callback) => {
+      mockDb.transaction.mockImplementation(async (callback) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -686,11 +690,11 @@ describe('ai-undo-service', () => {
     it('handles page without driveId (global assistant)', async () => {
       const mockMessage = createMockMessage();
 
-      (db.query.chatMessages.findFirst as Mock).mockResolvedValue(mockMessage);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ driveId: null });
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: null });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockImplementation(() => {
             selectCallCount++;

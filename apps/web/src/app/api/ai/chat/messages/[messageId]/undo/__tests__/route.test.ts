@@ -8,7 +8,7 @@
  * - Validation: 400 for invalid mode
  * - Success: 200 with preview/result data
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -65,6 +65,12 @@ import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/server';
+
+const mockAuth = vi.mocked(authenticateRequestWithOptions);
+const mockPreviewAiUndo = vi.mocked(previewAiUndo);
+const mockExecuteAiUndo = vi.mocked(executeAiUndo);
+const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockGlobalConvRepo = vi.mocked(globalConversationRepository);
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -149,10 +155,10 @@ const mockParams = Promise.resolve({ messageId: mockMessageId });
 describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (previewAiUndo as Mock).mockResolvedValue(createAiUndoPreview());
-    (canUserEditPage as Mock).mockResolvedValue(true);
-    (globalConversationRepository.getConversationById as Mock).mockResolvedValue({ id: 'conv_123' });
+    mockAuth.mockResolvedValue(mockWebAuth(mockUserId));
+    mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
+    mockCanUserEditPage.mockResolvedValue(true);
+    mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' });
   });
 
   // ============================================
@@ -161,7 +167,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      mockAuth.mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createGetRequest(), { params: mockParams });
 
@@ -176,7 +182,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('not found', () => {
     it('returns 404 when message does not exist or preview fails', async () => {
-      (previewAiUndo as Mock).mockResolvedValue(null);
+      mockPreviewAiUndo.mockResolvedValue(null);
 
       const response = await GET(createGetRequest(), { params: mockParams });
       const body = await response.json();
@@ -192,7 +198,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks edit permission on page', async () => {
-      (canUserEditPage as Mock).mockResolvedValue(false);
+      mockCanUserEditPage.mockResolvedValue(false);
 
       const response = await GET(createGetRequest(), { params: mockParams });
       const body = await response.json();
@@ -202,13 +208,13 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
     });
 
     it('returns 403 when user lacks ownership of global conversation', async () => {
-      (previewAiUndo as Mock).mockResolvedValue(createAiUndoPreview({
+      mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview({
         source: 'global_chat',
         conversationId: 'global_conv_123',
         pageId: null,
         driveId: null,
       }));
-      (globalConversationRepository.getConversationById as Mock).mockResolvedValue(null);
+      mockGlobalConvRepo.getConversationById.mockResolvedValue(null);
 
       const response = await GET(createGetRequest(), { params: mockParams });
       const body = await response.json();
@@ -231,7 +237,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
         ],
       });
 
-      (previewAiUndo as Mock).mockResolvedValue(mockPreview);
+      mockPreviewAiUndo.mockResolvedValue(mockPreview);
 
       const response = await GET(createGetRequest(), { params: mockParams });
       const body = await response.json();
@@ -246,10 +252,10 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
 describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (previewAiUndo as Mock).mockResolvedValue(createAiUndoPreview());
-    (canUserEditPage as Mock).mockResolvedValue(true);
-    (globalConversationRepository.getConversationById as Mock).mockResolvedValue({ id: 'conv_123' });
+    mockAuth.mockResolvedValue(mockWebAuth(mockUserId));
+    mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
+    mockCanUserEditPage.mockResolvedValue(true);
+    mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' });
   });
 
   // ============================================
@@ -258,7 +264,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      mockAuth.mockResolvedValue(mockAuthError(401));
 
       const response = await POST(createPostRequest({ mode: 'messages_only' }), { params: mockParams });
 
@@ -297,7 +303,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     });
 
     it('accepts messages_only mode', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
+      mockExecuteAiUndo.mockResolvedValue({
         success: true,
         messagesDeleted: 3,
         activitiesRolledBack: 0,
@@ -323,7 +329,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     });
 
     it('accepts messages_and_changes mode', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
+      mockExecuteAiUndo.mockResolvedValue({
         success: true,
         messagesDeleted: 3,
         activitiesRolledBack: 2,
@@ -355,7 +361,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks edit permission', async () => {
-      (canUserEditPage as Mock).mockResolvedValue(false);
+      mockCanUserEditPage.mockResolvedValue(false);
 
       const response = await POST(createPostRequest({ mode: 'messages_only' }), { params: mockParams });
       const body = await response.json();
@@ -371,7 +377,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('success', () => {
     it('returns success for messages_only mode', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
+      mockExecuteAiUndo.mockResolvedValue({
         success: true,
         messagesDeleted: 5,
         activitiesRolledBack: 0,
@@ -388,7 +394,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     });
 
     it('returns success for messages_and_changes mode', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
+      mockExecuteAiUndo.mockResolvedValue({
         success: true,
         messagesDeleted: 3,
         activitiesRolledBack: 2,
@@ -407,7 +413,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
 
   describe('failure', () => {
     it('returns 500 when operations fail', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
+      mockExecuteAiUndo.mockResolvedValue({
         success: false,
         messagesDeleted: 0,
         activitiesRolledBack: 0,
@@ -423,7 +429,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     });
 
     it('returns 500 when operations fail with empty errors array', async () => {
-      (executeAiUndo as Mock).mockResolvedValue({
+      mockExecuteAiUndo.mockResolvedValue({
         success: false,
         messagesDeleted: 0,
         activitiesRolledBack: 0,

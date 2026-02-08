@@ -13,7 +13,7 @@
  * abstraction, we mock at the db boundary. Consider refactoring to introduce
  * a repository seam for better testability.
  */
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   getActivityById,
   previewRollback,
@@ -128,6 +128,10 @@ import { db } from '@pagespace/db';
 import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions';
 import { logRollbackActivity } from '@pagespace/lib/monitoring';
 
+const mockDb = vi.mocked(db);
+const mockCanUserRollback = vi.mocked(canUserRollback);
+const mockIsRollbackableOperation = vi.mocked(isRollbackableOperation);
+
 // Test fixtures
 const mockUserId = 'user_123';
 const mockActivityId = 'activity_123';
@@ -181,7 +185,7 @@ describe('rollback-service', () => {
 
   describe('getActivityById', () => {
     it('returns null when activity not found', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
@@ -226,7 +230,7 @@ describe('rollback-service', () => {
         stateHashAfter: null,
       };
 
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([mockRawActivity]),
@@ -249,7 +253,7 @@ describe('rollback-service', () => {
 
   describe('previewRollback', () => {
     it('returns canExecute=false when activity not found', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
@@ -266,14 +270,14 @@ describe('rollback-service', () => {
 
     it('returns canExecute=false for non-rollbackable operations', async () => {
       const mockActivity = createMockActivity({ operation: 'create' });
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([mockActivity]),
           }),
         }),
       });
-      (isRollbackableOperation as Mock).mockReturnValue(false);
+      mockIsRollbackableOperation.mockReturnValue(false);
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
@@ -286,14 +290,14 @@ describe('rollback-service', () => {
         previousValues: null,
         contentSnapshot: null,
       });
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([mockActivity]),
           }),
         }),
       });
-      (isRollbackableOperation as Mock).mockReturnValue(true);
+      mockIsRollbackableOperation.mockReturnValue(true);
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
@@ -303,15 +307,15 @@ describe('rollback-service', () => {
 
     it('returns canExecute=false when user lacks permission', async () => {
       const mockActivity = createMockActivity();
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([mockActivity]),
           }),
         }),
       });
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({
         canRollback: false,
         reason: 'You need edit permission',
       });
@@ -335,7 +339,7 @@ describe('rollback-service', () => {
       // First call: get activity
       // Second call: get current page state
       let callCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockImplementation(() => ({
             limit: vi.fn().mockImplementation(() => {
@@ -347,8 +351,8 @@ describe('rollback-service', () => {
         })),
       }));
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
@@ -368,7 +372,7 @@ describe('rollback-service', () => {
       };
 
       let callCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -380,8 +384,8 @@ describe('rollback-service', () => {
         }),
       }));
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       // Without force=true, conflict detection blocks rollback
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
@@ -404,7 +408,7 @@ describe('rollback-service', () => {
       };
 
       let callCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -416,8 +420,8 @@ describe('rollback-service', () => {
         }),
       }));
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       // With force=true, rollback proceeds with warning
       const result = await previewRollback(mockActivityId, mockUserId, 'page', { force: true });
@@ -433,7 +437,7 @@ describe('rollback-service', () => {
       const mockActivity = createMockActivity();
 
       let callCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -445,8 +449,8 @@ describe('rollback-service', () => {
         }),
       }));
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await previewRollback(mockActivityId, mockUserId, 'page');
 
@@ -461,7 +465,7 @@ describe('rollback-service', () => {
 
   describe('executeRollback', () => {
     it('returns failure when preview shows cannot rollback', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
@@ -490,7 +494,7 @@ describe('rollback-service', () => {
       };
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -512,10 +516,10 @@ describe('rollback-service', () => {
           returning: vi.fn().mockResolvedValue([{ id: mockPageId }]),
         }),
       });
-      (db.update as Mock).mockReturnValue({ set: mockUpdateSet });
+      mockDb.update.mockReturnValue({ set: mockUpdateSet });
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
@@ -557,7 +561,7 @@ describe('rollback-service', () => {
       };
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -579,10 +583,10 @@ describe('rollback-service', () => {
           returning: vi.fn().mockResolvedValue([{ id: mockPageId }]),
         }),
       });
-      (db.update as Mock).mockReturnValue({ set: mockUpdateSet });
+      mockDb.update.mockReturnValue({ set: mockUpdateSet });
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
@@ -605,7 +609,7 @@ describe('rollback-service', () => {
       };
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -622,7 +626,7 @@ describe('rollback-service', () => {
         }),
       }));
 
-      (db.update as Mock).mockReturnValue({
+      mockDb.update.mockReturnValue({
         set: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             returning: vi.fn().mockRejectedValue(new Error('Database connection failed')),
@@ -630,8 +634,8 @@ describe('rollback-service', () => {
         }),
       });
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
@@ -654,7 +658,7 @@ describe('rollback-service', () => {
       };
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -671,8 +675,8 @@ describe('rollback-service', () => {
         }),
       }));
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
@@ -695,7 +699,7 @@ describe('rollback-service', () => {
       });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -719,10 +723,10 @@ describe('rollback-service', () => {
       }));
 
       const mockDeleteWhere = vi.fn().mockResolvedValue(undefined);
-      (db.delete as Mock).mockReturnValue({ where: mockDeleteWhere });
+      mockDb.delete.mockReturnValue({ where: mockDeleteWhere });
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
@@ -749,7 +753,7 @@ describe('rollback-service', () => {
       });
 
       let selectCallCount = 0;
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockImplementation(() => {
@@ -764,10 +768,10 @@ describe('rollback-service', () => {
       }));
 
       const mockInsertValues = vi.fn().mockResolvedValue(undefined);
-      (db.insert as Mock).mockReturnValue({ values: mockInsertValues });
+      mockDb.insert.mockReturnValue({ values: mockInsertValues });
 
-      (isRollbackableOperation as Mock).mockReturnValue(true);
-      (canUserRollback as Mock).mockResolvedValue({ canRollback: true });
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
 
       const result = await executeRollback(mockActivityId, mockUserId, 'page');
 
@@ -790,7 +794,7 @@ describe('rollback-service', () => {
 
   describe('getUserRetentionDays', () => {
     it('returns 7 days for free tier', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([{ subscriptionTier: 'free' }]),
@@ -804,7 +808,7 @@ describe('rollback-service', () => {
     });
 
     it('returns 30 days for pro tier', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([{ subscriptionTier: 'pro' }]),
@@ -818,7 +822,7 @@ describe('rollback-service', () => {
     });
 
     it('returns 90 days for founder tier', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([{ subscriptionTier: 'founder' }]),
@@ -832,7 +836,7 @@ describe('rollback-service', () => {
     });
 
     it('returns -1 (unlimited) for business tier', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([{ subscriptionTier: 'business' }]),
@@ -846,7 +850,7 @@ describe('rollback-service', () => {
     });
 
     it('returns free tier default when user not found', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
@@ -860,7 +864,7 @@ describe('rollback-service', () => {
     });
 
     it('returns free tier default when subscriptionTier is null', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([{ subscriptionTier: null }]),
@@ -874,7 +878,7 @@ describe('rollback-service', () => {
     });
 
     it('returns free tier default on database error', async () => {
-      (db.select as Mock).mockReturnValue({
+      mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             limit: vi.fn().mockRejectedValue(new Error('DB error')),
@@ -899,7 +903,7 @@ describe('rollback-service', () => {
         createMockActivity({ id: 'act_2' }),
       ];
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
@@ -926,7 +930,7 @@ describe('rollback-service', () => {
     it('applies filter options correctly', async () => {
       const mockActivities: ActivityLogForRollback[] = [];
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
@@ -958,7 +962,7 @@ describe('rollback-service', () => {
     });
 
     it('returns empty results on error', async () => {
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
@@ -988,7 +992,7 @@ describe('rollback-service', () => {
         createMockActivity({ id: 'act_2', resourceType: 'member' }),
       ];
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
@@ -1013,7 +1017,7 @@ describe('rollback-service', () => {
     it('filters by resourceType when specified', async () => {
       const mockActivities: ActivityLogForRollback[] = [];
 
-      (db.select as Mock).mockImplementation(() => ({
+      mockDb.select.mockImplementation(() => ({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
