@@ -1,6 +1,6 @@
-import Redis from 'ioredis';
 import { loggers } from '../logging/logger-config';
 import { getTodayUTC, getSecondsUntilMidnightUTC } from './date-utils';
+import { getSharedRedisClient, isSharedRedisAvailable } from './shared-redis';
 
 // Types for rate limiting
 export type ProviderType = 'standard' | 'pro';
@@ -31,11 +31,9 @@ interface RateLimitConfig {
 export class RateLimitCache {
   private static instance: RateLimitCache | null = null;
 
-  private redis: Redis | null = null;
   private memoryCache = new Map<string, { count: number; expiresAt: number }>();
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private config: RateLimitConfig;
-  private isRedisAvailable = false;
-  private initializationPromise: Promise<void> | null = null;
 
   private constructor(config: Partial<RateLimitConfig> = {}) {
     this.config = {
@@ -44,7 +42,6 @@ export class RateLimitCache {
       ...config
     };
 
-    this.initializationPromise = this.initializeRedis();
     this.startMemoryCacheCleanup();
   }
 
@@ -59,58 +56,18 @@ export class RateLimitCache {
   }
 
   /**
-   * Initialize Redis connection with graceful fallback
+   * Get Redis client at point of use (no local caching)
    */
-  private async initializeRedis(): Promise<void> {
-    if (!this.config.enableRedis) return;
-
-    try {
-      const redisUrl = process.env.REDIS_URL;
-      if (!redisUrl) {
-        loggers.api.warn('REDIS_URL not configured for rate limiting, using memory-only cache');
-        return;
-      }
-
-      this.redis = new Redis(redisUrl, {
-        maxRetriesPerRequest: 3,
-        lazyConnect: true,
-        connectTimeout: 5000,
-        commandTimeout: 3000,
-      });
-
-      this.redis.on('connect', () => {
-        this.isRedisAvailable = true;
-        loggers.api.info('Redis connected for rate limiting');
-      });
-
-      this.redis.on('error', (error: Error) => {
-        this.isRedisAvailable = false;
-        loggers.api.warn('Redis connection error for rate limiting, falling back to memory cache', error);
-      });
-
-      this.redis.on('close', () => {
-        this.isRedisAvailable = false;
-        loggers.api.warn('Redis connection closed for rate limiting, using memory cache only');
-      });
-
-      // Test connection
-      await this.redis.ping();
-      this.isRedisAvailable = true;
-
-    } catch (error) {
-      loggers.api.warn('Failed to initialize Redis for rate limiting, using memory-only cache', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      this.redis = null;
-      this.isRedisAvailable = false;
-    }
+  private async getRedis() {
+    if (!this.config.enableRedis) return null;
+    return getSharedRedisClient();
   }
 
   /**
    * Cleanup expired entries from memory cache
    */
   private startMemoryCacheCleanup(): void {
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       let cleanedCount = 0;
 
@@ -146,27 +103,24 @@ export class RateLimitCache {
    * Atomically increment usage count with limit check (Redis)
    */
   private async incrementRedis(
+    redis: NonNullable<Awaited<ReturnType<typeof getSharedRedisClient>>>,
     key: string,
     limit: number
   ): Promise<UsageTrackingResult | null> {
-    if (!this.isRedisAvailable || !this.redis) {
-      return null;
-    }
-
     try {
       // Use Redis INCR for atomic increment
-      const newCount = await this.redis.incr(key);
+      const newCount = await redis.incr(key);
 
       // Set TTL on first increment (when count was 1)
       if (newCount === 1) {
         const ttl = this.getTTL();
-        await this.redis.expire(key, ttl);
+        await redis.expire(key, ttl);
       }
 
       // Check if limit exceeded
       if (newCount > limit) {
         // Decrement back (we exceeded the limit)
-        await this.redis.decr(key);
+        await redis.decr(key);
 
         return {
           success: false,
@@ -242,15 +196,21 @@ export class RateLimitCache {
     const key = this.getRateLimitKey(userId, providerType);
 
     // Try Redis first (L2)
-    const redisResult = await this.incrementRedis(key, limit);
-    if (redisResult !== null) {
-      // Update memory cache for fast reads
-      const ttl = this.getTTL() * 1000;
-      this.memoryCache.set(key, {
-        count: redisResult.currentCount,
-        expiresAt: Date.now() + ttl
-      });
-      return redisResult;
+    const redis = await this.getRedis();
+    if (redis) {
+      const redisResult = await this.incrementRedis(redis, key, limit);
+      if (redisResult !== null) {
+        // Update memory cache for fast reads (monotonic: never regress count)
+        const ttl = this.getTTL() * 1000;
+        const existing = this.memoryCache.get(key);
+        if (!existing || redisResult.currentCount >= existing.count) {
+          this.memoryCache.set(key, {
+            count: redisResult.currentCount,
+            expiresAt: Date.now() + ttl
+          });
+        }
+        return redisResult;
+      }
     }
 
     // Fallback to memory (L1)
@@ -266,23 +226,13 @@ export class RateLimitCache {
     limit: number
   ): Promise<UsageTrackingResult> {
     const key = this.getRateLimitKey(userId, providerType);
-
-    // Try memory cache first (L1)
     const now = Date.now();
-    const memoryEntry = this.memoryCache.get(key);
-    if (memoryEntry && now <= memoryEntry.expiresAt) {
-      return {
-        success: memoryEntry.count < limit,
-        currentCount: memoryEntry.count,
-        limit,
-        remainingCalls: Math.max(0, limit - memoryEntry.count)
-      };
-    }
 
-    // Try Redis (L2)
-    if (this.isRedisAvailable && this.redis) {
+    // Try Redis first (source of truth when available)
+    const redis = await this.getRedis();
+    if (redis) {
       try {
-        const countStr = await this.redis.get(key);
+        const countStr = await redis.get(key);
         const count = countStr ? parseInt(countStr, 10) : 0;
 
         // Promote to memory cache
@@ -305,6 +255,17 @@ export class RateLimitCache {
       }
     }
 
+    // Fallback to memory cache (L1)
+    const memoryEntry = this.memoryCache.get(key);
+    if (memoryEntry && now <= memoryEntry.expiresAt) {
+      return {
+        success: memoryEntry.count < limit,
+        currentCount: memoryEntry.count,
+        limit,
+        remainingCalls: Math.max(0, limit - memoryEntry.count)
+      };
+    }
+
     // No data found, return zero usage
     return {
       success: true,
@@ -324,9 +285,10 @@ export class RateLimitCache {
     this.memoryCache.delete(key);
 
     // Clear from Redis
-    if (this.isRedisAvailable && this.redis) {
+    const redis = await this.getRedis();
+    if (redis) {
       try {
-        await this.redis.del(key);
+        await redis.del(key);
       } catch (error) {
         loggers.api.warn('Redis delete error for rate limiting', { key, error });
       }
@@ -344,17 +306,8 @@ export class RateLimitCache {
   } {
     return {
       memoryEntries: this.memoryCache.size,
-      redisAvailable: this.isRedisAvailable
+      redisAvailable: this.config.enableRedis && isSharedRedisAvailable()
     };
-  }
-
-  /**
-   * Wait for initialization to complete (useful for tests)
-   */
-  async waitForReady(): Promise<void> {
-    if (this.initializationPromise) {
-      await this.initializationPromise;
-    }
   }
 
   /**
@@ -363,11 +316,12 @@ export class RateLimitCache {
   async clearAll(): Promise<void> {
     this.memoryCache.clear();
 
-    if (this.isRedisAvailable && this.redis) {
+    const redis = await this.getRedis();
+    if (redis) {
       try {
-        const keys = await this.redis.keys(`${this.config.keyPrefix}*`);
+        const keys = await redis.keys(`${this.config.keyPrefix}*`);
         if (keys.length > 0) {
-          await this.redis.del(...keys);
+          await redis.del(...keys);
         }
       } catch (error) {
         loggers.api.warn('Redis clear all error for rate limiting', { error });
@@ -379,11 +333,12 @@ export class RateLimitCache {
 
   /**
    * Graceful shutdown
+   * Note: Does not close the shared Redis connection - that's managed by shared-redis.ts
    */
   async shutdown(): Promise<void> {
-    if (this.redis) {
-      await this.redis.quit();
-      this.redis = null;
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
     }
     this.memoryCache.clear();
     RateLimitCache.instance = null;

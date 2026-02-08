@@ -2,7 +2,7 @@
  * Personalization utilities for AI system prompt injection
  */
 
-import { db, userPersonalization, eq } from '@pagespace/db';
+import { db, users, userPersonalization, eq } from '@pagespace/db';
 import type { PersonalizationInfo } from './system-prompt';
 
 /**
@@ -36,5 +36,23 @@ export async function getUserPersonalization(
     // Log error but don't fail - personalization is optional
     console.error('Failed to fetch user personalization:', error);
     return null;
+  }
+}
+
+/**
+ * Fetch user's IANA timezone from the database.
+ * Returns undefined if not set or on error.
+ */
+export async function getUserTimezone(
+  userId: string
+): Promise<string | undefined> {
+  try {
+    const [user] = await db
+      .select({ timezone: users.timezone })
+      .from(users)
+      .where(eq(users.id, userId));
+    return user?.timezone ?? undefined;
+  } catch {
+    return undefined;
   }
 }

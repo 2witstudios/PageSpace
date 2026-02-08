@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getUserNotifications, getUnreadNotificationCount } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -14,7 +15,11 @@ export async function GET(req: Request) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : 50;
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 50,
+      min: 1,
+      max: 100,
+    });
     const countOnly = searchParams.get('countOnly') === 'true';
 
     if (countOnly) {

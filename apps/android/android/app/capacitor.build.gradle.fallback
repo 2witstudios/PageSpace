@@ -1,0 +1,27 @@
+// Fallback capacitor build config when capacitor-cordova-android-plugins hasn't been generated yet.
+// This file is used when 'cap sync' hasn't been run. Run 'pnpm sync' in apps/android to generate full config.
+
+android {
+  compileOptions {
+      sourceCompatibility JavaVersion.VERSION_21
+      targetCompatibility JavaVersion.VERSION_21
+  }
+}
+
+// Note: cordova.variables.gradle is not applied in fallback mode
+// Cordova plugin dependencies are skipped until 'cap sync' is run
+
+dependencies {
+    implementation project(':capacitor-app')
+    implementation project(':capacitor-browser')
+    implementation project(':capacitor-keyboard')
+    implementation project(':capacitor-preferences')
+    implementation project(':capacitor-push-notifications')
+    implementation project(':capacitor-splash-screen')
+    implementation project(':capacitor-status-bar')
+    implementation project(':capgo-capacitor-social-login')
+}
+
+if (hasProperty('postBuildExtras')) {
+  postBuildExtras()
+}

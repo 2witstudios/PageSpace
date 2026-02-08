@@ -63,7 +63,7 @@ export function InputPositioner({
   return (
     <motion.div
       className={cn(
-        'absolute z-10 left-0 right-0',
+        'absolute z-30 left-0 right-0',
         // Horizontal padding varies by state
         isCentered ? 'px-6' : 'px-4',
         className
@@ -91,6 +91,14 @@ export function InputPositioner({
       >
         {children}
       </div>
+      {/* Background fill behind safe area - extends UI behind iPad keyboard toolbar */}
+      {!isCentered && (
+        <div
+          className="absolute bottom-0 left-0 right-0 bg-background"
+          style={{ height: 'var(--safe-bottom-offset, 0px)' }}
+          aria-hidden="true"
+        />
+      )}
     </motion.div>
   );
 }

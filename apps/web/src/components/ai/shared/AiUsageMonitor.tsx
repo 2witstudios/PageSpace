@@ -27,7 +27,8 @@ interface AiUsageMonitorProps {
  * - For Page AI: pass both `conversationId` and `pageId` (will prioritize conversationId)
  */
 export function AiUsageMonitor({ conversationId, pageId, className, compact = false }: AiUsageMonitorProps) {
-  const { connect, getSocket } = useSocketStore();
+  const connect = useSocketStore((state) => state.connect);
+  const getSocket = useSocketStore((state) => state.getSocket);
 
   // Use conversation-based tracking for Global Assistant
   const { usage: conversationUsage, isLoading: conversationLoading, isError: conversationError, mutate: mutateConversation } = useAiUsage(

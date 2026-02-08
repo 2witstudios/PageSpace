@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -45,7 +45,9 @@ export function MovePageDialog({
   pages,
   onSuccess,
 }: MovePageDialogProps) {
-  const { drives, fetchDrives, isLoading: drivesLoading } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const drivesLoading = useDriveStore((state) => state.isLoading);
   const [selectedDriveId, setSelectedDriveId] = useState<string>("");
   const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [pageTree, setPageTree] = useState<TreeNode[]>([]);
@@ -64,8 +66,11 @@ export function MovePageDialog({
   }, [isOpen, fetchDrives]);
 
   // Filter drives to only show ones where user has edit access
-  const availableDrives = drives.filter(
-    (d: Drive) => d.isOwned || d.role === "OWNER" || d.role === "ADMIN"
+  const availableDrives = useMemo(
+    () => drives.filter(
+      (d: Drive) => d.isOwned || d.role === "OWNER" || d.role === "ADMIN"
+    ),
+    [drives]
   );
 
   // Fetch page tree when drive changes

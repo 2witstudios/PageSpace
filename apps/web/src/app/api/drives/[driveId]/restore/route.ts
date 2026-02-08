@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -48,11 +48,13 @@ export async function POST(
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(auth.userId);
+    const isMCP = isMCPAuthResult(auth);
     logDriveActivity(auth.userId, 'restore', {
       id: driveId,
       name: drive.name,
     }, {
       ...actorInfo,
+      metadata: isMCP ? { source: 'mcp' } : undefined,
       previousValues: { isTrashed: true },
       newValues: { isTrashed: false },
     });

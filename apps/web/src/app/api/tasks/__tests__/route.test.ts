@@ -18,6 +18,7 @@ vi.mock('@pagespace/db', () => ({
       pages: { findMany: vi.fn() },
       taskLists: { findMany: vi.fn() },
       taskItems: { findMany: vi.fn() },
+      taskStatusConfigs: { findMany: vi.fn() },
     },
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -27,6 +28,7 @@ vi.mock('@pagespace/db', () => ({
   },
   taskItems: { taskListId: 'taskListId', assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt' },
   taskLists: { id: 'id', pageId: 'pageId' },
+  taskStatusConfigs: { taskListId: 'taskListId' },
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title' },
   eq: vi.fn(),
   and: vi.fn((...args) => args),
@@ -34,10 +36,21 @@ vi.mock('@pagespace/db', () => ({
   count: vi.fn(),
   gte: vi.fn(),
   lt: vi.fn(),
+  lte: vi.fn(),
   inArray: vi.fn(),
   or: vi.fn(),
   isNull: vi.fn(),
   not: vi.fn(),
+  sql: vi.fn(),
+}));
+
+vi.mock('@/lib/task-status-config', () => ({
+  DEFAULT_STATUS_CONFIG: {
+    pending: { label: 'To Do', color: 'bg-slate-100 text-slate-700', group: 'todo' },
+    in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700', group: 'in_progress' },
+    blocked: { label: 'Blocked', color: 'bg-red-100 text-red-700', group: 'in_progress' },
+    completed: { label: 'Done', color: 'bg-green-100 text-green-700', group: 'done' },
+  } as Record<string, { label: string; color: string; group: string }>,
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -201,10 +214,11 @@ describe('GET /api/tasks', () => {
       }),
     } as any);
 
-    // Default: no task list pages
+    // Default: no task list pages, no status configs
     vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
     vi.mocked(db.query.taskLists.findMany).mockResolvedValue([]);
     vi.mocked(db.query.taskItems.findMany).mockResolvedValue([]);
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([]);
   });
 
   describe('authentication', () => {
@@ -337,6 +351,9 @@ describe('GET /api/tasks', () => {
         driveId: 'drive_1',
         taskListPageId: 'page_tasklist',
         taskListPageTitle: 'My Task List',
+        statusGroup: 'todo',
+        statusLabel: 'To Do',
+        statusColor: expect.any(String),
       });
     });
   });

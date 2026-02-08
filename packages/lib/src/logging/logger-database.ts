@@ -3,7 +3,7 @@
  * Handles writing log entries to the database
  */
 
-import { db, systemLogs, apiMetrics, aiUsageLogs, errorLogs, userActivities, performanceMetrics } from '@pagespace/db';
+import { db, systemLogs, apiMetrics, aiUsageLogs, errorLogs, userActivities } from '@pagespace/db';
 import type { LogEntry, LogContext } from './logger';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -254,37 +254,6 @@ export async function writeUserActivity(activity: {
     });
   } catch (error) {
     console.error('[Logger] Failed to write user activity:', error);
-  }
-}
-
-/**
- * Write performance metrics to database
- */
-export async function writePerformanceMetric(metric: {
-  metric: string;
-  value: number;
-  unit: string;
-  userId?: string;
-  sessionId?: string;
-  pageId?: string;
-  driveId?: string;
-  metadata?: any;
-}): Promise<void> {
-  try {
-    await db.insert(performanceMetrics).values({
-      id: createId(),
-      timestamp: new Date(),
-      metric: metric.metric,
-      value: metric.value,
-      unit: metric.unit,
-      userId: metric.userId,
-      sessionId: metric.sessionId,
-      pageId: metric.pageId,
-      driveId: metric.driveId,
-      metadata: metric.metadata,
-    });
-  } catch (error) {
-    console.error('[Logger] Failed to write performance metric:', error);
   }
 }
 

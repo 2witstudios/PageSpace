@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from 'react';
-import { usePathname } from 'next/navigation';
-import { useTabsStore } from '@/stores/useTabsStore';
+import { usePathname, useRouter } from 'next/navigation';
+import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
 
 /**
  * Syncs URL navigation with the browser-style tabs store.
@@ -14,30 +14,58 @@ import { useTabsStore } from '@/stores/useTabsStore';
  */
 export function useTabSync() {
   const pathname = usePathname();
+  const router = useRouter();
   const lastSyncedPath = useRef<string | null>(null);
+  const didAttemptDesktopRestore = useRef(false);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
-  const tabs = useTabsStore((state) => state.tabs);
-  const activeTabId = useTabsStore((state) => state.activeTabId);
-  const createTab = useTabsStore((state) => state.createTab);
-  const navigateInActiveTab = useTabsStore((state) => state.navigateInActiveTab);
 
   useEffect(() => {
     // Wait for store to rehydrate from localStorage
     if (!rehydrated) return;
 
+    const state = useTabsStore.getState();
+    const hasTabs = state.tabs.length > 0;
+
+    // Heal invalid state: tabs exist but activeTabId is missing/stale.
+    if (hasTabs && !selectActiveTab(state)) {
+      state.setActiveTab(state.tabs[0].id);
+    }
+
+    // Desktop bootstrap: app starts at /dashboard, so restore the active tab route once
+    // to ensure page hooks mount immediately without requiring user interaction.
+    // Mark the attempt on first hydrated pass so it cannot trigger mid-session.
+    const isDesktop = !!window.electron?.isDesktop;
+    if (isDesktop && !didAttemptDesktopRestore.current) {
+      didAttemptDesktopRestore.current = true;
+
+      if (pathname === '/dashboard' && hasTabs) {
+        const activeTab = selectActiveTab(useTabsStore.getState());
+        const restorePath = activeTab?.path;
+
+        if (restorePath && restorePath !== '/dashboard') {
+          lastSyncedPath.current = restorePath;
+          router.replace(restorePath);
+          return;
+        }
+      }
+    }
+
     // Skip if we already synced this path
     if (lastSyncedPath.current === pathname) return;
 
+    // Re-read after potential healing / restore
+    const currentState = useTabsStore.getState();
+
     // If no tabs exist, create one from current path
-    if (tabs.length === 0) {
-      createTab({ path: pathname });
+    if (currentState.tabs.length === 0) {
+      currentState.createTab({ path: pathname });
       lastSyncedPath.current = pathname;
       return;
     }
 
     // Get active tab's current path
-    const activeTab = tabs.find(t => t.id === activeTabId);
+    const activeTab = selectActiveTab(currentState);
 
     // If active tab already at this path, just update sync ref
     if (activeTab?.path === pathname) {
@@ -46,7 +74,7 @@ export function useTabSync() {
     }
 
     // Navigate within the active tab
-    navigateInActiveTab(pathname);
+    currentState.navigateInActiveTab(pathname);
     lastSyncedPath.current = pathname;
-  }, [pathname, rehydrated, tabs, activeTabId, createTab, navigateInActiveTab]);
+  }, [pathname, rehydrated, router]);
 }

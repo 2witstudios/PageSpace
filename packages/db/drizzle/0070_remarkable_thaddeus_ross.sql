@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS "display_preferences_user_type_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "display_preferences_user_type_idx" ON "display_preferences" USING btree ("userId","preferenceType");

@@ -6,6 +6,7 @@ import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
 import { broadcastDriveMemberEvent, createDriveMemberEventPayload } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -187,6 +188,12 @@ export async function POST(
       role,
       userId
     );
+
+    trackDriveOperation(userId, 'invite_member', driveId, {
+      invitedUserId,
+      role,
+      permissionsGranted: validResults.length,
+    });
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);

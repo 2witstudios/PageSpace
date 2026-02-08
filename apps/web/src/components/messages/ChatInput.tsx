@@ -5,6 +5,10 @@ import { useSuggestion } from '@/hooks/useSuggestion';
 import { Textarea } from '@/components/ui/textarea';
 import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
+import { cn } from '@/lib/utils';
+import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
+import { useMentionOverlay } from '@/hooks/useMentionOverlay';
+import { useMentionTracker } from '@/hooks/useMentionTracker';
 
 interface ChatInputProps {
   value: string;
@@ -33,15 +37,28 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
   // Track IME composition state to prevent accidental sends during predictive text
   const [isComposing, setIsComposing] = useState(false);
 
+  // Convert between markdown (parent) and display text (textarea)
+  const {
+    displayText,
+    mentions,
+    hasMentions,
+    handleDisplayTextChange,
+    registerMention,
+  } = useMentionTracker(value, onChange);
+
+  const { overlayRef, handleScroll } = useMentionOverlay(textareaRef, hasMentions);
+
   const suggestion = useSuggestion({
     inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
-    onValueChange: onChange,
+    onValueChange: handleDisplayTextChange,
     trigger: '@',
     driveId,
     crossDrive,
-    mentionFormat: 'markdown-typed',
+    mentionFormat: 'label',
     variant: 'chat',
     popupPlacement: 'top',
+    mentionRanges: mentions,
+    onMentionInserted: registerMention,
   });
 
   useImperativeHandle(ref, () => ({
@@ -72,15 +89,28 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
     <div className="w-full relative">
       <Textarea
         ref={textareaRef}
-        value={value}
+        value={displayText}
         onChange={(e) => suggestion.handleValueChange(e.target.value)}
         onKeyDown={handleKeyDown}
+        onScroll={handleScroll}
         onCompositionStart={() => setIsComposing(true)}
         onCompositionEnd={() => setIsComposing(false)}
         placeholder={placeholder}
-        className="min-h-[40px] max-h-[120px] w-full"
+        className={cn(
+          'min-h-[40px] max-h-[120px] w-full',
+          hasMentions && 'text-transparent caret-foreground'
+        )}
       />
-      
+
+      {hasMentions && (
+        <MentionHighlightOverlay
+          ref={overlayRef}
+          value={displayText}
+          mentions={mentions}
+          className="px-3 py-2 text-base md:text-sm text-foreground min-h-[40px] max-h-[120px]"
+        />
+      )}
+
       <SuggestionPopup
         isOpen={context.isOpen}
         items={context.items}

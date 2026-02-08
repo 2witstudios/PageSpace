@@ -56,6 +56,13 @@ interface ToolPart {
   state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
 }
 
+interface FilePart {
+  type: 'file';
+  url: string;
+  mediaType?: string;
+  filename?: string;
+}
+
 interface DatabaseMessage {
   id: string;
   pageId: string;
@@ -209,11 +216,12 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
  * Reconstruct message from structured content (new format with chronological ordering)
  */
 function reconstructMessageFromStructuredContent(
-  dbMessage: DatabaseMessage, 
-  structuredData: { textParts: string[]; partsOrder: Array<{ index: number; type: string; toolCallId?: string }>; originalContent?: string }
+  dbMessage: DatabaseMessage,
+  structuredData: { textParts: string[]; fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>; partsOrder: Array<{ index: number; type: string; toolCallId?: string }>; originalContent?: string }
 ): UIMessage {
-  const parts: Array<TextPart | ToolPart> = [];
+  const parts: Array<TextPart | ToolPart | FilePart> = [];
   let textPartIndex = 0;
+  let filePartIndex = 0;
   
   // Parse tool calls and results for lookup
   const toolCallsMap = new Map<string, ToolCall>();
@@ -241,6 +249,8 @@ function reconstructMessageFromStructuredContent(
     }
   }
   
+  const fileParts = structuredData.fileParts || [];
+
   // Reconstruct parts in original order
   structuredData.partsOrder.forEach(partOrder => {
     if (partOrder.type === 'text') {
@@ -254,10 +264,21 @@ function reconstructMessageFromStructuredContent(
         }
         textPartIndex++;
       }
+    } else if (partOrder.type === 'file') {
+      if (filePartIndex < fileParts.length) {
+        const fp = fileParts[filePartIndex];
+        parts.push({
+          type: 'file',
+          url: fp.url,
+          mediaType: fp.mediaType,
+          filename: fp.filename,
+        });
+        filePartIndex++;
+      }
     } else if (partOrder.type.startsWith('tool-') && partOrder.toolCallId) {
       const toolCall = toolCallsMap.get(partOrder.toolCallId);
       const toolResult = toolResultsMap.get(partOrder.toolCallId);
-      
+
       if (toolCall) {
         parts.push({
           type: partOrder.type,
@@ -272,7 +293,7 @@ function reconstructMessageFromStructuredContent(
       // Skip step-start parts for now - they're AI SDK internal
     }
   });
-  
+
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
@@ -321,22 +342,36 @@ export async function saveMessageToDatabase({
         .filter(p => p.type === 'text')
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map(p => (p as any).text || '');
-      
+
+      const filePartsData = uiMessage.parts
+        .filter(p => p.type === 'file')
+        .map(p => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const fp = p as any;
+          return {
+            url: typeof fp.url === 'string' ? fp.url : '',
+            mediaType: typeof fp.mediaType === 'string' ? fp.mediaType : undefined,
+            filename: typeof fp.filename === 'string' ? fp.filename : undefined,
+          };
+        });
+
       const partsOrder = uiMessage.parts.map((p, i) => ({
         index: i,
         type: p.type,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         toolCallId: p.type.startsWith('tool-') ? (p as any).toolCallId : undefined
       }));
-      
+
       structuredContent = JSON.stringify({
         textParts,
+        ...(filePartsData.length > 0 ? { fileParts: filePartsData } : {}),
         partsOrder,
         originalContent: content, // Keep original for backward compatibility
       });
-      
+
       debugLogAI('Saving structured content', {
         textPartsCount: textParts.length,
+        filePartsCount: filePartsData.length,
         totalPartsCount: partsOrder.length
       });
     }
@@ -410,19 +445,20 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
  * Reconstruct Global Assistant message from structured content (new format with chronological ordering)
  */
 function reconstructGlobalAssistantMessageFromStructuredContent(
-  dbMessage: GlobalAssistantMessage, 
-  structuredData: { textParts: string[]; partsOrder: Array<{ index: number; type: string; toolCallId?: string }>; originalContent?: string }
+  dbMessage: GlobalAssistantMessage,
+  structuredData: { textParts: string[]; fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>; partsOrder: Array<{ index: number; type: string; toolCallId?: string }>; originalContent?: string }
 ): UIMessage {
-  const parts: Array<TextPart | ToolPart> = [];
+  const parts: Array<TextPart | ToolPart | FilePart> = [];
   let textPartIndex = 0;
-  
+  let filePartIndex = 0;
+
   // Parse tool calls and results for lookup
   const toolCallsMap = new Map<string, ToolCall>();
   const toolResultsMap = new Map<string, ToolResult>();
-  
+
   if (dbMessage.toolCalls) {
     try {
-      const toolCalls = typeof dbMessage.toolCalls === 'string' 
+      const toolCalls = typeof dbMessage.toolCalls === 'string'
         ? JSON.parse(dbMessage.toolCalls) as ToolCall[]
         : Array.isArray(dbMessage.toolCalls) ? dbMessage.toolCalls as ToolCall[] : [];
       toolCalls.forEach(tc => toolCallsMap.set(tc.toolCallId, tc));
@@ -430,7 +466,7 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
       console.error('Error parsing global assistant tool calls:', error);
     }
   }
-  
+
   if (dbMessage.toolResults) {
     try {
       const toolResults = typeof dbMessage.toolResults === 'string'
@@ -441,7 +477,9 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
       console.error('Error parsing global assistant tool results:', error);
     }
   }
-  
+
+  const fileParts = structuredData.fileParts || [];
+
   // Reconstruct parts in original order
   structuredData.partsOrder.forEach(partOrder => {
     if (partOrder.type === 'text') {
@@ -455,10 +493,21 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
         }
         textPartIndex++;
       }
+    } else if (partOrder.type === 'file') {
+      if (filePartIndex < fileParts.length) {
+        const fp = fileParts[filePartIndex];
+        parts.push({
+          type: 'file',
+          url: fp.url,
+          mediaType: fp.mediaType,
+          filename: fp.filename,
+        });
+        filePartIndex++;
+      }
     } else if (partOrder.type.startsWith('tool-') && partOrder.toolCallId) {
       const toolCall = toolCallsMap.get(partOrder.toolCallId);
       const toolResult = toolResultsMap.get(partOrder.toolCallId);
-      
+
       if (toolCall) {
         parts.push({
           type: partOrder.type,
@@ -473,7 +522,7 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
       // Skip step-start parts for now - they're AI SDK internal
     }
   });
-  
+
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
@@ -519,22 +568,36 @@ export async function saveGlobalAssistantMessageToDatabase({
         .filter(p => p.type === 'text')
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map(p => (p as any).text || '');
-      
+
+      const filePartsData = uiMessage.parts
+        .filter(p => p.type === 'file')
+        .map(p => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const fp = p as any;
+          return {
+            url: typeof fp.url === 'string' ? fp.url : '',
+            mediaType: typeof fp.mediaType === 'string' ? fp.mediaType : undefined,
+            filename: typeof fp.filename === 'string' ? fp.filename : undefined,
+          };
+        });
+
       const partsOrder = uiMessage.parts.map((p, i) => ({
         index: i,
         type: p.type,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         toolCallId: p.type.startsWith('tool-') ? (p as any).toolCallId : undefined
       }));
-      
+
       structuredContent = JSON.stringify({
         textParts,
+        ...(filePartsData.length > 0 ? { fileParts: filePartsData } : {}),
         partsOrder,
         originalContent: content, // Keep original for backward compatibility
       });
-      
+
       debugLogAI('Global Assistant: Saving structured content', {
         textPartsCount: textParts.length,
+        filePartsCount: filePartsData.length,
         totalPartsCount: partsOrder.length
       });
     }
@@ -695,7 +758,10 @@ export function sanitizeMessagesForModel(messages: UIMessage[]): UIMessage[] {
     parts: message.parts?.filter(part => {
       // Keep text parts
       if (part.type === 'text') return true;
-      
+
+      // Keep file parts (image attachments for vision)
+      if (part.type === 'file') return true;
+
       // For tool parts, only keep those with results
       if (part.type.startsWith('tool-')) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -703,7 +769,7 @@ export function sanitizeMessagesForModel(messages: UIMessage[]): UIMessage[] {
         // Only include tool parts that have output (completed executions)
         return toolPart.state === 'output-available' && toolPart.output !== undefined;
       }
-      
+
       // Keep other part types (step-start, etc.)
       return true;
     }) || []

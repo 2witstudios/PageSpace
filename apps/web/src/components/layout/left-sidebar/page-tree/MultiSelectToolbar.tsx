@@ -10,6 +10,7 @@ import {
 import { X, Trash2, FolderInput, Copy, CheckSquare } from "lucide-react";
 import { toast } from "sonner";
 import { useMultiSelectStore } from "@/stores/useMultiSelectStore";
+import { useShallow } from "zustand/react/shallow";
 import { MovePageDialog } from "@/components/dialogs/MovePageDialog";
 import { CopyPageDialog } from "@/components/dialogs/CopyPageDialog";
 import {
@@ -30,21 +31,16 @@ interface MultiSelectToolbarProps {
 }
 
 export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProps) {
-  const {
-    isMultiSelectMode,
-    activeDriveId,
-    getSelectedPages,
-    getSelectedCount,
-    exitMultiSelectMode,
-  } = useMultiSelectStore();
+  const isMultiSelectMode = useMultiSelectStore((state) => state.isMultiSelectMode);
+  const activeDriveId = useMultiSelectStore((state) => state.activeDriveId);
+  const selectedPages = useMultiSelectStore(useShallow((state) => Array.from(state.selectedPages.values())));
+  const selectedCount = useMultiSelectStore((state) => state.selectedPages.size);
+  const exitMultiSelectMode = useMultiSelectStore((state) => state.exitMultiSelectMode);
 
   const [isMoveOpen, setMoveOpen] = useState(false);
   const [isCopyOpen, setCopyOpen] = useState(false);
   const [isDeleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const selectedPages = getSelectedPages();
-  const selectedCount = getSelectedCount();
 
   // Must define all hooks before any conditional returns
   const handleSuccess = useCallback(() => {
@@ -58,8 +54,9 @@ export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProp
 
   const handleBulkDelete = useCallback(async () => {
     setIsDeleting(true);
-    const count = selectedCount;
-    const pageIds = selectedPages.map((p) => p.id);
+    const { selectedPages: currentPages } = useMultiSelectStore.getState();
+    const count = currentPages.size;
+    const pageIds = Array.from(currentPages.keys());
     const toastId = toast.loading(
       `Moving ${count} ${count === 1 ? "page" : "pages"} to trash...`
     );
@@ -94,7 +91,7 @@ export function MultiSelectToolbar({ driveId, onMutate }: MultiSelectToolbarProp
       setIsDeleting(false);
       setDeleteOpen(false);
     }
-  }, [selectedCount, selectedPages, exitMultiSelectMode, onMutate]);
+  }, [exitMultiSelectMode, onMutate]);
 
   // Only show toolbar for the active drive
   if (!isMultiSelectMode || activeDriveId !== driveId) {

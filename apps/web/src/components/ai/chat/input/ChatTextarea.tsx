@@ -9,11 +9,14 @@ import {
   useSuggestionContext,
 } from '@/components/providers/SuggestionProvider';
 import { cn } from '@/lib/utils';
+import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
+import { useMentionOverlay } from '@/hooks/useMentionOverlay';
+import { useMentionTracker } from '@/hooks/useMentionTracker';
 
 export interface ChatTextareaProps {
-  /** Current input value */
+  /** Current input value (markdown format with @[label](id:type) mentions) */
   value: string;
-  /** Input change handler */
+  /** Input change handler (receives markdown format) */
   onChange: (value: string) => void;
   /** Send message handler (triggered on Enter without Shift) */
   onSend: () => void;
@@ -29,6 +32,8 @@ export interface ChatTextareaProps {
   variant?: 'main' | 'sidebar';
   /** Popup placement: 'top' for suggestions above (docked input), 'bottom' for suggestions below (centered input) */
   popupPlacement?: 'top' | 'bottom';
+  /** Handler for pasted image files (vision support) */
+  onPasteFiles?: (files: File[]) => void;
   /** Additional class names */
   className?: string;
 }
@@ -56,6 +61,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       disabled = false,
       variant = 'main',
       popupPlacement = 'top',
+      onPasteFiles,
       className,
     },
     ref
@@ -65,15 +71,28 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     // Track IME composition state to prevent accidental sends during predictive text
     const [isComposing, setIsComposing] = useState(false);
 
+    // Convert between markdown (parent) and display text (textarea)
+    const {
+      displayText,
+      mentions,
+      hasMentions,
+      handleDisplayTextChange,
+      registerMention,
+    } = useMentionTracker(value, onChange);
+
+    const { overlayRef, handleScroll } = useMentionOverlay(textareaRef, hasMentions);
+
     const suggestion = useSuggestion({
       inputRef: textareaRef as React.RefObject<HTMLTextAreaElement>,
-      onValueChange: onChange,
+      onValueChange: handleDisplayTextChange,
       trigger: '@',
       driveId,
       crossDrive,
-      mentionFormat: 'markdown-typed',
+      mentionFormat: 'label',
       variant: 'chat',
       popupPlacement,
+      mentionRanges: mentions,
+      onMentionInserted: registerMention,
     });
 
     useImperativeHandle(ref, () => ({
@@ -99,13 +118,37 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       }
     };
 
+    const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!onPasteFiles) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        onPasteFiles(imageFiles);
+      }
+      // If no image files, let normal text paste proceed
+    };
+
     return (
       <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
           ref={textareaRef}
-          value={value}
+          value={displayText}
           onChange={(e) => suggestion.handleValueChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          onScroll={handleScroll}
           onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={() => setIsComposing(false)}
           placeholder={placeholder}
@@ -121,10 +164,26 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',
             'focus-visible:ring-0 focus-visible:ring-offset-0',
+            // When mentions are present, make text transparent so the overlay shows through
+            hasMentions && 'text-transparent caret-foreground',
             className
           )}
           rows={1}
         />
+
+        {/* Overlay that renders formatted mentions on top of the transparent textarea text */}
+        {hasMentions && (
+          <MentionHighlightOverlay
+            ref={overlayRef}
+            value={displayText}
+            mentions={mentions}
+            className={cn(
+              'px-3 py-2 text-base md:text-sm',
+              'text-foreground',
+              'min-h-[36px] max-h-48'
+            )}
+          />
+        )}
 
         <SuggestionPopup
           isOpen={context.isOpen}

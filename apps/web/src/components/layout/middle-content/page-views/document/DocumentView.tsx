@@ -25,10 +25,9 @@ const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ss
 
 
 const DocumentView = ({ pageId }: DocumentViewProps) => {
-  const { activeView } = useDocumentStore();
+  const activeView = useDocumentStore((state) => state.activeView);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
-  const [isPaginated, setIsPaginated] = useState(false);
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
@@ -72,7 +71,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
       const response = await fetchWithAuth(`/api/pages/${pageId}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content);
+        updateContentFromServer(updatedPage.content, updatedPage.revision);
       }
     } catch (error) {
       console.error('Failed to refresh document:', error);
@@ -99,23 +98,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   // Reset initialization flag when pageId changes
   useEffect(() => {
     hasInitializedRef.current = false;
-  }, [pageId]);
-
-  // Fetch pagination setting from page data
-  useEffect(() => {
-    const fetchPageSettings = async () => {
-      try {
-        const response = await fetchWithAuth(`/api/pages/${pageId}`);
-        if (response.ok) {
-          const page = await response.json();
-          setIsPaginated(page.isPaginated || false);
-        }
-      } catch (error) {
-        console.error('Failed to fetch page settings:', error);
-      }
-    };
-
-    fetchPageSettings();
   }, [pageId]);
 
   // Register editing state when document is dirty
@@ -183,7 +165,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
             // Only update if content actually changed and we're not currently editing
             // Note: This uses closure over documentState, which is acceptable here
             if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-              updateContentFromServer(updatedPage.content);
+              updateContentFromServer(updatedPage.content, updatedPage.revision);
             }
           }
         } catch (error) {
@@ -351,7 +333,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                       onChange={handleContentChange}
                       onEditorChange={setEditor}
                       readOnly={isReadOnly}
-                      isPaginated={isPaginated}
+                      isPaginated={false}
                     />
                   </div>
                 </motion.div>
@@ -381,4 +363,4 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   );
 };
 
-export default DocumentView;
+export default React.memo(DocumentView, (prevProps, nextProps) => prevProps.pageId === nextProps.pageId);

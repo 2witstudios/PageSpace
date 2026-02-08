@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { UIMessage } from 'ai';
@@ -195,18 +195,18 @@ export interface UseSidebarAgentStateReturn {
  * Uses Zustand store internally for shared state across components.
  */
 export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
-  const store = useSidebarAgentStore();
+  const selectedAgent = useSidebarAgentStore((state) => state.selectedAgent);
+  const conversationId = useSidebarAgentStore((state) => state.conversationId);
+  const initialMessages = useSidebarAgentStore((state) => state.initialMessages);
+  const isInitialized = useSidebarAgentStore((state) => state.isInitialized);
+  const agentIdForConversation = useSidebarAgentStore((state) => state.agentIdForConversation);
 
-  // Destructure store methods for useEffect dependencies (stable references from Zustand)
-  const {
-    selectedAgent,
-    isInitialized,
-    agentIdForConversation,
-    setConversationLoading,
-    setConversationLoaded,
-    setConversationCreated,
-    setConversationError,
-  } = store;
+  const selectAgent = useSidebarAgentStore((state) => state.selectAgent);
+  const setConversationLoading = useSidebarAgentStore((state) => state.setConversationLoading);
+  const setConversationLoaded = useSidebarAgentStore((state) => state.setConversationLoaded);
+  const setConversationCreated = useSidebarAgentStore((state) => state.setConversationCreated);
+  const setConversationError = useSidebarAgentStore((state) => state.setConversationError);
+  const updateMessages = useSidebarAgentStore((state) => state.updateMessages);
 
   // Ref to track which agent we're currently loading (for race condition protection)
   const loadingAgentIdRef = useRef<string | null>(null);
@@ -289,48 +289,45 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   // ============================================
   // Action: Create New Conversation
   // ============================================
-  const createNewConversation = async (): Promise<string | null> => {
-    const agent = store.selectedAgent;
-    if (!agent) return null;
+  const createNewConversation = useCallback(async (): Promise<string | null> => {
+    if (!selectedAgent) return null;
 
     try {
-      const newConversationId = await createAgentConversation(agent.id);
-      store.setConversationCreated(newConversationId, agent.id);
+      const newConversationId = await createAgentConversation(selectedAgent.id);
+      setConversationCreated(newConversationId, selectedAgent.id);
       return newConversationId;
     } catch (error) {
       console.error('Failed to create new conversation:', error);
       toast.error('Failed to create new conversation');
     }
     return null;
-  };
+  }, [selectedAgent, setConversationCreated]);
 
   // ============================================
   // Action: Refresh Conversation
   // ============================================
-  const refreshConversation = async (): Promise<void> => {
-    const agent = store.selectedAgent;
-    const conversationId = store.conversationId;
-    if (!agent || !conversationId) return;
+  const refreshConversation = useCallback(async (): Promise<void> => {
+    if (!selectedAgent || !conversationId) return;
 
     try {
-      const result = await fetchAgentConversationMessages(agent.id, conversationId, { limit: 50 });
-      store.updateMessages(result.messages);
+      const result = await fetchAgentConversationMessages(selectedAgent.id, conversationId, { limit: 50 });
+      updateMessages(result.messages);
     } catch (error) {
       console.error('Failed to refresh agent conversation:', error);
     }
-  };
+  }, [selectedAgent, conversationId, updateMessages]);
 
   // ============================================
   // Return hook interface
   // ============================================
   return {
-    selectedAgent: store.selectedAgent,
-    conversationId: store.conversationId,
-    initialMessages: store.initialMessages,
-    isInitialized: store.isInitialized,
-    selectAgent: store.selectAgent,
+    selectedAgent,
+    conversationId,
+    initialMessages,
+    isInitialized,
+    selectAgent,
     createNewConversation,
     refreshConversation,
-    updateMessages: store.updateMessages,
+    updateMessages,
   };
 }

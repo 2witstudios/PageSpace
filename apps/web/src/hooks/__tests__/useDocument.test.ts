@@ -10,8 +10,10 @@ import { useDirtyStore } from '@/stores/useDirtyStore';
 
 // Mock dependencies
 vi.mock('@/lib/auth/auth-fetch', () => ({
-  patch: vi.fn().mockResolvedValue({ ok: true }),
-  fetchWithAuth: vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ content: 'test' }) }),
+  fetchWithAuth: vi.fn().mockResolvedValue({
+    ok: true,
+    json: () => Promise.resolve({ content: 'test', revision: 1 }),
+  }),
 }));
 
 vi.mock('../useSocket', () => ({
@@ -23,7 +25,7 @@ vi.mock('sonner', () => ({
 }));
 
 import { useDocumentSaving, useDocument } from '../useDocument';
-import { patch } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 describe('useDocument dirty flag integration', () => {
   beforeEach(() => {
@@ -67,6 +69,30 @@ describe('useDocument dirty flag integration', () => {
       expect(useDirtyStore.getState().dirtyFlags[pageId]).toBeUndefined();
     });
 
+    it('given a document save succeeds, should update stored revision from response', async () => {
+      const pageId = 'page-123';
+
+      // Setup: Create a document with initial revision
+      useDocumentManagerStore.getState().createDocument(pageId, 'content');
+      useDocumentManagerStore.getState().updateDocument(pageId, { revision: 5 });
+
+      // Mock response with incremented revision
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ content: 'content', revision: 6 }),
+      } as Response);
+
+      const { result } = renderHook(() => useDocumentSaving(pageId));
+
+      await act(async () => {
+        await result.current.saveDocument('content');
+      });
+
+      // Assert: Stored revision should be updated
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      expect(doc?.revision).toBe(6);
+    });
+
     it('given a document save fails, should retain the dirty flag for retry', async () => {
       const pageId = 'page-123';
 
@@ -75,7 +101,11 @@ describe('useDocument dirty flag integration', () => {
       useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
       useDirtyStore.getState().setDirty(pageId, true);
 
-      vi.mocked(patch).mockRejectedValueOnce(new Error('Network error'));
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: 'Server error' }),
+      } as Response);
 
       // Render the saving hook
       const { result } = renderHook(() => useDocumentSaving(pageId));
@@ -91,6 +121,68 @@ describe('useDocument dirty flag integration', () => {
 
       // Assert: Dirty flag should remain
       expect(useDirtyStore.getState().isDirty(pageId)).toBe(true);
+    });
+
+    it('given a 409 conflict response, should show conflict toast, refetch, and not throw', async () => {
+      const pageId = 'page-123';
+      const { toast } = await import('sonner');
+
+      // Setup: Create a document with revision
+      useDocumentManagerStore.getState().createDocument(pageId, 'content');
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true, revision: 3 });
+
+      // First call: PATCH returns 409
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve({ error: 'Page was modified', currentRevision: 4, expectedRevision: 3 }),
+      } as Response);
+      // Second call: GET refetch returns latest page
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ content: 'newer content', revision: 4 }),
+      } as Response);
+
+      const { result } = renderHook(() => useDocumentSaving(pageId));
+
+      let saveResult: boolean | undefined;
+      await act(async () => {
+        saveResult = await result.current.saveDocument('content');
+      });
+
+      // Assert: Should return false (not throw)
+      expect(saveResult).toBe(false);
+      // Assert: Conflict toast shown
+      expect(toast.error).toHaveBeenCalledWith(
+        'Document was modified elsewhere. Your local copy has been updated.',
+        { id: `conflict-${pageId}` },
+      );
+      // Assert: Document updated with latest server state
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      expect(doc?.content).toBe('newer content');
+      expect(doc?.revision).toBe(4);
+      expect(doc?.isDirty).toBe(false);
+    });
+
+    it('given a save with revision, should send expectedRevision in request body', async () => {
+      const pageId = 'page-123';
+
+      // Setup: Create a document with a known revision
+      useDocumentManagerStore.getState().createDocument(pageId, 'content');
+      useDocumentManagerStore.getState().updateDocument(pageId, { revision: 7 });
+
+      const { result } = renderHook(() => useDocumentSaving(pageId));
+
+      await act(async () => {
+        await result.current.saveDocument('content');
+      });
+
+      // Assert: fetchWithAuth called with expectedRevision in body
+      const call = vi.mocked(fetchWithAuth).mock.calls[0];
+      expect(call[0]).toBe(`/api/pages/${pageId}`);
+      const opts = call[1] as { method: string; body: string };
+      expect(opts.method).toBe('PATCH');
+      expect(JSON.parse(opts.body)).toMatchObject({ expectedRevision: 7 });
     });
   });
 

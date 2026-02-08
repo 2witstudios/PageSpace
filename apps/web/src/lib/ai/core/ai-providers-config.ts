@@ -41,12 +41,18 @@ export const AI_PROVIDERS = {
   openrouter: {
     name: 'OpenRouter (Paid)',
     models: {
+      // Anthropic Models (2026)
+      'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+
       // Anthropic Models (2025)
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
       'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
       'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
+
+      // OpenAI Models (2026)
+      'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
 
       // OpenAI Models (2025)
       'openai/gpt-5.2': 'GPT-5.2',
@@ -192,6 +198,9 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
+      // GPT-5.3 Models (2026)
+      'gpt-5.3-codex': 'GPT-5.3 Codex',
+
       // GPT-5.2 Models (2025)
       'gpt-5.2': 'GPT-5.2',
       'gpt-5.2-codex': 'GPT-5.2 Codex',
@@ -236,6 +245,9 @@ export const AI_PROVIDERS = {
   anthropic: {
     name: 'Anthropic',
     models: {
+      // Claude 4.6 Models (2026)
+      'claude-opus-4-6-20260204': 'Claude Opus 4.6',
+
       // Claude 4.5 Models (2025)
       'claude-opus-4-5-20251124': 'Claude Opus 4.5',
       'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',

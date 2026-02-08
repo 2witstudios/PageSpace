@@ -30,7 +30,7 @@ vi.mock('swr', () => ({
   default: vi.fn((key) => {
     if (!key) {
       // Null key: SWR returns undefined data, so isLoading = !error && !data = true
-      return { data: undefined, error: undefined, isLoading: true, mutate: mockMutate };
+      return { data: undefined, error: undefined, isLoading: true, mutate: mockMutate, isValidating: false };
     }
     return {
       data: mockSWRState.data,
@@ -38,8 +38,12 @@ vi.mock('swr', () => ({
       // Compute isLoading like the actual hook: !error && !data
       isLoading: !mockSWRState.error && !mockSWRState.data,
       mutate: mockMutate,
+      isValidating: false,
     };
   }),
+  useSWRConfig: vi.fn(() => ({
+    cache: new Map(),
+  })),
 }));
 
 import { useBreadcrumbs } from '../useBreadcrumbs';

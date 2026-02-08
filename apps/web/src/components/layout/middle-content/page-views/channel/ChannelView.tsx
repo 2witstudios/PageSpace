@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
@@ -15,17 +15,20 @@ import { Lock, FileIcon, FileText, Download } from 'lucide-react';
 import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import {
+  type AttachmentMeta,
+  type FileRelation,
+  isImageAttachment,
+  getFileId,
+  getAttachmentName,
+  getAttachmentMimeType,
+  getAttachmentSize,
+  formatFileSize,
+  hasAttachment,
+} from '@/lib/attachment-utils';
 
 interface ChannelViewProps {
   page: TreePage;
-}
-
-// Attachment metadata stored in the database
-interface AttachmentMeta {
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
 }
 
 // Extended message type with reactions and file attachment
@@ -33,14 +36,10 @@ interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
-  file?: {
-    id: string;
-    mimeType: string | null;
-    sizeBytes: number;
-  } | null;
+  file?: FileRelation | null;
 }
 
-export default function ChannelView({ page }: ChannelViewProps) {
+function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -48,7 +47,9 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
-  const { socket, connectionStatus, connect } = useSocketStore();
+  const socket = useSocketStore((state) => state.socket);
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
+  const connect = useSocketStore((state) => state.connect);
 
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
@@ -162,6 +163,7 @@ export default function ChannelView({ page }: ChannelViewProps) {
       // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
+      toast.error('Failed to send message. Please try again.');
     }
   };
 
@@ -231,14 +233,14 @@ export default function ChannelView({ page }: ChannelViewProps) {
   const handleRemoveReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!user) return;
 
-    // Optimistic update
-    const removedReaction = messages
-      .find((m) => m.id === messageId)
-      ?.reactions?.find((r) => r.emoji === emoji && r.userId === user.id);
-
+    // Capture removedReaction inside the updater so messages isn't a dependency
+    let removedReaction: Reaction | undefined;
     setMessages((prev) =>
       prev.map((m) => {
         if (m.id !== messageId) return m;
+        removedReaction ??= m.reactions?.find(
+          (r) => r.emoji === emoji && r.userId === user.id
+        );
         return {
           ...m,
           reactions: (m.reactions || []).filter(
@@ -253,19 +255,20 @@ export default function ChannelView({ page }: ChannelViewProps) {
     } catch {
       // Revert optimistic update on error
       if (removedReaction) {
+        const reactionToRestore = removedReaction;
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id !== messageId) return m;
             return {
               ...m,
-              reactions: [...(m.reactions || []), removedReaction],
+              reactions: [...(m.reactions || []), reactionToRestore],
             };
           })
         );
       }
       toast.error('Failed to remove reaction');
     }
-  }, [page.id, user, messages]);
+  }, [page.id, user]);
 
   // Handle real-time reaction updates
   useEffect(() => {
@@ -343,44 +346,43 @@ export default function ChannelView({ page }: ChannelViewProps) {
                                 </div>
                               )}
                               {/* File attachment */}
-                              {m.attachmentMeta && (
+                              {hasAttachment(m) && (
                                 <div className="mt-2">
-                                  {m.attachmentMeta.mimeType.startsWith('image/') ? (
+                                  {isImageAttachment(m) ? (
                                     <a
-                                      href={`/api/files/${m.fileId}/view?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                                      href={`/api/files/${getFileId(m)}/view?filename=${encodeURIComponent(getAttachmentName(m))}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="block max-w-sm"
                                     >
+                                      {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
                                       <img
-                                        src={`/api/files/${m.fileId}/view`}
-                                        alt={m.attachmentMeta.originalName}
+                                        src={`/api/files/${getFileId(m)}/view`}
+                                        alt={getAttachmentName(m)}
                                         className="rounded-lg max-h-64 object-contain border border-border/50"
                                       />
                                     </a>
                                   ) : (
                                     <a
-                                      href={`/api/files/${m.fileId}/download?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                                      href={`/api/files/${getFileId(m)}/download?filename=${encodeURIComponent(getAttachmentName(m))}`}
                                       className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
                                     >
                                       <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-                                        {m.attachmentMeta.mimeType.includes('pdf') ? (
+                                        {getAttachmentMimeType(m).includes('pdf') ? (
                                           <FileText className="h-5 w-5 text-red-500" />
-                                        ) : m.attachmentMeta.mimeType.includes('document') || m.attachmentMeta.mimeType.includes('word') ? (
+                                        ) : getAttachmentMimeType(m).includes('document') || getAttachmentMimeType(m).includes('word') ? (
                                           <FileText className="h-5 w-5 text-blue-500" />
                                         ) : (
                                           <FileIcon className="h-5 w-5 text-muted-foreground" />
                                         )}
                                       </div>
                                       <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium truncate">{m.attachmentMeta.originalName}</p>
-                                        <p className="text-xs text-muted-foreground">
-                                          {m.attachmentMeta.size < 1024
-                                            ? `${m.attachmentMeta.size} B`
-                                            : m.attachmentMeta.size < 1024 * 1024
-                                            ? `${(m.attachmentMeta.size / 1024).toFixed(1)} KB`
-                                            : `${(m.attachmentMeta.size / (1024 * 1024)).toFixed(1)} MB`}
-                                        </p>
+                                        <p className="text-sm font-medium truncate">{getAttachmentName(m)}</p>
+                                        {getAttachmentSize(m) != null && (
+                                          <p className="text-xs text-muted-foreground">
+                                            {formatFileSize(getAttachmentSize(m)!)}
+                                          </p>
+                                        )}
                                       </div>
                                       <Download className="h-4 w-4 text-muted-foreground shrink-0" />
                                     </a>
@@ -429,3 +431,12 @@ export default function ChannelView({ page }: ChannelViewProps) {
     </div>
   );
 }
+
+// Only re-render when the channel identity changes.
+// Update this comparator if additional page fields are consumed.
+export default memo(
+  ChannelView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.driveId === nextProps.page.driveId
+);

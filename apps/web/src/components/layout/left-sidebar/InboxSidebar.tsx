@@ -270,7 +270,7 @@ export default function InboxSidebar({ className }: SidebarProps) {
           </div>
         </ScrollArea>
 
-        {/* User Actions Footer */}
+        {/* Dashboard Actions */}
         <DashboardFooter />
       </div>
     </aside>

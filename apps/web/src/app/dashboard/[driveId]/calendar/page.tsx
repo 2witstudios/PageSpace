@@ -9,7 +9,9 @@ import { CalendarView } from '@/components/calendar';
 function DriveCalendarContent() {
   const params = useParams();
   const driveId = params.driveId as string;
-  const { drives, isLoading, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const isLoading = useDriveStore((state) => state.isLoading);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   useEffect(() => {
     fetchDrives();

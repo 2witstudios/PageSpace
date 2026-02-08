@@ -3,9 +3,8 @@
  * Fire-and-forget async tracking with zero performance impact
  */
 
-import { writeUserActivity, writeApiMetrics } from '../logging/logger-database';
+import { writeUserActivity } from '../logging/logger-database';
 import { loggers } from '../logging/logger-config';
-import { AIMonitoring } from './ai-monitoring';
 import { sessionService } from '../auth/session-service';
 
 /**
@@ -81,40 +80,6 @@ export function trackDriveOperation(
 }
 
 /**
- * Track AI usage - simplified wrapper that delegates to enhanced AI monitoring
- */
-export function trackAiUsage(
-  userId: string | undefined,
-  provider: string,
-  model: string,
-  data?: {
-    tokens?: number;
-    cost?: number;
-    duration?: number;
-    conversationId?: string;
-    pageId?: string;
-    driveId?: string;
-    error?: string;
-  }
-): void {
-  if (!userId) return;
-
-  // Delegate to enhanced AI monitoring which handles token counting and cost calculation
-  AIMonitoring.trackUsage({
-    userId,
-    provider,
-    model,
-    totalTokens: data?.tokens,
-    duration: data?.duration,
-    conversationId: data?.conversationId,
-    pageId: data?.pageId,
-    driveId: data?.driveId,
-    success: !data?.error,
-    error: data?.error,
-  });
-}
-
-/**
  * Track feature usage
  */
 export function trackFeature(
@@ -144,43 +109,6 @@ export function trackAuthEvent(
 }
 
 /**
- * Track search queries
- */
-export function trackSearch(
-  userId: string | undefined,
-  searchType: string,
-  query: string,
-  resultCount?: number
-): void {
-  trackActivity(userId, 'search', {
-    resource: 'search',
-    metadata: {
-      type: searchType,
-      query: query.substring(0, 100), // Limit query length
-      resultCount
-    }
-  });
-}
-
-/**
- * Track navigation
- */
-export function trackNavigation(
-  userId: string | undefined,
-  from: string,
-  to: string,
-  metadata?: any
-): void {
-  trackActivity(userId, 'navigation', {
-    metadata: {
-      from,
-      to,
-      ...metadata
-    }
-  });
-}
-
-/**
  * Track errors that affect users
  */
 export function trackError(
@@ -197,32 +125,6 @@ export function trackError(
       context
     }
   });
-}
-
-/**
- * Track API metrics - simplified wrapper
- */
-export function trackApiCall(
-  endpoint: string,
-  method: string,
-  statusCode: number,
-  duration: number,
-  userId?: string,
-  error?: string
-): void {
-  // Only track slow requests or errors to minimize overhead
-  if (duration > 5000 || statusCode >= 400) {
-    writeApiMetrics({
-      endpoint,
-      method,
-      statusCode,
-      duration,
-      userId,
-      error
-    }).catch(() => {
-      // Silent fail
-    });
-  }
 }
 
 /**

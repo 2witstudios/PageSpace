@@ -41,6 +41,7 @@ import { Projection } from "@/lib/tree/sortable-tree";
 import { cn } from "@/lib/utils";
 import { useSortable } from "@dnd-kit/sortable";
 import { useMultiSelectStore, SelectedPageInfo } from "@/stores/useMultiSelectStore";
+import { PageViewersInline } from "@/components/common/PageViewers";
 
 export type DropPosition = "before" | "after" | "inside" | null;
 
@@ -114,16 +115,13 @@ export function PageTreeItem({
   const driveId = params.driveId as string;
 
   // Multi-select state
-  const {
-    isMultiSelectMode,
-    activeDriveId,
-    enterMultiSelectMode,
-    togglePageSelection,
-    isSelected,
-  } = useMultiSelectStore();
+  const isMultiSelectMode = useMultiSelectStore((state) => state.isMultiSelectMode);
+  const activeDriveId = useMultiSelectStore((state) => state.activeDriveId);
+  const enterMultiSelectMode = useMultiSelectStore((state) => state.enterMultiSelectMode);
+  const togglePageSelection = useMultiSelectStore((state) => state.togglePageSelection);
+  const isPageSelected = useMultiSelectStore((state) => state.selectedPages.has(item.id));
 
   const isInMultiSelectMode = isMultiSelectMode && activeDriveId === driveId;
-  const isPageSelected = isSelected(item.id);
 
   // Memoize page info for selection to prevent unnecessary re-renders
   const pageInfo: SelectedPageInfo = useMemo(() => ({
@@ -351,6 +349,9 @@ export function PageTreeItem({
               >
                 {item.title}
               </Link>
+
+              {/* Currently viewing indicators */}
+              <PageViewersInline pageId={item.id} />
 
               {/* Action Button - Add child */}
               <div

@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback } from "react";
 import useSWR from "swr";
-import { ChevronDown, RefreshCw } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
@@ -89,38 +89,22 @@ export default function Pulse() {
     <Collapsible
       open={!pulseCollapsed}
       onOpenChange={(open) => setPulseCollapsed(!open)}
-      className="rounded-lg border border-[var(--separator)] bg-card/50"
     >
-      <div className="flex items-center justify-between px-3 py-2">
-        <CollapsibleTrigger asChild>
-          <Button
-            variant="ghost"
-            className="flex-1 justify-start gap-2 px-0 h-auto font-normal hover:bg-transparent"
-          >
-            <h4 className="text-[10px] uppercase tracking-widest text-muted-foreground/60 font-medium">
-              Pulse
-            </h4>
-            <ChevronDown
-              className={cn(
-                "h-4 w-4 text-muted-foreground/60 transition-transform duration-200",
-                !pulseCollapsed && "rotate-180"
-              )}
-            />
-          </Button>
-        </CollapsibleTrigger>
+      <CollapsibleTrigger asChild>
         <Button
           variant="ghost"
-          size="icon"
-          className="h-5 w-5 shrink-0"
-          onClick={handleRefresh}
-          disabled={isGenerating}
-          title="Refresh summary"
-          aria-label="Refresh summary"
+          className="w-full justify-between px-2 py-2.5 h-auto font-normal text-muted-foreground hover:text-foreground bg-[var(--sidebar-section-bg)]"
         >
-          <RefreshCw className={cn("h-3 w-3", isGenerating && "animate-spin")} />
+          <span className="text-[11px] font-semibold tracking-wide">Pulse</span>
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 transition-transform duration-200",
+              !pulseCollapsed && "rotate-180"
+            )}
+          />
         </Button>
-      </div>
-      <CollapsibleContent className="px-3 pb-3">
+      </CollapsibleTrigger>
+      <CollapsibleContent className="px-2 pb-2">
         <div className="space-y-2">
           {isGenerating ? (
             <div className="space-y-1.5">
@@ -147,15 +131,12 @@ export default function Pulse() {
 
 function PulseSkeleton() {
   return (
-    <div className="rounded-lg border border-[var(--separator)] bg-card/50">
-      <div className="flex items-center justify-between px-3 py-2">
-        <Skeleton className="h-3 w-12" />
-        <div className="flex items-center gap-1">
-          <Skeleton className="h-5 w-5 rounded" />
-          <Skeleton className="h-4 w-4 rounded" />
-        </div>
+    <div>
+      <div className="flex items-center justify-between px-2 py-2.5 bg-[var(--sidebar-section-bg)]">
+        <Skeleton className="h-4 w-12" />
+        <Skeleton className="h-3.5 w-3.5" />
       </div>
-      <div className="px-3 pb-3 space-y-1.5">
+      <div className="px-2 pb-2 space-y-1.5">
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-4/5" />
         <Skeleton className="h-4 w-3/5" />

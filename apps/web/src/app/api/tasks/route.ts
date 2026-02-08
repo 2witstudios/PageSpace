@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, taskItems, taskLists, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { db, taskItems, taskLists, taskStatusConfigs, pages, eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db';
+import { DEFAULT_STATUS_CONFIG } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
@@ -11,8 +12,8 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const querySchema = z.object({
   context: z.enum(['user', 'drive']),
   driveId: z.string().optional(),
-  // Filter parameters
-  status: z.enum(['pending', 'in_progress', 'completed', 'blocked']).optional(),
+  // Filter parameters - status accepts any string for custom statuses
+  status: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
@@ -191,7 +192,7 @@ export async function GET(request: Request) {
     // This ensures pagination counts match the actual filtered results
     const trashedPages = await db.select({ id: pages.id })
       .from(pages)
-      .where(eq(pages.isTrashed, true));
+      .where(and(eq(pages.isTrashed, true), inArray(pages.driveId, driveIds)));
     const trashedPageIds = trashedPages.map(p => p.id);
 
     // Build assignee filter condition
@@ -260,7 +261,7 @@ export async function GET(request: Request) {
             and(
               not(isNull(taskItems.dueDate)),
               lt(taskItems.dueDate, today),
-              not(eq(taskItems.status, 'completed'))
+              isNull(taskItems.completedAt)
             )
           );
           break;
@@ -293,7 +294,20 @@ export async function GET(request: Request) {
 
     const whereCondition = and(...filterConditions);
 
-    // Fetch tasks with relations
+    // Fetch status configs for all involved task lists
+    const statusConfigRows = await db.query.taskStatusConfigs.findMany({
+      where: inArray(taskStatusConfigs.taskListId, taskListIds),
+    });
+
+    // Build map: taskListId -> status configs
+    const taskListStatusMap = new Map<string, typeof statusConfigRows>();
+    for (const config of statusConfigRows) {
+      const existing = taskListStatusMap.get(config.taskListId) || [];
+      existing.push(config);
+      taskListStatusMap.set(config.taskListId, existing);
+    }
+
+    // Fetch tasks with relations (including multi-assignees)
     const tasks = await db.query.taskItems.findMany({
       where: whereCondition,
       with: {
@@ -302,6 +316,12 @@ export async function GET(request: Request) {
         },
         assigneeAgent: {
           columns: { id: true, title: true, type: true },
+        },
+        assignees: {
+          with: {
+            user: { columns: { id: true, name: true, image: true } },
+            agentPage: { columns: { id: true, title: true, type: true } },
+          },
         },
         user: {
           columns: { id: true, name: true, image: true },
@@ -318,7 +338,7 @@ export async function GET(request: Request) {
       offset: params.offset,
     });
 
-    // Enrich tasks with drive and task list page info
+    // Enrich tasks with drive, task list page info, and status metadata
     // Filter out orphaned tasks where pageInfo is missing to prevent undefined URLs
     const enrichedTasks = tasks
       .map(task => {
@@ -330,11 +350,25 @@ export async function GET(request: Request) {
           });
           return null;
         }
+
+        // Compute status metadata from custom configs or defaults.
+        // Note: DB configs use `.name` while DEFAULT_STATUS_CONFIG uses `.label` — both map to statusLabel.
+        const configs = taskListStatusMap.get(task.taskListId) || [];
+        const matchingConfig = configs.find(c => c.slug === task.status);
+        const defaultConfig = DEFAULT_STATUS_CONFIG[task.status];
+
+        const statusGroup = matchingConfig?.group || defaultConfig?.group || 'todo';
+        const statusLabel = matchingConfig?.name || defaultConfig?.label || task.status;
+        const statusColor = matchingConfig?.color || defaultConfig?.color || 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400';
+
         return {
           ...task,
           driveId: pageInfo.driveId,
           taskListPageId: pageInfo.pageId,
           taskListPageTitle: pageInfo.taskListTitle,
+          statusGroup,
+          statusLabel,
+          statusColor,
         };
       })
       .filter((task): task is NonNullable<typeof task> => task !== null);
@@ -347,8 +381,22 @@ export async function GET(request: Request) {
 
     const total = countResult?.total ?? 0;
 
+    // Serialize status configs so the frontend can build per-task dropdowns
+    type StatusGroup = 'todo' | 'in_progress' | 'done';
+    const statusConfigsByTaskList: Record<string, Array<{
+      id: string; taskListId: string; name: string;
+      slug: string; color: string; group: StatusGroup; position: number;
+    }>> = {};
+    for (const [taskListId, configs] of taskListStatusMap) {
+      statusConfigsByTaskList[taskListId] = configs.map(c => ({
+        id: c.id, taskListId: c.taskListId, name: c.name,
+        slug: c.slug, color: c.color, group: c.group, position: c.position,
+      }));
+    }
+
     return NextResponse.json({
       tasks: enrichedTasks,
+      statusConfigsByTaskList,
       pagination: {
         total,
         limit: params.limit,

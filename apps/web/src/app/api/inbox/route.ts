@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { loggers, canUserViewPage } from '@pagespace/lib/server';
+import { loggers, getBatchPagePermissions } from '@pagespace/lib/server';
 import type { InboxItem, InboxResponse } from '@pagespace/lib';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -23,7 +24,11 @@ export async function GET(request: Request) {
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 20,
+      min: 1,
+      max: 100,
+    });
     const cursor = searchParams.get('cursor'); // ISO timestamp or "id:<id>" for null timestamps
     const driveId = searchParams.get('driveId'); // Optional: filter to specific drive
 
@@ -106,12 +111,15 @@ export async function GET(request: Request) {
         unread_count: string;
       }
 
-      for (const row of channelResults.rows) {
-        const typedRow = row as unknown as ChannelRow;
+      const typedChannelRows = channelResults.rows.map((row) => row as unknown as ChannelRow);
+      const channelPermissions = await getBatchPagePermissions(
+        userId,
+        typedChannelRows.map((row) => row.id)
+      );
 
-        // Check page-level permission before including in results
-        const canView = await canUserViewPage(userId, typedRow.id);
-        if (!canView) continue;
+      for (const typedRow of typedChannelRows) {
+        const permissions = channelPermissions.get(typedRow.id);
+        if (!permissions?.canView) continue;
 
         items.push({
           id: typedRow.id,
@@ -286,12 +294,15 @@ export async function GET(request: Request) {
         unread_count: string;
       }
 
-      for (const row of channelResults.rows) {
-        const typedRow = row as unknown as ChannelRow;
+      const typedChannelRows = channelResults.rows.map((row) => row as unknown as ChannelRow);
+      const channelPermissions = await getBatchPagePermissions(
+        userId,
+        typedChannelRows.map((row) => row.id)
+      );
 
-        // Check page-level permission before including in results
-        const canView = await canUserViewPage(userId, typedRow.id);
-        if (!canView) continue;
+      for (const typedRow of typedChannelRows) {
+        const permissions = channelPermissions.get(typedRow.id);
+        if (!permissions?.canView) continue;
 
         items.push({
           id: typedRow.id,

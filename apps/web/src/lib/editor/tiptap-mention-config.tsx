@@ -219,24 +219,25 @@ export const PageMention = PageMentionNode.configure({
     ];
   },
   suggestion: {
+    allowSpaces: true,
     items: async ({ query }) => {
       console.log('[TipTap] items called with query:', query);
       const { currentDriveId } = useDriveStore.getState();
       console.log('[TipTap] currentDriveId:', currentDriveId);
-      
+
       if (!currentDriveId) {
         console.log('[TipTap] No currentDriveId, returning empty array');
         return [];
       }
 
       const types = ['page', 'user'].join(',');
-      const url = `/api/mentions/search?q=${query}&driveId=${currentDriveId}&types=${types}`;
+      const url = `/api/mentions/search?q=${encodeURIComponent(query)}&driveId=${encodeURIComponent(currentDriveId)}&types=${types}`;
       console.log('[TipTap] Fetching suggestions from:', url);
-      
+
       const response = await fetchWithAuth(url);
       const suggestions: MentionSuggestion[] = await response.json();
       console.log('[TipTap] Got suggestions:', suggestions);
-      
+
       return suggestions;
     },
     render: () => {

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -29,8 +30,11 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const usePagination = searchParams.get('paginated') === 'true';
-    const limitParam = parseInt(searchParams.get('limit') || '20');
-    const limit = isNaN(limitParam) ? 20 : Math.max(1, Math.min(limitParam, 100));
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 20,
+      min: 1,
+      max: 100,
+    });
     const cursor = searchParams.get('cursor') || undefined;
     const directionParam = searchParams.get('direction');
     const direction = (directionParam === 'before' || directionParam === 'after')

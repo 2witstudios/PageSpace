@@ -12,6 +12,7 @@ import GlobalSearch from "@/components/search/GlobalSearch";
 import UserDropdown from "@/components/shared/UserDropdown";
 import RecentsDropdown from "@/components/shared/RecentsDropdown";
 import { UsageCounter } from "@/components/billing/UsageCounter";
+import NavButtons from "./NavButtons";
 
 interface TopBarProps {
   onToggleLeftPanel: () => void;
@@ -25,25 +26,29 @@ export default function TopBar({ onToggleLeftPanel, onToggleRightPanel }: TopBar
     <header className="sticky top-0 z-50 pt-[env(safe-area-inset-top)] liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onToggleLeftPanel}
-            className="lg:hidden"
-            aria-label="Toggle navigation"
-          >
-            <PanelLeft className="h-5 w-5" />
-          </Button>
+          <div className="flex items-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleLeftPanel}
+              className="lg:hidden"
+              aria-label="Toggle navigation"
+            >
+              <PanelLeft className="h-5 w-5" />
+            </Button>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onToggleLeftPanel}
-            className="hidden lg:flex"
-            aria-label="Collapse navigation"
-          >
-            <PanelLeft className="h-5 w-5" />
-          </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleLeftPanel}
+              className="hidden lg:flex"
+              aria-label="Collapse navigation"
+            >
+              <PanelLeft className="h-5 w-5" />
+            </Button>
+
+            <NavButtons />
+          </div>
 
           <Link
             href="/dashboard"

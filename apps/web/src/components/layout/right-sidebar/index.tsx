@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo, useCallback } from "react";
 import { History, MessageSquare, Activity } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { usePageAgentSidebarState, useSidebarAgentStore } from "@/hooks/page-agents";
+import { useSidebarAgentStore } from "@/hooks/page-agents";
 import { useDashboardContext } from "@/hooks/useDashboardContext";
 import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -28,14 +28,14 @@ export interface RightPanelProps {
  *
  * AGENT STATE MANAGEMENT:
  * - Dashboard context: Uses usePageAgentDashboardStore.selectedAgent (shared with GlobalAssistantView)
- * - Page context: Uses usePageAgentSidebarState (independent sidebar chat)
+ * - Page context: Uses useSidebarAgentStore.selectedAgent (independent sidebar chat)
  *
  * ACCESSIBILITY:
  * - Uses Radix UI Tabs for keyboard navigation (Arrow keys, Home, End)
  * - Automatic ARIA roles (tablist, tab, tabpanel)
  * - Focus management and screen reader support
  */
-export default function RightPanel({ className, variant }: RightPanelProps) {
+function RightPanel({ className, variant }: RightPanelProps) {
   const { isDashboardContext } = useDashboardContext();
 
   // Mobile keyboard support - adjust height when keyboard is open
@@ -43,8 +43,10 @@ export default function RightPanel({ className, variant }: RightPanelProps) {
 
   // Get agent state from both stores (hooks must be called unconditionally)
   // Only extract selectedAgent from sidebar state to minimize subscriptions
-  const { selectedAgent: sidebarAgent } = usePageAgentSidebarState();
-  const { selectedAgent: dashboardAgent, activeTab: dashboardActiveTab, setActiveTab: setDashboardActiveTab } = usePageAgentDashboardStore();
+  const sidebarAgent = useSidebarAgentStore((state) => state.selectedAgent);
+  const dashboardAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
+  const dashboardActiveTab = usePageAgentDashboardStore((state) => state.activeTab);
+  const setDashboardActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
   // On dashboard context, use the central agent store; otherwise use sidebar's own store
   const selectedAgent = isDashboardContext ? dashboardAgent : sidebarAgent;
@@ -80,14 +82,14 @@ export default function RightPanel({ className, variant }: RightPanelProps) {
   // Use appropriate tab state based on context
   const activeTab = isDashboardContext ? dashboardActiveTab : localActiveTab;
 
-  const handleTabChange = (tab: string) => {
+  const handleTabChange = useCallback((tab: string) => {
     const validTab = tab as SidebarTab;
     if (isDashboardContext) {
       setDashboardActiveTab(validTab);
     } else {
       setLocalActiveTab(validTab);
     }
-  };
+  }, [isDashboardContext, setDashboardActiveTab]);
 
   // Shared trigger styles matching original visual design
   const triggerBaseStyles = cn(
@@ -221,3 +223,5 @@ export default function RightPanel({ className, variant }: RightPanelProps) {
     </aside>
   );
 }
+
+export default memo(RightPanel);

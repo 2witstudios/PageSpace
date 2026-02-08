@@ -19,17 +19,16 @@ import {
   Bot
 } from 'lucide-react';
 
-import { FileTreeRenderer } from './FileTreeRenderer';
+import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { TaskRenderer } from './TaskRenderer';
-
-interface TreeItem {
-  path: string;
-  title: string;
-  type: string;
-  children: TreeItem[];
-}
+import { ActionResultRenderer } from './ActionResultRenderer';
+import { DriveListRenderer } from './DriveListRenderer';
+import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
+import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
+import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
+import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 
 interface ToolPart {
   type: string;
@@ -248,112 +247,438 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     return 'Pending';
   }, [error, state, parsedOutput, toolName]);
 
-  // Memoize stringified input for display
-  const inputDisplay = useMemo(() => {
-    if (!parsedInput) return null;
-    try {
-      return JSON.stringify(parsedInput, null, 2);
-    } catch {
-      return String(input);
+  // Memoize rich content for expanded view
+  const richContent = useMemo((): React.ReactNode | null => {
+    if (!parsedOutput) return null;
+    const result = parsedOutput as Record<string, unknown>;
+
+    // === DRIVE TOOLS ===
+    if (toolName === 'list_drives' && result.drives) {
+      const drives = (result.drives as Array<{ id: string; slug: string; title?: string; name?: string; description?: string; isPersonal?: boolean; memberCount?: number }>).map(d => ({
+        id: d.id,
+        name: d.name || d.title || 'Untitled',
+        slug: d.slug,
+        description: d.description,
+        isPersonal: d.isPersonal,
+        memberCount: d.memberCount,
+      }));
+      return <DriveListRenderer drives={drives} />;
     }
-  }, [parsedInput, input]);
+
+    if (toolName === 'create_drive' || toolName === 'rename_drive') {
+      return (
+        <ActionResultRenderer
+          actionType={toolName === 'create_drive' ? 'create' : 'rename'}
+          success={result.success !== false}
+          title={(result.name || result.title) as string | undefined}
+          oldTitle={result.oldName as string | undefined}
+          message={result.message as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'update_drive_context') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={result.success !== false}
+          title="Workspace Context"
+          message={(result.message as string | undefined) || 'Context updated successfully'}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    // === PAGE READ TOOLS ===
+    if (toolName === 'list_pages' && result.tree) {
+      return (
+        <PageTreeRenderer
+          tree={result.tree as TreeItem[]}
+          driveName={result.driveName as string | undefined}
+          driveId={result.driveId as string | undefined}
+          maxHeight={200}
+        />
+      );
+    }
+
+    if (toolName === 'list_trash' && result.tree) {
+      return (
+        <PageTreeRenderer
+          tree={result.tree as TreeItem[]}
+          driveName={result.driveName as string | undefined}
+          driveId={result.driveId as string | undefined}
+          title="Trash"
+          maxHeight={200}
+        />
+      );
+    }
+
+    if (toolName === 'read_page' && (result.rawContent != null || result.content != null)) {
+      return (
+        <RichContentRenderer
+          title={(result.title as string) || 'Document'}
+          content={(result.rawContent ?? result.content) as string}
+          pageId={result.pageId as string | undefined}
+          pageType={result.type as string | undefined}
+          maxHeight={200}
+        />
+      );
+    }
+
+    if (toolName === 'list_conversations' && result.conversations != null) {
+      const conversations = result.conversations as Array<{ id: string; title?: string }>;
+      return (
+        <PageTreeRenderer
+          tree={conversations.map(c => ({
+            path: c.id,
+            title: c.title || `Conversation ${c.id.slice(0, 8)}`,
+            type: 'AI_CHAT',
+            pageId: c.id,
+            children: []
+          }))}
+          title="Conversations"
+          maxHeight={200}
+        />
+      );
+    }
+
+    if (toolName === 'read_conversation' && result.content != null) {
+      return (
+        <RichContentRenderer
+          title={(result.title as string | undefined) || 'Conversation'}
+          content={result.content as string}
+          pageId={result.pageId as string | undefined}
+          pageType="AI_CHAT"
+          maxHeight={200}
+        />
+      );
+    }
+
+    // === PAGE WRITE TOOLS ===
+    if (toolName === 'replace_lines') {
+      if (result.success && result.oldContent != null && result.newContent != null) {
+        return (
+          <RichDiffRenderer
+            title={(result.title as string) || 'Modified Document'}
+            oldContent={result.oldContent as string}
+            newContent={result.newContent as string}
+            pageId={result.pageId as string | undefined}
+            changeSummary={result.summary as string | undefined}
+            maxHeight={200}
+          />
+        );
+      }
+      if (result.success && result.newContent != null) {
+        return (
+          <RichContentRenderer
+            title={(result.title as string) || 'Modified Document'}
+            content={result.newContent as string}
+            pageId={result.pageId as string | undefined}
+            pageType={result.type as string | undefined}
+            maxHeight={200}
+          />
+        );
+      }
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={result.success !== false}
+          title={result.title as string | undefined}
+          pageId={result.pageId as string | undefined}
+          pageType={result.type as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'create_page') {
+      return (
+        <ActionResultRenderer
+          actionType="create"
+          success={result.success !== false}
+          title={result.title as string | undefined}
+          pageId={result.pageId as string | undefined}
+          driveId={result.driveId as string | undefined}
+          pageType={result.type as string | undefined}
+          message={result.message as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'rename_page') {
+      return (
+        <ActionResultRenderer
+          actionType="rename"
+          success={result.success !== false}
+          title={(result.newTitle || result.title) as string | undefined}
+          oldTitle={result.oldTitle as string | undefined}
+          pageId={result.pageId as string | undefined}
+          driveId={result.driveId as string | undefined}
+          pageType={result.type as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'trash') {
+      return (
+        <ActionResultRenderer
+          actionType="trash"
+          success={result.success !== false}
+          title={result.title as string | undefined}
+          pageType={result.type as string | undefined}
+          message={result.message as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'restore') {
+      return (
+        <ActionResultRenderer
+          actionType="restore"
+          success={result.success !== false}
+          title={result.title as string | undefined}
+          pageId={result.pageId as string | undefined}
+          driveId={result.driveId as string | undefined}
+          pageType={result.type as string | undefined}
+          message={result.message as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'move_page') {
+      return (
+        <ActionResultRenderer
+          actionType="move"
+          success={result.success !== false}
+          title={result.title as string | undefined}
+          pageId={result.pageId as string | undefined}
+          driveId={result.driveId as string | undefined}
+          pageType={result.type as string | undefined}
+          oldParent={result.oldParentTitle as string | undefined}
+          newParent={result.newParentTitle as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'edit_sheet_cells') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={result.success !== false}
+          title={(result.title as string | undefined) || 'Sheet'}
+          pageId={result.pageId as string | undefined}
+          driveId={result.driveId as string | undefined}
+          pageType="SHEET"
+          message={(result.summary as string | undefined) || `${(result.updatedCount as number | undefined) || 0} cells updated`}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    // === SEARCH TOOLS ===
+    if (toolName === 'regex_search' && result.results) {
+      return (
+        <SearchResultsRenderer
+          results={result.results as SearchResult[]}
+          query={parsedInput?.pattern as string}
+          searchType="regex"
+          totalMatches={result.totalMatches as number | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'glob_search' && result.results) {
+      return (
+        <SearchResultsRenderer
+          results={result.results as SearchResult[]}
+          query={parsedInput?.pattern as string}
+          searchType="glob"
+        />
+      );
+    }
+
+    if (toolName === 'multi_drive_search' && result.results) {
+      return (
+        <SearchResultsRenderer
+          results={result.results as SearchResult[]}
+          query={(parsedInput?.pattern || parsedInput?.query) as string}
+          searchType="multi-drive"
+          totalMatches={result.totalMatches as number | undefined}
+        />
+      );
+    }
+
+    // === AGENT TOOLS ===
+    if (toolName === 'list_agents' && result.agents) {
+      return <AgentListRenderer agents={result.agents as AgentInfo[]} />;
+    }
+
+    if (toolName === 'multi_drive_list_agents' && result.agents) {
+      return <AgentListRenderer agents={result.agents as AgentInfo[]} isMultiDrive />;
+    }
+
+    if (toolName === 'update_agent_config') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={result.success !== false}
+          title={(result.agentTitle as string | undefined) || 'Agent Configuration'}
+          message={(result.message as string | undefined) || 'Configuration updated'}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    if (toolName === 'ask_agent' && result.response) {
+      return (
+        <RichContentRenderer
+          title="Agent Response"
+          content={String(result.response)}
+          maxHeight={200}
+        />
+      );
+    }
+
+    // === WEB SEARCH ===
+    if (toolName === 'web_search' && result.results) {
+      return (
+        <WebSearchRenderer
+          results={result.results as WebSearchResult[]}
+          query={parsedInput?.query as string}
+        />
+      );
+    }
+
+    // === ACTIVITY ===
+    if (toolName === 'get_activity') {
+      if (result.activities) {
+        return (
+          <ActivityRenderer
+            activities={result.activities as ActivityItem[]}
+            period={result.period as string | undefined}
+          />
+        );
+      }
+      if (result.drives && Array.isArray(result.drives)) {
+        const actors = (result.actors || []) as Array<{ email: string; name: string | null; isYou: boolean; count: number }>;
+        const driveGroups = result.drives as Array<{
+          drive: { id: string; name: string; slug: string };
+          activities: Array<{
+            id: string; ts: string; op: string; res: string;
+            title: string | null; pageId: string | null; actor: number; ai?: string;
+          }>;
+        }>;
+
+        const opToAction = (op: string): 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'renamed' => {
+          switch (op) {
+            case 'create': return 'created';
+            case 'update': return 'updated';
+            case 'delete': case 'trash': return 'deleted';
+            case 'restore': return 'restored';
+            case 'move': case 'reorder': return 'moved';
+            case 'rename': return 'renamed';
+            default: return 'updated';
+          }
+        };
+
+        const flatActivities: ActivityItem[] = [];
+        for (const group of driveGroups) {
+          for (const activity of group.activities) {
+            const actor = actors[activity.actor];
+            flatActivities.push({
+              id: activity.id,
+              action: opToAction(activity.op),
+              pageId: activity.pageId || undefined,
+              pageTitle: activity.title || undefined,
+              pageType: activity.res === 'page' ? undefined : activity.res,
+              driveId: group.drive.id,
+              driveName: group.drive.name,
+              actorName: actor?.name || actor?.email || undefined,
+              timestamp: activity.ts,
+              summary: activity.ai ? `AI-generated (${activity.ai})` : undefined,
+            });
+          }
+        }
+
+        flatActivities.sort((a, b) => {
+          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return timeB - timeA;
+        });
+
+        const meta = result.meta as { window?: string } | undefined;
+        const period = meta?.window ? `Last ${meta.window}` : undefined;
+
+        return <ActivityRenderer activities={flatActivities} period={period} />;
+      }
+    }
+
+    // === TASK TOOLS ===
+    if (toolName === 'get_assigned_tasks' && result.tasks) {
+      const tasks = result.tasks as Array<{ id: string; title: string; status?: string; pageId?: string }>;
+      return (
+        <PageTreeRenderer
+          tree={tasks.map(t => ({
+            path: t.id,
+            title: `${t.status === 'completed' ? '[Done] ' : ''}${t.title}`,
+            type: 'TASK_LIST',
+            pageId: t.pageId,
+            children: []
+          }))}
+          title="Assigned Tasks"
+          maxHeight={200}
+        />
+      );
+    }
+
+    // Default: show success/failure for any tool with success field
+    if (typeof result.success === 'boolean') {
+      return (
+        <ActionResultRenderer
+          actionType="update"
+          success={result.success}
+          title={(result.title || result.name) as string | undefined}
+          message={result.message as string | undefined}
+          errorMessage={result.error as string | undefined}
+        />
+      );
+    }
+
+    return null;
+  }, [toolName, parsedInput, parsedOutput]);
 
   // Memoize expanded details content
   const expandedDetails = useMemo(() => {
     if (!isExpanded) return null;
 
-    const result = parsedOutput as Record<string, unknown> | null;
-
     return (
-      <div className="mt-1 p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px] space-y-1 max-w-full break-words">
-        {inputDisplay ? (
-          <div className="space-y-0.5 max-w-full break-words">
-            <div className="font-medium text-gray-600 dark:text-gray-400">Input:</div>
-            <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-w-full">
-              {inputDisplay}
-            </pre>
-          </div>
-        ) : null}
-
-        {output ? (
-          <div className="space-y-0.5 max-w-full break-words">
-            <div className="font-medium text-gray-600 dark:text-gray-400">Result:</div>
-            {(() => {
-              if (result) {
-                if (toolName === 'list_pages' && result.tree) {
-                  return <div className="border rounded-md overflow-hidden"><FileTreeRenderer tree={result.tree as TreeItem[]} /></div>;
-                }
-
-                if (toolName === 'read_page' && (result.rawContent || result.content)) {
-                  return (
-                    <div className="border rounded-md overflow-hidden">
-                      <RichContentRenderer
-                        title={(result.title as string) || 'Document'}
-                        content={(result.rawContent as string) || (result.content as string)}
-                        pageId={result.pageId as string | undefined}
-                        pageType={result.type as string | undefined}
-                        maxHeight={200}
-                      />
-                    </div>
-                  );
-                }
-
-                if (toolName === 'replace_lines' && result.success) {
-                  // Show diff if both old and new content available
-                  if (result.oldContent && result.newContent) {
-                    return (
-                      <div className="border rounded-md overflow-hidden">
-                        <RichDiffRenderer
-                          title={(result.title as string) || 'Modified Document'}
-                          oldContent={result.oldContent as string}
-                          newContent={result.newContent as string}
-                          pageId={result.pageId as string | undefined}
-                          changeSummary={result.summary as string | undefined}
-                          maxHeight={200}
-                        />
-                      </div>
-                    );
-                  }
-                  // Fallback to showing new content
-                  if (result.newContent) {
-                    return (
-                      <div className="border rounded-md overflow-hidden">
-                        <RichContentRenderer
-                          title={(result.title as string) || 'Modified Document'}
-                          content={result.newContent as string}
-                          pageId={result.pageId as string | undefined}
-                          pageType={result.type as string | undefined}
-                          maxHeight={200}
-                        />
-                      </div>
-                    );
-                  }
-                }
-
-                return (
-                  <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-60 overflow-y-auto max-w-full">
-                    {JSON.stringify(result, null, 2)}
-                  </pre>
-                );
-              }
-
-              return (
-                <pre className="text-gray-500 dark:text-gray-500 overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto max-w-full">
-                  {typeof output === 'string' ? output : JSON.stringify(output, null, 2)}
-                </pre>
-              );
-            })()}
-          </div>
-        ) : null}
-
+      <div className="mt-1 max-w-full break-words">
         {error ? (
-          <div className="p-1 bg-red-50 dark:bg-red-900/20 rounded max-w-full break-words">
-            <div className="text-red-600 dark:text-red-400 break-words">{error}</div>
+          <ActionResultRenderer
+            actionType="update"
+            success={false}
+            errorMessage={error}
+            title={parsedInput?.title as string}
+          />
+        ) : richContent ? (
+          <div className="text-[10px]">{richContent}</div>
+        ) : (
+          <div className="p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px]">
+            <span className="text-gray-500 dark:text-gray-400">
+              {state === 'input-streaming' || state === 'streaming' ? 'Processing...' :
+               state === 'input-available' ? 'Waiting for result...' : 'Completed'}
+            </span>
           </div>
-        ) : null}
+        )}
       </div>
     );
-  }, [isExpanded, inputDisplay, output, parsedOutput, toolName, error]);
+  }, [isExpanded, error, richContent, parsedInput, state]);
 
   return (
     <div className="py-0.5 text-[11px] max-w-full">

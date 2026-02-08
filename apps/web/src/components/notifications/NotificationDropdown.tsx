@@ -66,14 +66,12 @@ const NotificationIcon = ({ type }: { type: string }) => {
 
 export default function NotificationDropdown() {
   const router = useRouter();
-  const {
-    notifications,
-    isLoading,
-    handleNotificationRead,
-    handleMarkAllAsRead,
-    handleDeleteNotification,
-    setIsDropdownOpen,
-  } = useNotificationStore();
+  const notifications = useNotificationStore((state) => state.notifications);
+  const isLoading = useNotificationStore((state) => state.isLoading);
+  const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
+  const handleMarkAllAsRead = useNotificationStore((state) => state.handleMarkAllAsRead);
+  const handleDeleteNotification = useNotificationStore((state) => state.handleDeleteNotification);
+  const setIsDropdownOpen = useNotificationStore((state) => state.setIsDropdownOpen);
 
   const handleConnectionAction = async (connectionId: string, action: 'accept' | 'reject', notificationId: string) => {
     try {

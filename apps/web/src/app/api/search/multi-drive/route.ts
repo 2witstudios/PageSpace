@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
+import { getBatchPagePermissions, getDriveIdsForUser } from '@pagespace/lib/server';
+import { loggers } from '@pagespace/lib/server';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
-import { db, pages, drives, eq, and, sql } from '@pagespace/db';
-import { getBatchPagePermissions, getUserDriveAccess } from '@pagespace/lib/server';
-import { loggers } from '@pagespace/lib/server';
 
 /**
  * GET /api/search/multi-drive
@@ -19,7 +20,11 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const searchQuery = searchParams.get('searchQuery');
     const searchType = searchParams.get('searchType') || 'text';
-    const maxResultsPerDrive = Math.min(parseInt(searchParams.get('maxResultsPerDrive') || '20'), 50);
+    const maxResultsPerDrive = parseBoundedIntParam(searchParams.get('maxResultsPerDrive'), {
+      defaultValue: 20,
+      min: 1,
+      max: 50,
+    });
 
     if (!searchQuery) {
       return NextResponse.json(
@@ -35,32 +40,117 @@ export async function GET(request: Request) {
       );
     }
 
-    // Get all drives user has access to
-    const userDrives = await db
-      .selectDistinct({
+    // Get drive IDs accessible by this user without scanning all drives.
+    const accessibleDriveIds = await getDriveIdsForUser(userId);
+    if (accessibleDriveIds.length === 0) {
+      return NextResponse.json({
+        success: true,
+        searchQuery,
+        searchType,
+        results: [],
+        totalDrives: 0,
+        totalMatches: 0,
+        summary: 'Found 0 matches across 0 drives',
+        stats: {
+          drivesSearched: 0,
+          drivesWithResults: 0,
+          totalMatches: 0,
+        },
+        nextSteps: [
+          'Try a different search query',
+          'Check if you have access to the expected drives',
+          'Use list_drives to see available workspaces',
+        ],
+      });
+    }
+
+    const accessibleDrives = await db
+      .select({
         id: drives.id,
         name: drives.name,
         slug: drives.slug,
       })
       .from(drives)
-      .where(eq(drives.isTrashed, false));
+      .where(and(
+        eq(drives.isTrashed, false),
+        inArray(drives.id, accessibleDriveIds)
+      ));
 
-    const results = [];
+    if (accessibleDrives.length === 0) {
+      return NextResponse.json({
+        success: true,
+        searchQuery,
+        searchType,
+        results: [],
+        totalDrives: 0,
+        totalMatches: 0,
+        summary: 'Found 0 matches across 0 drives',
+        stats: {
+          drivesSearched: 0,
+          drivesWithResults: 0,
+          totalMatches: 0,
+        },
+        nextSteps: [
+          'Try a different search query',
+          'Check if you have access to the expected drives',
+          'Use list_drives to see available workspaces',
+        ],
+      });
+    }
 
-    // First, batch check drive access for all drives
-    const driveAccessChecks = await Promise.all(
-      userDrives.map(async (drive) => ({
-        drive,
-        hasAccess: await getUserDriveAccess(userId, drive.id)
-      }))
-    );
+    // Run one ranked query across all accessible drives, enforcing per-drive caps
+    // at the database layer (no per-drive loop queries).
+    const driveIds = accessibleDrives.map((drive) => drive.id);
+    const regexPattern = searchQuery.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
+    const searchPattern = `%${searchQuery}%`;
+    const searchCondition = searchType === 'regex'
+      ? sql`${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern}`
+      : sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`;
 
-    // Filter to only accessible drives
-    const accessibleDrives = driveAccessChecks
-      .filter(({ hasAccess }) => hasAccess)
-      .map(({ drive }) => drive);
+    const rankedMatches = db
+      .select({
+        id: pages.id,
+        title: pages.title,
+        type: pages.type,
+        content: pages.content,
+        driveId: pages.driveId,
+        rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${pages.driveId} ORDER BY ${pages.updatedAt} DESC, ${pages.id} DESC)`.as('row_number'),
+      })
+      .from(pages)
+      .where(and(
+        inArray(pages.driveId, driveIds),
+        eq(pages.isTrashed, false),
+        searchCondition
+      ))
+      .as('ranked_matches');
 
-    // Collect all search results from accessible drives
+    const rankedResults = await db
+      .select({
+        id: rankedMatches.id,
+        title: rankedMatches.title,
+        type: rankedMatches.type,
+        content: rankedMatches.content,
+        driveId: rankedMatches.driveId,
+      })
+      .from(rankedMatches)
+      .where(sql`${rankedMatches.rowNumber} <= ${maxResultsPerDrive}`);
+
+    const driveMap = new Map(accessibleDrives.map((drive) => [drive.id, drive]));
+
+    const results: Array<{
+      driveId: string;
+      driveName: string;
+      driveSlug: string;
+      matches: Array<{
+        pageId: string;
+        title: string;
+        type: string;
+        excerpt: string;
+      }>;
+      count: number;
+    }> = [];
+
+    // Collect all search results for batch permission checking.
     const allSearchResults: Array<{
       page: {
         id: string;
@@ -73,47 +163,21 @@ export async function GET(request: Request) {
       driveSlug: string;
     }> = [];
 
-    for (const drive of accessibleDrives) {
-      // Build search conditions
-      let searchWhereConditions;
-      if (searchType === 'regex') {
-        const pgPattern = searchQuery.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
-        searchWhereConditions = and(
-          eq(pages.driveId, drive.id),
-          eq(pages.isTrashed, false),
-          sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
-        );
-      } else {
-        const searchPattern = `%${searchQuery}%`;
-        searchWhereConditions = and(
-          eq(pages.driveId, drive.id),
-          eq(pages.isTrashed, false),
-          sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`
-        );
-      }
+    for (const page of rankedResults) {
+      const drive = driveMap.get(page.driveId);
+      if (!drive) continue;
 
-      // Search in this drive
-      const driveQuery = db
-        .select({
-          id: pages.id,
-          title: pages.title,
-          type: pages.type,
-          content: pages.content,
-        })
-        .from(pages)
-        .where(searchWhereConditions);
-
-      const drivePages = await driveQuery.limit(maxResultsPerDrive);
-
-      // Add to collection for batch permission checking
-      for (const page of drivePages) {
-        allSearchResults.push({
-          page,
-          driveId: drive.id,
-          driveName: drive.name,
-          driveSlug: drive.slug
-        });
-      }
+      allSearchResults.push({
+        page: {
+          id: page.id,
+          title: page.title,
+          type: page.type,
+          content: page.content,
+        },
+        driveId: drive.id,
+        driveName: drive.name,
+        driveSlug: drive.slug,
+      });
     }
 
     // Batch check permissions for all search results at once
@@ -177,7 +241,7 @@ export async function GET(request: Request) {
       totalMatches,
       summary: `Found ${totalMatches} matches across ${results.length} drive${results.length === 1 ? '' : 's'}`,
       stats: {
-        drivesSearched: userDrives.length,
+        drivesSearched: accessibleDrives.length,
         drivesWithResults: results.length,
         totalMatches,
       },
@@ -195,7 +259,7 @@ export async function GET(request: Request) {
   } catch (error) {
     loggers.api.error('Error in multi-drive search:', error as Error);
     return NextResponse.json(
-      { error: `Multi-drive search failed: ${error instanceof Error ? error.message : String(error)}` },
+      { error: 'Multi-drive search failed' },
       { status: 500 }
     );
   }

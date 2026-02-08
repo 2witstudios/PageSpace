@@ -82,6 +82,7 @@ vi.mock('@pagespace/lib/security', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
+  appendSessionCookie: vi.fn(),
 }));
 
 import { db } from '@pagespace/db';

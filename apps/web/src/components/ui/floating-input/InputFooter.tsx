@@ -7,7 +7,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
-import { Mic } from 'lucide-react';
+import { Mic, AudioLines, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { ToolsPopover } from './ToolsPopover';
@@ -41,12 +41,22 @@ export interface InputFooterProps {
   onMcpServerToggle?: (serverName: string, enabled: boolean) => void;
   /** Whether MCP section should be shown (desktop only) */
   showMcp?: boolean;
-  /** Callback when mic button is clicked */
+  /** Callback when mic button is clicked (basic speech-to-text) */
   onMicClick?: () => void;
-  /** Whether microphone is currently listening */
+  /** Whether microphone is currently listening (basic STT) */
   isListening?: boolean;
   /** Whether microphone is supported by the browser */
   isMicSupported?: boolean;
+  /** Callback when voice mode button is clicked */
+  onVoiceModeClick?: () => void;
+  /** Whether voice mode is currently active */
+  isVoiceModeActive?: boolean;
+  /** Whether voice mode is available (user has OpenAI key) */
+  isVoiceModeAvailable?: boolean;
+  /** Error message from microphone/speech recognition */
+  micError?: string | null;
+  /** Callback to clear the mic error */
+  onClearMicError?: () => void;
   /** Currently selected provider */
   selectedProvider?: string | null;
   /** Currently selected model */
@@ -87,6 +97,11 @@ export function InputFooter({
   onMicClick,
   isListening = false,
   isMicSupported = true,
+  onVoiceModeClick,
+  isVoiceModeActive = false,
+  isVoiceModeAvailable = false,
+  micError,
+  onClearMicError,
   selectedProvider,
   selectedModel,
   onProviderModelChange,
@@ -134,33 +149,74 @@ export function InputFooter({
           />
         )}
 
-        {/* Mic button */}
+        {/* Voice Mode button (OpenAI STT/TTS) */}
+        {isVoiceModeAvailable && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onVoiceModeClick}
+                disabled={disabled}
+                className={cn(
+                  'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
+                  isVoiceModeActive
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <AudioLines className="h-4 w-4" />
+                <span className="sr-only">
+                  {isVoiceModeActive ? 'Exit voice mode' : 'Enter voice mode'}
+                </span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {isVoiceModeActive ? 'Exit voice mode' : 'Voice mode (hands-free)'}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {/* Mic button (basic STT) */}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
               size="sm"
-              onClick={onMicClick}
+              onClick={micError ? onClearMicError : onMicClick}
               disabled={disabled || !isMicSupported}
               className={cn(
                 'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
-                isListening
-                  ? 'animate-pulse text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
+                'hidden sm:inline-flex',
+                micError
+                  ? 'text-destructive hover:text-destructive/80'
+                  : isListening
+                    ? 'animate-pulse text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              <Mic className="h-4 w-4" />
+              {micError ? (
+                <MicOff className="h-4 w-4" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
               <span className="sr-only">
-                {isListening ? 'Stop listening' : 'Voice input'}
+                {micError
+                  ? 'Microphone error - click to dismiss'
+                  : isListening
+                    ? 'Stop listening'
+                    : 'Voice input'}
               </span>
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">
-            {!isMicSupported
-              ? 'Voice input not supported'
-              : isListening
-                ? 'Stop listening'
-                : 'Voice input'}
+          <TooltipContent side="top" className={cn(micError && 'max-w-64')}>
+            {micError
+              ? micError
+              : !isMicSupported
+                ? 'Voice input not supported'
+                : isListening
+                  ? 'Stop listening'
+                  : 'Voice input'}
           </TooltipContent>
         </Tooltip>
       </div>

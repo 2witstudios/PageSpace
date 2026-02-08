@@ -65,6 +65,8 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
+import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -98,6 +100,13 @@ export async function POST(request: Request) {
     }
     userId = authResult.userId;
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
+
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.ai.warn('AI Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
 
     // Parse request body for AI SDK v5 pattern
     const requestBody = await request.json();
@@ -182,6 +191,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
+    // Image security validation — validate file parts in the user message
+    const userMessageForValidation = messages[messages.length - 1];
+    const messageHasImages = userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation);
+    if (messageHasImages) {
+      const imageValidation = validateUserMessageFileParts(userMessageForValidation);
+      if (!imageValidation.valid) {
+        loggers.ai.warn('AI Chat API: Image validation failed', { error: imageValidation.error });
+        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+      }
+    }
+
     // Check if user has permission to view and edit this AI chat page
     const maskedUserId = maskIdentifier(userId);
     const maskedChatId = maskIdentifier(chatId);
@@ -234,6 +254,18 @@ export async function POST(request: Request) {
     if (!page) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Vision capability gate — reject images sent to non-vision models
+    if (messageHasImages) {
+      const effectiveModel = selectedModel || page.aiModel;
+      if (effectiveModel && !hasVisionCapability(effectiveModel)) {
+        loggers.ai.warn('AI Chat API: Images sent to non-vision model', { model: effectiveModel });
+        return NextResponse.json(
+          { error: `The selected model "${effectiveModel}" does not support image attachments. Please choose a vision-capable model.` },
+          { status: 400 }
+        );
+      }
     }
 
     // Extract custom agent configuration from page
@@ -303,17 +335,16 @@ export async function POST(request: Request) {
         
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        await db.insert(chatMessages).values({
-          id: messageId,
+        await saveMessageToDatabase({
+          messageId,
           pageId: chatId,
-          conversationId, // Group messages into conversation sessions
+          conversationId,
           userId,
           role: 'user',
           content: messageContent,
-          toolCalls: null,
-          toolResults: null,
-          createdAt: new Date(),
-          isActive: true,
+          toolCalls: undefined,
+          toolResults: undefined,
+          uiMessage: userMessage,
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');
@@ -705,7 +736,8 @@ export async function POST(request: Request) {
     }
     
     // Build timestamp system prompt for temporal awareness
-    const timestampSystemPrompt = buildTimestampSystemPrompt();
+    const userTimezone = user?.timezone ?? undefined;
+    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
@@ -745,6 +777,8 @@ export async function POST(request: Request) {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         execute: async ({ writer }) => {
+          let startChunkSent = false;
+
           // Send the server-generated message ID to the client at stream start
           // streamId is passed via X-Stream-Id header (see result.toUIMessageStreamResponse below)
           // Wrapped in try/catch to handle early disconnect - continue processing anyway
@@ -753,6 +787,7 @@ export async function POST(request: Request) {
               type: 'start',
               messageId: serverAssistantMessageId,
             });
+            startChunkSent = true;
           } catch {
             // Client disconnected before first write - continue processing
             // to ensure onFinish fires and the message is saved
@@ -768,6 +803,7 @@ export async function POST(request: Request) {
             abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
             experimental_context: {
               userId,
+              timezone: userTimezone,
               aiProvider: currentProvider,
               aiModel: currentModel,
               conversationId,
@@ -786,7 +822,7 @@ export async function POST(request: Request) {
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
               modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId, AI context, location context, and model capabilities to tools
+            }, // Pass userId, timezone, AI context, location context, and model capabilities to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {
@@ -813,6 +849,21 @@ export async function POST(request: Request) {
           // will continue processing server-side even if writes fail
           for await (const chunk of aiResult.toUIMessageStream()) {
             try {
+              // We already emitted a start chunk with a server-controlled message ID.
+              // Skip any additional start chunks so client/server message IDs stay aligned.
+              if (chunk.type === 'start') {
+                if (startChunkSent) {
+                  continue;
+                }
+
+                writer.write({
+                  type: 'start',
+                  messageId: serverAssistantMessageId,
+                });
+                startChunkSent = true;
+                continue;
+              }
+
               writer.write(chunk);
             } catch {
               // Client disconnected - continue processing to ensure onFinish fires

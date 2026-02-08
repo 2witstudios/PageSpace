@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import {
   db,
@@ -11,11 +11,10 @@ import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isUserDriveMember } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-const GOOGLE_READ_ONLY_ERROR =
-  'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
 
 // Schema for updating an event
 const updateEventSchema = z.object({
@@ -179,10 +178,6 @@ export async function PATCH(
       );
     }
 
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
-    }
-
     const body = await request.json();
     const parseResult = updateEventSchema.safeParse(body);
 
@@ -260,6 +255,13 @@ export async function PATCH(
       attendeeIds: attendees.map(a => a.userId),
     });
 
+    // Push update to Google Calendar (fire-and-forget)
+    after(() => {
+      pushEventUpdateToGoogle(userId, eventId).catch(err =>
+        loggers.api.warn('Push update to Google failed', { eventId, error: err?.message })
+      );
+    });
+
     return NextResponse.json(completeEvent);
   } catch (error) {
     loggers.api.error('Error updating calendar event:', error as Error);
@@ -309,15 +311,18 @@ export async function DELETE(
       );
     }
 
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
-    }
-
     // Get all attendee IDs before deletion for broadcasting
     const attendees = await db
       .select({ userId: eventAttendees.userId })
       .from(eventAttendees)
       .where(eq(eventAttendees.eventId, eventId));
+
+    // Delete from Google Calendar before soft-deleting locally (fire-and-forget)
+    after(() => {
+      pushEventDeleteToGoogle(userId, eventId).catch(err =>
+        loggers.api.warn('Push delete to Google failed', { eventId, error: err?.message })
+      );
+    });
 
     // Soft delete the event
     await db

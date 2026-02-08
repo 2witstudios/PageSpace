@@ -9,16 +9,14 @@ import { useSocketStore } from '@/stores/useSocketStore';
 import NotificationDropdown from './NotificationDropdown';
 
 export default function NotificationBell() {
-  const { 
-    unreadCount, 
-    isDropdownOpen,
-    setIsDropdownOpen,
-    fetchNotifications,
-    initializeSocketListeners,
-    cleanupSocketListeners,
-  } = useNotificationStore();
-  
-  const { connectionStatus } = useSocketStore();
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+  const isDropdownOpen = useNotificationStore((state) => state.isDropdownOpen);
+  const setIsDropdownOpen = useNotificationStore((state) => state.setIsDropdownOpen);
+  const fetchNotifications = useNotificationStore((state) => state.fetchNotifications);
+  const initializeSocketListeners = useNotificationStore((state) => state.initializeSocketListeners);
+  const cleanupSocketListeners = useNotificationStore((state) => state.cleanupSocketListeners);
+
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
 
   useEffect(() => {
     // Fetch initial notifications

@@ -94,18 +94,16 @@ export default function NotificationsPage() {
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
   const [selectedType, setSelectedType] = useState<string | null>(null);
   
-  const {
-    notifications,
-    isLoading,
-    fetchNotifications,
-    handleNotificationRead,
-    handleMarkAllAsRead,
-    handleDeleteNotification,
-    initializeSocketListeners,
-    cleanupSocketListeners,
-  } = useNotificationStore();
+  const notifications = useNotificationStore((state) => state.notifications);
+  const isLoading = useNotificationStore((state) => state.isLoading);
+  const fetchNotifications = useNotificationStore((state) => state.fetchNotifications);
+  const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
+  const handleMarkAllAsRead = useNotificationStore((state) => state.handleMarkAllAsRead);
+  const handleDeleteNotification = useNotificationStore((state) => state.handleDeleteNotification);
+  const initializeSocketListeners = useNotificationStore((state) => state.initializeSocketListeners);
+  const cleanupSocketListeners = useNotificationStore((state) => state.cleanupSocketListeners);
   
-  const { connectionStatus } = useSocketStore();
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
 
   useEffect(() => {
     fetchNotifications();

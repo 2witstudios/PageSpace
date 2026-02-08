@@ -44,6 +44,7 @@ const FaviconImage: React.FC<{ src: string }> = memo(function FaviconImage({ src
   }
 
   return (
+    // eslint-disable-next-line @next/next/no-img-element -- external favicons from arbitrary domains; 16px images don't benefit from optimization
     <img
       src={src}
       alt=""

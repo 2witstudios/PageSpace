@@ -100,18 +100,18 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
       <CollapsibleTrigger asChild>
         <Button
           variant="ghost"
-          className="w-full justify-between px-3 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
+          className="w-full justify-between px-2 py-2 h-auto font-normal text-muted-foreground hover:text-foreground"
         >
           <span className="text-xs font-medium">Drive Actions</span>
           <ChevronDown
             className={cn(
-              "h-4 w-4 transition-transform duration-200",
+              "h-3.5 w-3.5 transition-transform duration-200",
               !driveFooterCollapsed && "rotate-180"
             )}
           />
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-1 pb-2">
+      <CollapsibleContent className="pb-1">
         <div className="space-y-0.5">
           {actions.map((action) => {
             const linkElement = (

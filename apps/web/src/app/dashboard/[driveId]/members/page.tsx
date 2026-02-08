@@ -12,7 +12,9 @@ export default function MembersPage() {
   const params = useParams();
   const router = useRouter();
   const driveId = params.driveId as string;
-  const { drives, isLoading, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const isLoading = useDriveStore((state) => state.isLoading);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
   
   useEffect(() => {
     fetchDrives();

@@ -25,6 +25,7 @@ vi.mock('@/services/api', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -39,7 +40,7 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   pageTreeCache: {
-    invalidateDriveTree: vi.fn(),
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
   },
   loggers: {
     api: {

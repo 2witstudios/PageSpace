@@ -7,11 +7,11 @@ import {
   messages,
   userAiSettings,
   subscriptions,
+  and,
   eq,
-
   inArray,
   desc,
-  count
+  count,
 } from '@pagespace/db';
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
@@ -45,11 +45,20 @@ export async function GET(request: Request) {
       .from(users)
       .orderBy(users.name);
 
+    if (allUsers.length === 0) {
+      return Response.json({ users: [] });
+    }
+
+    const userIds = allUsers.map((user) => user.id);
+
     // Get active subscriptions for all users
     const activeSubscriptions = await db
       .select()
       .from(subscriptions)
-      .where(inArray(subscriptions.status, ['active', 'trialing']))
+      .where(and(
+        inArray(subscriptions.status, ['active', 'trialing']),
+        inArray(subscriptions.userId, userIds)
+      ))
       .orderBy(desc(subscriptions.updatedAt));
 
     // Create a map of userId to subscription
@@ -57,41 +66,69 @@ export async function GET(request: Request) {
       activeSubscriptions.map(sub => [sub.userId, sub])
     );
 
-    // Get stats for each user
-    const usersWithStats = await Promise.all(
-      allUsers.map(async (user) => {
-        const [
-          drivesCount,
-          pagesCount,
-          chatMessagesCount,
-          globalMessagesCount,
-          aiSettingsCount
-        ] = await Promise.all([
-          // Count drives owned by user
-          db.select({ count: count() }).from(drives).where(eq(drives.ownerId, user.id)),
-          // Count pages in user's drives
-          db.select({ count: count() })
-            .from(pages)
-            .innerJoin(drives, eq(pages.driveId, drives.id))
-            .where(eq(drives.ownerId, user.id)),
-          // Count chat messages
-          db.select({ count: count() }).from(chatMessages).where(eq(chatMessages.userId, user.id)),
-          // Count global messages (conversations)
-          db.select({ count: count() }).from(messages).where(eq(messages.userId, user.id)),
-          // Count AI settings
-          db.select({ count: count() }).from(userAiSettings).where(eq(userAiSettings.userId, user.id))
-        ]);
-
-        return {
-          ...user,
-          drivesCount: drivesCount[0]?.count || 0,
-          pagesCount: pagesCount[0]?.count || 0,
-          chatMessagesCount: chatMessagesCount[0]?.count || 0,
-          globalMessagesCount: globalMessagesCount[0]?.count || 0,
-          aiSettingsCount: aiSettingsCount[0]?.count || 0,
-        };
+    // Batch aggregate stats instead of per-user N+1 queries
+    const [driveCounts, pageCounts, chatMessageCounts, globalMessageCounts, aiSettingCounts] = await Promise.all([
+      db.select({
+        userId: drives.ownerId,
+        count: count(),
       })
-    );
+        .from(drives)
+        .where(inArray(drives.ownerId, userIds))
+        .groupBy(drives.ownerId),
+      db.select({
+        userId: drives.ownerId,
+        count: count(),
+      })
+        .from(pages)
+        .innerJoin(drives, eq(pages.driveId, drives.id))
+        .where(inArray(drives.ownerId, userIds))
+        .groupBy(drives.ownerId),
+      db.select({
+        userId: chatMessages.userId,
+        count: count(),
+      })
+        .from(chatMessages)
+        .where(inArray(chatMessages.userId, userIds))
+        .groupBy(chatMessages.userId),
+      db.select({
+        userId: messages.userId,
+        count: count(),
+      })
+        .from(messages)
+        .where(inArray(messages.userId, userIds))
+        .groupBy(messages.userId),
+      db.select({
+        userId: userAiSettings.userId,
+        count: count(),
+      })
+        .from(userAiSettings)
+        .where(inArray(userAiSettings.userId, userIds))
+        .groupBy(userAiSettings.userId),
+    ]);
+
+    const toCountMap = (rows: Array<{ userId: string | null; count: unknown }>) => {
+      const map = new Map<string, number>();
+      for (const row of rows) {
+        if (!row.userId) continue;
+        map.set(row.userId, Number(row.count ?? 0));
+      }
+      return map;
+    };
+
+    const drivesCountMap = toCountMap(driveCounts);
+    const pagesCountMap = toCountMap(pageCounts);
+    const chatMessagesCountMap = toCountMap(chatMessageCounts);
+    const globalMessagesCountMap = toCountMap(globalMessageCounts);
+    const aiSettingsCountMap = toCountMap(aiSettingCounts);
+
+    const usersWithStats = allUsers.map((user) => ({
+      ...user,
+      drivesCount: drivesCountMap.get(user.id) ?? 0,
+      pagesCount: pagesCountMap.get(user.id) ?? 0,
+      chatMessagesCount: chatMessagesCountMap.get(user.id) ?? 0,
+      globalMessagesCount: globalMessagesCountMap.get(user.id) ?? 0,
+      aiSettingsCount: aiSettingsCountMap.get(user.id) ?? 0,
+    }));
 
     // Get AI settings details for each user
     const allAiSettings = await db
@@ -102,7 +139,18 @@ export async function GET(request: Request) {
         createdAt: userAiSettings.createdAt,
         updatedAt: userAiSettings.updatedAt
       })
-      .from(userAiSettings);
+      .from(userAiSettings)
+      .where(inArray(userAiSettings.userId, userIds));
+
+    const aiSettingsByUserId = new Map<string, typeof allAiSettings>();
+    for (const setting of allAiSettings) {
+      const existing = aiSettingsByUserId.get(setting.userId);
+      if (existing) {
+        existing.push(setting);
+      } else {
+        aiSettingsByUserId.set(setting.userId, [setting]);
+      }
+    }
 
     // Fetch Stripe subscription details to check if gifted
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
@@ -112,10 +160,14 @@ export async function GET(request: Request) {
       subscriptionsByUserId.has(user.id)
     );
 
-    await Promise.all(
-      usersWithSubscriptions.map(async (user) => {
-        const sub = subscriptionsByUserId.get(user.id);
-        if (sub) {
+    const STRIPE_LOOKUP_CONCURRENCY = 10;
+    for (let i = 0; i < usersWithSubscriptions.length; i += STRIPE_LOOKUP_CONCURRENCY) {
+      const batch = usersWithSubscriptions.slice(i, i + STRIPE_LOOKUP_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (user) => {
+          const sub = subscriptionsByUserId.get(user.id);
+          if (!sub) return;
+
           try {
             const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
             const metadata = stripeSub.metadata || {};
@@ -128,13 +180,13 @@ export async function GET(request: Request) {
             // Subscription may not exist in Stripe anymore
             stripeSubscriptionDetails.set(user.id, { isGifted: false });
           }
-        }
-      })
-    );
+        })
+      );
+    }
 
     // Combine the data
     const enrichedUsers = usersWithStats.map(user => {
-      const userAiSettings = allAiSettings.filter(setting => setting.userId === user.id);
+      const userAiSettings = aiSettingsByUserId.get(user.id) ?? [];
       const subscription = subscriptionsByUserId.get(user.id);
       const stripeDetails = stripeSubscriptionDetails.get(user.id);
 

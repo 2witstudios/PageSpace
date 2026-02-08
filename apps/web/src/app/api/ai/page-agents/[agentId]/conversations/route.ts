@@ -8,6 +8,7 @@ import {
   extractPreviewText,
   generateTitle,
 } from '@/lib/repositories/conversation-repository';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 // Auth options: GET is read-only, POST creates new conversations
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -50,8 +51,16 @@ export async function GET(
 
     // Get URL params for pagination
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '0', 10);
-    const pageSize = parseInt(searchParams.get('pageSize') || '50', 10);
+    const page = parseBoundedIntParam(searchParams.get('page'), {
+      defaultValue: 0,
+      min: 0,
+      max: 10000,
+    });
+    const pageSize = parseBoundedIntParam(searchParams.get('pageSize'), {
+      defaultValue: 50,
+      min: 1,
+      max: 200,
+    });
     const offset = page * pageSize;
 
     // Get conversations with stats

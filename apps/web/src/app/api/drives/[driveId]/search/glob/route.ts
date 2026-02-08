@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   checkDriveAccessForSearch,
   globSearchPages,
@@ -33,7 +34,11 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const pattern = searchParams.get('pattern');
     const includeTypesParam = searchParams.get('includeTypes');
-    const maxResults = Math.min(parseInt(searchParams.get('maxResults') || '100'), 200);
+    const maxResults = parseBoundedIntParam(searchParams.get('maxResults'), {
+      defaultValue: 100,
+      min: 1,
+      max: 200,
+    });
 
     if (!pattern) {
       return NextResponse.json(
@@ -93,7 +98,7 @@ export async function GET(
   } catch (error) {
     loggers.api.error('Error in glob search:', error as Error);
     return NextResponse.json(
-      { error: `Glob search failed: ${error instanceof Error ? error.message : String(error)}` },
+      { error: 'Glob search failed' },
       { status: 500 }
     );
   }

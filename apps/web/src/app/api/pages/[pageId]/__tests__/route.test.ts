@@ -28,6 +28,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -42,10 +43,10 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@pagespace/lib/server', () => ({
   agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn(),
+    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
   },
   pageTreeCache: {
-    invalidateDriveTree: vi.fn(),
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
   },
   loggers: {
     api: {

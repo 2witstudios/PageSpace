@@ -8,6 +8,8 @@ import { ModelCapabilities } from './model-capabilities';
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
+  // User's IANA timezone (e.g., "America/New_York") for timezone-aware tool operations
+  timezone?: string;
   // AI attribution for activity logging
   aiProvider?: string;
   aiModel?: string;

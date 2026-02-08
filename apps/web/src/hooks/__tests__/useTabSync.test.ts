@@ -7,11 +7,16 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useTabSync } from '../useTabSync';
 import { useTabsStore } from '@/stores/useTabsStore';
+import type { ElectronAPI } from '@/types/electron';
 
 // Mock next/navigation
 const mockPathname = vi.fn(() => '/dashboard');
+const mockRouterReplace = vi.fn();
 vi.mock('next/navigation', () => ({
   usePathname: () => mockPathname(),
+  useRouter: () => ({
+    replace: mockRouterReplace,
+  }),
   useParams: () => ({}),
 }));
 
@@ -37,6 +42,7 @@ describe('useTabSync', () => {
     });
     mockLocalStorage.clear();
     mockPathname.mockReturnValue('/dashboard');
+    window.electron = undefined;
     vi.clearAllMocks();
   });
 
@@ -99,6 +105,82 @@ describe('useTabSync', () => {
         const state = useTabsStore.getState();
         expect(state.tabs[0].history).toHaveLength(1); // No duplicate in history
       });
+    });
+  });
+
+  describe('desktop bootstrap restore', () => {
+    it('given desktop starts on /dashboard with active non-dashboard tab, should restore active tab path', async () => {
+      window.electron = { isDesktop: true } as unknown as ElectronAPI;
+
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/drive-1/page-1' });
+      mockPathname.mockReturnValue('/dashboard');
+
+      renderHook(() => useTabSync());
+
+      await waitFor(() => {
+        expect(mockRouterReplace).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
+      });
+
+      const state = useTabsStore.getState();
+      expect(state.tabs[0].path).toBe('/dashboard/drive-1/page-1');
+    });
+
+    it('given desktop restore already attempted, should not restore again on re-render', async () => {
+      window.electron = { isDesktop: true } as unknown as ElectronAPI;
+
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/drive-1/page-1' });
+      mockPathname.mockReturnValue('/dashboard');
+
+      const { rerender } = renderHook(() => useTabSync());
+
+      await waitFor(() => {
+        expect(mockRouterReplace).toHaveBeenCalledTimes(1);
+      });
+
+      // Re-render should not trigger another restore
+      rerender();
+
+      expect(mockRouterReplace).toHaveBeenCalledTimes(1);
+    });
+
+    it('given desktop first run with no tabs, later navigating to /dashboard should not bounce', async () => {
+      window.electron = { isDesktop: true } as unknown as ElectronAPI;
+
+      // First run: no tabs, start at /dashboard
+      mockPathname.mockReturnValue('/dashboard');
+      const { rerender } = renderHook(() => useTabSync());
+
+      await waitFor(() => {
+        expect(useTabsStore.getState().tabs).toHaveLength(1);
+      });
+
+      // Simulate user navigating to a page (tab path updates)
+      act(() => {
+        useTabsStore.getState().navigateInActiveTab('/dashboard/drive-1/page-1');
+      });
+      mockPathname.mockReturnValue('/dashboard/drive-1/page-1');
+      rerender();
+
+      // Now user navigates back to /dashboard — should NOT bounce
+      mockPathname.mockReturnValue('/dashboard');
+      rerender();
+
+      expect(mockRouterReplace).not.toHaveBeenCalled();
+    });
+
+    it('given desktop starts on a deep-link path (not /dashboard), should skip restore', async () => {
+      window.electron = { isDesktop: true } as unknown as ElectronAPI;
+
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/drive-1/page-1' });
+      mockPathname.mockReturnValue('/dashboard/drive-2/page-5');
+
+      renderHook(() => useTabSync());
+
+      // Should not call replace because pathname is not /dashboard
+      expect(mockRouterReplace).not.toHaveBeenCalled();
     });
   });
 

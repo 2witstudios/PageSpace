@@ -228,6 +228,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       )}
       <div className={`flex-1 overflow-y-auto ${readOnly ? 'opacity-95' : ''}`}>
         <EditorContent editor={editor} />
+        {isPaginated && <div className="print-page-number hidden print:block" />}
       </div>
       <div className="flex justify-end p-2 text-sm text-muted-foreground">
         {editor?.storage.characterCount.characters()} characters

@@ -19,7 +19,10 @@ import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 import { useIOSKeyboardInit } from "@/hooks/useIOSKeyboardInit";
 import { dismissKeyboard } from "@/hooks/useMobileKeyboard";
+import { useDeviceTier } from "@/hooks/useDeviceTier";
+import { cn } from "@/lib/utils";
 import { useTabSync } from "@/hooks/useTabSync";
+import { useEditingStore } from "@/stores/useEditingStore";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import {
@@ -55,7 +58,14 @@ function Layout({ children }: LayoutProps) {
   const setRightSheetOpen = useLayoutStore(state => state.setRightSheetOpen);
 
   const hasHydrated = useHasHydrated();
-  const shouldOverlaySidebars = useBreakpoint("(max-width: 1279px)");
+  const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
+  const { isTablet } = useDeviceTier();
+
+  // On tablet (iPad), both sidebars become persistent at 1024px+ (landscape)
+  // instead of 1280px+, giving iPad persistent navigation and assistant sidebars
+  // while keeping all other views mobile-optimized (handled by useMobile() returning true for tablets).
+  const shouldOverlayLeftSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
+  const shouldOverlayRightSidebar = isTablet ? isSheetBreakpoint : shouldOverlaySidebarsDefault;
 
   useResponsivePanels();
 
@@ -73,6 +83,12 @@ function Layout({ children }: LayoutProps) {
 
   // Keep tab store in sync for both CenterPanel routes and full-page dashboard routes.
   useTabSync();
+
+  // Clear stale editing sessions on app initialization (defense-in-depth for Capacitor/Electron
+  // where the app may have been killed while editing was active and Zustand cached state)
+  useEffect(() => {
+    useEditingStore.getState().clearAllSessions();
+  }, []);
 
   useEffect(() => {
     if (!isSheetBreakpoint) {
@@ -101,11 +117,12 @@ function Layout({ children }: LayoutProps) {
       return;
     }
 
-    if (shouldOverlaySidebars) {
+    // Left sidebar is in overlay mode (desktop 1024-1279px): exclusive toggle
+    if (shouldOverlayLeftSidebar) {
       if (leftSidebarOpen) {
         setLeftSidebarOpen(false);
       } else {
-        if (rightSidebarOpen) {
+        if (shouldOverlayRightSidebar && rightSidebarOpen) {
           setRightSidebarOpen(false);
         }
         setLeftSidebarOpen(true);
@@ -113,12 +130,14 @@ function Layout({ children }: LayoutProps) {
       return;
     }
 
+    // Left sidebar is in persistent mode (desktop >=1280px, or iPad >=1024px)
     toggleLeftSidebar();
   }, [
     isSheetBreakpoint,
     leftSheetOpen,
     rightSheetOpen,
-    shouldOverlaySidebars,
+    shouldOverlayLeftSidebar,
+    shouldOverlayRightSidebar,
     leftSidebarOpen,
     rightSidebarOpen,
     setLeftSheetOpen,
@@ -139,11 +158,13 @@ function Layout({ children }: LayoutProps) {
       return;
     }
 
-    if (shouldOverlaySidebars) {
+    // Right sidebar is in overlay mode (desktop 1024-1279px): exclusive toggle
+    if (shouldOverlayRightSidebar) {
       if (rightSidebarOpen) {
         setRightSidebarOpen(false);
       } else {
-        if (leftSidebarOpen) {
+        // Only close left sidebar if left is also in overlay mode
+        if (shouldOverlayLeftSidebar && leftSidebarOpen) {
           setLeftSidebarOpen(false);
         }
         setRightSidebarOpen(true);
@@ -151,12 +172,14 @@ function Layout({ children }: LayoutProps) {
       return;
     }
 
+    // Right sidebar is in persistent mode (>=1280px, or iPad >=1024px)
     toggleRightSidebar();
   }, [
     isSheetBreakpoint,
     leftSheetOpen,
     rightSheetOpen,
-    shouldOverlaySidebars,
+    shouldOverlayLeftSidebar,
+    shouldOverlayRightSidebar,
     leftSidebarOpen,
     rightSidebarOpen,
     setLeftSheetOpen,
@@ -224,14 +247,19 @@ function Layout({ children }: LayoutProps) {
           <TabBar />
 
         <div className="relative flex flex-1 min-h-0 overflow-hidden">
-          {!shouldOverlaySidebars && leftSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
+          {!shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
+            <div className={cn(
+              "relative flex-shrink-0 pt-4 overflow-hidden",
+              isTablet
+                ? "flex w-[18rem]"
+                : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
+            )}>
               <MemoizedSidebar className="h-full w-full" />
             </div>
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && !isSheetBreakpoint && leftSidebarOpen && (
+            {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
               <motion.div
                 key="left-sidebar"
                 initial={{ x: -320, opacity: 0, scale: 0.98 }}
@@ -262,14 +290,19 @@ function Layout({ children }: LayoutProps) {
             )}
           </main>
 
-          {!shouldOverlaySidebars && rightSidebarOpen && (
-            <div className="relative hidden flex-shrink-0 xl:flex xl:w-[18rem] 2xl:w-80 pt-4 overflow-hidden">
+          {!shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
+            <div className={cn(
+              "relative flex-shrink-0 pt-4 overflow-hidden",
+              isTablet
+                ? "flex w-[18rem]"
+                : "hidden xl:flex xl:w-[18rem] 2xl:w-80"
+            )}>
               <RightPanel className="h-full w-full" />
             </div>
           )}
 
           <AnimatePresence>
-            {shouldOverlaySidebars && !isSheetBreakpoint && rightSidebarOpen && (
+            {shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
               <motion.div
                 key="right-sidebar"
                 initial={{ x: 320, opacity: 0, scale: 0.98 }}
@@ -291,7 +324,10 @@ function Layout({ children }: LayoutProps) {
           </AnimatePresence>
 
           <AnimatePresence>
-            {shouldOverlaySidebars && !isSheetBreakpoint && (leftSidebarOpen || rightSidebarOpen) && (
+            {!isSheetBreakpoint && (
+              (shouldOverlayLeftSidebar && leftSidebarOpen) ||
+              (shouldOverlayRightSidebar && rightSidebarOpen)
+            ) && (
               <motion.button
                 key="panel-overlay"
                 type="button"
@@ -302,10 +338,10 @@ function Layout({ children }: LayoutProps) {
                 className="absolute inset-0 z-30 bg-black/50 backdrop-blur-sm"
                 aria-label="Close side panels"
                 onClick={() => {
-                  if (leftSidebarOpen) {
+                  if (shouldOverlayLeftSidebar && leftSidebarOpen) {
                     setLeftSidebarOpen(false);
                   }
-                  if (rightSidebarOpen) {
+                  if (shouldOverlayRightSidebar && rightSidebarOpen) {
                     setRightSidebarOpen(false);
                   }
                 }}

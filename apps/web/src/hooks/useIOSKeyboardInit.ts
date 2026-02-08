@@ -27,12 +27,21 @@ export function useIOSKeyboardInit(): void {
         showListener = await Keyboard.addListener(
           "keyboardWillShow",
           (info) => {
-            document.body.style.setProperty(
-              "--keyboard-height",
-              `${info.keyboardHeight}px`
-            );
-            document.body.classList.add("keyboard-open");
-            document.documentElement.classList.add("keyboard-open");
+            // iPad external keyboard toolbar is typically ~55px tall.
+            // Don't shrink the app for it - let the toolbar overlay naturally
+            // so the UI extends behind it. Full on-screen keyboards are 300+px.
+            const isExternalKeyboardToolbar = info.keyboardHeight < 100;
+
+            if (isExternalKeyboardToolbar) {
+              document.body.style.setProperty("--keyboard-height", "0px");
+            } else {
+              document.body.style.setProperty(
+                "--keyboard-height",
+                `${info.keyboardHeight}px`
+              );
+              document.body.classList.add("keyboard-open");
+              document.documentElement.classList.add("keyboard-open");
+            }
             window.scrollTo(0, 0);
           }
         );

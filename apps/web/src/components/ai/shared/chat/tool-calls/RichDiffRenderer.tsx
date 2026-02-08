@@ -5,7 +5,7 @@ import { usePageNavigation } from '@/hooks/usePageNavigation';
 import DOMPurify from 'dompurify';
 import { FileEdit, ExternalLink, Plus, Minus, MoreHorizontal } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { stripLineNumbers, markdownToHtml, DIFF_STYLES } from './content-utils';
+import { stripLineNumbers, markdownToHtml, sanitizeHtmlAllowlist, DIFF_STYLES } from './content-utils';
 
 interface LineDiff {
   type: 'add' | 'remove' | 'unchanged';
@@ -251,22 +251,28 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
   const renderHunk = (lines: LineDiff[], key: string) => {
     const htmlParts = lines.map((line, idx) => {
       const lineKey = `${key}-line-${idx}`;
-      // Convert markdown to HTML for rich rendering
-      const renderedContent = markdownToHtml(line.content) || '&nbsp;';
+
+      // Preserve rich text HTML fragments so tool call output matches editor/read_page rendering.
+      // Fallback to markdown rendering for plain text lines.
+      const contentIsHtml = /<[a-z][\s\S]*>/i.test(line.content);
+      const renderedContent = contentIsHtml
+        ? sanitizeHtmlAllowlist(line.content)
+        : markdownToHtml(line.content);
+      const safeRenderedContent = renderedContent || '&nbsp;';
 
       if (line.type === 'unchanged') {
-        return `<div key="${lineKey}" class="pl-2 border-l-2 border-transparent">${renderedContent}</div>`;
+        return `<div key="${lineKey}" class="pl-2 border-l-2 border-transparent">${safeRenderedContent}</div>`;
       }
 
       if (line.type === 'add') {
-        return `<div key="${lineKey}" class="pl-2 border-l-2 border-green-500 ${DIFF_STYLES.add}">${renderedContent}</div>`;
+        return `<div key="${lineKey}" class="pl-2 border-l-2 border-green-500 ${DIFF_STYLES.add}">${safeRenderedContent}</div>`;
       }
 
       if (line.type === 'remove') {
-        return `<div key="${lineKey}" class="pl-2 border-l-2 border-red-500 ${DIFF_STYLES.remove}">${renderedContent}</div>`;
+        return `<div key="${lineKey}" class="pl-2 border-l-2 border-red-500 ${DIFF_STYLES.remove}">${safeRenderedContent}</div>`;
       }
 
-      return `<div key="${lineKey}">${renderedContent}</div>`;
+      return `<div key="${lineKey}">${safeRenderedContent}</div>`;
     });
 
     const html = htmlParts.join('');

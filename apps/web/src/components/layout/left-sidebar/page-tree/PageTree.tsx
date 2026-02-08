@@ -182,62 +182,84 @@ export default function PageTree({
     if (e.dataTransfer?.types?.includes("Files")) {
       e.preventDefault();
       setIsDraggingFiles(true);
-      setFileDragState((prev) => ({
-        ...prev,
-        dragStartPos: { x: e.clientX, y: e.clientY },
-      }));
+      setFileDragState((prev) => {
+        if (prev.dragStartPos) {
+          return prev;
+        }
+
+        return {
+          overId: null,
+          dropPosition: null,
+          dragStartPos: { x: e.clientX, y: e.clientY },
+        };
+      });
     }
   }, []);
 
   const handleFileDragLeave = useCallback((e: React.DragEvent) => {
     if (e.currentTarget === e.target) {
       setIsDraggingFiles(false);
-      setFileDragState({ overId: null, dropPosition: null, dragStartPos: null });
+      setFileDragState((prev) => {
+        if (prev.overId === null && prev.dropPosition === null && prev.dragStartPos === null) {
+          return prev;
+        }
+        return { overId: null, dropPosition: null, dragStartPos: null };
+      });
     }
   }, []);
 
   const handleFileDragOver = useCallback(
     (e: React.DragEvent) => {
-      if (isDraggingFiles && fileDragState.dragStartPos) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
+      if (!isDraggingFiles) {
+        return;
+      }
 
-        const deltaX = e.clientX - fileDragState.dragStartPos.x;
-        const target = e.target as HTMLElement;
-        const treeNode = target.closest("[data-tree-node-id]");
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+
+      const target = e.target as HTMLElement;
+      const treeNode = target.closest("[data-tree-node-id]");
+
+      setFileDragState((prev) => {
+        if (!prev.dragStartPos) {
+          return prev;
+        }
+
+        let nextOverId: string | null = null;
+        let nextDropPosition: DropPosition = null;
 
         if (treeNode) {
           const nodeId = treeNode.getAttribute("data-tree-node-id");
           const rect = treeNode.getBoundingClientRect();
           const relativeY = e.clientY - rect.top;
           const heightPercent = relativeY / rect.height;
+          const deltaX = e.clientX - prev.dragStartPos.x;
 
-          let dropPosition: DropPosition;
           if (deltaX > 30) {
-            dropPosition = "inside";
+            nextDropPosition = "inside";
           } else if (heightPercent < 0.4) {
-            dropPosition = "before";
+            nextDropPosition = "before";
           } else if (heightPercent > 0.6) {
-            dropPosition = "after";
+            nextDropPosition = "after";
           } else {
-            dropPosition = fileDragState.dropPosition || "after";
+            nextDropPosition = prev.dropPosition || "after";
           }
 
-          setFileDragState((prev) => ({
-            ...prev,
-            overId: nodeId,
-            dropPosition,
-          }));
-        } else {
-          setFileDragState((prev) => ({
-            ...prev,
-            overId: null,
-            dropPosition: null,
-          }));
+          nextOverId = nodeId;
         }
-      }
+
+        if (prev.overId === nextOverId && prev.dropPosition === nextDropPosition) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          overId: nextOverId,
+          dropPosition: nextDropPosition,
+        };
+      });
     },
-    [isDraggingFiles, fileDragState.dragStartPos, fileDragState.dropPosition]
+    [isDraggingFiles]
   );
 
   const handleFileDropEvent = useCallback(
@@ -271,7 +293,12 @@ export default function PageTree({
         }
 
         setIsDraggingFiles(false);
-        setFileDragState({ overId: null, dropPosition: null, dragStartPos: null });
+        setFileDragState((prev) => {
+          if (prev.overId === null && prev.dropPosition === null && prev.dragStartPos === null) {
+            return prev;
+          }
+          return { overId: null, dropPosition: null, dragStartPos: null };
+        });
       }
     },
     [isDraggingFiles, fileDragState, tree, handleFileDrop]

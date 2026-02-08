@@ -112,6 +112,9 @@ export interface InboxEventPayload {
   unreadCount?: number;
 }
 
+// Presence types - re-export from shared lib
+export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/client-safe';
+
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
 
 // Safely access environment variables

@@ -41,7 +41,6 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -49,19 +48,24 @@ import { AiUsageMonitor, AISelector, TasksDropdown } from '@/components/ai/share
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { VoiceModeOverlay } from '@/components/ai/voice';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
 import {
   useMCPTools,
   useMessageActions,
   useProviderSettings,
+  useChatTransport,
+  useStreamingRegistration,
+  useChatStop,
   LocationContext,
 } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import {
   ProviderSetupCard,
@@ -71,10 +75,13 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
-  const { setRightSidebarOpen, setRightSheetOpen } = useLayoutStore();
+  const setRightSidebarOpen = useLayoutStore((state) => state.setRightSidebarOpen);
+  const setRightSheetOpen = useLayoutStore((state) => state.setRightSheetOpen);
 
   // ============================================
   // GLOBAL CHAT CONTEXT - for Global Assistant mode
@@ -92,19 +99,18 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // AGENT STORE - for agent selection and conversation management
   // ============================================
-  const {
-    selectedAgent,
-    selectAgent,
-    initializeFromUrlOrCookie,
-    conversationId: agentConversationId,
-    conversationMessages: agentInitialMessages,
-    isConversationLoading: agentIsLoading,
-    setConversationMessages: setAgentStoreMessages,
-    createNewConversation: createAgentConversation,
-    loadMostRecentConversation,
-    setAgentStreaming,
-    setAgentStopStreaming,
-  } = usePageAgentDashboardStore();
+  const selectedAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
+  const selectAgent = usePageAgentDashboardStore((state) => state.selectAgent);
+  const initializeFromUrlOrCookie = usePageAgentDashboardStore((state) => state.initializeFromUrlOrCookie);
+  const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
+  const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
+  const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
+  const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
+  const loadMostRecentConversation = usePageAgentDashboardStore((state) => state.loadMostRecentConversation);
+  const setAgentStreaming = usePageAgentDashboardStore((state) => state.setAgentStreaming);
+  const setAgentStopStreaming = usePageAgentDashboardStore((state) => state.setAgentStopStreaming);
+  const setActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
 
   // ============================================
   // CENTRALIZED ASSISTANT SETTINGS (from store)
@@ -125,10 +131,24 @@ const GlobalAssistantView: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
 
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
+
+  // Voice mode state
+  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
+  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+
+  // Display preferences
+  const { preferences: displayPreferences } = useDisplayPreferences();
+
+  // Image attachments for vision support
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -157,7 +177,8 @@ const GlobalAssistantView: React.FC = () => {
   } = useMCPTools({ conversationId: currentConversationId });
 
   // Get drives from store
-  const { drives, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -223,28 +244,42 @@ const GlobalAssistantView: React.FC = () => {
     loadAgentConfig();
   }, [selectedAgent]);
 
+  // Check if OpenAI is configured (required for voice mode)
+  useEffect(() => {
+    const checkOpenAI = async () => {
+      try {
+        const response = await fetchWithAuth('/api/ai/settings');
+        if (response.ok) {
+          const data = await response.json();
+          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
+        }
+      } catch {
+        setIsOpenAIConfigured(false);
+      }
+    };
+    checkOpenAI();
+  }, []);
+
   // ============================================
   // CHAT CONFIGURATION
   // ============================================
 
+  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+
   // Agent mode chat config
   const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId) return null;
+    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: agentTransport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
     };
-  }, [selectedAgent, agentConversationId, agentInitialMessages]);
+  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
 
   // Global mode chat
   const {
@@ -278,19 +313,17 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const latestAgentMessagesRef = useRef(agentMessages);
+  const latestGlobalMessagesRef = useRef(globalLocalMessages);
 
-  // Wrap stop handler to abort server-side stream before client-side stop
-  // This ensures the server stops processing when user clicks Stop
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  const stop = useCallback(async () => {
-    try {
-      if (currentConversationId) {
-        await abortActiveStream({ chatId: currentConversationId });
-      }
-    } finally {
-      rawStop();
-    }
-  }, [currentConversationId, rawStop]);
+  useEffect(() => {
+    latestAgentMessagesRef.current = agentMessages;
+  }, [agentMessages]);
+
+  useEffect(() => {
+    latestGlobalMessagesRef.current = globalLocalMessages;
+  }, [globalLocalMessages]);
+  const stop = useChatStop(currentConversationId, rawStop);
   // Agent mode: initialized when we have a conversationId and not loading
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
@@ -300,20 +333,36 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // MESSAGE ACTIONS (shared hook)
   // ============================================
+  const agentSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestAgentMessagesRef.current)
+          : nextOrUpdater;
+      setAgentMessages(nextMessages);
+      setAgentStoreMessages(nextMessages);
+    },
+    [setAgentMessages, setAgentStoreMessages]
+  );
+
+  const globalSetMessages = useCallback(
+    (nextOrUpdater: import('ai').UIMessage[] | ((prev: import('ai').UIMessage[]) => import('ai').UIMessage[])) => {
+      const nextMessages =
+        typeof nextOrUpdater === 'function'
+          ? nextOrUpdater(latestGlobalMessagesRef.current)
+          : nextOrUpdater;
+      setGlobalMessages(nextMessages);
+      setGlobalLocalMessages(nextMessages);
+    },
+    [setGlobalMessages, setGlobalLocalMessages]
+  );
+
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
     useMessageActions({
       agentId: selectedAgent?.id || null,
       conversationId: currentConversationId,
       messages,
-      setMessages: selectedAgent
-        ? (msgs) => {
-            setAgentMessages(msgs);
-            setAgentStoreMessages(msgs); // Sync to store
-          }
-        : (msgs) => {
-            setGlobalMessages(msgs);
-            setGlobalLocalMessages(msgs);
-          },
+      setMessages: selectedAgent ? agentSetMessages : globalSetMessages,
       regenerate,
     });
 
@@ -495,20 +544,11 @@ const GlobalAssistantView: React.FC = () => {
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
   // Register streaming state with editing store
-  useEffect(() => {
-    const componentId = `global-assistant-${currentConversationId || 'init'}`;
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        conversationId: currentConversationId || undefined,
-        componentName: 'GlobalAssistantView',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, currentConversationId]);
+  useStreamingRegistration(
+    `global-assistant-${currentConversationId || 'init'}`,
+    isStreaming,
+    { conversationId: currentConversationId || undefined, componentName: 'GlobalAssistantView' }
+  );
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -518,9 +558,6 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // HANDLERS
   // ============================================
-
-  // Get setActiveTab from store for sidebar tab control
-  const { setActiveTab } = usePageAgentDashboardStore();
 
   const handleNewConversation = async () => {
     if (selectedAgent) {
@@ -545,7 +582,8 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !currentConversationId) return;
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
     const requestBody = selectedAgent
       ? {
@@ -567,10 +605,76 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text: input }, { body: requestBody });
+    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
     setInput('');
+    clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    const requestBody = selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: currentConversationId,
+          selectedProvider: agentSelectedProvider,
+          selectedModel: agentSelectedModel,
+          isReadOnly,
+          webSearchEnabled,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+        }
+      : {
+          isReadOnly,
+          webSearchEnabled,
+          showPageTree,
+          locationContext: locationContext || undefined,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+        };
+
+    sendMessage({ text }, { body: requestBody });
+  }, [
+    currentConversationId,
+    selectedAgent,
+    agentSelectedProvider,
+    agentSelectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    mcpToolSchemas,
+    sendMessage,
+  ]);
+
+  // Track last AI response for voice mode TTS
+  useEffect(() => {
+    if (!isVoiceModeEnabled || isStreaming) return;
+
+    // Get the last assistant message
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastAssistantMsg) {
+      // Extract text from message parts
+      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
+      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+      if (text && text !== lastAIResponse) {
+        setLastAIResponse(text);
+      }
+    }
+  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+
+  // Voice mode toggle handler
+  const handleVoiceModeToggle = useCallback(() => {
+    if (isVoiceModeEnabled) {
+      disableVoiceMode();
+    } else {
+      enableVoiceMode();
+    }
+  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
 
   // ============================================
   // RENDER
@@ -600,6 +704,18 @@ const GlobalAssistantView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Voice Mode Overlay */}
+      {isVoiceModeEnabled && (
+        <VoiceModeOverlay
+          onClose={disableVoiceMode}
+          onSend={handleVoiceSend}
+          aiResponse={lastAIResponse}
+          isAIStreaming={isStreaming}
+          showSettings={showVoiceSettings}
+          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+        />
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
         <div className="flex items-center space-x-2">
@@ -642,15 +758,17 @@ const GlobalAssistantView: React.FC = () => {
       </div>
 
       {/* Usage Monitor */}
-      <div className="flex items-center justify-end px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
-        {selectedAgent ? (
-          <AiUsageMonitor pageId={selectedAgent.id} compact />
-        ) : (
-          currentConversationId && (
-            <AiUsageMonitor conversationId={currentConversationId} compact />
-          )
-        )}
-      </div>
+      {displayPreferences.showTokenCounts && (
+        <div className="flex items-center justify-end px-4 py-2 border-b border-gray-200 dark:border-[var(--separator)]">
+          {selectedAgent ? (
+            <AiUsageMonitor pageId={selectedAgent.id} compact />
+          ) : (
+            currentConversationId && (
+              <AiUsageMonitor conversationId={currentConversationId} compact />
+            )
+          )}
+        </div>
+      )}
 
       {/* Chat Interface - unified for both modes with floating input */}
       <ChatLayout
@@ -715,6 +833,15 @@ const GlobalAssistantView: React.FC = () => {
             onMcpServerToggle={props.onMcpServerToggle}
             showMcp={props.showMcp}
             popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
+            onVoiceModeClick={handleVoiceModeToggle}
+            isVoiceModeActive={isVoiceModeEnabled}
+            isVoiceModeAvailable={isOpenAIConfigured}
+            attachments={attachments}
+            onAddFiles={addFiles}
+            onRemoveFile={removeFile}
+            hasVision={hasVisionCapability(
+              (selectedAgent ? agentSelectedModel : currentModel) || ''
+            )}
           />
         )}
       />
@@ -722,4 +849,4 @@ const GlobalAssistantView: React.FC = () => {
   );
 };
 
-export default GlobalAssistantView;
+export default React.memo(GlobalAssistantView);

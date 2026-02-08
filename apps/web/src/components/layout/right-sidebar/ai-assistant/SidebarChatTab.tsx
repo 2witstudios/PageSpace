@@ -1,8 +1,10 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { DefaultChatTransport, UIMessage } from 'ai';
+import { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { Loader2, Plus } from 'lucide-react';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { CompactMessageRenderer, AISelector, AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
@@ -15,16 +17,19 @@ import {
 } from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
-import { abortActiveStream, createStreamTrackingFetch, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
+import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { VoiceModeOverlay } from '@/components/ai/voice';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -170,24 +175,22 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Agent Chat Configuration
   // ============================================
+  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+
   const agentChatConfig = useMemo(() => {
-    if (!selectedAgent || !agentConversationId) return null;
+    if (!selectedAgent || !agentConversationId || !agentTransport) return null;
+
     return {
       id: agentConversationId,
       messages: agentInitialMessages,
-      transport: new DefaultChatTransport({
-        api: '/api/ai/chat',
-        // Use stream tracking fetch to capture streamId from response headers
-        // This enables explicit abort via /api/ai/abort endpoint
-        fetch: createStreamTrackingFetch({ chatId: agentConversationId }),
-      }),
-      experimental_throttle: 100, // Increased from 50ms for better performance
+      transport: agentTransport,
+      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Sidebar Agent Chat error:', error);
         toast.error('Chat error. Please try again.');
       },
     };
-  }, [selectedAgent, agentConversationId, agentInitialMessages]);
+  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
 
   // ============================================
   // Sidebar Chat (custom hook - unified interface)
@@ -240,6 +243,20 @@ const SidebarChatTab: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+
+  // Voice mode state
+  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
+  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+
+  // Display preferences
+  const { preferences: displayPreferences } = useDisplayPreferences();
+
+  // Image attachments for vision support
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -252,7 +269,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Drive Loading
   // ============================================
-  const { fetchDrives } = useDriveStore();
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   useEffect(() => {
     fetchDrives();
@@ -413,22 +430,11 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Editing Store Registration
   // ============================================
-  useEffect(() => {
-    const componentId = `assistant-sidebar-${currentConversationId || 'init'}`;
-
-    if (status === 'submitted' || status === 'streaming') {
-      useEditingStore.getState().startStreaming(componentId, {
-        conversationId: currentConversationId || undefined,
-        componentName: 'SidebarChatTab',
-      });
-    } else {
-      useEditingStore.getState().endStreaming(componentId);
-    }
-
-    return () => {
-      useEditingStore.getState().endStreaming(componentId);
-    };
-  }, [status, currentConversationId]);
+  useStreamingRegistration(
+    `assistant-sidebar-${currentConversationId || 'init'}`,
+    status === 'submitted' || status === 'streaming',
+    { conversationId: currentConversationId || undefined, componentName: 'SidebarChatTab' }
+  );
 
   // ============================================
   // Effects: UI State
@@ -440,6 +446,36 @@ const SidebarChatTab: React.FC = () => {
   useEffect(() => {
     if (error) setShowError(true);
   }, [error]);
+
+  // Check if OpenAI is configured (required for voice mode)
+  useEffect(() => {
+    const checkOpenAI = async () => {
+      try {
+        const response = await fetchWithAuth('/api/ai/settings');
+        if (response.ok) {
+          const data = await response.json();
+          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
+        }
+      } catch {
+        setIsOpenAIConfigured(false);
+      }
+    };
+    checkOpenAI();
+  }, []);
+
+  // Track last AI response for voice mode TTS
+  useEffect(() => {
+    if (!isVoiceModeEnabled || isStreaming) return;
+
+    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (lastAssistantMsg) {
+      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
+      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+      if (text && text !== lastAIResponse) {
+        setLastAIResponse(text);
+      }
+    }
+  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
 
   // App state recovery - refresh messages when returning from background
   // This catches completed AI responses that finished while the app was backgrounded
@@ -499,7 +535,8 @@ const SidebarChatTab: React.FC = () => {
   }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
 
   const handleSendMessage = useCallback(async () => {
-    if (!input.trim() || !currentConversationId) return;
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
     // Derive isReadOnly from writeMode (inverted)
     const isReadOnly = !writeMode;
@@ -525,8 +562,9 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ text: input }, { body });
+    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body });
     setInput('');
+    clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -540,7 +578,59 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
+    getFilesForSend,
+    clearFiles,
   ]);
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    const isReadOnly = !writeMode;
+
+    const body = selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: agentConversationId,
+          isReadOnly,
+          webSearchEnabled,
+          provider: selectedAgent.aiProvider,
+          model: selectedAgent.aiModel,
+          systemPrompt: selectedAgent.systemPrompt,
+          locationContext: locationContext || undefined,
+          enabledTools: selectedAgent.enabledTools,
+        }
+      : {
+          isReadOnly,
+          webSearchEnabled,
+          showPageTree,
+          locationContext: locationContext || undefined,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
+        };
+
+    sendMessage({ text }, { body });
+  }, [
+    currentConversationId,
+    selectedAgent,
+    agentConversationId,
+    writeMode,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    sendMessage,
+  ]);
+
+  // Voice mode toggle handler
+  const handleVoiceModeToggle = useCallback(() => {
+    if (isVoiceModeEnabled) {
+      disableVoiceMode();
+    } else {
+      enableVoiceMode();
+    }
+  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {
     if (!currentConversationId) return;
@@ -718,6 +808,18 @@ const SidebarChatTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Voice Mode Overlay */}
+      {isVoiceModeEnabled && (
+        <VoiceModeOverlay
+          onClose={disableVoiceMode}
+          onSend={handleVoiceSend}
+          aiResponse={lastAIResponse}
+          isAIStreaming={displayIsStreaming}
+          showSettings={showVoiceSettings}
+          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+        />
+      )}
+
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <div className="flex items-center justify-between p-2">
@@ -739,11 +841,13 @@ const SidebarChatTab: React.FC = () => {
 
         {(currentConversationId || selectedAgent) && (
           <div className="flex items-center justify-between px-2 pb-2">
-            <AiUsageMonitor
-              conversationId={selectedAgent ? undefined : currentConversationId}
-              pageId={selectedAgent ? selectedAgent.id : undefined}
-              compact
-            />
+            {displayPreferences.showTokenCounts && (
+              <AiUsageMonitor
+                conversationId={selectedAgent ? undefined : currentConversationId}
+                pageId={selectedAgent ? selectedAgent.id : undefined}
+                compact
+              />
+            )}
             <TasksDropdown messages={displayMessages} driveId={locationContext?.currentDrive?.id} />
           </div>
         )}
@@ -822,6 +926,15 @@ const SidebarChatTab: React.FC = () => {
           crossDrive={true}
           hideModelSelector={true}
           variant="sidebar"
+          onVoiceModeClick={handleVoiceModeToggle}
+          isVoiceModeActive={isVoiceModeEnabled}
+          isVoiceModeAvailable={isOpenAIConfigured}
+          attachments={attachments}
+          onAddFiles={addFiles}
+          onRemoveFile={removeFile}
+          hasVision={hasVisionCapability(
+            (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
+          )}
         />
       </div>
 
@@ -835,4 +948,4 @@ const SidebarChatTab: React.FC = () => {
   );
 };
 
-export default SidebarChatTab;
+export default React.memo(SidebarChatTab);

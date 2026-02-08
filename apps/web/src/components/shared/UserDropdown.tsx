@@ -24,7 +24,6 @@ import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
-import { useEditingStore } from '@/stores/useEditingStore';
 import { FeedbackDialog } from './FeedbackDialog';
 
 const fetcher = async (url: string) => {
@@ -42,9 +41,6 @@ export default function UserDropdown() {
   const { showBilling } = useBillingVisibility();
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
-  // Check if any editing or streaming is active (state-based)
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
-
   // Fetch storage info
   const { data: storageInfo } = useSWR(
     isAuthenticated ? '/api/storage/info' : null,
@@ -52,7 +48,6 @@ export default function UserDropdown() {
     {
       refreshInterval: 300000, // 5 minutes (reduced from 30 seconds)
       revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
-      isPaused: () => isAnyActive, // Pause revalidation during editing/streaming
     }
   );
 
@@ -63,7 +58,6 @@ export default function UserDropdown() {
     {
       refreshInterval: 300000, // 5 minutes (reduced from 60 seconds)
       revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
-      isPaused: () => isAnyActive, // Pause revalidation during editing/streaming
     }
   );
 

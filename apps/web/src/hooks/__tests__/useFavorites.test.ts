@@ -184,7 +184,7 @@ describe('useFavorites', () => {
   });
 
   describe('removeFavorite', () => {
-    it('given a favorited page, should optimistically remove and call API', async () => {
+    it('given a favorited page, should optimistically remove from favorites array and Sets, then call API', async () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ id: 'fav-1', page: { id: 'page-123', title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
         pageIds: new Set(['page-123']),
@@ -192,12 +192,14 @@ describe('useFavorites', () => {
       });
 
       (del as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockResolvedValue({
-        ok: true,
-        json: async () => ({ favorites: [] }),
-      });
 
-      await useFavorites.getState().removeFavorite('page-123', 'page');
+      const removePromise = useFavorites.getState().removeFavorite('page-123', 'page');
+
+      // Optimistic update should have already removed from both favorites array and pageIds Set
+      expect(useFavorites.getState().favorites).toHaveLength(0);
+      expect(useFavorites.getState().pageIds.has('page-123')).toBe(false);
+
+      await removePromise;
 
       expect(del).toHaveBeenCalledWith('/api/user/favorites/fav-1');
     });

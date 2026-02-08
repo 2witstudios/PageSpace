@@ -20,6 +20,7 @@ import {
   kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { db, driveMembers, pagePermissions, pages, eq, and, inArray } from '@pagespace/db';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -292,6 +293,11 @@ export async function DELETE(
           eq(driveMembers.driveId, driveId),
           eq(driveMembers.userId, targetUserId)
         ));
+    });
+
+    trackDriveOperation(currentUserId, 'remove_member', driveId, {
+      targetUserId,
+      role: memberData.role,
     });
 
     // Log member removal for audit trail (fire-and-forget)

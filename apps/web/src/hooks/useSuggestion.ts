@@ -17,6 +17,16 @@ export interface UseSuggestionProps {
   popupPlacement?: 'top' | 'bottom';
   appendSpace?: boolean;
   triggerPattern?: RegExp;
+  /** Tracked mention ranges for position-based existing-mention detection */
+  mentionRanges?: Array<{ start: number; end: number }>;
+  /** Called when a mention is inserted via suggestion selection (before onValueChange) */
+  onMentionInserted?: (mention: {
+    label: string;
+    id: string;
+    type: MentionType;
+    start: number;
+    end: number;
+  }) => void;
 }
 
 export interface UseSuggestionResult {
@@ -46,6 +56,8 @@ export function useSuggestion({
   popupPlacement = 'bottom',
   appendSpace = true,
   triggerPattern,
+  mentionRanges,
+  onMentionInserted,
 }: UseSuggestionProps): UseSuggestionResult {
   const context = useSuggestionContext();
 
@@ -114,7 +126,16 @@ export function useSuggestion({
       
       // Temporarily suppress mention detection to avoid interference
       suppressMentionDetection.current = true;
-      
+
+      // Notify the tracker about the new mention before propagating the value change
+      onMentionInserted?.({
+        label: selectedSuggestion.label,
+        id: selectedSuggestion.id,
+        type: selectedSuggestion.type,
+        start: textBeforeMention.length,
+        end: textBeforeMention.length + mentionText.length,
+      });
+
       onValueChange(newValue);
 
       // Set cursor position after the mention synchronously
@@ -161,14 +182,19 @@ export function useSuggestion({
     if (mentionTriggerIndex !== -1 && (mentionTriggerIndex === 0 || effectiveTriggerPattern.test(textBeforeCursor[mentionTriggerIndex - 1]))) {
       const textAfterTrigger = textBeforeCursor.substring(mentionTriggerIndex + 1);
       
-      // Check if this @ is part of an existing mention by looking for patterns that indicate a completed mention
-      // Patterns to detect: @username (followed by space or end), @[label](id), @[label](id:type)
+      // Check if this @ is part of an existing mention
+      // First check tracked mention ranges (position-based, used by mention tracker)
+      const isInTrackedMention = mentionRanges?.some(
+        (m) => mentionTriggerIndex >= m.start && mentionTriggerIndex < m.end
+      ) ?? false;
+
+      // Fall back to regex patterns for non-tracked contexts
       const existingMentionPatterns = [
         /^[^\s\[\]]+\s/, // @username followed by space (completed simple mention)
         /^\[[^\]]+\]\([^)]+\)/, // @[label](id) or @[label](id:type) (markdown-style mention)
       ];
-      
-      const isPartOfExistingMention = existingMentionPatterns.some(pattern => 
+
+      const isPartOfExistingMention = isInTrackedMention || existingMentionPatterns.some(pattern =>
         pattern.test(textAfterTrigger)
       );
       
@@ -225,7 +251,8 @@ export function useSuggestion({
     getSelectionStart,
     variant,
     popupPlacement,
-    effectiveTriggerPattern
+    effectiveTriggerPattern,
+    mentionRanges
   ]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {

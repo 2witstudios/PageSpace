@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
@@ -64,14 +64,17 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
-import { AssigneeSelect } from './AssigneeSelect';
+import { MultiAssigneeSelect } from './MultiAssigneeSelect';
 import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
+import { StatusConfigManager } from './StatusConfigManager';
 import {
   TaskItem,
   TaskListData,
-  TaskStatus,
-  STATUS_CONFIG,
+  TaskStatusConfig,
+  buildStatusConfig,
+  getStatusOrder,
+  isCompletedStatus,
   PRIORITY_CONFIG,
   TaskHandlers,
 } from './task-list-types';
@@ -93,7 +96,7 @@ interface MobileTaskCardProps {
   onToggleComplete: (task: TaskItem) => void;
   onStatusChange: (taskId: string, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
-  onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
   onSaveTitle: (taskId: string, title: string) => void;
   onDelete: (taskId: string) => void;
@@ -104,6 +107,9 @@ interface MobileTaskCardProps {
   onEditingTitleChange: (title: string) => void;
   onStartEdit: (task: TaskItem) => void;
   onCancelEdit: () => void;
+  statusConfigMap: Record<string, { label: string; color: string }>;
+  statusOrder: string[];
+  statusConfigs: TaskStatusConfig[];
 }
 
 function MobileTaskCard({
@@ -112,7 +118,7 @@ function MobileTaskCard({
   onToggleComplete,
   onStatusChange,
   onPriorityChange,
-  onAssigneeChange,
+  onMultiAssigneeChange,
   onDueDateChange,
   onSaveTitle,
   onDelete,
@@ -123,8 +129,11 @@ function MobileTaskCard({
   onEditingTitleChange,
   onStartEdit,
   onCancelEdit,
+  statusConfigMap,
+  statusOrder,
+  statusConfigs,
 }: MobileTaskCardProps) {
-  const isCompleted = task.status === 'completed';
+  const isCompleted = isCompletedStatus(task.status, statusConfigs);
 
   return (
     <div
@@ -205,7 +214,7 @@ function MobileTaskCard({
 
       {/* Metadata row */}
       <div className="flex flex-wrap items-center gap-2 mt-3 pl-7">
-        {/* Status */}
+        {/* Status - uses dynamic status configs */}
         <Select
           value={task.status}
           onValueChange={(value) => onStatusChange(task.id, value)}
@@ -213,17 +222,21 @@ function MobileTaskCard({
         >
           <SelectTrigger className="h-7 w-auto px-2">
             <SelectValue>
-              <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                {STATUS_CONFIG[task.status].label}
+              <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
+                {statusConfigMap[task.status]?.label || task.status}
               </Badge>
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {Object.entries(STATUS_CONFIG).map(([key, { label, color }]) => (
-              <SelectItem key={key} value={key}>
-                <Badge className={cn('text-xs', color)}>{label}</Badge>
-              </SelectItem>
-            ))}
+            {statusOrder.map(slug => {
+              const cfg = statusConfigMap[slug];
+              if (!cfg) return null;
+              return (
+                <SelectItem key={slug} value={slug}>
+                  <Badge className={cn('text-xs', cfg.color)}>{cfg.label}</Badge>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
 
@@ -249,12 +262,11 @@ function MobileTaskCard({
           </SelectContent>
         </Select>
 
-        {/* Assignee */}
-        <AssigneeSelect
+        {/* Multiple Assignees */}
+        <MultiAssigneeSelect
           driveId={driveId}
-          currentAssignee={task.assignee}
-          currentAssigneeAgent={task.assigneeAgent}
-          onSelect={(assigneeId, agentId) => onAssigneeChange(task.id, assigneeId, agentId)}
+          assignees={task.assignees || []}
+          onUpdate={(assigneeIds) => onMultiAssigneeChange(task.id, assigneeIds)}
           disabled={!canEdit}
         />
 
@@ -319,7 +331,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, children }: SortableTaskR
   );
 }
 
-export default function TaskListView({ page }: TaskListViewProps) {
+function TaskListView({ page }: TaskListViewProps) {
   const router = useRouter();
   const { user } = useAuth();
   const { permissions } = usePermissions(page.id);
@@ -336,7 +348,9 @@ export default function TaskListView({ page }: TaskListViewProps) {
   const hasLoadedRef = useRef(false);
 
   // Use centralized socket store for proper authentication
-  const { socket, connectionStatus, connect } = useSocketStore();
+  const socket = useSocketStore((state) => state.socket);
+  const connectionStatus = useSocketStore((state) => state.connectionStatus);
+  const connect = useSocketStore((state) => state.connect);
 
   // Drag-and-drop sensors
   const sensors = useSensors(
@@ -414,11 +428,17 @@ export default function TaskListView({ page }: TaskListViewProps) {
     };
   }, [socket, connectionStatus, page.id]);
 
+  // Derive dynamic status config from API response
+  const statusConfigs: TaskStatusConfig[] = data?.statusConfigs || [];
+  const statusConfigMap = buildStatusConfig(statusConfigs);
+  const statusOrder = getStatusOrder(statusConfigs);
+
   // Filter tasks
   const filteredTasks = data?.tasks.filter(task => {
-    // Status filter
-    if (filter === 'active' && task.status === 'completed') return false;
-    if (filter === 'completed' && task.status !== 'completed') return false;
+    // Status filter - use group-based completion detection
+    const isDone = isCompletedStatus(task.status, statusConfigs);
+    if (filter === 'active' && isDone) return false;
+    if (filter === 'completed' && !isDone) return false;
 
     // Search filter
     if (search) {
@@ -433,7 +453,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
   }) || [];
 
   // Create new task (with optional status for kanban)
-  const handleCreateTask = async (title?: string, status?: TaskStatus) => {
+  const handleCreateTask = async (title?: string, status?: string) => {
     const taskTitle = (title ?? newTaskTitle).trim();
     if (!taskTitle || !canEdit) return;
 
@@ -473,12 +493,26 @@ export default function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
-  // Toggle task completion
+  // Toggle task completion - uses group-based detection
   const handleToggleComplete = async (task: TaskItem) => {
     if (!canEdit) return;
 
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed';
-    await handleStatusChange(task.id, newStatus);
+    const isDone = isCompletedStatus(task.status, statusConfigs);
+    if (isDone) {
+      // Move to first "todo" group status
+      const todoStatus = statusOrder.find(slug => {
+        const cfg = statusConfigMap[slug];
+        return cfg && cfg.group === 'todo';
+      }) || 'pending';
+      await handleStatusChange(task.id, todoStatus);
+    } else {
+      // Move to first "done" group status
+      const doneStatus = statusOrder.find(slug => {
+        const cfg = statusConfigMap[slug];
+        return cfg && cfg.group === 'done';
+      }) || 'completed';
+      await handleStatusChange(task.id, doneStatus);
+    }
   };
 
   // Start editing title
@@ -522,7 +556,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
-  // Update task assignee (user or agent)
+  // Update task assignee (user or agent) - legacy single assignee
   const handleAssigneeChange = async (taskId: string, assigneeId: string | null, agentId: string | null) => {
     if (!canEdit) return;
 
@@ -534,6 +568,18 @@ export default function TaskListView({ page }: TaskListViewProps) {
       mutate(`/api/pages/${page.id}/tasks`);
     } catch {
       toast.error('Failed to update assignee');
+    }
+  };
+
+  // Update task assignees (multiple)
+  const handleMultiAssigneeChange = async (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
+    if (!canEdit) return;
+
+    try {
+      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { assigneeIds });
+      mutate(`/api/pages/${page.id}/tasks`);
+    } catch {
+      toast.error('Failed to update assignees');
     }
   };
 
@@ -714,6 +760,14 @@ export default function TaskListView({ page }: TaskListViewProps) {
             </button>
           </div>
 
+          {canEdit && (
+            <StatusConfigManager
+              pageId={page.id}
+              statusConfigs={statusConfigs}
+              onConfigsChanged={() => mutate(`/api/pages/${page.id}/tasks`)}
+            />
+          )}
+
           {canEdit && viewMode === 'table' && (
             <Button
               size="sm"
@@ -741,7 +795,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
             onToggleComplete={handleToggleComplete}
             onStatusChange={handleStatusChange}
             onPriorityChange={handlePriorityChange}
-            onAssigneeChange={handleAssigneeChange}
+            onMultiAssigneeChange={handleMultiAssigneeChange}
             onDueDateChange={handleDueDateChange}
             onSaveTitle={handleSaveTaskTitle}
             onStartEdit={handleStartEdit}
@@ -756,6 +810,9 @@ export default function TaskListView({ page }: TaskListViewProps) {
             editingTitle={editingTitle}
             onEditingTitleChange={setEditingTitle}
             onCancelEdit={() => setEditingTaskId(null)}
+            statusConfigMap={statusConfigMap}
+            statusOrder={statusOrder}
+            statusConfigs={statusConfigs}
           />
         ))}
 
@@ -796,6 +853,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
             onEditingTitleChange={setEditingTitle}
             onCancelEdit={() => setEditingTaskId(null)}
             onCreateTask={handleCreateTask}
+            statusConfigs={statusConfigs}
           />
         ) : (
           <>
@@ -827,12 +885,12 @@ export default function TaskListView({ page }: TaskListViewProps) {
                         key={task.id}
                         task={task}
                         canEdit={canEdit}
-                        isCompleted={task.status === 'completed'}
+                        isCompleted={isCompletedStatus(task.status, statusConfigs)}
                       >
                         {/* Checkbox */}
                         <TableCell>
                           <Checkbox
-                            checked={task.status === 'completed'}
+                            checked={isCompletedStatus(task.status, statusConfigs)}
                             onCheckedChange={() => handleToggleComplete(task)}
                             disabled={!canEdit}
                           />
@@ -857,7 +915,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
                               <span
                                 className={cn(
                                   'cursor-pointer hover:text-primary hover:underline',
-                                  task.status === 'completed' && 'line-through'
+                                  isCompletedStatus(task.status, statusConfigs) && 'line-through'
                                 )}
                                 onClick={() => {
                                   if (task.pageId) {
@@ -871,7 +929,7 @@ export default function TaskListView({ page }: TaskListViewProps) {
                           )}
                         </TableCell>
 
-                        {/* Status */}
+                        {/* Status - uses dynamic status configs */}
                         <TableCell>
                           <Select
                             value={task.status}
@@ -880,17 +938,21 @@ export default function TaskListView({ page }: TaskListViewProps) {
                           >
                             <SelectTrigger className="h-8 w-28">
                               <SelectValue>
-                                <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                                  {STATUS_CONFIG[task.status].label}
+                                <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
+                                  {statusConfigMap[task.status]?.label || task.status}
                                 </Badge>
                               </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
-                              {Object.entries(STATUS_CONFIG).map(([key, { label, color }]) => (
-                                <SelectItem key={key} value={key}>
-                                  <Badge className={cn('text-xs', color)}>{label}</Badge>
-                                </SelectItem>
-                              ))}
+                              {statusOrder.map(slug => {
+                                const cfg = statusConfigMap[slug];
+                                if (!cfg) return null;
+                                return (
+                                  <SelectItem key={slug} value={slug}>
+                                    <Badge className={cn('text-xs', cfg.color)}>{cfg.label}</Badge>
+                                  </SelectItem>
+                                );
+                              })}
                             </SelectContent>
                           </Select>
                         </TableCell>
@@ -919,13 +981,12 @@ export default function TaskListView({ page }: TaskListViewProps) {
                           </Select>
                         </TableCell>
 
-                        {/* Assignee */}
+                        {/* Multiple Assignees */}
                         <TableCell>
-                          <AssigneeSelect
+                          <MultiAssigneeSelect
                             driveId={page.driveId}
-                            currentAssignee={task.assignee}
-                            currentAssigneeAgent={task.assigneeAgent}
-                            onSelect={(assigneeId, agentId) => handleAssigneeChange(task.id, assigneeId, agentId)}
+                            assignees={task.assignees || []}
+                            onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
                             disabled={!canEdit}
                           />
                         </TableCell>
@@ -1023,3 +1084,10 @@ export default function TaskListView({ page }: TaskListViewProps) {
     </div>
   );
 }
+
+export default memo(
+  TaskListView,
+  (prevProps, nextProps) =>
+    prevProps.page.id === nextProps.page.id &&
+    prevProps.page.driveId === nextProps.page.driveId
+);

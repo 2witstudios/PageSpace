@@ -8,14 +8,9 @@ import RecentsSection from "./RecentsSection";
 export default function DashboardSidebar() {
   return (
     <CustomScrollArea className="flex-1">
-      <div className="space-y-6 py-2">
-        {/* Favorites - Pinned drives and pages */}
-        <FavoritesSection />
-
-        {/* Pulse - Activity summary */}
+      <div className="flex flex-col">
         <Pulse />
-
-        {/* Recents - Recently viewed pages */}
+        <FavoritesSection />
         <RecentsSection />
       </div>
     </CustomScrollArea>

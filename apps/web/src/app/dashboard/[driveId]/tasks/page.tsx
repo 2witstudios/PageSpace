@@ -9,7 +9,9 @@ import { TasksDashboard } from '@/components/tasks';
 function DriveTasksContent() {
   const params = useParams();
   const driveId = params.driveId as string;
-  const { drives, isLoading, fetchDrives } = useDriveStore();
+  const drives = useDriveStore((state) => state.drives);
+  const isLoading = useDriveStore((state) => state.isLoading);
+  const fetchDrives = useDriveStore((state) => state.fetchDrives);
 
   useEffect(() => {
     fetchDrives();

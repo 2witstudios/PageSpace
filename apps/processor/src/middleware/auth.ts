@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions';
-import { loggers } from '@pagespace/lib/logging/logger-config';
+import { loggers } from '@pagespace/lib/logger-config';
 
 /**
  * Authentication is ALWAYS required in production.

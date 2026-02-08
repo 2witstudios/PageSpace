@@ -13,6 +13,7 @@ import {
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { verifyAdminAuth } from '@/lib/auth';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 export async function GET(request: Request) {
   try {
@@ -28,8 +29,16 @@ export async function GET(request: Request) {
 
     // Parse query parameters
     const url = new URL(request.url);
-    const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
-    const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '50', 10)));
+    const page = parseBoundedIntParam(url.searchParams.get('page'), {
+      defaultValue: 1,
+      min: 1,
+      max: 100000,
+    });
+    const limit = parseBoundedIntParam(url.searchParams.get('limit'), {
+      defaultValue: 50,
+      min: 1,
+      max: 100,
+    });
     const offset = (page - 1) * limit;
 
     // Filter parameters

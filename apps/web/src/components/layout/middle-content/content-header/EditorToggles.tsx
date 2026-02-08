@@ -7,6 +7,7 @@ import useSWR from 'swr';
 import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-safe';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -17,10 +18,12 @@ const fetcher = async (url: string) => {
 };
 
 export function EditorToggles() {
-  const { activeView, setActiveView } = useDocumentStore();
+  const activeView = useDocumentStore((state) => state.activeView);
+  const setActiveView = useDocumentStore((state) => state.setActiveView);
   const params = useParams();
   const pageId = params.pageId as string;
   const isMobile = useMobile();
+  const { preferences } = useDisplayPreferences();
 
   // Fetch page data to determine type
   const { data: pageData } = useSWR(
@@ -31,10 +34,11 @@ export function EditorToggles() {
       refreshInterval: 300000, // 5 minutes (prevents unnecessary polling)
     }
   );
-  
-  // Only show editor toggles for document and canvas pages, and not on mobile
+
+  // Only show editor toggles if preference is enabled, for document/canvas pages, and not on mobile
   const pageType = pageData?.type as PageType;
-  const shouldShowToggles = pageType && (isDocumentPage(pageType) || isCanvasPage(pageType));
+  const isValidPageType = pageType && (isDocumentPage(pageType) || isCanvasPage(pageType));
+  const shouldShowToggles = preferences.showCodeToggle && isValidPageType;
 
   if (!shouldShowToggles || isMobile) {
     return null;

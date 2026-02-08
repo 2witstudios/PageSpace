@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, eq } from '@pagespace/db';
+import { db, googleCalendarConnections, calendarEvents, eq, and, count } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 
@@ -24,7 +24,6 @@ export async function GET(request: Request) {
         googleEmail: true,
         selectedCalendars: true,
         syncFrequencyMinutes: true,
-        markAsReadOnly: true,
         targetDriveId: true,
         lastSyncAt: true,
         lastSyncError: true,
@@ -37,8 +36,21 @@ export async function GET(request: Request) {
       return NextResponse.json({
         connected: false,
         connection: null,
+        syncedEventCount: 0,
       });
     }
+
+    // Get count of synced events for this user
+    const [eventStats] = await db
+      .select({ total: count() })
+      .from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.createdById, userId),
+          eq(calendarEvents.syncedFromGoogle, true),
+          eq(calendarEvents.isTrashed, false)
+        )
+      );
 
     return NextResponse.json({
       connected: connection.status === 'active',
@@ -49,13 +61,13 @@ export async function GET(request: Request) {
         googleEmail: connection.googleEmail,
         selectedCalendars: connection.selectedCalendars,
         syncFrequencyMinutes: connection.syncFrequencyMinutes,
-        markAsReadOnly: connection.markAsReadOnly,
         targetDriveId: connection.targetDriveId,
         lastSyncAt: connection.lastSyncAt,
         lastSyncError: connection.lastSyncError,
         createdAt: connection.createdAt,
         updatedAt: connection.updatedAt,
       },
+      syncedEventCount: eventStats?.total ?? 0,
     });
   } catch (error) {
     loggers.api.error('Error fetching Google Calendar status:', error as Error);

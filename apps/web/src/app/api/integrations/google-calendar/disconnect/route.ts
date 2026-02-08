@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
+import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { decrypt } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
+import { unregisterWebhookChannels } from '@/lib/integrations/google-calendar/sync-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -29,20 +30,27 @@ export async function POST(request: Request) {
       );
     }
 
-    // Try to revoke the Google token (best effort)
-    try {
-      const accessToken = await decrypt(connection.accessToken);
-      await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
-      loggers.auth.info('Google Calendar token revoked', { userId });
-    } catch (error) {
-      // Log but don't fail - token might already be expired/revoked
-      loggers.auth.warn('Failed to revoke Google token (continuing with disconnect)', {
-        userId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+    // Try to revoke the Google token and unregister webhooks (best effort)
+    // Skip if tokens are already cleared from a prior disconnect
+    if (connection.accessToken !== 'REVOKED') {
+      try {
+        const accessToken = await decrypt(connection.accessToken);
+
+        // Unregister webhook channels before revoking token
+        await unregisterWebhookChannels(userId, accessToken).catch(() => {});
+
+        await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        loggers.auth.info('Google Calendar token revoked', { userId });
+      } catch (error) {
+        // Log but don't fail - token might already be expired/revoked
+        loggers.auth.warn('Failed to revoke Google token (continuing with disconnect)', {
+          userId,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
 
     // Update connection status to disconnected
@@ -58,21 +66,6 @@ export async function POST(request: Request) {
         updatedAt: new Date(),
       })
       .where(eq(googleCalendarConnections.userId, userId));
-
-    // Mark all synced events as no longer syncing
-    // They remain in the calendar but won't be updated anymore
-    await db
-      .update(calendarEvents)
-      .set({
-        googleSyncReadOnly: false, // Allow editing now that sync is off
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(calendarEvents.createdById, userId),
-          eq(calendarEvents.syncedFromGoogle, true)
-        )
-      );
 
     loggers.auth.info('Google Calendar disconnected', { userId });
 

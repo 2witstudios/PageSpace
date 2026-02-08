@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { MentionSuggestion } from '@/types/mentions';
 import { Position } from '@/services/positioningService';
 
@@ -141,7 +142,7 @@ export default function SuggestionPopup({
     ? `fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${getRoundingClasses()} shadow-xl min-w-56 max-w-sm backdrop-blur-sm bg-white/95 dark:bg-gray-800/95`
     : `fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${getRoundingClasses()} shadow-lg min-w-48 max-w-sm`;
 
-  return (
+  const popup = (
     <div
       className={`
         ${variantClasses}
@@ -157,4 +158,10 @@ export default function SuggestionPopup({
       {renderContent()}
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return popup;
+  }
+
+  return createPortal(popup, document.body);
 }

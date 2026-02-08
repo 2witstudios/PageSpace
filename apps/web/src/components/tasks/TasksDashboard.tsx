@@ -17,8 +17,6 @@ import {
   Pencil,
   Trash2,
   FileText,
-  User,
-  Users,
 } from 'lucide-react';
 import {
   DndContext,
@@ -73,16 +71,32 @@ import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { AssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/AssigneeSelect';
+import { useMobile } from '@/hooks/useMobile';
+import { useCapacitor } from '@/hooks/useCapacitor';
+import { MultiAssigneeSelect } from '@/components/layout/middle-content/page-views/task-list/MultiAssigneeSelect';
 import { DueDatePicker } from '@/components/layout/middle-content/page-views/task-list/DueDatePicker';
 import {
-  STATUS_CONFIG,
   PRIORITY_CONFIG,
-  STATUS_ORDER,
-  type TaskStatus,
+  buildStatusConfig,
+  getStatusOrder,
   type TaskPriority,
+  type TaskStatusConfig,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Task, TaskFilters, Drive, Pagination } from './types';
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+import type { Task, TaskFilters, Drive, Pagination, StatusConfigsByTaskList } from './types';
+import { getStatusDisplay, getAssigneeText } from './task-helpers';
+import { FilterControls } from './FilterControls';
+import { TaskCompactRow } from './TaskCompactRow';
+import { TaskDetailSheet } from './TaskDetailSheet';
+import { TaskFilterSheet, TaskFilterButton } from './TaskFilterSheet';
+
+// Status group labels and colors for kanban columns
+const STATUS_GROUP_CONFIG: Record<TaskStatusGroup, { label: string; color: string }> = {
+  todo: { label: 'To Do', color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
+  in_progress: { label: 'In Progress', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
+  done: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
+};
+const STATUS_GROUPS: TaskStatusGroup[] = ['todo', 'in_progress', 'done'];
 
 interface TasksDashboardProps {
   context: 'user' | 'drive';
@@ -106,6 +120,7 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   // State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
+  const [statusConfigsByTaskList, setStatusConfigsByTaskList] = useState<StatusConfigsByTaskList>({});
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pagination, setPagination] = useState<Pagination | null>(null);
@@ -114,16 +129,24 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   // View mode
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
+  const isMobile = useMobile();
+  const { isNative } = useCapacitor();
+  const isMobileTaskLayout = isMobile || isNative;
 
   // Editing state
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Mobile sheet state
+  const [detailSheetTask, setDetailSheetTask] = useState<Task | null>(null);
+  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+
   // Filter state from URL params
   const [selectedDriveId, setSelectedDriveId] = useState<string | undefined>(initialDriveId);
   const [filters, setFilters] = useState<ExtendedFilters>(() => ({
-    status: (searchParams.get('status') as TaskStatus) || undefined,
+    status: searchParams.get('status') || undefined,
     priority: (searchParams.get('priority') as TaskPriority) || undefined,
     driveId: searchParams.get('driveId') || undefined,
     search: searchParams.get('search') || undefined,
@@ -268,8 +291,15 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 
         if (append) {
           setTasks((prev) => [...prev, ...data.tasks]);
+          // Merge new configs into existing ones
+          if (data.statusConfigsByTaskList) {
+            setStatusConfigsByTaskList(prev => ({ ...prev, ...data.statusConfigsByTaskList }));
+          }
         } else {
           setTasks(data.tasks);
+          if (data.statusConfigsByTaskList) {
+            setStatusConfigsByTaskList(data.statusConfigsByTaskList);
+          }
         }
         setPagination(data.pagination);
         setLastRefreshTime(new Date());
@@ -338,15 +368,32 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     }
   };
 
+  // Helper to get status configs for a specific task
+  const getConfigsForTask = useCallback((task: Task): TaskStatusConfig[] => {
+    return statusConfigsByTaskList[task.taskListId] || [];
+  }, [statusConfigsByTaskList]);
+
   // Task update handlers
   const handleStatusChange = async (task: Task, newStatus: string) => {
     if (!task.taskListPageId) return;
 
     try {
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, { status: newStatus });
-      // Update local state optimistically
+      // Resolve status metadata from task's own configs for optimistic update
+      const configs = getConfigsForTask(task);
+      const configMap = buildStatusConfig(configs);
+      const matched = configMap[newStatus];
+      const fallback = DEFAULT_STATUS_CONFIG[newStatus];
       setTasks(prev => prev.map(t =>
-        t.id === task.id ? { ...t, status: newStatus as TaskStatus } : t
+        t.id === task.id
+          ? {
+              ...t,
+              status: newStatus,
+              statusGroup: matched?.group ?? fallback?.group ?? t.statusGroup,
+              statusLabel: matched?.label ?? fallback?.label ?? t.statusLabel,
+              statusColor: matched?.color ?? fallback?.color ?? t.statusColor,
+            }
+          : t
       ));
     } catch {
       toast.error('Failed to update status');
@@ -369,8 +416,16 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   };
 
   const handleToggleComplete = async (task: Task) => {
-    const newStatus = task.status === 'completed' ? 'pending' : 'completed';
-    await handleStatusChange(task, newStatus);
+    const statusDisplay = getStatusDisplay(task);
+    const configs = getConfigsForTask(task);
+    const sorted = [...configs].sort((a, b) => a.position - b.position);
+    if (statusDisplay.group === 'done') {
+      const firstTodo = sorted.find(c => c.group === 'todo');
+      await handleStatusChange(task, firstTodo?.slug || 'pending');
+    } else {
+      const firstDone = sorted.find(c => c.group === 'done');
+      await handleStatusChange(task, firstDone?.slug || 'completed');
+    }
   };
 
   const handleStartEdit = (task: Task) => {
@@ -393,17 +448,16 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     setEditingTaskId(null);
   };
 
-  const handleAssigneeChange = async (task: Task, assigneeId: string | null, agentId: string | null) => {
+  const handleMultiAssigneeChange = async (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!task.taskListPageId) return;
 
     try {
       await patch(`/api/pages/${task.taskListPageId}/tasks/${task.id}`, {
-        assigneeId,
-        assigneeAgentId: agentId,
+        assigneeIds,
       });
       fetchTasks(); // Refetch to get updated assignee data
     } catch {
-      toast.error('Failed to update assignee');
+      toast.error('Failed to update assignees');
       fetchTasks();
     }
   };
@@ -467,36 +521,44 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
     const draggedTask = tasks.find(t => t.id === active.id);
     if (!draggedTask) return;
 
-    // Determine target status
-    let targetStatus: TaskStatus | null = null;
+    // Determine target status group
+    let targetGroup: TaskStatusGroup | null = null;
 
-    // Check if dropped on a column
-    if (STATUS_ORDER.includes(over.id as TaskStatus)) {
-      targetStatus = over.id as TaskStatus;
+    // Check if dropped on a group column
+    if (STATUS_GROUPS.includes(over.id as TaskStatusGroup)) {
+      targetGroup = over.id as TaskStatusGroup;
     } else {
-      // Check if dropped on a task - find that task's status
+      // Check if dropped on a task - use that task's status group
       const targetTask = tasks.find(t => t.id === over.id);
       if (targetTask) {
-        targetStatus = targetTask.status;
+        targetGroup = getStatusDisplay(targetTask).group;
       }
     }
 
-    if (targetStatus && draggedTask.status !== targetStatus) {
-      await handleStatusChange(draggedTask, targetStatus);
+    if (targetGroup) {
+      const currentGroup = getStatusDisplay(draggedTask).group;
+      if (currentGroup !== targetGroup) {
+        // Use task's own configs to find first status in target group
+        const configs = getConfigsForTask(draggedTask);
+        const sorted = [...configs].sort((a, b) => a.position - b.position);
+        const firstInGroup = sorted.find(c => c.group === targetGroup);
+        const fallback: Record<TaskStatusGroup, string> = { todo: 'pending', in_progress: 'in_progress', done: 'completed' };
+        await handleStatusChange(draggedTask, firstInGroup?.slug || fallback[targetGroup]);
+      }
     }
   };
 
-  // Group tasks by status for kanban
-  const tasksByStatus = useMemo(() => {
-    const grouped: Record<TaskStatus, Task[]> = {
-      pending: [],
+  // Group tasks by status group for kanban
+  const tasksByGroup = useMemo(() => {
+    const grouped: Record<TaskStatusGroup, Task[]> = {
+      todo: [],
       in_progress: [],
-      completed: [],
-      blocked: [],
+      done: [],
     };
 
     for (const task of tasks) {
-      grouped[task.status].push(task);
+      const { group } = getStatusDisplay(task);
+      grouped[group].push(task);
     }
 
     return grouped;
@@ -506,11 +568,24 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
   if (loading && tasks.length === 0) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-6xl">
-          <div className="space-y-6">
-            <Skeleton className="h-8 w-48" />
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-96" />
+        <div className={cn(
+          'mx-auto w-full',
+          isMobileTaskLayout
+            ? 'px-4 pt-4'
+            : 'container max-w-6xl px-4 py-10 sm:px-6 lg:px-10'
+        )}>
+          <div className={cn('space-y-4', isMobileTaskLayout && 'space-y-3')}>
+            <Skeleton className={cn('w-48', isMobileTaskLayout ? 'h-6' : 'h-8')} />
+            <Skeleton className={cn('w-full', isMobileTaskLayout ? 'h-9' : 'h-10')} />
+            {isMobileTaskLayout ? (
+              <>
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <Skeleton key={i} className="h-14 w-full" />
+                ))}
+              </>
+            ) : (
+              <Skeleton className="h-96" />
+            )}
           </div>
         </div>
       </div>
@@ -527,6 +602,47 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
       ? `Your tasks in ${drives.find(d => d.id === filters.driveId)?.name || 'selected drive'}`
       : 'Your tasks across all drives';
 
+  // Note: assigneeFilter === 'all' is included because the default is 'mine',
+  // so viewing all tasks is a deviation from the default state that users may want to clear
+  const hasActiveFilters = Boolean(
+    filters.search ||
+    filters.status ||
+    filters.priority ||
+    (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
+    (context === 'user' && filters.driveId) ||
+    filters.assigneeFilter === 'all'
+  );
+
+  const clearFilters = () => {
+    const nextFilters: ExtendedFilters = {
+      assigneeFilter: 'mine',
+    };
+
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
+
+    setSearchValue('');
+    setFilters(nextFilters);
+    updateUrl(nextFilters, context === 'drive' ? selectedDriveId : undefined);
+  };
+
+  // Count active filters for the badge on mobile filter button
+  const activeFilterCount = [
+    filters.search,
+    filters.status,
+    filters.priority,
+    filters.dueDateFilter && filters.dueDateFilter !== 'all',
+    context === 'user' && filters.driveId,
+    filters.assigneeFilter === 'all',
+  ].filter(Boolean).length;
+
+  const handleOpenDetailSheet = (task: Task) => {
+    setDetailSheetTask(task);
+    setDetailSheetOpen(true);
+  };
+
   return (
     <div className="h-full flex flex-col">
       <PullToRefresh
@@ -534,317 +650,394 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
         onRefresh={handleRefresh}
       >
         <CustomScrollArea className="h-full">
-          <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-6xl">
-            {/* Header */}
-            <div className="mb-6">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => router.push(context === 'drive' && selectedDriveId
-                  ? `/dashboard/${selectedDriveId}`
-                  : '/dashboard'
-                )}
-                className="mb-4"
-              >
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back
-              </Button>
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h1 className="text-2xl font-bold">{title}</h1>
-                  <p className="text-sm text-muted-foreground">{description}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* View toggle */}
-                  <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
-                    <button
-                      onClick={() => setViewMode('table')}
-                      className={cn(
-                        'p-1.5 rounded transition-colors',
-                        viewMode === 'table'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                      title="Table view"
-                      aria-label="Table view"
-                    >
-                      <LayoutList className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => setViewMode('kanban')}
-                      className={cn(
-                        'p-1.5 rounded transition-colors',
-                        viewMode === 'kanban'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                      title="Kanban view"
-                      aria-label="Kanban view"
-                    >
-                      <Kanban className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <Button
-                    onClick={handleRefresh}
-                    variant="outline"
-                    size="sm"
-                    disabled={loading}
-                  >
-                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-                    Refresh
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            {/* Error Alert */}
-            {error && (
-              <Alert variant="destructive" className="mb-6">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
+          <div
+            className={cn(
+              'mx-auto w-full',
+              isMobileTaskLayout
+                ? 'max-w-none'
+                : 'container max-w-6xl px-4 py-10 sm:px-6 lg:px-10'
             )}
-
-            {/* Filter Bar */}
-            <div className="mb-6 flex flex-wrap gap-3">
-              {/* Search */}
-              <div className="relative flex-1 min-w-[200px] max-w-sm">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  ref={searchInputRef}
-                  placeholder="Search tasks..."
-                  value={searchValue}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
-
-              {/* Drive Selector */}
-              <Select
-                value={context === 'drive' ? selectedDriveId : (filters.driveId || 'all')}
-                onValueChange={(value) => handleDriveChange(value === 'all' ? '' : value)}
-              >
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="All drives" />
-                </SelectTrigger>
-                <SelectContent>
-                  {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-                  {drives.map((drive) => (
-                    <SelectItem key={drive.id} value={drive.id}>
-                      {drive.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* Status Filter */}
-              <Select
-                value={filters.status || 'all'}
-                onValueChange={(value) => handleFiltersChange({ status: value === 'all' ? undefined : value as TaskStatus })}
-              >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="All statuses" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All statuses</SelectItem>
-                  {STATUS_ORDER.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {STATUS_CONFIG[status].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* Priority Filter */}
-              <Select
-                value={filters.priority || 'all'}
-                onValueChange={(value) => handleFiltersChange({ priority: value === 'all' ? undefined : value as TaskPriority })}
-              >
-                <SelectTrigger className="w-[130px]">
-                  <SelectValue placeholder="All priorities" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All priorities</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {/* Due Date Filter */}
-              <Select
-                value={filters.dueDateFilter || 'all'}
-                onValueChange={(value) => handleFiltersChange({ dueDateFilter: value as DueDateFilter })}
-              >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="Any date" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Any date</SelectItem>
-                  <SelectItem value="overdue">Overdue</SelectItem>
-                  <SelectItem value="today">Due today</SelectItem>
-                  <SelectItem value="this_week">This week</SelectItem>
-                  <SelectItem value="upcoming">Upcoming</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {/* Assignee Filter */}
-              <div className="flex items-center bg-muted rounded-md p-0.5">
-                <button
-                  onClick={() => handleFiltersChange({ assigneeFilter: 'mine' })}
-                  className={cn(
-                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-                    filters.assigneeFilter !== 'all'
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  title="My tasks"
-                >
-                  <User className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">My tasks</span>
-                </button>
-                <button
-                  onClick={() => handleFiltersChange({ assigneeFilter: 'all' })}
-                  className={cn(
-                    'flex items-center gap-1.5 px-2.5 py-1.5 rounded text-sm transition-colors',
-                    filters.assigneeFilter === 'all'
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  title="All tasks"
-                >
-                  <Users className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">All tasks</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Tasks View */}
-            {tasks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <CheckSquare className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                <h3 className="text-lg font-medium mb-1">
-                  {context === 'drive' && !selectedDriveId
-                    ? 'Select a drive to view tasks'
-                    : 'No tasks found'}
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  {context === 'drive' && !selectedDriveId
-                    ? 'Choose a drive from the dropdown above'
-                    : filters.search || filters.status || filters.priority || filters.dueDateFilter
-                      ? 'Try adjusting your filters'
-                      : 'Tasks assigned to you will appear here'}
-                </p>
-              </div>
-            ) : viewMode === 'kanban' ? (
-              /* Kanban View */
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCorners}
-                onDragStart={handleDragStart}
-                onDragEnd={handleDragEnd}
-              >
-                <div className="flex gap-4 overflow-x-auto pb-4">
-                  {STATUS_ORDER.map((status) => (
-                    <KanbanColumn
-                      key={status}
-                      status={status}
-                      tasks={tasksByStatus[status]}
-                      onToggleComplete={handleToggleComplete}
-                      onNavigate={handleNavigate}
-                      onStartEdit={handleStartEdit}
-                      onDelete={handleDeleteTask}
-                      editingTaskId={editingTaskId}
-                      editingTitle={editingTitle}
-                      onEditingTitleChange={setEditingTitle}
-                      onSaveTitle={handleSaveTitle}
-                      onCancelEdit={() => setEditingTaskId(null)}
+          >
+            {isMobileTaskLayout ? (
+              <>
+                {/* Mobile Header - compact */}
+                <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border/50">
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={() => router.push(context === 'drive' && selectedDriveId
+                        ? `/dashboard/${selectedDriveId}`
+                        : '/dashboard'
+                      )}
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                    <h1 className="text-base font-semibold truncate flex-1">{title}</h1>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={handleRefresh}
+                      disabled={loading}
+                    >
+                      <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                    </Button>
+                    <TaskFilterButton
+                      activeFilterCount={activeFilterCount}
+                      onClick={() => setFilterSheetOpen(true)}
                     />
-                  ))}
+                  </div>
+
+                  {/* Search bar */}
+                  <div className="px-3 pb-2.5">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        ref={searchInputRef}
+                        placeholder="Search tasks..."
+                        value={searchValue}
+                        onChange={(e) => handleSearchChange(e.target.value)}
+                        className="pl-9 h-9 text-sm bg-muted/50 border-0"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <DragOverlay>
-                  {activeTask && (
-                    <KanbanCard
-                      task={activeTask}
-                      isDragging
-                      onToggleComplete={() => {}}
-                      onNavigate={() => {}}
-                      onStartEdit={() => {}}
-                      onDelete={() => {}}
-                      isEditing={false}
-                      editingTitle=""
-                      onEditingTitleChange={() => {}}
-                      onSaveTitle={() => {}}
-                      onCancelEdit={() => {}}
-                    />
-                  )}
-                </DragOverlay>
-              </DndContext>
-            ) : (
-              /* Table View */
-              <div className="border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-10"></TableHead>
-                      <TableHead className="min-w-[250px]">Task</TableHead>
-                      <TableHead className="w-32">Status</TableHead>
-                      <TableHead className="w-28">Priority</TableHead>
-                      <TableHead className="w-32">Assignee</TableHead>
-                      <TableHead className="w-28">Due Date</TableHead>
-                      <TableHead className="w-40">Source</TableHead>
-                      <TableHead className="w-12"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+
+                {/* Error Alert */}
+                {error && (
+                  <Alert variant="destructive" className="mx-3 mt-3">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Mobile Compact Task List */}
+                {tasks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+                    <CheckSquare className="h-10 w-10 text-muted-foreground/40 mb-3" />
+                    <h3 className="text-base font-medium mb-1">
+                      {context === 'drive' && !selectedDriveId
+                        ? 'Select a drive'
+                        : 'No tasks'}
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      {context === 'drive' && !selectedDriveId
+                        ? 'Open filters to choose a drive'
+                        : hasActiveFilters
+                          ? 'Try adjusting your filters'
+                          : 'Tasks assigned to you will appear here'}
+                    </p>
+                    {hasActiveFilters && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={clearFilters}
+                        className="mt-3"
+                      >
+                        Clear filters
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="divide-y divide-border/50">
                     {tasks.map((task) => (
-                      <TaskTableRow
+                      <TaskCompactRow
                         key={task.id}
                         task={task}
-                        onStatusChange={handleStatusChange}
-                        onPriorityChange={handlePriorityChange}
                         onToggleComplete={handleToggleComplete}
-                        onAssigneeChange={handleAssigneeChange}
-                        onDueDateChange={handleDueDateChange}
-                        onStartEdit={handleStartEdit}
-                        onSaveTitle={handleSaveTitle}
-                        onDelete={handleDeleteTask}
-                        onNavigate={handleNavigate}
-                        isEditing={editingTaskId === task.id}
-                        editingTitle={editingTitle}
-                        onEditingTitleChange={setEditingTitle}
-                        onCancelEdit={() => setEditingTaskId(null)}
+                        onTap={handleOpenDetailSheet}
                       />
                     ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+                  </div>
+                )}
 
-            {/* Load More */}
-            {pagination?.hasMore && (
-              <div className="flex justify-center pt-6">
-                <Button
-                  onClick={handleLoadMore}
-                  variant="outline"
-                  disabled={loadingMore}
-                >
-                  {loadingMore ? 'Loading...' : 'Load more'}
-                </Button>
-              </div>
+                {/* Load More */}
+                {pagination?.hasMore && (
+                  <div className="px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                    <Button
+                      onClick={handleLoadMore}
+                      variant="outline"
+                      disabled={loadingMore}
+                      className="h-10 w-full"
+                    >
+                      {loadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+
+                {/* Mobile Sheets */}
+                <TaskDetailSheet
+                  task={detailSheetTask}
+                  statusConfigs={detailSheetTask ? getConfigsForTask(detailSheetTask) : []}
+                  open={detailSheetOpen}
+                  onOpenChange={setDetailSheetOpen}
+                  onStatusChange={handleStatusChange}
+                  onPriorityChange={handlePriorityChange}
+                  onToggleComplete={handleToggleComplete}
+                  onMultiAssigneeChange={handleMultiAssigneeChange}
+                  onDueDateChange={handleDueDateChange}
+                  onSaveTitle={handleSaveTitle}
+                  onDelete={handleDeleteTask}
+                  onNavigate={handleNavigate}
+                />
+                <TaskFilterSheet
+                  open={filterSheetOpen}
+                  onOpenChange={setFilterSheetOpen}
+                  context={context}
+                  drives={drives}
+                  selectedDriveId={selectedDriveId}
+                  filters={filters}
+                  activeFilterCount={activeFilterCount}
+                  statusConfigsByTaskList={statusConfigsByTaskList}
+                  onDriveChange={handleDriveChange}
+                  onFiltersChange={handleFiltersChange}
+                  onClearFilters={clearFilters}
+                />
+              </>
+            ) : (
+              <>
+                {/* Desktop Header */}
+                <div className="mb-6">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => router.push(context === 'drive' && selectedDriveId
+                      ? `/dashboard/${selectedDriveId}`
+                      : '/dashboard'
+                    )}
+                    className="mb-3 sm:mb-4"
+                  >
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Back
+                  </Button>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h1 className="text-2xl font-bold">{title}</h1>
+                      <p className="text-sm text-muted-foreground">{description}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* View toggle */}
+                      <div className="hidden md:flex items-center bg-muted rounded-md p-0.5">
+                        <button
+                          onClick={() => setViewMode('table')}
+                          className={cn(
+                            'p-1.5 rounded transition-colors',
+                            viewMode === 'table'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                          title="Table view"
+                          aria-label="Table view"
+                        >
+                          <LayoutList className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setViewMode('kanban')}
+                          className={cn(
+                            'p-1.5 rounded transition-colors',
+                            viewMode === 'kanban'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                          title="Kanban view"
+                          aria-label="Kanban view"
+                        >
+                          <Kanban className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <Button
+                        onClick={handleRefresh}
+                        variant="outline"
+                        size="sm"
+                        disabled={loading}
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                        <span>Refresh</span>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Error Alert */}
+                {error && (
+                  <Alert variant="destructive" className="mb-6">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Desktop Filter Bar */}
+                <div className="flex flex-wrap gap-3 mb-6">
+                  {/* Search */}
+                  <div className="relative flex-1 min-w-[200px] max-w-sm">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      ref={searchInputRef}
+                      placeholder="Search tasks..."
+                      value={searchValue}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+
+                  <FilterControls
+                    layout="desktop"
+                    context={context}
+                    drives={drives}
+                    selectedDriveId={selectedDriveId}
+                    filters={filters}
+                    hasActiveFilters={hasActiveFilters}
+                    statusConfigsByTaskList={statusConfigsByTaskList}
+                    onDriveChange={handleDriveChange}
+                    onFiltersChange={handleFiltersChange}
+                    onClearFilters={clearFilters}
+                  />
+                </div>
+
+                {/* Desktop Tasks View */}
+                {tasks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center">
+                    <CheckSquare className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                    <h3 className="text-lg font-medium mb-1">
+                      {context === 'drive' && !selectedDriveId
+                        ? 'Select a drive to view tasks'
+                        : 'No tasks found'}
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      {context === 'drive' && !selectedDriveId
+                        ? 'Choose a drive from the dropdown above'
+                        : hasActiveFilters
+                          ? 'Try adjusting your filters'
+                          : 'Tasks assigned to you will appear here'}
+                    </p>
+                    {hasActiveFilters && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={clearFilters}
+                        className="mt-4"
+                      >
+                        Clear filters
+                      </Button>
+                    )}
+                  </div>
+                ) : viewMode === 'kanban' ? (
+                  /* Kanban View */
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCorners}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <div className="flex gap-4 overflow-x-auto pb-4">
+                      {STATUS_GROUPS.map((group) => (
+                        <KanbanColumn
+                          key={group}
+                          statusGroup={group}
+                          tasks={tasksByGroup[group]}
+                          onToggleComplete={handleToggleComplete}
+                          onNavigate={handleNavigate}
+                          onStartEdit={handleStartEdit}
+                          onDelete={handleDeleteTask}
+                          editingTaskId={editingTaskId}
+                          editingTitle={editingTitle}
+                          onEditingTitleChange={setEditingTitle}
+                          onSaveTitle={handleSaveTitle}
+                          onCancelEdit={() => setEditingTaskId(null)}
+                        />
+                      ))}
+                    </div>
+                    <DragOverlay>
+                      {activeTask && (
+                        <KanbanCard
+                          task={activeTask}
+                          isDragging
+                          onToggleComplete={() => {}}
+                          onNavigate={() => {}}
+                          onStartEdit={() => {}}
+                          onDelete={() => {}}
+                          isEditing={false}
+                          editingTitle=""
+                          onEditingTitleChange={() => {}}
+                          onSaveTitle={() => {}}
+                          onCancelEdit={() => {}}
+                        />
+                      )}
+                    </DragOverlay>
+                  </DndContext>
+                ) : (
+                  /* Table View */
+                  <div className="border rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10"></TableHead>
+                          <TableHead className="min-w-[250px]">Task</TableHead>
+                          <TableHead className="w-32">Status</TableHead>
+                          <TableHead className="w-28">Priority</TableHead>
+                          <TableHead className="w-32">Assignee</TableHead>
+                          <TableHead className="w-28">Due Date</TableHead>
+                          <TableHead className="w-40">Source</TableHead>
+                          <TableHead className="w-12"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {tasks.map((task) => (
+                          <TaskTableRow
+                            key={task.id}
+                            task={task}
+                            statusConfigs={getConfigsForTask(task)}
+                            onStatusChange={handleStatusChange}
+                            onPriorityChange={handlePriorityChange}
+                            onToggleComplete={handleToggleComplete}
+                            onMultiAssigneeChange={handleMultiAssigneeChange}
+                            onDueDateChange={handleDueDateChange}
+                            onStartEdit={handleStartEdit}
+                            onSaveTitle={handleSaveTitle}
+                            onDelete={handleDeleteTask}
+                            onNavigate={handleNavigate}
+                            isEditing={editingTaskId === task.id}
+                            editingTitle={editingTitle}
+                            onEditingTitleChange={setEditingTitle}
+                            onCancelEdit={() => setEditingTaskId(null)}
+                          />
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {/* Load More */}
+                {pagination?.hasMore && (
+                  <div className="flex justify-center pt-6">
+                    <Button
+                      onClick={handleLoadMore}
+                      variant="outline"
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </CustomScrollArea>
       </PullToRefresh>
 
-      {/* Stats Footer */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
-        <span><strong>{pagination?.total ?? tasks.length}</strong> tasks</span>
-        <span className="text-xs sm:text-sm">
-          Updated {formatDistanceToNow(lastRefreshTime, { addSuffix: true })}
-        </span>
-      </div>
+      {/* Stats Footer - desktop only */}
+      {!isMobileTaskLayout && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 border-t bg-muted/50 text-sm text-muted-foreground">
+          <span><strong>{pagination?.total ?? tasks.length}</strong> tasks</span>
+          <span className="text-xs sm:text-sm">
+            Updated {formatDistanceToNow(lastRefreshTime, { addSuffix: true })}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -852,10 +1045,11 @@ export function TasksDashboard({ context, driveId: initialDriveId, driveName }: 
 // Table Row Component
 interface TaskTableRowProps {
   task: Task;
+  statusConfigs: TaskStatusConfig[];
   onStatusChange: (task: Task, status: string) => void;
   onPriorityChange: (task: Task, priority: string) => void;
   onToggleComplete: (task: Task) => void;
-  onAssigneeChange: (task: Task, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange: (task: Task, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (task: Task, date: Date | null) => void;
   onStartEdit: (task: Task) => void;
   onSaveTitle: (task: Task, title: string) => void;
@@ -869,10 +1063,11 @@ interface TaskTableRowProps {
 
 function TaskTableRow({
   task,
+  statusConfigs,
   onStatusChange,
   onPriorityChange,
   onToggleComplete,
-  onAssigneeChange,
+  onMultiAssigneeChange,
   onDueDateChange,
   onStartEdit,
   onSaveTitle,
@@ -883,8 +1078,11 @@ function TaskTableRow({
   onEditingTitleChange,
   onCancelEdit,
 }: TaskTableRowProps) {
-  const isCompleted = task.status === 'completed';
+  const statusDisplay = getStatusDisplay(task);
+  const isCompleted = statusDisplay.group === 'done';
   const cancelTriggeredRef = useRef(false);
+  const statusConfigMap = buildStatusConfig(statusConfigs);
+  const taskStatusOrder = getStatusOrder(statusConfigs);
 
   return (
     <TableRow className={cn('group', isCompleted && 'opacity-60')}>
@@ -951,19 +1149,22 @@ function TaskTableRow({
         >
           <SelectTrigger className="h-8 w-28">
             <SelectValue>
-              <Badge className={cn('text-xs', STATUS_CONFIG[task.status].color)}>
-                {STATUS_CONFIG[task.status].label}
+              <Badge className={cn('text-xs', statusDisplay.color)}>
+                {statusDisplay.label}
               </Badge>
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {STATUS_ORDER.map((status) => (
-              <SelectItem key={status} value={status}>
-                <Badge className={cn('text-xs', STATUS_CONFIG[status].color)}>
-                  {STATUS_CONFIG[status].label}
-                </Badge>
-              </SelectItem>
-            ))}
+            {taskStatusOrder.map((slug) => {
+              const config = statusConfigMap[slug];
+              return (
+                <SelectItem key={slug} value={slug}>
+                  <Badge className={cn('text-xs', config?.color || '')}>
+                    {config?.label || slug}
+                  </Badge>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </TableCell>
@@ -993,14 +1194,13 @@ function TaskTableRow({
         </Select>
       </TableCell>
 
-      {/* Assignee */}
+      {/* Assignees */}
       <TableCell>
         {task.driveId && (
-          <AssigneeSelect
+          <MultiAssigneeSelect
             driveId={task.driveId}
-            currentAssignee={task.assignee}
-            currentAssigneeAgent={task.assigneeAgent}
-            onSelect={(assigneeId, agentId) => onAssigneeChange(task, assigneeId, agentId)}
+            assignees={task.assignees || []}
+            onUpdate={(assigneeIds) => onMultiAssigneeChange(task, assigneeIds)}
           />
         )}
       </TableCell>
@@ -1063,7 +1263,7 @@ function TaskTableRow({
 
 // Kanban Column Component
 interface KanbanColumnProps {
-  status: TaskStatus;
+  statusGroup: TaskStatusGroup;
   tasks: Task[];
   onToggleComplete: (task: Task) => void;
   onNavigate: (task: Task) => void;
@@ -1077,7 +1277,7 @@ interface KanbanColumnProps {
 }
 
 function KanbanColumn({
-  status,
+  statusGroup,
   tasks,
   onToggleComplete,
   onNavigate,
@@ -1089,8 +1289,8 @@ function KanbanColumn({
   onSaveTitle,
   onCancelEdit,
 }: KanbanColumnProps) {
-  const { setNodeRef } = useDroppable({ id: status });
-  const config = STATUS_CONFIG[status];
+  const { setNodeRef } = useDroppable({ id: statusGroup });
+  const config = STATUS_GROUP_CONFIG[statusGroup];
 
   return (
     <div className="flex-shrink-0 w-72 flex flex-col">
@@ -1105,7 +1305,7 @@ function KanbanColumn({
       {/* Cards */}
       <ScrollArea className="flex-1">
         <SortableContext
-          id={status}
+          id={statusGroup}
           items={tasks.map(t => t.id)}
           strategy={verticalListSortingStrategy}
         >
@@ -1204,7 +1404,8 @@ function KanbanCard({
   onSaveTitle,
   onCancelEdit,
 }: KanbanCardProps) {
-  const isCompleted = task.status === 'completed';
+  const statusDisplay = getStatusDisplay(task);
+  const isCompleted = statusDisplay.group === 'done';
   const cancelTriggeredRef = useRef(false);
 
   return (
@@ -1306,18 +1507,17 @@ function KanbanCard({
             {PRIORITY_CONFIG[task.priority].label}
           </Badge>
 
-          {/* Assignee */}
-          {(task.assignee || task.assigneeAgent) && (
-            <span className="text-xs text-muted-foreground">
-              {task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}
-            </span>
-          )}
+          {/* Assignees */}
+          {(() => {
+            const text = getAssigneeText(task);
+            return text ? <span className="text-xs text-muted-foreground">{text}</span> : null;
+          })()}
 
           {/* Due date */}
           {task.dueDate && (
             <span className={cn(
               'text-xs',
-              isPast(new Date(task.dueDate)) && task.status !== 'completed'
+              isPast(new Date(task.dueDate)) && !isCompleted
                 ? 'text-red-500 font-medium'
                 : isToday(new Date(task.dueDate))
                   ? 'text-amber-500'

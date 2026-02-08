@@ -3,6 +3,8 @@ import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
   createSecureResponse,
   createSecureErrorResponse,
+  isPublicPageRoute,
+  shouldDisableCOEP,
 } from '@/middleware/security-headers';
 import { logSecurityEvent } from '@pagespace/lib/server';
 import {
@@ -61,24 +63,35 @@ export async function middleware(req: NextRequest) {
     const authHeader = req.headers.get('authorization');
     if (authHeader?.startsWith(MCP_BEARER_PREFIX) || authHeader?.startsWith(SESSION_BEARER_PREFIX)) {
       // API routes get restrictive CSP (no nonce needed)
-      const { response } = createSecureResponse(isProduction, req, true);
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return response;
     }
 
     // Public routes that don't require authentication
     // Note: Cron routes handle their own auth via validateCronRequest (internal network only)
+    // Device/mobile auth endpoints authenticate via body tokens (device token, email/password),
+    // not session cookies, so they must bypass the cookie check to allow cookie-expired recovery.
     if (
       pathname.startsWith('/api/auth/login') ||
       pathname.startsWith('/api/auth/signup') ||
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/google') ||
+      pathname.startsWith('/api/auth/device/') ||
+      pathname.startsWith('/api/auth/mobile/') ||
+      pathname.startsWith('/api/auth/desktop/') ||
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron'
     ) {
-      const { response } = createSecureResponse(isProduction, req, isAPIRoute);
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
+      return response;
+    }
+
+    // Public page routes (auth pages) get security headers but no session check
+    if (isPublicPageRoute(pathname)) {
+      const { response } = createSecureResponse(isProduction, req, { disableCOEP: shouldDisableCOEP(pathname) });
       return response;
     }
 
@@ -103,7 +116,7 @@ export async function middleware(req: NextRequest) {
 
     // Session cookie exists - let request through
     // Route handlers will validate the session and check admin role
-    const { response } = createSecureResponse(isProduction, req, isAPIRoute);
+    const { response } = createSecureResponse(isProduction, req, { isAPIRoute, disableCOEP: shouldDisableCOEP(pathname) });
 
     return response;
   });
@@ -112,7 +125,7 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     {
-      source: '/((?!_next/static|_next/image|favicon.ico|auth).*)',
+      source: '/((?!_next/static|_next/image|favicon.ico).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },

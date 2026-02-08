@@ -195,13 +195,11 @@ export class PageTreeCache {
     // Store in L1 (memory)
     this.memoryCache.set(key, cached);
 
-    // Store in L2 (Redis)
+    // Store in L2 (Redis) - fire-and-forget since L1 is already updated
     if (this.isRedisAvailable && this.redis) {
-      try {
-        await this.redis.setex(key, ttl, JSON.stringify(cached));
-      } catch (error) {
+      this.redis.setex(key, ttl, JSON.stringify(cached)).catch((error) => {
         loggers.api.warn('Redis set error for page tree cache', { key, error });
-      }
+      });
     }
   }
 

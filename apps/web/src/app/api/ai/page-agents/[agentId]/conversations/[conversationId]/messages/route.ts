@@ -4,6 +4,7 @@ import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -86,8 +87,11 @@ export async function GET(
 
     // Parse pagination parameters with validation
     const { searchParams } = new URL(request.url);
-    const limitParam = parseInt(searchParams.get('limit') || '50');
-    const limit = isNaN(limitParam) ? 50 : Math.max(1, Math.min(limitParam, 200));
+    const limit = parseBoundedIntParam(searchParams.get('limit'), {
+      defaultValue: 50,
+      min: 1,
+      max: 200,
+    });
     const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
     const directionParam = searchParams.get('direction');
     const direction = (directionParam === 'before' || directionParam === 'after')

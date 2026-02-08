@@ -30,6 +30,29 @@ export function normalizeTimezone(timezone?: string | null): string {
   return isValidTimezone(trimmedTimezone) ? trimmedTimezone : DEFAULT_TIMEZONE;
 }
 
+/**
+ * Get the UTC offset in minutes for an IANA timezone at a given date.
+ * Positive = east of UTC, negative = west (e.g., America/New_York in winter = -300).
+ * Used by chrono-node for timezone-aware natural language date parsing.
+ */
+export function getTimezoneOffsetMinutes(timezone: string, date?: Date): number {
+  const tz = normalizeTimezone(timezone);
+  const refDate = date ?? new Date();
+  return getTimezoneOffsetMilliseconds(refDate, tz) / (60 * 1000);
+}
+
+/**
+ * Format a UTC Date for display in a specific timezone.
+ */
+export function formatDateInTimezone(date: Date, timezone?: string | null): string {
+  const tz = normalizeTimezone(timezone);
+  return date.toLocaleString('en-US', {
+    timeZone: tz,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+}
+
 function getTimezoneOffsetMilliseconds(date: Date, timezone: string): number {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
