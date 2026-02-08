@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
 import { loggers } from '@pagespace/lib/server';
 import { canUserViewPage } from '@pagespace/lib/server';
@@ -24,6 +24,9 @@ export async function GET(request: Request) {
     if (!pageId) {
       return NextResponse.json({ error: 'pageId is required' }, { status: 400 });
     }
+
+    const mcpScopeError = await checkMCPPageScope(auth, pageId);
+    if (mcpScopeError) return mcpScopeError;
 
     // Check if user has view permission for this page
     const canView = await canUserViewPage(auth.userId, pageId);

@@ -51,6 +51,8 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { parseConsentError } from '@/lib/ai/shared/error-messages';
+import { CloudProviderConsentDialog } from '@/components/ai/consent/CloudProviderConsentDialog';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -78,6 +80,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+  const [consentProvider, setConsentProvider] = useState<string | null>(null);
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -168,6 +171,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       transport,
       experimental_throttle: 100,
       onError: (error: Error) => {
+        const provider = parseConsentError(error.message);
+        if (provider) {
+          setConsentProvider(provider);
+          return;
+        }
         console.error('AiChatView: Chat error:', error);
       },
     }),
@@ -449,6 +457,32 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
   }, [currentConversationId, page.id, setMessages]);
 
+  // Handle consent grant — call API, dismiss dialog, retry last message
+  const handleConsentGrant = useCallback(async () => {
+    if (!consentProvider) return;
+    try {
+      await fetchWithAuth('/api/ai/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: consentProvider }),
+      });
+      setConsentProvider(null);
+      setShowError(false);
+      // Retry the last user message if one exists
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg) {
+        const textParts = lastUserMsg.parts?.filter((p) => p.type === 'text') || [];
+        const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+        if (text) {
+          void sendMessageWithContext(text);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to grant consent:', err);
+      toast.error('Failed to grant consent. Please try again.');
+    }
+  }, [consentProvider, messages, sendMessageWithContext]);
+
   // Pull-up refresh handler for mobile - check for missed messages
   const handlePullUpRefresh = useCallback(async () => {
     if (!currentConversationId) return;
@@ -691,6 +725,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           />
         </TabsContent>
       </Tabs>
+
+      <CloudProviderConsentDialog
+        provider={consentProvider}
+        onConsent={handleConsentGrant}
+        onCancel={() => setConsentProvider(null)}
+      />
     </div>
   );
 };

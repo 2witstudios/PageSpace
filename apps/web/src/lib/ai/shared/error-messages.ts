@@ -3,10 +3,24 @@
  */
 
 /**
+ * Parse a consent_required error and return the provider name, or null if not a consent error.
+ */
+export function parseConsentError(errorMessage: string | undefined): string | null {
+  if (!errorMessage) return null;
+  const match = errorMessage.match(/consent_required:(\w+)/);
+  return match ? match[1] : null;
+}
+
+/**
  * Get user-friendly error message based on error content
  */
 export function getAIErrorMessage(errorMessage: string | undefined): string {
   if (!errorMessage) return 'Something went wrong. Please try again.';
+
+  // Consent required errors — show a user-friendly message
+  if (parseConsentError(errorMessage)) {
+    return 'This AI provider requires your consent before use. Please grant consent to continue.';
+  }
 
   // Authentication errors
   if (errorMessage.includes('Unauthorized') || errorMessage.includes('401')) {
