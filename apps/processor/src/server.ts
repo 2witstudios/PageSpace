@@ -9,6 +9,7 @@ import { cacheRouter } from './api/serve';
 import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
 import avatarRouter from './api/avatar';
+import { deleteFileRouter } from './api/delete-file';
 import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 
@@ -48,6 +49,7 @@ app.use('/api/upload', authenticateService, requireScope('files:write'), uploadR
 app.use('/api/optimize', authenticateService, requireScope('files:optimize'), imageRouter);
 app.use('/api/ingest', authenticateService, requireScope('files:ingest'), ingestRouter);
 app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
+app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/cache', authenticateService, requireScope('files:read'), cacheRouter);
 
 // Queue status endpoint
