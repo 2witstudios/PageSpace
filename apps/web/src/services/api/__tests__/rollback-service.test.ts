@@ -903,23 +903,28 @@ describe('rollback-service', () => {
         createMockActivity({ id: 'act_2' }),
       ];
 
-      mockDb.select.mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn().mockReturnValue({
-                offset: vi.fn().mockResolvedValue(mockActivities),
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                orderBy: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockReturnValue({
+                    offset: vi.fn().mockResolvedValue(mockActivities),
+                  }),
+                }),
               }),
             }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ value: 2 }]),
           }),
-        }),
-      }));
-
-      // Mock for count query
-      vi.spyOn(Promise, 'all').mockResolvedValueOnce([
-        mockActivities,
-        [{ value: 2 }],
-      ]);
+        };
+      });
 
       const result = await getPageVersionHistory(mockPageId, mockUserId);
 
@@ -930,22 +935,28 @@ describe('rollback-service', () => {
     it('applies filter options correctly', async () => {
       const mockActivities: ActivityLogForRollback[] = [];
 
-      mockDb.select.mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn().mockReturnValue({
-                offset: vi.fn().mockResolvedValue(mockActivities),
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                orderBy: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockReturnValue({
+                    offset: vi.fn().mockResolvedValue(mockActivities),
+                  }),
+                }),
               }),
             }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ value: 0 }]),
           }),
-        }),
-      }));
-
-      vi.spyOn(Promise, 'all').mockResolvedValueOnce([
-        mockActivities,
-        [{ value: 0 }],
-      ]);
+        };
+      });
 
       const result = await getPageVersionHistory(mockPageId, mockUserId, {
         limit: 10,
@@ -992,22 +1003,28 @@ describe('rollback-service', () => {
         createMockActivity({ id: 'act_2', resourceType: 'member' }),
       ];
 
-      mockDb.select.mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn().mockReturnValue({
-                offset: vi.fn().mockResolvedValue(mockActivities),
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                orderBy: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockReturnValue({
+                    offset: vi.fn().mockResolvedValue(mockActivities),
+                  }),
+                }),
               }),
             }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ value: 2 }]),
           }),
-        }),
-      }));
-
-      vi.spyOn(Promise, 'all').mockResolvedValueOnce([
-        mockActivities,
-        [{ value: 2 }],
-      ]);
+        };
+      });
 
       const result = await getDriveVersionHistory(mockDriveId, mockUserId);
 
@@ -1017,22 +1034,28 @@ describe('rollback-service', () => {
     it('filters by resourceType when specified', async () => {
       const mockActivities: ActivityLogForRollback[] = [];
 
-      mockDb.select.mockImplementation(() => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn().mockReturnValue({
-                offset: vi.fn().mockResolvedValue(mockActivities),
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                orderBy: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockReturnValue({
+                    offset: vi.fn().mockResolvedValue(mockActivities),
+                  }),
+                }),
               }),
             }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ value: 0 }]),
           }),
-        }),
-      }));
-
-      vi.spyOn(Promise, 'all').mockResolvedValueOnce([
-        mockActivities,
-        [{ value: 0 }],
-      ]);
+        };
+      });
 
       await getDriveVersionHistory(mockDriveId, mockUserId, {
         resourceType: 'page',
