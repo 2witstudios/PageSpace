@@ -14,8 +14,8 @@
  *
  * Paying users only: 'pro', 'founder', 'business' subscription tiers
  *
- * Security: CRON_SECRET Bearer token + internal network origin check
- * Trigger via: curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/memory/cron
+ * Security: HMAC-signed cron requests (via cron-curl) + internal network origin check
+ * Trigger via: cron-curl POST http://web:3000/api/memory/cron
  */
 
 import { NextResponse } from 'next/server';

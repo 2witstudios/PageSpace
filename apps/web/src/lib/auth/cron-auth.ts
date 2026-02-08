@@ -143,7 +143,7 @@ export function validateCronRequest(request: Request): NextResponse | null {
 const TIMESTAMP_MAX_AGE_SECONDS = 300; // 5 minutes
 const NONCE_CLEANUP_INTERVAL_MS = 600_000; // 10 minutes
 
-const usedNonces = new Set<string>();
+const usedNonces = new Map<string, number>(); // nonce → epoch ms when recorded
 let lastNonceCleanup = Date.now();
 
 /**
@@ -163,12 +163,16 @@ export function computeCronSignature(
 
 /**
  * Check if a nonce has been seen before and record it.
- * Periodically prunes old nonces.
+ * Periodically prunes nonces older than the timestamp acceptance window,
+ * preventing the race condition where a blanket clear could evict still-valid nonces.
  */
 export function checkAndRecordNonce(nonce: string): boolean {
   const now = Date.now();
   if (now - lastNonceCleanup > NONCE_CLEANUP_INTERVAL_MS) {
-    usedNonces.clear();
+    const cutoffMs = now - TIMESTAMP_MAX_AGE_SECONDS * 1000;
+    for (const [n, ts] of usedNonces) {
+      if (ts < cutoffMs) usedNonces.delete(n);
+    }
     lastNonceCleanup = now;
   }
 
@@ -176,7 +180,7 @@ export function checkAndRecordNonce(nonce: string): boolean {
     return false; // Replay detected
   }
 
-  usedNonces.add(nonce);
+  usedNonces.set(nonce, now);
   return true;
 }
 
@@ -237,7 +241,7 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
   // Anti-replay: check timestamp freshness
   const requestTime = parseInt(timestamp, 10);
   const now = Math.floor(Date.now() / 1000);
-  if (isNaN(requestTime) || Math.abs(now - requestTime) > TIMESTAMP_MAX_AGE_SECONDS) {
+  if (isNaN(requestTime) || Math.abs(now - requestTime) >= TIMESTAMP_MAX_AGE_SECONDS) {
     return NextResponse.json(
       { error: 'Forbidden - cron request timestamp expired' },
       { status: 403 }

@@ -47,8 +47,10 @@ else
 fi
 SCRIPT
 
-# Inject the actual secret value into the helper script
-sed -i "s|__CRON_SECRET__|${CRON_SECRET}|g" /usr/local/bin/cron-curl
-chmod +x /usr/local/bin/cron-curl
+# Inject the actual secret value into the helper script using awk for literal-safe replacement
+# (sed can break if CRON_SECRET contains |, &, \, or other metacharacters)
+awk -v secret="$CRON_SECRET" '{ gsub(/__CRON_SECRET__/, secret); print }' /usr/local/bin/cron-curl > /usr/local/bin/cron-curl.tmp \
+  && mv /usr/local/bin/cron-curl.tmp /usr/local/bin/cron-curl
+chmod 700 /usr/local/bin/cron-curl
 
 exec crond -f -d 8

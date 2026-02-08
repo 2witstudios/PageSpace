@@ -15,7 +15,7 @@ import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-serv
  * most syncs happen in near-real-time via the webhook endpoint.
  *
  * Recommended cron schedule: every 5 minutes
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/calendar-sync
+ * cron-curl GET http://web:3000/api/cron/calendar-sync
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);

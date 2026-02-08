@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { shouldReauthorize, isSensitiveEvent, reauthorizePageAccess, withPerEventAuth, SensitiveEventType } from '../per-event-auth';
+import { shouldReauthorize, isSensitiveEvent, reauthorizePageAccess, withPerEventAuth, type AuthSocket, SensitiveEventType } from '../per-event-auth';
 
 vi.mock('@pagespace/lib/logger-config', () => {
   const noop = vi.fn();
@@ -172,25 +172,29 @@ describe('withPerEventAuth', () => {
     mockedGetUserAccessLevel.mockReset();
   });
 
-  function createMockSocket(userId?: string) {
+  function createMockSocket(userId?: string): { socket: AuthSocket; emitFn: ReturnType<typeof vi.fn> } {
     const emitFn = vi.fn();
+    const toFn = vi.fn().mockReturnValue({ emit: vi.fn() });
     return {
       socket: {
         data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined },
         emit: emitFn,
-      } as any,
+        to: toFn,
+      } as unknown as AuthSocket,
       emitFn,
     };
   }
 
   it('given a non-sensitive event, should call handler directly without reauth', async () => {
     const handler = vi.fn();
-    const wrapped = withPerEventAuth('cursor_move', handler, { pageIdExtractor: (p: any) => p.pageId });
-
     const { socket } = createMockSocket('user-1');
+    const wrapped = withPerEventAuth(socket, 'cursor_move', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
     const payload = { pageId: 'page-1' };
 
-    await wrapped(socket, payload);
+    await wrapped(payload);
 
     expect(handler).toHaveBeenCalledWith(socket, payload);
     expect(mockedGetUserAccessLevel).not.toHaveBeenCalled();
@@ -205,12 +209,14 @@ describe('withPerEventAuth', () => {
     });
 
     const handler = vi.fn();
-    const wrapped = withPerEventAuth('document_update', handler, { pageIdExtractor: (p: any) => p.pageId });
-
     const { socket } = createMockSocket('user-1');
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
     const payload = { pageId: 'page-1' };
 
-    await wrapped(socket, payload);
+    await wrapped(payload);
 
     expect(handler).toHaveBeenCalledWith(socket, payload);
   });
@@ -219,12 +225,14 @@ describe('withPerEventAuth', () => {
     mockedGetUserAccessLevel.mockResolvedValue(null);
 
     const handler = vi.fn();
-    const wrapped = withPerEventAuth('document_update', handler, { pageIdExtractor: (p: any) => p.pageId });
-
     const { socket, emitFn } = createMockSocket('user-revoked');
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
     const payload = { pageId: 'page-1' };
 
-    await wrapped(socket, payload);
+    await wrapped(payload);
 
     expect(handler).not.toHaveBeenCalled();
     expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
@@ -237,12 +245,14 @@ describe('withPerEventAuth', () => {
     mockedGetUserAccessLevel.mockRejectedValue(new Error('DB connection error'));
 
     const handler = vi.fn();
-    const wrapped = withPerEventAuth('document_update', handler, { pageIdExtractor: (p: any) => p.pageId });
-
     const { socket, emitFn } = createMockSocket('user-1');
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
     const payload = { pageId: 'page-1' };
 
-    await wrapped(socket, payload);
+    await wrapped(payload);
 
     expect(handler).not.toHaveBeenCalled();
     expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
@@ -253,28 +263,54 @@ describe('withPerEventAuth', () => {
 
   it('given no user on socket, should not call handler', async () => {
     const handler = vi.fn();
-    const wrapped = withPerEventAuth('document_update', handler, { pageIdExtractor: (p: any) => p.pageId });
-
     const { socket } = createMockSocket(); // no user
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
     const payload = { pageId: 'page-1' };
 
-    await wrapped(socket, payload);
+    await wrapped(payload);
 
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('given missing pageId from extractor, should not call handler', async () => {
     const handler = vi.fn();
-    const wrapped = withPerEventAuth('document_update', handler, { pageIdExtractor: () => undefined });
-
     const { socket, emitFn } = createMockSocket('user-1');
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: () => undefined,
+    });
+
     const payload = {};
 
-    await wrapped(socket, payload);
+    await wrapped(payload);
 
     expect(handler).not.toHaveBeenCalled();
     expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
       event: 'document_update',
     }));
+  });
+
+  it('given Socket.IO-style invocation (single arg), should work correctly', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: true,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const handler = vi.fn();
+    const { socket } = createMockSocket('user-1');
+    const listener = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
+    // Simulate exactly how Socket.IO calls the listener: single payload argument
+    const payload = { pageId: 'page-1', content: { text: 'hello' } };
+    await listener(payload);
+
+    expect(handler).toHaveBeenCalledWith(socket, payload);
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
   });
 });

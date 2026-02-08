@@ -17,7 +17,7 @@ import { createHash } from 'crypto';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
-import { withPerEventAuth } from './per-event-auth';
+import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
 
@@ -368,15 +368,7 @@ const io = new Server(httpServer, {
   },
 });
 
-interface AuthSocket extends Socket {
-  data: {
-    user?: {
-      id: string;
-      name: string;
-      avatarUrl: string | null;
-    };
-  };
-}
+// AuthSocket is imported from per-event-auth.ts
 
 /**
  * Look up user display metadata (name, avatar) and store on socket.data.
@@ -855,13 +847,13 @@ io.on('connection', (socket: AuthSocket) => {
   // and the pattern for future write event handlers.
   //
   // To wrap future write handlers:
-  //   socket.on('page_content_change', withPerEventAuth('page_content_change', myHandler, {
-  //     pageIdExtractor: (payload: any) => payload?.pageId,
+  //   socket.on('page_content_change', withPerEventAuth(socket, 'page_content_change', myHandler, {
+  //     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
   //   }));
-  socket.on('document_update', withPerEventAuth('document_update', async (sock, payload) => {
+  socket.on('document_update', withPerEventAuth(socket, 'document_update', async (sock, payload) => {
     const data = payload as { pageId: string; content: unknown };
     loggers.realtime.debug('document_update received (with per-event reauth)', {
-      userId: (sock as AuthSocket).data.user?.id,
+      userId: sock.data.user?.id,
       pageId: data.pageId,
     });
     // Forward the update to the page room for other participants

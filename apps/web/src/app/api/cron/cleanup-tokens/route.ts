@@ -11,11 +11,11 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * the database tidy and prevents unbounded growth.
  *
  * Authentication:
- * - Primary: CRON_SECRET Bearer token (timing-safe comparison)
+ * - Primary: HMAC-signed cron requests (via cron-curl)
  * - Defense-in-depth: internal network origin check
  *
  * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/cleanup-tokens
+ * cron-curl GET http://web:3000/api/cron/cleanup-tokens
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);

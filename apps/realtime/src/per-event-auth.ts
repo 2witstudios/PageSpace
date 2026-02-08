@@ -169,7 +169,7 @@ export async function reauthorizePageAccess(
   }
 }
 
-interface AuthSocket extends Socket {
+export interface AuthSocket extends Socket {
   data: {
     user?: {
       id: string;
@@ -191,19 +191,23 @@ interface WithPerEventAuthOptions {
  * For sensitive events, re-checks page-level permissions before allowing the handler to proceed.
  * Fails closed: if auth check errors, the event is denied.
  *
+ * Socket.IO calls event listeners with (data, ack?) — the socket is NOT passed as a parameter.
+ * This wrapper captures the socket via closure and returns a single-argument listener.
+ *
  * Usage:
- *   socket.on('document_update', withPerEventAuth('document_update', handler, {
+ *   socket.on('document_update', withPerEventAuth(socket, 'document_update', handler, {
  *     pageIdExtractor: (payload) => payload.pageId,
  *   }));
  */
 export function withPerEventAuth(
+  socket: AuthSocket,
   eventType: string,
   handler: (socket: AuthSocket, payload: unknown) => void | Promise<void>,
   options: WithPerEventAuthOptions
-): (socket: AuthSocket, payload: unknown) => Promise<void> {
+): (payload: unknown) => Promise<void> {
   const { pageIdExtractor, requiredLevel = 'edit' } = options;
 
-  return async (socket: AuthSocket, payload: unknown) => {
+  return async (payload: unknown) => {
     const userId = socket.data.user?.id;
     if (!userId) return;
 
