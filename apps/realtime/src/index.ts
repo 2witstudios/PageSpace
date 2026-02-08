@@ -17,6 +17,7 @@ import { createHash } from 'crypto';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
+import { withPerEventAuth } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
 
@@ -848,6 +849,26 @@ io.on('connection', (socket: AuthSocket) => {
       viewerCount: uniqueViewers.length,
     });
   });
+
+  // Per-event reauth: Sensitive write events re-verify permissions before processing.
+  // Currently writes go through HTTP API + broadcast, but this provides defense-in-depth
+  // and the pattern for future write event handlers.
+  //
+  // To wrap future write handlers:
+  //   socket.on('page_content_change', withPerEventAuth('page_content_change', myHandler, {
+  //     pageIdExtractor: (payload: any) => payload?.pageId,
+  //   }));
+  socket.on('document_update', withPerEventAuth('document_update', async (sock, payload) => {
+    const data = payload as { pageId: string; content: unknown };
+    loggers.realtime.debug('document_update received (with per-event reauth)', {
+      userId: (sock as AuthSocket).data.user?.id,
+      pageId: data.pageId,
+    });
+    // Forward the update to the page room for other participants
+    sock.to(data.pageId).emit('document_update', data);
+  }, {
+    pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
+  }));
 
   socket.on('disconnect', (reason) => {
     // Clean up presence tracking and broadcast updates for affected pages

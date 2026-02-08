@@ -16,6 +16,7 @@
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions-cached';
 import { loggers } from '@pagespace/lib/logger-config';
+import type { Socket } from 'socket.io';
 
 /**
  * Events that require re-authorization before processing.
@@ -166,4 +167,75 @@ export async function reauthorizePageAccess(
       reason: 'Authorization check failed',
     };
   }
+}
+
+interface AuthSocket extends Socket {
+  data: {
+    user?: {
+      id: string;
+      name: string;
+      avatarUrl: string | null;
+    };
+  };
+}
+
+interface WithPerEventAuthOptions {
+  pageIdExtractor: (payload: unknown) => string | undefined;
+  requiredLevel?: 'view' | 'edit';
+}
+
+/**
+ * Middleware wrapper for Socket.IO event handlers that require per-event re-authorization.
+ *
+ * For non-sensitive events, the handler is called directly.
+ * For sensitive events, re-checks page-level permissions before allowing the handler to proceed.
+ * Fails closed: if auth check errors, the event is denied.
+ *
+ * Usage:
+ *   socket.on('document_update', withPerEventAuth('document_update', handler, {
+ *     pageIdExtractor: (payload) => payload.pageId,
+ *   }));
+ */
+export function withPerEventAuth(
+  eventType: string,
+  handler: (socket: AuthSocket, payload: unknown) => void | Promise<void>,
+  options: WithPerEventAuthOptions
+): (socket: AuthSocket, payload: unknown) => Promise<void> {
+  const { pageIdExtractor, requiredLevel = 'edit' } = options;
+
+  return async (socket: AuthSocket, payload: unknown) => {
+    const userId = socket.data.user?.id;
+    if (!userId) return;
+
+    if (!isSensitiveEvent(eventType)) {
+      return handler(socket, payload);
+    }
+
+    const pageId = pageIdExtractor(payload);
+    if (!pageId) {
+      socket.emit('error', {
+        event: eventType,
+        message: 'Access denied: missing resource identifier',
+      });
+      return;
+    }
+
+    const result = await reauthorizePageAccess(userId, pageId, requiredLevel);
+
+    if (!result.authorized) {
+      loggers.realtime.warn('Per-event auth middleware: access denied', {
+        userId,
+        pageId,
+        eventType,
+        reason: result.reason,
+      });
+      socket.emit('error', {
+        event: eventType,
+        message: `Access denied: ${result.reason}`,
+      });
+      return;
+    }
+
+    return handler(socket, payload);
+  };
 }
