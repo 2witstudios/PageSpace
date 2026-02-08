@@ -86,7 +86,7 @@ export default function DashboardFooter() {
           variant="ghost"
           className="w-full justify-between px-2 py-2.5 h-auto font-normal text-muted-foreground hover:text-foreground bg-[var(--sidebar-section-bg)]"
         >
-          <span className="text-[11px] font-semibold tracking-wide">User Actions</span>
+          <span className="text-[11px] font-semibold tracking-wide">Dashboard Actions</span>
           <ChevronDown
             className={cn(
               "h-3.5 w-3.5 transition-transform duration-200",
