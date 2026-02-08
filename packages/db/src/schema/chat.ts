@@ -20,6 +20,12 @@ export const channelMessages = pgTable('channel_messages', {
     mimeType: string;
     contentHash: string;
   } | null>(),
+  // AI sender metadata: set when message is posted by an AI tool
+  aiMeta: jsonb('aiMeta').$type<{
+    senderType: 'global_assistant' | 'agent';
+    senderName: string;
+    agentPageId?: string;
+  } | null>(),
 }, (table) => {
     return {
         pageIdx: index('channel_messages_page_id_idx').on(table.pageId),

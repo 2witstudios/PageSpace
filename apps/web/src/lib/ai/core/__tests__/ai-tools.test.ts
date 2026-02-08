@@ -97,6 +97,12 @@ vi.mock('../../tools/calendar-write-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/channel-tools', () => ({
+  channelTools: {
+    send_channel_message: { name: 'send_channel_message', description: 'Send channel message' },
+  },
+}));
+
 import { pageSpaceTools } from '../ai-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
@@ -109,6 +115,7 @@ import { webSearchTools } from '../../tools/web-search-tools';
 import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
+import { channelTools } from '../../tools/channel-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -125,6 +132,7 @@ describe('ai-tools', () => {
         ...activityTools,
         ...calendarReadTools,
         ...calendarWriteTools,
+        ...channelTools,
       });
     });
 
@@ -141,6 +149,7 @@ describe('ai-tools', () => {
         Object.keys(activityTools),
         Object.keys(calendarReadTools),
         Object.keys(calendarWriteTools),
+        Object.keys(channelTools),
       ];
 
       const allKeys = moduleKeysets.flat();

@@ -23,6 +23,8 @@ const WRITE_TOOLS = new Set([
   'update_agent_config',
   // Task operations
   'update_task',
+  // Channel operations
+  'send_channel_message',
 ]);
 
 // Web search tools (excluded when web search is disabled)

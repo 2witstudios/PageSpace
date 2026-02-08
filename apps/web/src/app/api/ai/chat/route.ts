@@ -821,8 +821,13 @@ export async function POST(request: Request) {
                 } : undefined,
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
-              modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId, timezone, AI context, location context, and model capabilities to tools
+              modelCapabilities: getModelCapabilities(currentModel, currentProvider),
+              chatSource: {
+                type: 'page' as const,
+                agentPageId: chatId,
+                agentTitle: page.title,
+              },
+            }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {
