@@ -2,8 +2,17 @@ import { useTheme } from 'next-themes';
 import { useEffect, useState } from 'react';
 import type { Monaco } from '@monaco-editor/react';
 
+let _ctx: CanvasRenderingContext2D | null = null;
+function getCanvasContext(): CanvasRenderingContext2D {
+  if (!_ctx) {
+    _ctx = document.createElement('canvas').getContext('2d');
+  }
+  if (!_ctx) throw new Error('Canvas 2D context unavailable');
+  return _ctx;
+}
+
 function resolveColor(cssValue: string): string {
-  const ctx = document.createElement('canvas').getContext('2d')!;
+  const ctx = getCanvasContext();
   ctx.fillStyle = cssValue;
   return ctx.fillStyle;
 }
@@ -39,6 +48,8 @@ export function useMonacoTheme(monaco: Monaco | null): string {
         'editor.lineHighlightBackground': muted,
         'editorLineNumber.foreground': resolveColor(getCssVar('--muted-foreground')),
         'editorGutter.background': bg,
+        // ctx.fillStyle normalizes to 6-digit hex (#rrggbb), so appending
+        // '40'/'33' produces valid 8-digit hex with alpha
         'editor.selectionBackground': isDark
           ? resolveColor(getCssVar('--primary')) + '40'   // 25% opacity
           : resolveColor(getCssVar('--primary')) + '33',  // 20% opacity

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { useMonacoTheme } from '@/hooks/useMonacoTheme';
@@ -31,7 +31,7 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', option
     }
   }, []);
 
-  const defaultOptions: editor.IStandaloneEditorConstructionOptions = {
+  const defaultOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(() => ({
     readOnly,
     domReadOnly: readOnly,
     cursorWidth: readOnly ? 0 : undefined,
@@ -56,9 +56,9 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', option
       vertical: 'auto',
       horizontal: 'auto'
     },
-  };
+  }), [readOnly]);
 
-  const mergedOptions = { ...defaultOptions, ...optionOverrides };
+  const mergedOptions = useMemo(() => ({ ...defaultOptions, ...optionOverrides }), [defaultOptions, optionOverrides]);
 
   return (
     <div className={className} style={{ height: '100%' }}>
