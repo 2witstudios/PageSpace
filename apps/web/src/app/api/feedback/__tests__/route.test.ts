@@ -399,7 +399,7 @@ describe('/api/feedback', () => {
       const insertMock = vi.mocked(db.insert);
       insertMock.mockReturnValue({
         values: vi.fn().mockRejectedValue(new Error('DB connection failed')),
-      });
+      } as never);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -414,7 +414,7 @@ describe('/api/feedback', () => {
       const insertMock = vi.mocked(db.insert);
       insertMock.mockReturnValue({
         values: vi.fn().mockRejectedValue(new Error('Unexpected error')),
-      });
+      } as never);
 
       const request = createRequest({ message: 'Test' });
       await POST(request);

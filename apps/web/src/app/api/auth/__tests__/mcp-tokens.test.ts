@@ -83,10 +83,10 @@ import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Helper to create a mock transaction that executes callback with a mock tx
 const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
-  vi.mocked(db.transaction).mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<unknown>) => {
+  vi.mocked(db.transaction).mockImplementation((async (callback: (tx: Record<string, unknown>) => Promise<unknown>) => {
     const tx = { insert: insertMock };
     return callback(tx);
-  });
+  }) as never);
 };
 
 describe('/api/auth/mcp-tokens', () => {
@@ -100,7 +100,7 @@ describe('/api/auth/mcp-tokens', () => {
       tokenVersion: 0,
       tokenType: 'session',
       sessionId: 'test-session-id',
-    });
+    } as never);
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default transaction mock that returns a basic token
@@ -317,7 +317,7 @@ describe('/api/auth/mcp-tokens', () => {
         const mockError = {
           error: Response.json({ error: 'Unauthorized' }, { status: 401 }),
         };
-        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockError);
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockError as never);
         vi.mocked(isAuthError).mockReturnValue(true);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -378,7 +378,7 @@ describe('/api/auth/mcp-tokens', () => {
           createdAt: new Date(),
           driveScopes: [],
         },
-      ]);
+      ] as never);
     });
 
     describe('successful listing', () => {
@@ -539,7 +539,7 @@ describe('/api/auth/mcp-tokens', () => {
             }),
           };
         });
-        vi.mocked(db.update).mockReturnValue({ set: mockSet });
+        vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',

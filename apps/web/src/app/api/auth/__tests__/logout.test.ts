@@ -78,7 +78,7 @@ describe('/api/auth/logout', () => {
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-    });
+    } as never);
     vi.mocked(getClientIP).mockReturnValue('unknown');
   });
 

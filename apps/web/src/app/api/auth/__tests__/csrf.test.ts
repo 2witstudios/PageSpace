@@ -57,7 +57,7 @@ describe('/api/auth/csrf', () => {
 
     // Default: valid session
     vi.mocked(getSessionFromCookies).mockReturnValue('valid-session-token');
-    vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
+    vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims as never);
   });
 
   describe('successful CSRF token generation', () => {
