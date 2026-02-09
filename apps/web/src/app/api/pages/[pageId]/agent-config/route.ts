@@ -43,11 +43,9 @@ export async function GET(
     }
 
     // Get available tools for the UI
-    const availableTools = Object.keys(pageSpaceTools).map(toolName => ({
+    const availableTools = Object.entries(pageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      description: (pageSpaceTools as any)[toolName].description || `${toolName} tool`,
-      // You could add more metadata here like categories, etc.
+      description: tool.description || `${toolName} tool`,
     }));
 
     // Fetch the drive's prompt for reference in UI

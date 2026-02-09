@@ -14,6 +14,7 @@ import {
   buildCompleteRequest,
   type CompletePayloadResult,
   type LocationContext,
+  type ToolDefinitionForExtraction,
   getToolsSummary,
   pageSpaceTools,
   extractToolSchemas,
@@ -353,14 +354,11 @@ export async function GET(request: Request) {
     }
 
     // Extract full tool schemas for display (all tools, not filtered by mode)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const toolsForExtraction: Record<string, { description?: string; parameters?: any }> = {};
+    const toolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
     for (const [name, tool] of Object.entries(pageSpaceTools)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toolAny = tool as any;
       toolsForExtraction[name] = {
-        description: toolAny.description,
-        parameters: toolAny.inputSchema,  // AI SDK v5 uses inputSchema, not parameters
+        description: tool.description,
+        parameters: tool.inputSchema,
       };
     }
     const allToolSchemas = extractToolSchemas(toolsForExtraction);
