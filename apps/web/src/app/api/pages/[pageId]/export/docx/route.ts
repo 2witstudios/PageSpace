@@ -5,6 +5,7 @@ import { generateDOCX, sanitizeFilename } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { marked } from 'marked';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -46,8 +47,13 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       );
     }
 
-    // Get the HTML content
-    const htmlContent = page.content || '<p>No content</p>';
+    // Get the HTML content (convert markdown to HTML if needed)
+    let htmlContent: string;
+    if (page.contentMode === 'markdown') {
+      htmlContent = await marked.parse(page.content || '') || '<p>No content</p>';
+    } else {
+      htmlContent = page.content || '<p>No content</p>';
+    }
 
     // Generate DOCX
     const docxBuffer = await generateDOCX(htmlContent, page.title);

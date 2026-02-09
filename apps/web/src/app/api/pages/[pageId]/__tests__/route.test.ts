@@ -99,6 +99,7 @@ const mockPage: PageWithDetails = {
   title: 'Test Page',
   type: 'DOCUMENT',
   content: '<p>Test content</p>',
+  contentMode: 'html',
   parentId: null,
   driveId: mockDriveId,
   position: 0,

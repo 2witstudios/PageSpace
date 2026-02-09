@@ -4,6 +4,7 @@ import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 interface DisplayPreferences {
   showTokenCounts: boolean;
   showCodeToggle: boolean;
+  defaultMarkdownMode: boolean;
 }
 
 const fetcher = async (url: string): Promise<DisplayPreferences> => {
@@ -17,6 +18,7 @@ const fetcher = async (url: string): Promise<DisplayPreferences> => {
 const defaultPreferences: DisplayPreferences = {
   showTokenCounts: false,
   showCodeToggle: false,
+  defaultMarkdownMode: false,
 };
 
 export function useDisplayPreferences() {
@@ -30,11 +32,16 @@ export function useDisplayPreferences() {
   );
 
   const updatePreference = async (
-    type: 'SHOW_TOKEN_COUNTS' | 'SHOW_CODE_TOGGLE',
+    type: 'SHOW_TOKEN_COUNTS' | 'SHOW_CODE_TOGGLE' | 'DEFAULT_MARKDOWN_MODE',
     enabled: boolean
   ) => {
     // Optimistic update
-    const key = type === 'SHOW_TOKEN_COUNTS' ? 'showTokenCounts' : 'showCodeToggle';
+    const keyMap: Record<string, keyof DisplayPreferences> = {
+      'SHOW_TOKEN_COUNTS': 'showTokenCounts',
+      'SHOW_CODE_TOGGLE': 'showCodeToggle',
+      'DEFAULT_MARKDOWN_MODE': 'defaultMarkdownMode',
+    };
+    const key = keyMap[type];
     const optimisticData = {
       ...defaultPreferences,
       ...data,

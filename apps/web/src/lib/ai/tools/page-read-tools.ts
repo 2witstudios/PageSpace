@@ -302,8 +302,11 @@ export const pageReadTools = {
         }
 
         // Format content for AI line-based editing, then split into lines
-        // addLineBreaksForAI adds newlines between block tags without removing any content
-        const formattedContent = addLineBreaksForAI(page.content || '');
+        // Markdown pages already have natural line structure; HTML pages need addLineBreaksForAI
+        const isMarkdown = page.contentMode === 'markdown';
+        const formattedContent = isMarkdown
+          ? (page.content || '')
+          : addLineBreaksForAI(page.content || '');
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 
@@ -354,6 +357,7 @@ export const pageReadTools = {
           pageId: page.id,
           title: page.title,
           type: page.type,
+          contentMode: page.contentMode || 'html',
           isTaskLinked,
           content: numberedContent,
           rawContent,
