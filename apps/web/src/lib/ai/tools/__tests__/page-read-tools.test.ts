@@ -15,11 +15,17 @@ vi.mock('@pagespace/db', () => ({
       drives: { findFirst: vi.fn() },
       taskItems: { findFirst: vi.fn() },
       chatMessages: { findFirst: vi.fn() },
+      channelMessages: { findMany: vi.fn() },
     },
   },
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
   drives: { id: 'id' },
   taskItems: { pageId: 'pageId' },
+  channelMessages: {
+    pageId: 'pageId',
+    isActive: 'isActive',
+    createdAt: 'createdAt',
+  },
   chatMessages: {
     id: 'id',
     pageId: 'pageId',
@@ -168,6 +174,65 @@ describe('page-read-tools', () => {
           context
         )
       ).rejects.toThrow('Page with ID "non-existent" not found');
+    });
+
+    it('returns channel messages when reading a CHANNEL page', async () => {
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'CHANNEL'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockDb.query.channelMessages = {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'msg-1',
+            content: 'First channel message',
+            createdAt: new Date('2025-01-15T10:00:00.000Z'),
+            userId: 'user-1',
+            aiMeta: null,
+            user: { id: 'user-1', name: 'Alice' },
+          },
+          {
+            id: 'msg-2',
+            content: 'AI follow-up',
+            createdAt: new Date('2025-01-15T10:05:00.000Z'),
+            userId: 'user-2',
+            aiMeta: { senderType: 'global_assistant', senderName: 'Assistant' },
+            user: { id: 'user-2', name: 'Bob' },
+          },
+        ]),
+      } as unknown as typeof mockDb.query.channelMessages;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'General', pageId: 'page-1' },
+        createAuthContext()
+      );
+
+      assert({
+        given: 'a CHANNEL page with two messages',
+        should: 'return success',
+        actual: (result as { success: boolean }).success,
+        expected: true,
+      });
+
+      assert({
+        given: 'a CHANNEL page',
+        should: 'return messageCount for messages read',
+        actual: (result as { messageCount: number }).messageCount,
+        expected: 2,
+      });
+
+      assert({
+        given: 'channel output',
+        should: 'include formatted assistant attribution in transcript',
+        actual: (result as { content: string }).content.includes('[assistant] Assistant'),
+        expected: true,
+      });
+
+      assert({
+        given: 'channel output',
+        should: 'include structured channelMessages array',
+        actual: Array.isArray((result as { channelMessages: unknown[] }).channelMessages),
+        expected: true,
+      });
     });
 
     describe('line range support', () => {

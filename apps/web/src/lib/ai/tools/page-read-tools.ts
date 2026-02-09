@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { db, pages, taskItems, taskLists, chatMessages, eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db';
+import { db, pages, taskItems, taskLists, chatMessages, channelMessages, eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db';
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
@@ -91,7 +91,7 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. Use lineStart/lineEnd to read specific line ranges.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. Use lineStart/lineEnd to read specific line ranges.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().describe('The unique ID of the page to read'),
@@ -298,6 +298,192 @@ export const pageReadTools = {
           return {
             success: false,
             error: `Invalid line range: lineStart (${lineStart}) cannot be greater than lineEnd (${lineEnd})`,
+          };
+        }
+
+        // Handle CHANNEL pages - return message transcript (lineStart/lineEnd map to message numbers)
+        if (page.type === 'CHANNEL') {
+          const messages = await db.query.channelMessages.findMany({
+            where: and(
+              eq(channelMessages.pageId, page.id),
+              eq(channelMessages.isActive, true)
+            ),
+            with: {
+              user: {
+                columns: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+            orderBy: [asc(channelMessages.createdAt)],
+          });
+
+          const totalMessages = messages.length;
+          const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
+
+          const extractMessageText = (content: string): string => {
+            try {
+              const parsed = JSON.parse(content) as {
+                originalContent?: unknown;
+                parts?: Array<{ type?: string; text?: string }>;
+                textParts?: string[];
+              };
+
+              if (typeof parsed.originalContent === 'string') {
+                return parsed.originalContent;
+              }
+
+              if (Array.isArray(parsed.parts)) {
+                const textParts = parsed.parts
+                  .filter(part => part?.type === 'text' && typeof part.text === 'string')
+                  .map(part => part.text as string);
+                if (textParts.length > 0) {
+                  return textParts.join('\n');
+                }
+              }
+
+              if (Array.isArray(parsed.textParts)) {
+                return parsed.textParts.join('\n');
+              }
+            } catch {
+              // Fall through and return raw content
+            }
+
+            return content;
+          };
+
+          const getSenderInfo = (message: typeof messages[number]) => {
+            const senderName = message.aiMeta?.senderName || message.user?.name || 'Unknown';
+
+            if (message.aiMeta?.senderType === 'agent') {
+              return { senderType: 'agent' as const, senderName, prefix: '[agent]' };
+            }
+
+            if (message.aiMeta?.senderType === 'global_assistant') {
+              return { senderType: 'global_assistant' as const, senderName, prefix: '[assistant]' };
+            }
+
+            return { senderType: 'user' as const, senderName, prefix: '[user]' };
+          };
+
+          if (totalMessages === 0) {
+            return {
+              success: true,
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              contentMode: page.contentMode || 'html',
+              isTaskLinked,
+              content: '',
+              rawContent: '',
+              lineCount: 0,
+              totalLines: 0,
+              messageCount: 0,
+              totalMessages: 0,
+              channelMessages: [],
+              summary: `Channel "${page.title}" has no messages yet`,
+              stats: {
+                documentType: page.type,
+                lineCount: 0,
+                messageCount: 0,
+                totalMessages: 0,
+                wordCount: 0,
+                characterCount: 0,
+              },
+              nextSteps: [
+                'Use send_channel_message to post the first update',
+                'Use list_pages to find related documents for context',
+              ],
+            };
+          }
+
+          const effectiveStart = lineStart ?? 1;
+          const effectiveEnd = lineEnd !== undefined ? Math.min(lineEnd, totalMessages) : totalMessages;
+
+          if (effectiveStart > totalMessages) {
+            return {
+              success: true,
+              pageId: page.id,
+              title: page.title,
+              type: page.type,
+              isTaskLinked,
+              content: '',
+              rawContent: '',
+              lineCount: 0,
+              totalLines: totalMessages,
+              messageCount: 0,
+              totalMessages,
+              channelMessages: [],
+              rangeStart: effectiveStart,
+              rangeEnd: effectiveEnd,
+              rangeMessage: `Requested range (${effectiveStart}-${lineEnd ?? totalMessages}) is beyond channel length (${totalMessages} messages)`,
+              summary: `Channel "${page.title}" has ${totalMessages} message${totalMessages === 1 ? '' : 's'}, but requested range starts at message ${effectiveStart}`,
+            };
+          }
+
+          const selectedMessages = messages.slice(effectiveStart - 1, effectiveEnd);
+
+          const transcriptLines = selectedMessages.map((message, index) => {
+            const lineNumber = effectiveStart + index;
+            const sender = getSenderInfo(message);
+            const timestamp = message.createdAt.toISOString();
+            const messageText = extractMessageText(message.content);
+            return `${lineNumber}→${sender.prefix} ${sender.senderName} (${timestamp}): ${messageText}`;
+          });
+
+          const rawTranscriptLines = selectedMessages.map(message => {
+            const sender = getSenderInfo(message);
+            const timestamp = message.createdAt.toISOString();
+            const messageText = extractMessageText(message.content);
+            return `${sender.prefix} ${sender.senderName} (${timestamp}): ${messageText}`;
+          });
+
+          const rawContent = rawTranscriptLines.join('\n');
+          const content = transcriptLines.join('\n');
+
+          return {
+            success: true,
+            pageId: page.id,
+            title: page.title,
+            type: page.type,
+            contentMode: page.contentMode || 'html',
+            isTaskLinked,
+            content,
+            rawContent,
+            lineCount: selectedMessages.length,
+            totalLines: totalMessages,
+            messageCount: selectedMessages.length,
+            totalMessages,
+            channelMessages: selectedMessages.map((message, index) => {
+              const sender = getSenderInfo(message);
+              const messageText = extractMessageText(message.content);
+              return {
+                id: message.id,
+                lineNumber: effectiveStart + index,
+                createdAt: message.createdAt.toISOString(),
+                senderId: message.userId,
+                senderName: sender.senderName,
+                senderType: sender.senderType,
+                content: messageText,
+              };
+            }),
+            ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
+            summary: isRangeRequest
+              ? `Read messages ${effectiveStart}-${effectiveEnd} of channel "${page.title}" (${selectedMessages.length} of ${totalMessages} messages)`
+              : `Read channel "${page.title}" (${totalMessages} messages)`,
+            stats: {
+              documentType: page.type,
+              lineCount: selectedMessages.length,
+              messageCount: selectedMessages.length,
+              totalMessages,
+              wordCount: rawContent.split(/\s+/).filter(Boolean).length,
+              characterCount: rawContent.length,
+            },
+            nextSteps: [
+              'Use send_channel_message to post a response in this channel',
+              'Use these messages as context before drafting updates',
+            ],
           };
         }
 

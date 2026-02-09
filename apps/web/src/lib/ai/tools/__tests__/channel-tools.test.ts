@@ -223,6 +223,7 @@ describe('channel-tools', () => {
       expect(result.success).toBe(true);
       expect(result.senderName).toBe('Alice');
       expect(result.senderType).toBe('global_assistant');
+      expect(result.messagePreview).toBe('Hello from assistant');
     });
 
     it('sends message as page agent with agent title', async () => {
