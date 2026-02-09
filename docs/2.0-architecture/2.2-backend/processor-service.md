@@ -442,9 +442,8 @@ interface HealthMetrics {
 ### Performance Improvements
 1. **WebAssembly**: WASM-based image processing
 2. **GPU Acceleration**: For AI and image processing
-3. **Streaming Uploads**: Chunked upload support
-4. **Progressive Enhancement**: Progressive image loading
-5. **Smart Caching**: ML-based cache prediction
+3. **Progressive Enhancement**: Progressive image loading
+4. **Smart Caching**: ML-based cache prediction
 
 ## Development & Testing
 

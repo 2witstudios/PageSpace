@@ -1,5 +1,16 @@
 import PgBoss from 'pg-boss';
-import { ProcessingJob } from '../types';
+import type {
+  ProcessingJob,
+  QueueName,
+  JobDataMap,
+  QueueStats,
+  IngestFileJobData,
+  ImageOptimizeJobData,
+  TextExtractJobData,
+  OCRJobData,
+  TextExtractResult,
+  IngestResult,
+} from '../types';
 import { setPageCompleted, setPageFailed, setPageProcessing, setPageVisual } from '../db';
 import { needsTextExtraction } from './text-extractor';
 
@@ -63,13 +74,8 @@ export class QueueManager {
       async (jobs) => {
         const job = Array.isArray(jobs) ? jobs[0] : jobs;
         console.log(`Processing ingest-file job: ${job.id}`);
-        const data = job.data as {
-          contentHash: string;
-          fileId: string; // pageId
-          mimeType: string;
-          originalName: string;
-        };
-        const { contentHash, fileId, mimeType, originalName } = data || {} as any;
+        const data = job.data as IngestFileJobData;
+        const { contentHash, fileId, mimeType, originalName } = data;
 
         try {
           if (!fileId || !contentHash) {
@@ -92,24 +98,24 @@ export class QueueManager {
               await this.addJob('ocr-process', { contentHash, fileId });
             }
 
-            return { success: true, status: 'visual' };
+            return { success: true, status: 'visual' } satisfies IngestResult;
           }
 
           // Documents → text extraction
           if (mimeType && needsTextExtraction(mimeType)) {
-            const result = await extractText({
+            const result: TextExtractResult = await extractText({
               contentHash,
               fileId,
               mimeType,
               originalName: originalName || 'file'
             });
 
-            const text = (result as any)?.text || '';
+            const text = result.text || '';
             const hasText = !!(text && text.trim().length > 0);
 
             if (hasText) {
-              await setPageCompleted(fileId, text, (result as any)?.metadata || null, 'text');
-              return { success: true, status: 'completed', textLength: text.length };
+              await setPageCompleted(fileId, text, result.metadata || null, 'text');
+              return { success: true, status: 'completed', textLength: text.length } satisfies IngestResult;
             }
 
             // No text found (likely scanned PDF) → visual, optionally queue OCR
@@ -118,28 +124,30 @@ export class QueueManager {
             if (process.env.ENABLE_OCR === 'true') {
               await this.addJob('ocr-process', { contentHash, fileId });
             }
-            return { success: true, status: 'visual' };
+            return { success: true, status: 'visual' } satisfies IngestResult;
           }
 
           // Unsupported types → visual fallback
           await setPageVisual(fileId);
-          return { success: true, status: 'visual' };
+          return { success: true, status: 'visual' } satisfies IngestResult;
 
         } catch (error) {
           console.error(`ingest-file job failed for page ${fileId}:`, error);
-          await setPageFailed(fileId, error instanceof Error ? error.message : 'Unknown error');
+          if (fileId) {
+            await setPageFailed(fileId, error instanceof Error ? error.message : 'Unknown error');
+          }
           throw error;
         }
       }
     );
 
     // Image optimization worker (high concurrency)
-    await this.boss.work('image-optimize', 
+    await this.boss.work('image-optimize',
       { batchSize: 5 },
       async (jobs) => {
         const job = Array.isArray(jobs) ? jobs[0] : jobs;
         console.log(`Processing image job: ${job.id}`);
-        return await processImage(job.data as any);
+        return await processImage(job.data as ImageOptimizeJobData);
       }
     );
 
@@ -149,7 +157,7 @@ export class QueueManager {
       async (jobs) => {
         const job = Array.isArray(jobs) ? jobs[0] : jobs;
         console.log(`Processing text extraction job: ${job.id}`);
-        return await extractText(job.data as any);
+        return await extractText(job.data as TextExtractJobData);
       }
     );
 
@@ -159,15 +167,15 @@ export class QueueManager {
       async (jobs) => {
         const job = Array.isArray(jobs) ? jobs[0] : jobs;
         console.log(`Processing OCR job: ${job.id}`);
-        return await processOCR(job.data as any);
+        return await processOCR(job.data as OCRJobData);
       }
     );
   }
 
-  async addJob(
-    queue: 'ingest-file' | 'image-optimize' | 'text-extract' | 'ocr-process',
-    data: any,
-    options?: any
+  async addJob<Q extends QueueName>(
+    queue: Q,
+    data: JobDataMap[Q],
+    options?: PgBoss.SendOptions
   ): Promise<string> {
     if (!this.boss) throw new Error('Queue manager not initialized');
 
@@ -195,17 +203,17 @@ export class QueueManager {
     const job = await this.boss.getJobById('*', jobId);
     if (!job) return null;
 
-    const data = job.data as any;
-    const output = job.output as any;
+    const data = job.data as Record<string, unknown> | undefined;
+    const output = job.output as Record<string, unknown> | undefined;
 
     return {
       id: job.id,
-      type: job.name as ProcessingJob['type'],
-      fileId: data?.fileId,
-      contentHash: data?.contentHash,
+      type: job.name as QueueName,
+      fileId: (data?.fileId as string) ?? '',
+      contentHash: (data?.contentHash as string) ?? '',
       status: this.mapJobState(job.state),
-      result: output,
-      error: output?.error,
+      result: output as ProcessingJob['result'],
+      error: (output?.error as string) ?? undefined,
       createdAt: job.createdOn,
       completedAt: job.completedOn || undefined
     };
@@ -229,11 +237,11 @@ export class QueueManager {
     }
   }
 
-  async getQueueStatus(): Promise<any> {
+  async getQueueStatus(): Promise<Record<QueueName, QueueStats>> {
     if (!this.boss) throw new Error('Queue manager not initialized');
 
-    const queues = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process'];
-    const status: any = {};
+    const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process'];
+    const status = {} as Record<QueueName, QueueStats>;
 
     for (const queue of queues) {
       // PgBoss v10 uses different method signature
@@ -241,7 +249,7 @@ export class QueueManager {
       const active = await this.boss.getQueueSize(queue, { before: 'completed' });
       const completed = await this.boss.getQueueSize(queue, { before: 'failed' });
       const failed = await this.boss.getQueueSize(queue, { before: 'cancelled' });
-      
+
       status[queue] = {
         active: active || 0,
         pending: created || 0,

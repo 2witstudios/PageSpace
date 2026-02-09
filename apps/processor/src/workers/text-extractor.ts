@@ -1,15 +1,9 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import { contentStore } from '../server';
+import type { TextExtractJobData, TextExtractResult } from '../types';
 
-interface TextExtractJobData {
-  contentHash: string;
-  fileId: string;
-  mimeType: string;
-  originalName: string;
-}
-
-export async function extractText(data: TextExtractJobData): Promise<any> {
+export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
   const { contentHash, mimeType, originalName } = data;
 
   console.log(`Extracting text from ${originalName} (${mimeType})`);
@@ -21,7 +15,7 @@ export async function extractText(data: TextExtractJobData): Promise<any> {
   }
 
   let extractedText = '';
-  let metadata: any = {};
+  let metadata: Record<string, unknown> = {};
 
   try {
     switch (mimeType) {
@@ -83,7 +77,7 @@ export async function extractText(data: TextExtractJobData): Promise<any> {
   }
 }
 
-async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata: any }> {
+async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata: Record<string, unknown> }> {
   const uint8Array = new Uint8Array(buffer);
   const loadingTask = (pdfjsLib as any).getDocument({ data: uint8Array, disableWorker: true });
   const pdf = await loadingTask.promise;

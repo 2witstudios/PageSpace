@@ -1,12 +1,6 @@
 import Tesseract from 'tesseract.js';
 import { contentStore } from '../server';
-
-interface OCRJobData {
-  contentHash: string;
-  fileId: string;
-  language?: string;
-  provider?: 'tesseract' | 'ai-vision';
-}
+import type { OCRJobData, OCRResult } from '../types';
 
 // Rate limiting for external OCR APIs
 const rateLimiter = {
@@ -26,7 +20,7 @@ const rateLimiter = {
   }
 };
 
-export async function processOCR(data: OCRJobData): Promise<any> {
+export async function processOCR(data: OCRJobData): Promise<OCRResult> {
   const { contentHash, language = 'eng', provider = 'tesseract' } = data;
 
   console.log(`Processing OCR for ${contentHash} with ${provider}`);

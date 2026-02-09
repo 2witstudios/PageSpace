@@ -1,13 +1,20 @@
-// Import pg without type dependency to keep processor build self-contained
+// Minimal pg Pool interface to keep processor build self-contained without @types/pg
+interface PgPoolClient {
+  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }>;
+  release(): void;
+}
+
+interface PgPool {
+  connect(): Promise<PgPoolClient>;
+  end(): Promise<void>;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { Pool }: any = require('pg');
+const { Pool } = require('pg') as { Pool: new (config: { connectionString: string; max: number }) => PgPool };
 
-// Simple PG helper for processor-owned updates to page processing fields
-// Uses DATABASE_URL env var (same as PgBoss)
+let pool: PgPool | null = null;
 
-let pool: any = null;
-
-function getPool(): any {
+function getPool(): PgPool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
@@ -33,7 +40,7 @@ export async function setPageProcessing(pageId: string): Promise<void> {
 export async function setPageCompleted(
   pageId: string,
   content: string,
-  metadata: any | null,
+  metadata: Record<string, unknown> | null,
   extractionMethod: 'text' | 'ocr' | 'visual' | 'hybrid' | 'none' = 'text'
 ): Promise<void> {
   const client = await getPool().connect();
@@ -84,7 +91,12 @@ export async function getPageForIngestion(pageId: string): Promise<{
       [pageId]
     );
     if (result.rowCount === 0) return null;
-    return result.rows[0];
+    return result.rows[0] as {
+      id: string;
+      contentHash: string;
+      mimeType: string | null;
+      originalFileName: string | null;
+    };
   } finally {
     client.release();
   }
