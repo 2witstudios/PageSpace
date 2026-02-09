@@ -342,6 +342,8 @@ export function useAuth(): {
       const loadAndCleanup = async () => {
         try {
           await authStoreHelpers.loadSession(isOAuthSuccess); // Force reload for OAuth success
+        } catch (error) {
+          console.error('[AUTH_HOOK] Failed to load session during initial auth check:', error);
         } finally {
           // Clean up OAuth success parameter from URL after session loads
           if (isOAuthSuccess && typeof window !== 'undefined') {
@@ -353,7 +355,7 @@ export function useAuth(): {
           }
         }
       };
-      loadAndCleanup();
+      void loadAndCleanup();
     } else {
       // Multiple components can mount useAuth simultaneously.
       // If another instance already started loadSession(), keep loading true
