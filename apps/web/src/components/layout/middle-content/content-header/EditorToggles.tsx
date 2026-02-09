@@ -83,7 +83,7 @@ export function EditorToggles() {
       });
 
       if (!response.ok) {
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         throw new Error(data.error || 'Conversion failed');
       }
 
@@ -105,7 +105,7 @@ export function EditorToggles() {
 
       toast.success(`Converted to ${targetMode === 'markdown' ? 'Markdown' : 'Rich Text'}`);
     } catch (error) {
-      toast.error((error as Error).message);
+      toast.error(error instanceof Error ? error.message : 'Conversion failed');
     } finally {
       setIsConverting(false);
     }
