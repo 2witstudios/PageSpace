@@ -94,8 +94,8 @@ export default function SettingsPage() {
           available: true,
         },
         {
-          title: "Display",
-          description: "Customize what UI elements are shown",
+          title: "Display & Pages",
+          description: "Manage interface visibility and global page defaults",
           icon: Eye,
           href: "/settings/display",
           available: true,

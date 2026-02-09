@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Eye, Loader2, ArrowLeft, Info } from 'lucide-react';
+import { Eye, Loader2, ArrowLeft, Info, FileText } from 'lucide-react';
 
 interface DisplaySetting {
   id: 'SHOW_TOKEN_COUNTS' | 'SHOW_CODE_TOGGLE' | 'DEFAULT_MARKDOWN_MODE';
@@ -19,7 +19,15 @@ interface DisplaySetting {
   preferenceKey: 'showTokenCounts' | 'showCodeToggle' | 'defaultMarkdownMode';
 }
 
-const DISPLAY_SETTINGS: DisplaySetting[] = [
+interface DisplaySettingsSection {
+  key: string;
+  title: string;
+  description: string;
+  icon: typeof Eye;
+  settings: DisplaySetting[];
+}
+
+const INTERFACE_SETTINGS: DisplaySetting[] = [
   {
     id: 'SHOW_TOKEN_COUNTS',
     label: 'Show AI token counts',
@@ -28,15 +36,35 @@ const DISPLAY_SETTINGS: DisplaySetting[] = [
   },
   {
     id: 'SHOW_CODE_TOGGLE',
-    label: 'Show code editor toggle',
-    description: 'Display Rich/Code toggle buttons for document and canvas pages',
+    label: 'Show Rich/Code view toggle',
+    description: 'Display stable Rich and Code buttons for document pages',
     preferenceKey: 'showCodeToggle',
   },
+];
+
+const PAGE_SETTINGS: DisplaySetting[] = [
   {
     id: 'DEFAULT_MARKDOWN_MODE',
-    label: 'Default to Markdown for new documents',
-    description: 'New document pages will store content as markdown instead of HTML',
+    label: 'Default new document pages to Markdown',
+    description: 'Sets the global default save format for newly created document pages',
     preferenceKey: 'defaultMarkdownMode',
+  },
+];
+
+const SETTINGS_SECTIONS: DisplaySettingsSection[] = [
+  {
+    key: 'global-page-settings',
+    title: 'Global Page Settings',
+    description: 'Set default behavior for how new document pages are created.',
+    icon: FileText,
+    settings: PAGE_SETTINGS,
+  },
+  {
+    key: 'display-settings',
+    title: 'Display Settings',
+    description: 'Control optional interface elements.',
+    icon: Eye,
+    settings: INTERFACE_SETTINGS,
   },
 ];
 
@@ -82,58 +110,58 @@ export default function DisplaySettingsPage() {
         </Button>
         <h1 className="text-3xl font-bold flex items-center gap-2">
           <Eye className="h-8 w-8" />
-          Display Settings
+          Display & Page Settings
         </h1>
         <p className="text-muted-foreground mt-2">
-          Customize which UI elements are shown throughout the application.
+          Configure global page defaults and optional UI elements.
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Eye className="h-5 w-5" />
-            Interface Options
-          </CardTitle>
-          <CardDescription>
-            Toggle visibility of optional interface elements.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {DISPLAY_SETTINGS.map((setting) => {
-            const isEnabled = preferences[setting.preferenceKey];
+      {SETTINGS_SECTIONS.map((section) => (
+        <Card key={section.key}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <section.icon className="h-5 w-5" />
+              {section.title}
+            </CardTitle>
+            <CardDescription>{section.description}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {section.settings.map((setting) => {
+              const isEnabled = preferences[setting.preferenceKey];
 
-            return (
-              <div
-                key={setting.id}
-                className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
-              >
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor={setting.id}
-                    className="text-sm font-medium cursor-pointer"
-                  >
-                    {setting.label}
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {setting.description}
-                  </p>
+              return (
+                <div
+                  key={setting.id}
+                  className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
+                >
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor={setting.id}
+                      className="text-sm font-medium cursor-pointer"
+                    >
+                      {setting.label}
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      {setting.description}
+                    </p>
+                  </div>
+                  <Switch
+                    id={setting.id}
+                    checked={isEnabled}
+                    onCheckedChange={(checked) => handleToggle(setting, checked)}
+                  />
                 </div>
-                <Switch
-                  id={setting.id}
-                  checked={isEnabled}
-                  onCheckedChange={(checked) => handleToggle(setting, checked)}
-                />
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
+              );
+            })}
+          </CardContent>
+        </Card>
+      ))}
 
       <Alert>
         <Info className="h-4 w-4" />
         <AlertDescription>
-          These settings are saved to your account and will apply across all your devices.
+          These settings are saved to your account and apply across all your devices.
         </AlertDescription>
       </Alert>
     </div>
