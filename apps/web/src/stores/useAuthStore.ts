@@ -240,6 +240,12 @@ export const useAuthStore = create<AuthState>()(
           return state._authPromise;
         }
 
+        // Mark this app boot as session-initialized after the first loadSession attempt.
+        // This prevents every future useAuth mount from forcing another immediate load.
+        if (!state._serverSessionInitialized) {
+          set({ _serverSessionInitialized: true });
+        }
+
         // CRITICAL: Check for permanent auth failure BEFORE attempting any auth
         // This breaks the rehydration loop where Zustand restores stale isAuthenticated: true
         if (state.authFailedPermanently && !force) {
@@ -588,7 +594,14 @@ export const authStoreHelpers = {
   // Check if auth data is stale and needs refresh
   needsAuthCheck: (): boolean => {
     const state = useAuthStore.getState();
-    if (!state.lastAuthCheck) return true;
+    if (!state.lastAuthCheck) {
+      // After this boot has already performed an auth load and determined no active session,
+      // avoid re-checking on every component mount.
+      if (state._serverSessionInitialized && !state.isAuthenticated) {
+        return false;
+      }
+      return true;
+    }
     
     return Date.now() - state.lastAuthCheck > AUTH_CHECK_INTERVAL;
   },
