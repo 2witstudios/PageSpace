@@ -647,13 +647,14 @@ export const authStoreHelpers = {
       return true;
     }
 
-    // If server session was initialized, only reload if stale
-    if (state._serverSessionInitialized) {
-      return authStoreHelpers.needsAuthCheck();
+    // If server session was not initialized this app boot, force one revalidation.
+    // Persisted auth state (user/isAuthenticated/lastAuthCheck) can be stale.
+    if (!state._serverSessionInitialized) {
+      return true;
     }
 
-    // No server data and no recent check - load session
-    return !state.lastAuthCheck || authStoreHelpers.needsAuthCheck();
+    // Server session initialized on this boot, so normal staleness policy applies.
+    return authStoreHelpers.needsAuthCheck();
   },
 
   // Initialize store from server session (called during app startup)

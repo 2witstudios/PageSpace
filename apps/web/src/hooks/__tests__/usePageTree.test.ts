@@ -214,6 +214,17 @@ describe('usePageTree', () => {
       // No data means no optimistic mutation attempt.
       expect(mockMutate).not.toHaveBeenCalled();
     });
+
+    it('given tree data changes, should keep updateNode callback stable', () => {
+      mockSWRState.data = [createMockTreePage({ id: 'page-1' })];
+      const { result, rerender } = renderHook(() => usePageTree('drive-123'));
+      const firstUpdateNode = result.current.updateNode;
+
+      mockSWRState.data = [createMockTreePage({ id: 'page-2' })];
+      rerender();
+
+      expect(result.current.updateNode).toBe(firstUpdateNode);
+    });
   });
 
   describe('fetchAndMergeChildren', () => {

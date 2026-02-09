@@ -821,6 +821,16 @@ describe('authStoreHelpers', () => {
       expect(authStoreHelpers.shouldLoadSession()).toBe(true);
     });
 
+    it('given no server initialization and recent auth check, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: false,
+        lastAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
     it('given circuit breaker active, should return false', () => {
       useAuthStore.setState({
         hasHydrated: true,
@@ -848,6 +858,16 @@ describe('authStoreHelpers', () => {
       });
 
       expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
+    it('given server initialized and recent check, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        lastAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
     });
   });
 
