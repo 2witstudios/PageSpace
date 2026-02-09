@@ -1,5 +1,9 @@
 import { PageType, PermissionAction } from './utils/enums';
 
+// JSON-compatible value types for structured data (logging, metadata, etc.)
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
 // Presence types for real-time "who is viewing this page" indicators
 export interface PresenceViewer {
   userId: string;

@@ -5,6 +5,7 @@
 
 import { hostname } from 'os';
 import { createId } from '@paralleldrive/cuid2';
+import type { LogInput } from './logger-types';
 
 export enum LogLevel {
   TRACE = 0,
@@ -27,7 +28,7 @@ export interface LogContext {
   ip?: string;
   userAgent?: string;
   duration?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface LogEntry {
@@ -47,7 +48,7 @@ export interface LogEntry {
       total: number;
     };
   };
-  metadata?: Record<string, any>;
+  metadata?: LogInput;
   hostname: string;
   pid: number;
   version?: string;
@@ -126,42 +127,47 @@ class Logger {
     return levels[level] || 'INFO';
   }
 
-  private sanitizeData(data: any): any {
+  private sanitizeData(data: unknown): unknown {
     if (!this.config.sanitize) return data;
-    
+
     const sensitive = [
-      'password', 'token', 'secret', 'api_key', 'apiKey', 
+      'password', 'token', 'secret', 'api_key', 'apiKey',
       'authorization', 'cookie', 'credit_card', 'ssn', 'jwt'
     ];
-    
+
     if (typeof data === 'string') {
       return data;
     }
-    
+
+    if (Array.isArray(data)) {
+      return data.map((item: unknown) => this.sanitizeData(item));
+    }
+
     if (typeof data === 'object' && data !== null) {
-      const sanitized: any = Array.isArray(data) ? [] : {};
-      
-      for (const key in data) {
+      const source = data as Record<string, unknown>;
+      const sanitized: Record<string, unknown> = {};
+
+      for (const key in source) {
         const lowerKey = key.toLowerCase();
         if (sensitive.some(s => lowerKey.includes(s))) {
           sanitized[key] = '[REDACTED]';
-        } else if (typeof data[key] === 'object') {
-          sanitized[key] = this.sanitizeData(data[key]);
+        } else if (typeof source[key] === 'object') {
+          sanitized[key] = this.sanitizeData(source[key]);
         } else {
-          sanitized[key] = data[key];
+          sanitized[key] = source[key];
         }
       }
-      
+
       return sanitized;
     }
-    
+
     return data;
   }
 
   private createLogEntry(
     level: LogLevel,
     message: string,
-    metadata?: Record<string, any>,
+    metadata?: LogInput,
     error?: Error
   ): LogEntry {
     const entry: LogEntry = {
@@ -174,11 +180,11 @@ class Logger {
     };
 
     if (this.config.enableContext && Object.keys(this.context).length > 0) {
-      entry.context = this.sanitizeData({ ...this.context });
+      entry.context = this.sanitizeData({ ...this.context }) as LogContext;
     }
 
     if (metadata) {
-      entry.metadata = this.sanitizeData(metadata);
+      entry.metadata = this.sanitizeData(metadata) as LogInput;
     }
 
     if (error) {
@@ -212,30 +218,30 @@ class Logger {
     const { timestamp, level, message, context, error, metadata } = entry;
     const time = new Date(timestamp).toLocaleTimeString();
     const levelColor = this.getLevelColor(level);
-    
+
     let output = `${time} ${levelColor}[${level}]${this.resetColor()} ${message}`;
-    
+
     if (context && Object.keys(context).length > 0) {
       output += ` ${this.dim()}${JSON.stringify(context)}${this.resetColor()}`;
     }
-    
+
     if (metadata) {
       output += `\n  ${this.dim()}Metadata: ${JSON.stringify(metadata, null, 2)}${this.resetColor()}`;
     }
-    
+
     if (error) {
       output += `\n  ${this.red()}Error: ${error.name}: ${error.message}${this.resetColor()}`;
       if (error.stack) {
         output += `\n  ${this.dim()}${error.stack}${this.resetColor()}`;
       }
     }
-    
+
     return output;
   }
 
   private getLevelColor(level: string): string {
     if (process.env.NO_COLOR) return '';
-    
+
     const colors: Record<string, string> = {
       TRACE: '\x1b[90m',  // Gray
       DEBUG: '\x1b[36m',  // Cyan
@@ -261,7 +267,7 @@ class Logger {
 
   private async writeToConsole(entry: LogEntry): Promise<void> {
     const output = this.formatOutput(entry);
-    
+
     if (entry.level === 'ERROR' || entry.level === 'FATAL') {
       console.error(output);
     } else if (entry.level === 'WARN') {
@@ -286,14 +292,14 @@ class Logger {
 
   private async flush(): Promise<void> {
     if (this.buffer.length === 0) return;
-    
+
     const entriesToFlush = [...this.buffer];
     this.buffer = [];
-    
+
     if (this.config.destination === 'database' || this.config.destination === 'both') {
       await this.writeToDatabase(entriesToFlush);
     }
-    
+
     if (this.config.destination === 'console' || this.config.destination === 'both') {
       for (const entry of entriesToFlush) {
         await this.writeToConsole(entry);
@@ -305,13 +311,13 @@ class Logger {
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
     }
-    
+
     this.flushTimer = setInterval(() => {
       this.flush().catch(err => {
         console.error('[Logger] Flush error:', err);
       });
     }, this.config.flushInterval);
-    
+
     // Ensure flush on process exit
     process.on('beforeExit', () => this.flush());
     process.on('SIGINT', () => {
@@ -324,11 +330,11 @@ class Logger {
     });
   }
 
-  private log(level: LogLevel, message: string, metadata?: Record<string, any>, error?: Error): void {
+  private log(level: LogLevel, message: string, metadata?: LogInput, error?: Error): void {
     if (!this.shouldLog(level)) return;
-    
+
     const entry = this.createLogEntry(level, message, metadata, error);
-    
+
     if (this.config.destination === 'console') {
       // Write immediately to console
       this.writeToConsole(entry).catch(err => {
@@ -337,7 +343,7 @@ class Logger {
     } else {
       // Buffer for batch writing
       this.buffer.push(entry);
-      
+
       if (this.buffer.length >= this.config.batchSize) {
         this.flush().catch(err => {
           console.error('[Logger] Flush error:', err);
@@ -347,23 +353,23 @@ class Logger {
   }
 
   // Public logging methods
-  trace(message: string, metadata?: Record<string, any>): void {
+  trace(message: string, metadata?: LogInput): void {
     this.log(LogLevel.TRACE, message, metadata);
   }
 
-  debug(message: string, metadata?: Record<string, any>): void {
+  debug(message: string, metadata?: LogInput): void {
     this.log(LogLevel.DEBUG, message, metadata);
   }
 
-  info(message: string, metadata?: Record<string, any>): void {
+  info(message: string, metadata?: LogInput): void {
     this.log(LogLevel.INFO, message, metadata);
   }
 
-  warn(message: string, metadata?: Record<string, any>): void {
+  warn(message: string, metadata?: LogInput): void {
     this.log(LogLevel.WARN, message, metadata);
   }
 
-  error(message: string, error?: Error | Record<string, any>, metadata?: Record<string, any>): void {
+  error(message: string, error?: Error | LogInput, metadata?: LogInput): void {
     if (error instanceof Error) {
       this.log(LogLevel.ERROR, message, metadata, error);
     } else {
@@ -371,7 +377,7 @@ class Logger {
     }
   }
 
-  fatal(message: string, error?: Error | Record<string, any>, metadata?: Record<string, any>): void {
+  fatal(message: string, error?: Error | LogInput, metadata?: LogInput): void {
     if (error instanceof Error) {
       this.log(LogLevel.FATAL, message, metadata, error);
     } else {
