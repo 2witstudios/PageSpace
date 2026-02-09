@@ -326,29 +326,46 @@ export function useAuth(): {
     }
   }, []);
 
-  // Initial auth check - always run loadSession() on cold start
-  // This ensures warmSessionCache() runs before CenterPanel mounts,
-  // preventing SWR stuck detection on Electron/Capacitor cold starts.
-  // loadSession() has internal deduplication, circuit breaker, and permanent failure guards.
+  // Initial auth check - simplified with store-level deduplication
+  // Desktop OAuth now uses secure exchange codes handled in Electron main process
   useEffect(() => {
     // Wait for hydration
     if (!hasHydrated) return;
 
-    const loadAndCleanup = async () => {
-      try {
-        await authStoreHelpers.loadSession(isOAuthSuccess); // Force reload for OAuth success
-      } finally {
-        // Clean up OAuth success parameter from URL after session loads
-        if (isOAuthSuccess && typeof window !== 'undefined') {
-          console.log('[AUTH_HOOK] Cleaning up OAuth success parameter from URL');
-          const newUrl = new URL(window.location.href);
-          newUrl.searchParams.delete('auth');
-          window.history.replaceState({}, '', newUrl.toString());
-          setIsOAuthSuccess(false); // Clear the flag to exit loading state
+    // Use store helper to determine if session load is needed
+    const shouldLoad = authStoreHelpers.shouldLoadSession() || isOAuthSuccess;
+
+    if (shouldLoad) {
+      console.log(`[AUTH_HOOK] Loading session - hasHydrated: ${hasHydrated}, isOAuthSuccess: ${isOAuthSuccess}`);
+
+      // Await loadSession to ensure isLoading is set before clearing OAuth flag
+      const loadAndCleanup = async () => {
+        try {
+          await authStoreHelpers.loadSession(isOAuthSuccess); // Force reload for OAuth success
+        } catch (error) {
+          console.error('[AUTH_HOOK] Failed to load session during initial auth check:', error);
+        } finally {
+          // Clean up OAuth success parameter from URL after session loads
+          if (isOAuthSuccess && typeof window !== 'undefined') {
+            console.log('[AUTH_HOOK] Cleaning up OAuth success parameter from URL');
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.delete('auth');
+            window.history.replaceState({}, '', newUrl.toString());
+            setIsOAuthSuccess(false); // Clear the flag to exit loading state
+          }
         }
-      }
-    };
-    loadAndCleanup();
+      };
+      void loadAndCleanup();
+    } else {
+      // Multiple components can mount useAuth simultaneously.
+      // If another instance already started loadSession(), keep loading true
+      // until that shared auth promise settles.
+      const hasInFlightSessionLoad = !!useAuthStore.getState()._authPromise;
+      if (hasInFlightSessionLoad) return;
+
+      // Session check not needed (e.g., lastAuthCheck is recent) — unblock the UI
+      useAuthStore.getState().setLoading(false);
+    }
   }, [hasHydrated, isOAuthSuccess]);
 
   // Initialize auth event listeners once (moved to store level for deduplication)

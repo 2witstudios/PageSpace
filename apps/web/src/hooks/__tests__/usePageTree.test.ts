@@ -200,7 +200,7 @@ describe('usePageTree', () => {
       expect(updatedTree).toBe(mockTree); // Same reference, unchanged
     });
 
-    it('given no data loaded yet, should return undefined without error', () => {
+    it('given no data loaded yet, should no-op without mutating cache', () => {
       mockSWRState.data = undefined;
 
       const { result } = renderHook(() => usePageTree('drive-123'));
@@ -211,10 +211,19 @@ describe('usePageTree', () => {
         });
       }).not.toThrow();
 
-      // mutate is called, and updater returns undefined when no data
-      expect(mockMutate).toHaveBeenCalledWith(expect.any(Function), { revalidate: false });
-      const updaterFn = mockMutate.mock.calls[0][0];
-      expect(updaterFn(undefined)).toBeUndefined();
+      // No data means no optimistic mutation attempt.
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('given tree data changes, should keep updateNode callback stable', () => {
+      mockSWRState.data = [createMockTreePage({ id: 'page-1' })];
+      const { result, rerender } = renderHook(() => usePageTree('drive-123'));
+      const firstUpdateNode = result.current.updateNode;
+
+      mockSWRState.data = [createMockTreePage({ id: 'page-2' })];
+      rerender();
+
+      expect(result.current.updateNode).toBe(firstUpdateNode);
     });
   });
 

@@ -25,6 +25,7 @@ type MockAuthStoreState = {
   isRefreshing: boolean;
   hasHydrated: boolean;
   authFailedPermanently: boolean;
+  _authPromise: Promise<void> | null;
   setUser: ReturnType<typeof vi.fn<(user: AuthUser | null) => void>>;
   setLoading: ReturnType<typeof vi.fn<(loading: boolean) => void>>;
   setHydrated: ReturnType<typeof vi.fn<(hydrated: boolean) => void>>;
@@ -46,6 +47,7 @@ const {
   mockAuthStore,
   mockLoadSession,
   mockGetSessionDuration,
+  mockShouldLoadSession,
   mockInitializeEventListeners,
 } = vi.hoisted(() => {
   const store: MockAuthStoreState = {
@@ -55,6 +57,7 @@ const {
     isRefreshing: false,
     hasHydrated: true,
     authFailedPermanently: false,
+    _authPromise: null,
     // Simulate actual state transitions
     setUser: vi.fn<(user: AuthUser | null) => void>((user) => {
       store.user = user;
@@ -88,6 +91,7 @@ const {
     mockAuthStore: store,
     mockLoadSession: vi.fn(),
     mockGetSessionDuration: vi.fn(() => 0),
+    mockShouldLoadSession: vi.fn(() => false),
     mockInitializeEventListeners: vi.fn(),
   };
 });
@@ -136,6 +140,7 @@ vi.mock('@/stores/useAuthStore', () => {
     authStoreHelpers: {
       loadSession: mockLoadSession,
       getSessionDuration: mockGetSessionDuration,
+      shouldLoadSession: mockShouldLoadSession,
       initializeEventListeners: mockInitializeEventListeners,
     },
   };
@@ -177,6 +182,8 @@ describe('useAuth', () => {
     mockAuthStore.isRefreshing = false;
     mockAuthStore.hasHydrated = true;
     mockAuthStore.authFailedPermanently = false;
+    mockAuthStore._authPromise = null;
+    mockShouldLoadSession.mockReturnValue(false);
 
     global.fetch = vi.fn();
   });
@@ -427,11 +434,9 @@ describe('useAuth', () => {
 
     it('given already loading, should skip redundant auth check', async () => {
       mockAuthStore.isLoading = true;
+      mockLoadSession.mockClear();
 
       const { result } = renderHook(() => useAuth());
-
-      // Clear calls from the initial mount effect (loadSession always runs on mount)
-      mockLoadSession.mockClear();
 
       await act(async () => {
         await result.current.actions.checkAuth();
@@ -529,6 +534,24 @@ describe('useAuth', () => {
 
       // Observable: hydration state updated
       expect(mockAuthStore.setHydrated).toHaveBeenCalledWith(true);
+    });
+
+    it('given no session load needed and no in-flight auth, should clear loading', () => {
+      mockShouldLoadSession.mockReturnValue(false);
+      mockAuthStore._authPromise = null;
+
+      renderHook(() => useAuth());
+
+      expect(mockAuthStore.setLoading).toHaveBeenCalledWith(false);
+    });
+
+    it('given shared auth promise in flight, should not clear loading', () => {
+      mockShouldLoadSession.mockReturnValue(false);
+      mockAuthStore._authPromise = Promise.resolve();
+
+      renderHook(() => useAuth());
+
+      expect(mockAuthStore.setLoading).not.toHaveBeenCalledWith(false);
     });
   });
 });

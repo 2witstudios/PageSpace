@@ -511,6 +511,45 @@ describe('useAuthStore', () => {
       expect(global.fetch).toHaveBeenCalled();
     });
 
+    it('given overlapping force loads, should keep latest auth promise active', async () => {
+      const user = createMockUser();
+      let resolveFirstFetch!: (value: Response) => void;
+      let resolveSecondFetch!: (value: Response) => void;
+      const firstFetch = new Promise<Response>((resolve) => {
+        resolveFirstFetch = resolve;
+      });
+      const secondFetch = new Promise<Response>((resolve) => {
+        resolveSecondFetch = resolve;
+      });
+
+      vi.mocked(global.fetch)
+        .mockImplementationOnce(() => firstFetch)
+        .mockImplementationOnce(() => secondFetch);
+
+      const firstLoad = useAuthStore.getState().loadSession(true);
+      const secondLoad = useAuthStore.getState().loadSession(true);
+      const activePromise = useAuthStore.getState()._authPromise;
+
+      // Latest request should own dedupe slot.
+      expect(activePromise).not.toBeNull();
+
+      resolveFirstFetch({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+      await firstLoad;
+
+      // Completing first request must not clear second in-flight promise.
+      expect(useAuthStore.getState()._authPromise).toBe(activePromise);
+
+      resolveSecondFetch({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+      await secondLoad;
+      expect(useAuthStore.getState()._authPromise).toBeNull();
+    });
+
     it('given network error, should record failed attempt', async () => {
       vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -811,6 +850,63 @@ describe('authStoreHelpers', () => {
       });
 
       expect(authStoreHelpers.shouldSkipAuthCheck()).toBe(false);
+    });
+  });
+
+  describe('shouldLoadSession', () => {
+    it('given not hydrated, should return true', () => {
+      useAuthStore.setState({ hasHydrated: false });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
+    it('given no server initialization and recent auth check, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: false,
+        lastAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
+    it('given circuit breaker active, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        failedAuthAttempts: 5, // MAX_FAILED_AUTH_ATTEMPTS (web threshold)
+        lastFailedAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given already loading, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _authPromise: Promise.resolve(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given server initialized and stale check, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        lastAuthCheck: Date.now() - 16 * 60 * 1000, // Stale
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
+    it('given server initialized and recent check, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        lastAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
     });
   });
 

@@ -78,6 +78,8 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     }
   );
   const { cache } = useSWRConfig();
+  const hasTreeSnapshotRef = useRef(!!data);
+  hasTreeSnapshotRef.current = !!data;
 
   // Self-healing: detect when SWR gets stuck (valid key, no data, no error, not fetching).
   // On desktop/Capacitor, async token retrieval in fetchWithAuth can cause SWR to lose track
@@ -137,6 +139,11 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   }, [swrKey, cache, mutate]);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {
+    // Avoid optimistic mutation before the first tree snapshot exists.
+    // A no-op mutate on undefined data can stamp SWR mutation state and drop
+    // the in-flight initial fetch result, leaving the tree in a stuck skeleton state.
+    if (!hasTreeSnapshotRef.current) return;
+
     mutate((currentData) => {
       if (!currentData) return currentData;
 
