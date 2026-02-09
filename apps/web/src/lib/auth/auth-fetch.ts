@@ -925,6 +925,13 @@ class AuthFetch {
    * If timeout fires, returns null so the request proceeds without auth → 401 → SWR retry handles recovery.
    */
   private async getSessionTokenWithTimeout(storage: PlatformStorage, url: string): Promise<string | null> {
+    // Fast path: return cached token for ANY bearer platform (desktop, iOS, Android)
+    // Desktop already gets this via getSessionFromElectron(), but iOS/Android skip
+    // that method and go straight to storage.getSessionToken() which has no cache.
+    if (this.sessionCache) {
+      return this.sessionCache.token;
+    }
+
     const tokenPromise = storage.platform === 'desktop'
       ? this.getSessionFromElectron()
       : storage.getSessionToken();
@@ -938,7 +945,12 @@ class AuthFetch {
     });
 
     try {
-      return await Promise.race([tokenPromise, timeoutPromise]);
+      const token = await Promise.race([tokenPromise, timeoutPromise]);
+      // Cache the token after slow-path resolution so subsequent calls are instant
+      if (token) {
+        this.sessionCache = { token };
+      }
+      return token;
     } finally {
       clearTimeout(timeoutId!);
     }
