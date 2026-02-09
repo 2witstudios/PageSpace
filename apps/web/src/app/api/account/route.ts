@@ -2,7 +2,7 @@ import { users, db, eq } from '@pagespace/db';
 import { createHash } from 'crypto';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
+import { createUserServiceToken, deleteAiUsageLogsForUser, type ServiceScope } from '@pagespace/lib';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -249,6 +249,13 @@ export async function DELETE(req: Request) {
     } else {
       // Log error but don't fail the deletion - user has right to delete their account
       loggers.auth.error('Could not anonymize activity logs during account deletion:', new Error(anonymizeResult.error));
+    }
+
+    // Clean up AI usage logs (no FK cascade exists for this table)
+    try {
+      await deleteAiUsageLogsForUser(userId);
+    } catch (error) {
+      loggers.auth.error('Could not delete AI usage logs during account deletion:', error as Error);
     }
 
     // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)

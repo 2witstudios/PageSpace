@@ -17,6 +17,7 @@ import { createHash } from 'crypto';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
+import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
 
@@ -367,15 +368,7 @@ const io = new Server(httpServer, {
   },
 });
 
-interface AuthSocket extends Socket {
-  data: {
-    user?: {
-      id: string;
-      name: string;
-      avatarUrl: string | null;
-    };
-  };
-}
+// AuthSocket is imported from per-event-auth.ts
 
 /**
  * Look up user display metadata (name, avatar) and store on socket.data.
@@ -849,11 +842,25 @@ io.on('connection', (socket: AuthSocket) => {
     });
   });
 
-  socket.on('document_update', (payload: unknown) => {
-    const data = payload as { pageId?: string; content?: unknown };
-    if (!socket.data.user?.id || !data?.pageId) return;
-    socket.to(data.pageId).emit('document_update', data);
-  });
+  // Per-event reauth: Sensitive write events re-verify permissions before processing.
+  // Currently writes go through HTTP API + broadcast, but this provides defense-in-depth
+  // and the pattern for future write event handlers.
+  //
+  // To wrap future write handlers:
+  //   socket.on('page_content_change', withPerEventAuth(socket, 'page_content_change', myHandler, {
+  //     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
+  //   }));
+  socket.on('document_update', withPerEventAuth(socket, 'document_update', async (sock, payload) => {
+    const data = payload as { pageId: string; content: unknown };
+    loggers.realtime.debug('document_update received (with per-event reauth)', {
+      userId: sock.data.user?.id,
+      pageId: data.pageId,
+    });
+    // Forward the update to the page room for other participants
+    sock.to(data.pageId).emit('document_update', data);
+  }, {
+    pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
+  }));
 
   socket.on('disconnect', (reason) => {
     // Clean up presence tracking and broadcast updates for affected pages

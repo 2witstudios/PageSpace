@@ -222,6 +222,21 @@
       "types": "./dist/validators/index.d.ts",
       "import": "./dist/validators/index.js",
       "require": "./dist/validators/index.js"
+    },
+    "./compliance/retention/retention-engine": {
+      "types": "./dist/compliance/retention/retention-engine.d.ts",
+      "import": "./dist/compliance/retention/retention-engine.js",
+      "require": "./dist/compliance/retention/retention-engine.js"
+    },
+    "./compliance/file-cleanup/orphan-detector": {
+      "types": "./dist/compliance/file-cleanup/orphan-detector.d.ts",
+      "import": "./dist/compliance/file-cleanup/orphan-detector.js",
+      "require": "./dist/compliance/file-cleanup/orphan-detector.js"
+    },
+    "./compliance/export/gdpr-export": {
+      "types": "./dist/compliance/export/gdpr-export.d.ts",
+      "import": "./dist/compliance/export/gdpr-export.js",
+      "require": "./dist/compliance/export/gdpr-export.js"
     }
   },
   "typesVersions": {
@@ -348,6 +363,15 @@
       ],
       "validators": [
         "./dist/validators/index.d.ts"
+      ],
+      "compliance/retention/retention-engine": [
+        "./dist/compliance/retention/retention-engine.d.ts"
+      ],
+      "compliance/file-cleanup/orphan-detector": [
+        "./dist/compliance/file-cleanup/orphan-detector.d.ts"
+      ],
+      "compliance/export/gdpr-export": [
+        "./dist/compliance/export/gdpr-export.d.ts"
       ]
     }
   },

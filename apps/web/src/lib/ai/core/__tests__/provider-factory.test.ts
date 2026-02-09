@@ -1,4 +1,22 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+
+// Mock next/server - create a mock class so instanceof checks work
+vi.mock('next/server', () => {
+  class MockNextResponse {
+    status: number;
+    _body: unknown;
+    constructor(body: unknown, init?: { status?: number }) {
+      this._body = body;
+      this.status = init?.status || 200;
+    }
+    async json() { return this._body; }
+    static json(body: unknown, init?: { status?: number }) {
+      return new MockNextResponse(body, init);
+    }
+  }
+  return { NextResponse: MockNextResponse };
+});
+
 import { NextResponse } from 'next/server';
 
 // Mock database
@@ -43,6 +61,27 @@ vi.mock('@ai-sdk/xai', () => ({
 
 vi.mock('ollama-ai-provider-v2', () => ({
   createOllama: vi.fn(() => vi.fn(() => ({ modelId: 'ollama-model' }))),
+}));
+
+// Mock security validation
+vi.mock('@pagespace/lib/security', () => ({
+  validateLocalProviderURL: vi.fn(),
+}));
+
+// Mock ai-providers-config - provide real resolvePageSpaceModel + mockable requiresConsent
+vi.mock('../ai-providers-config', () => ({
+  resolvePageSpaceModel: vi.fn((m: string) => {
+    const aliases: Record<string, string> = { standard: 'glm-4.5-air', pro: 'glm-4.7' };
+    return aliases[m?.toLowerCase()] || m;
+  }),
+  requiresConsent: vi.fn(),
+}));
+
+// Mock consent repository (dynamically imported by provider-factory)
+vi.mock('@/lib/repositories/ai-consent-repository', () => ({
+  aiConsentRepository: {
+    hasConsent: vi.fn(),
+  },
 }));
 
 // Mock ai-utils
@@ -97,6 +136,9 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
+import { validateLocalProviderURL } from '@pagespace/lib/security';
+import { requiresConsent } from '../ai-providers-config';
+import { aiConsentRepository } from '@/lib/repositories/ai-consent-repository';
 
 const mockDb = vi.mocked(db);
 const mockDbMock = mockDb as unknown as MockDb;
@@ -126,6 +168,14 @@ describe('provider-factory', () => {
     mockDbMock.where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
+    // Default mock: URL validation passes (for ollama/lmstudio tests)
+    vi.mocked(validateLocalProviderURL).mockResolvedValue({
+      valid: true,
+      url: new URL('http://localhost:11434'),
+      resolvedIPs: ['127.0.0.1'],
+    });
+    // Default mock: no consent required (so existing tests are unaffected)
+    vi.mocked(requiresConsent).mockReturnValue(false);
   });
 
   describe('createAIProvider', () => {
@@ -607,6 +657,63 @@ describe('provider-factory', () => {
         }
       });
     });
+
+    describe('consent enforcement', () => {
+      it('returns consent_required error when cloud provider lacks consent', async () => {
+        mockDbMock.where.mockResolvedValue([
+          { id: 'user-123', currentAiProvider: 'openai', currentAiModel: 'gpt-4o' },
+        ]);
+        vi.mocked(requiresConsent).mockReturnValue(true);
+        vi.mocked(aiConsentRepository.hasConsent).mockResolvedValue(false);
+
+        const result = await createAIProvider('user-123', {
+          selectedProvider: 'openai',
+          selectedModel: 'gpt-4o',
+        });
+
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) {
+          expect(result.status).toBe(403);
+          expect(result.error).toBe('consent_required:openai');
+        }
+      });
+
+      it('proceeds when cloud provider has consent', async () => {
+        mockDbMock.where.mockResolvedValue([
+          { id: 'user-123', currentAiProvider: 'openai', currentAiModel: 'gpt-4o' },
+        ]);
+        vi.mocked(requiresConsent).mockReturnValue(true);
+        vi.mocked(aiConsentRepository.hasConsent).mockResolvedValue(true);
+        mockGetUserOpenAISettings.mockResolvedValue({ apiKey: 'test-key', isConfigured: true });
+
+        const result = await createAIProvider('user-123', {
+          selectedProvider: 'openai',
+          selectedModel: 'gpt-4o',
+        });
+
+        expect(isProviderError(result)).toBe(false);
+      });
+
+      it('skips consent check for exempt providers', async () => {
+        mockDbMock.where.mockResolvedValue([
+          { id: 'user-123', currentAiProvider: 'pagespace', currentAiModel: 'glm-4.5-air' },
+        ]);
+        vi.mocked(requiresConsent).mockReturnValue(false);
+        mockGetDefaultPageSpaceSettings.mockResolvedValue({
+          provider: 'glm',
+          apiKey: 'test-key',
+          isConfigured: true,
+        });
+
+        const result = await createAIProvider('user-123', {
+          selectedProvider: 'pagespace',
+          selectedModel: 'glm-4.5-air',
+        });
+
+        expect(aiConsentRepository.hasConsent).not.toHaveBeenCalled();
+        expect(isProviderError(result)).toBe(false);
+      });
+    });
   });
 
   describe('updateUserProviderSettings', () => {
@@ -698,6 +805,90 @@ describe('provider-factory', () => {
         provider: 'google',
         modelName: 'gemini-pro',
       };
+
+      expect(isProviderError(result)).toBe(false);
+    });
+  });
+
+  describe('SSRF validation', () => {
+    it('blocks Ollama with cloud metadata URL', async () => {
+      mockGetUserOllamaSettings.mockResolvedValue({
+        baseUrl: 'http://169.254.169.254',
+        isConfigured: true,
+      });
+      vi.mocked(validateLocalProviderURL).mockResolvedValue({
+        valid: false,
+        error: 'IP address blocked: cloud metadata endpoint',
+      });
+
+      const result = await createAIProvider('user-123', {
+        selectedProvider: 'ollama',
+        selectedModel: 'llama3',
+      });
+
+      expect(isProviderError(result)).toBe(true);
+      if (isProviderError(result)) {
+        expect(result.status).toBe(400);
+        expect(result.error).toContain('blocked');
+      }
+    });
+
+    it('allows Ollama with localhost URL', async () => {
+      mockGetUserOllamaSettings.mockResolvedValue({
+        baseUrl: 'http://localhost:11434',
+        isConfigured: true,
+      });
+      vi.mocked(validateLocalProviderURL).mockResolvedValue({
+        valid: true,
+        url: new URL('http://localhost:11434'),
+        resolvedIPs: ['127.0.0.1'],
+      });
+
+      const result = await createAIProvider('user-123', {
+        selectedProvider: 'ollama',
+        selectedModel: 'llama3',
+      });
+
+      expect(isProviderError(result)).toBe(false);
+    });
+
+    it('blocks LM Studio with cloud metadata URL', async () => {
+      mockGetUserLMStudioSettings.mockResolvedValue({
+        baseUrl: 'http://169.254.169.254',
+        isConfigured: true,
+      });
+      vi.mocked(validateLocalProviderURL).mockResolvedValue({
+        valid: false,
+        error: 'IP address blocked: cloud metadata endpoint',
+      });
+
+      const result = await createAIProvider('user-123', {
+        selectedProvider: 'lmstudio',
+        selectedModel: 'local-model',
+      });
+
+      expect(isProviderError(result)).toBe(true);
+      if (isProviderError(result)) {
+        expect(result.status).toBe(400);
+        expect(result.error).toContain('blocked');
+      }
+    });
+
+    it('allows LM Studio with localhost URL', async () => {
+      mockGetUserLMStudioSettings.mockResolvedValue({
+        baseUrl: 'http://localhost:1234/v1',
+        isConfigured: true,
+      });
+      vi.mocked(validateLocalProviderURL).mockResolvedValue({
+        valid: true,
+        url: new URL('http://localhost:1234/v1'),
+        resolvedIPs: ['127.0.0.1'],
+      });
+
+      const result = await createAIProvider('user-123', {
+        selectedProvider: 'lmstudio',
+        selectedModel: 'local-model',
+      });
 
       expect(isProviderError(result)).toBe(false);
     });

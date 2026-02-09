@@ -183,6 +183,9 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   // Metadata
   metadata: jsonb('metadata'),
 
+  // Data retention
+  expiresAt: timestamp('expires_at', { mode: 'date' }),
+
   // Context tracking - track actual conversation context vs billing tokens
   contextMessages: jsonb('context_messages'), // Array of message IDs included in this call's context
   contextSize: integer('context_size'), // Actual tokens in context (input + system prompt + tools)
@@ -200,6 +203,7 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   conversationIdx: index('idx_ai_usage_conversation').on(table.conversationId),
   conversationContextIdx: index('idx_ai_usage_context').on(table.conversationId, table.timestamp),
   contextSizeIdx: index('idx_ai_usage_context_size').on(table.contextSize),
+  expiresAtIdx: index('idx_ai_usage_expires_at').on(table.expiresAt),
 }));
 
 /**

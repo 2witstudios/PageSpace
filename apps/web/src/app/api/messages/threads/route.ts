@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
 
 // Fetch DM conversations with last message and unread count
 async function fetchDMConversations(userId: string) {
-  const conversationDetails = await db.execute(sql`
+  const conversationDetails = await db.execute<ConversationRow>(sql`
     WITH conversation_data AS (
       SELECT
         c.id,
@@ -91,56 +92,35 @@ async function fetchDMConversations(userId: string) {
     ORDER BY cd."lastMessageAt" DESC NULLS LAST
   `);
 
-  interface ConversationRow {
-    id: string;
-    participant1Id: string;
-    participant2Id: string;
-    lastMessageAt: string | null;
-    lastMessagePreview: string | null;
-    participant1LastRead: string | null;
-    participant2LastRead: string | null;
-    createdAt: string;
-    last_read: string | null;
-    other_user_id: string;
-    other_user_name: string;
-    other_user_email: string;
-    other_user_image: string | null;
-    other_user_username: string | null;
-    other_user_display_name: string | null;
-    other_user_avatar_url: string | null;
-    unread_count: string;
-  }
-
   return conversationDetails.rows.map((row) => {
-    const typedRow = row as unknown as ConversationRow;
     return {
-      id: typedRow.id,
-      participant1Id: typedRow.participant1Id,
-      participant2Id: typedRow.participant2Id,
+      id: row.id,
+      participant1Id: row.participant1Id,
+      participant2Id: row.participant2Id,
       // Convert PostgreSQL timestamp strings to ISO 8601 for iOS compatibility
-      lastMessageAt: typedRow.lastMessageAt ? new Date(typedRow.lastMessageAt).toISOString() : null,
-      lastMessagePreview: typedRow.lastMessagePreview,
-      participant1LastRead: typedRow.participant1LastRead ? new Date(typedRow.participant1LastRead).toISOString() : null,
-      participant2LastRead: typedRow.participant2LastRead ? new Date(typedRow.participant2LastRead).toISOString() : null,
-      createdAt: new Date(typedRow.createdAt).toISOString(),
-      lastRead: typedRow.last_read ? new Date(typedRow.last_read).toISOString() : null,
+      lastMessageAt: row.lastMessageAt ? new Date(row.lastMessageAt).toISOString() : null,
+      lastMessagePreview: row.lastMessagePreview,
+      participant1LastRead: row.participant1LastRead ? new Date(row.participant1LastRead).toISOString() : null,
+      participant2LastRead: row.participant2LastRead ? new Date(row.participant2LastRead).toISOString() : null,
+      createdAt: new Date(row.createdAt).toISOString(),
+      lastRead: row.last_read ? new Date(row.last_read).toISOString() : null,
       otherUser: {
-        id: typedRow.other_user_id,
-        name: typedRow.other_user_name,
-        email: typedRow.other_user_email,
-        image: typedRow.other_user_image,
-        username: typedRow.other_user_username,
-        displayName: typedRow.other_user_display_name,
-        avatarUrl: typedRow.other_user_avatar_url,
+        id: row.other_user_id,
+        name: row.other_user_name,
+        email: row.other_user_email,
+        image: row.other_user_image,
+        username: row.other_user_username,
+        displayName: row.other_user_display_name,
+        avatarUrl: row.other_user_avatar_url,
       },
-      unreadCount: parseInt(typedRow.unread_count) || 0,
+      unreadCount: parseInt(row.unread_count) || 0,
     };
   });
 }
 
 // Fetch channels user has access to with their last message
 async function fetchChannelsWithLastMessage(userId: string) {
-  const channelDetails = await db.execute(sql`
+  const channelDetails = await db.execute<ChannelThreadRow>(sql`
     WITH user_channels AS (
       SELECT DISTINCT
         p.id,
@@ -182,27 +162,16 @@ async function fetchChannelsWithLastMessage(userId: string) {
     ORDER BY COALESCE(lm.last_message_at, uc."updatedAt") DESC
   `);
 
-  interface ChannelRow {
-    id: string;
-    title: string;
-    driveId: string;
-    drive_name: string;
-    updatedAt: string;
-    last_message: string | null;
-    last_message_at: string | null;
-  }
-
   return channelDetails.rows.map((row) => {
-    const typedRow = row as unknown as ChannelRow;
     return {
-      id: typedRow.id,
-      title: typedRow.title,
-      driveId: typedRow.driveId,
-      driveName: typedRow.drive_name,
+      id: row.id,
+      title: row.title,
+      driveId: row.driveId,
+      driveName: row.drive_name,
       // Convert PostgreSQL timestamp strings to ISO 8601
-      updatedAt: typedRow.updatedAt ? new Date(typedRow.updatedAt).toISOString() : new Date().toISOString(),
-      lastMessage: typedRow.last_message,
-      lastMessageAt: typedRow.last_message_at ? new Date(typedRow.last_message_at).toISOString() : null,
+      updatedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : new Date().toISOString(),
+      lastMessage: row.last_message,
+      lastMessageAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
     };
   });
 }

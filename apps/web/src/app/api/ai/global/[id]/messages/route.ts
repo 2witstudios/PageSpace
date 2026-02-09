@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
@@ -675,7 +675,7 @@ MENTION PROCESSING:
     // Filter tools based on read-only mode and web search toggle
     const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
     // Apply web search filtering (exclude web_search if disabled)
-    let finalTools = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
+    let finalTools: ToolSet = filterToolsForWebSearch(postReadOnlyTools, webSearchMode) as ToolSet;
 
     loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
@@ -725,8 +725,7 @@ MENTION PROCESSING:
 
         // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
         // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute }) as any;
+        finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
 
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,

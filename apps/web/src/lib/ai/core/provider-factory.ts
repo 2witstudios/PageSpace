@@ -35,7 +35,7 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
 } from './ai-utils';
-import { resolvePageSpaceModel } from './ai-providers-config';
+import { resolvePageSpaceModel, requiresConsent } from './ai-providers-config';
 
 export interface ProviderRequest {
   selectedProvider?: string;
@@ -92,6 +92,18 @@ export async function createAIProvider(
   // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.5-air')
   if (currentProvider === 'pagespace') {
     currentModel = resolvePageSpaceModel(currentModel);
+  }
+
+  // Check consent for cloud providers
+  if (requiresConsent(currentProvider)) {
+    const { aiConsentRepository } = await import('@/lib/repositories/ai-consent-repository');
+    const hasConsent = await aiConsentRepository.hasConsent(userId, currentProvider);
+    if (!hasConsent) {
+      return {
+        error: `consent_required:${currentProvider}`,
+        status: 403,
+      };
+    }
   }
 
   try {

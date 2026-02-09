@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db, sql } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
+import type { ConversationDetailRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -18,7 +19,7 @@ export async function GET(
     const { conversationId } = await context.params;
 
     // Fetch conversation with participant info
-    const result = await db.execute(sql`
+    const result = await db.execute<ConversationDetailRow>(sql`
       SELECT
         c.id,
         c."participant1Id",
@@ -55,24 +56,7 @@ export async function GET(
       );
     }
 
-    interface ConversationRow {
-      id: string;
-      participant1Id: string;
-      participant2Id: string;
-      lastMessageAt: string | null;
-      lastMessagePreview: string | null;
-      createdAt: string;
-      other_user_id: string;
-      user_id: string;
-      user_name: string;
-      user_email: string;
-      user_image: string | null;
-      user_username: string | null;
-      user_display_name: string | null;
-      user_avatar_url: string | null;
-    }
-
-    const row = result.rows[0] as unknown as ConversationRow;
+    const row = result.rows[0];
 
     const conversation = {
       id: row.id,

@@ -42,6 +42,7 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+  BCRYPT_COST: 12,
 }));
 
 // Mock cookie utilities

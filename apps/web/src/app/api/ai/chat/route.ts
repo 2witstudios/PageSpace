@@ -7,11 +7,13 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   type LanguageModelUsage,
+  type TextUIPart,
+  type ToolSet,
 } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -184,6 +186,9 @@ export async function POST(request: Request) {
       loggers.ai.warn('AI Chat API: No chatId provided');
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 });
     }
+
+    const mcpScopeError = await checkMCPPageScope(authResult, chatId);
+    if (mcpScopeError) return mcpScopeError;
 
     // Ensure userId and chatId are defined
     if (!userId) {
@@ -493,7 +498,7 @@ export async function POST(request: Request) {
     // Filter tools based on custom enabled tools configuration
     // - null or [] = no tools enabled (default behavior)
     // - ['tool1', 'tool2'] = specific tools → use only those
-    let filteredTools;
+    let filteredTools: ToolSet;
     if (enabledTools === null || enabledTools.length === 0) {
       // No tools configured - default to no tools
       filteredTools = {};
@@ -506,12 +511,10 @@ export async function POST(request: Request) {
     } else {
       // Filter tools based on the page's enabled tools configuration
       // Simple object filtering approach to avoid complex TypeScript issues
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filtered: Record<string, any> = {};
+      const filtered: Record<string, (typeof pageSpaceTools)[keyof typeof pageSpaceTools]> = {};
       for (const toolName of enabledTools) {
         if (toolName in pageSpaceTools) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          filtered[toolName] = (pageSpaceTools as any)[toolName];
+          filtered[toolName] = pageSpaceTools[toolName as keyof typeof pageSpaceTools];
         }
       }
       // Apply read-only filtering on top of enabled tools
@@ -547,8 +550,7 @@ export async function POST(request: Request) {
         for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
           mcpToolsWithExecute[toolName] = {
             ...toolSchema,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            execute: async (args: any) => {
+            execute: async (args: Record<string, unknown>) => {
               // Ensure userId is defined (it should be from authentication)
               if (!userId) {
                 throw new Error('User ID not available for MCP tool execution');
@@ -616,8 +618,7 @@ export async function POST(request: Request) {
 
         // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
         // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        filteredTools = sanitizeToolNamesForProvider({ ...filteredTools, ...mcpToolsWithExecute }) as any;
+        filteredTools = sanitizeToolNamesForProvider({ ...filteredTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
 
         loggers.ai.info('AI Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(filteredTools).length,
@@ -893,12 +894,10 @@ export async function POST(request: Request) {
           // Log each part in detail
           responseMessage?.parts?.forEach((part, index) => {
             if (part.type === 'text') {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const text = (part as any).text || '';
+              const text = (part as TextUIPart).text || '';
               loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
             } else if (part.type.startsWith('tool-')) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const toolPart = part as any;
+              const toolPart = part as { state?: string; output?: unknown };
               loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
             } else {
               loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { isBlockedIP, validateExternalURL, safeFetch } from '../url-validator';
+import { isBlockedIP, validateExternalURL, safeFetch, validateLocalProviderURL } from '../url-validator';
 
 // Mock DNS resolution
 vi.mock('dns', () => ({
@@ -397,6 +397,65 @@ describe('URL Validator - SSRF Prevention', () => {
       const result = await safeFetch('https://example.com/start');
       expect(result.status).toBe(200);
       expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('validateLocalProviderURL', () => {
+    it('allows http://localhost:11434', async () => {
+      const result = await validateLocalProviderURL('http://localhost:11434');
+      expect(result.valid).toBe(true);
+    });
+
+    it('allows http://127.0.0.1:11434', async () => {
+      const result = await validateLocalProviderURL('http://127.0.0.1:11434');
+      expect(result.valid).toBe(true);
+    });
+
+    it('allows http://192.168.1.100:1234/v1', async () => {
+      const result = await validateLocalProviderURL('http://192.168.1.100:1234/v1');
+      expect(result.valid).toBe(true);
+    });
+
+    it('allows http://10.0.0.5:11434', async () => {
+      const result = await validateLocalProviderURL('http://10.0.0.5:11434');
+      expect(result.valid).toBe(true);
+    });
+
+    it('blocks http://169.254.169.254/latest/meta-data/', async () => {
+      const result = await validateLocalProviderURL('http://169.254.169.254/latest/meta-data/');
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('blocked');
+    });
+
+    it('blocks cloud metadata hostnames', async () => {
+      vi.mocked(dns.resolve4).mockResolvedValue(['169.254.169.254']);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://metadata.google.internal/');
+      expect(result.valid).toBe(false);
+    });
+
+    it('blocks file:// protocol', async () => {
+      const result = await validateLocalProviderURL('file:///etc/passwd');
+      expect(result.valid).toBe(false);
+    });
+
+    it('blocks invalid URLs', async () => {
+      const result = await validateLocalProviderURL('not-a-url');
+      expect(result.valid).toBe(false);
+    });
+
+    it('blocks hostnames that resolve to cloud metadata IPs', async () => {
+      vi.mocked(dns.resolve4).mockResolvedValue(['169.254.169.254']);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://evil.example.com:11434');
+      expect(result.valid).toBe(false);
+    });
+
+    it('allows hostnames resolving to private IPs', async () => {
+      vi.mocked(dns.resolve4).mockResolvedValue(['192.168.1.50']);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://my-ollama.local:11434');
+      expect(result.valid).toBe(true);
     });
   });
 });
