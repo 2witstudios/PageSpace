@@ -4,6 +4,7 @@ import React, { memo, useCallback, useMemo, useState } from 'react';
 import { EditableTitle } from './EditableTitle';
 import { Breadcrumbs } from './Breadcrumbs';
 import { EditorToggles } from './EditorToggles';
+import { PageSetupButton } from './PageSetupButton';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
 import { ShareDialog } from './page-settings/ShareDialog';
 import { usePageTree } from '@/hooks/usePageTree';
@@ -113,8 +114,9 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
           <EditableTitle pageId={pageId} />
           <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
         </div>
-        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2">
           {pageIsDocument && <EditorToggles />}
+          {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (
             <ExportDropdown pageId={page.id} pageTitle={page.title} pageType={page.type} />
           )}
