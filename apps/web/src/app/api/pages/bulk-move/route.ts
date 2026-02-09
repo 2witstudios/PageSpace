@@ -112,7 +112,7 @@ export async function POST(request: Request) {
 
     // Verify edit permissions for all pages
     for (const page of sourcePages) {
-      const canEdit = await canUserEditPage(userId, page.id);
+      const canEdit = await canUserEditPage(userId, page.id, { bypassCache: true });
       if (!canEdit) {
         return NextResponse.json(
           { error: `You do not have permission to move page: ${page.title}` },

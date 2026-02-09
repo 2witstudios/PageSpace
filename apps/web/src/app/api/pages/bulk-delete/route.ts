@@ -60,7 +60,7 @@ export async function DELETE(request: Request) {
 
     // Verify delete permissions for all pages
     for (const page of sourcePages) {
-      const canDelete = await canUserDeletePage(userId, page.id);
+      const canDelete = await canUserDeletePage(userId, page.id, { bypassCache: true });
       if (!canDelete) {
         return NextResponse.json(
           { error: `You do not have permission to delete page: ${page.title}` },

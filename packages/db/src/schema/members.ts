@@ -7,9 +7,6 @@ import { createId } from '@paralleldrive/cuid2';
 // Drive member roles
 export const memberRole = pgEnum('MemberRole', ['OWNER', 'ADMIN', 'MEMBER']);
 
-// Drive invitation status
-export const invitationStatus = pgEnum('InvitationStatus', ['PENDING', 'ACCEPTED', 'REJECTED', 'EXPIRED']);
-
 // Custom roles for permission templates
 export const driveRoles = pgTable('drive_roles', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -69,28 +66,6 @@ export const driveMembers = pgTable('drive_members', {
   }
 });
 
-// Drive invitations - pending invites
-export const driveInvitations = pgTable('drive_invitations', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
-  email: text('email').notNull(),
-  userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
-  invitedBy: text('invitedBy').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  status: invitationStatus('status').default('PENDING').notNull(),
-  token: text('token').notNull().unique().$defaultFn(() => createId()),
-  message: text('message'),
-  expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  respondedAt: timestamp('respondedAt', { mode: 'date' }),
-}, (table) => {
-  return {
-    driveIdx: index('drive_invitations_drive_id_idx').on(table.driveId),
-    emailIdx: index('drive_invitations_email_idx').on(table.email),
-    statusIdx: index('drive_invitations_status_idx').on(table.status),
-    tokenIdx: index('drive_invitations_token_idx').on(table.token),
-  }
-});
-
 // Enhanced permissions with boolean flags
 export const pagePermissions = pgTable('page_permissions', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -144,21 +119,6 @@ export const driveMembersRelations = relations(driveMembers, ({ one }) => ({
   }),
   invitedByUser: one(users, {
     fields: [driveMembers.invitedBy],
-    references: [users.id],
-  }),
-}));
-
-export const driveInvitationsRelations = relations(driveInvitations, ({ one }) => ({
-  drive: one(drives, {
-    fields: [driveInvitations.driveId],
-    references: [drives.id],
-  }),
-  user: one(users, {
-    fields: [driveInvitations.userId],
-    references: [users.id],
-  }),
-  invitedByUser: one(users, {
-    fields: [driveInvitations.invitedBy],
     references: [users.id],
   }),
 }));

@@ -97,8 +97,8 @@ export const permissionManagementService = {
    * Check if user can manage (grant/revoke) permissions for a page
    */
   async canUserManagePermissions(userId: string, pageId: string): Promise<boolean> {
-    // Check direct share permission
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+    // Check direct share permission (bypass cache for mutation guard)
+    const accessLevel = await getUserAccessLevel(userId, pageId, { bypassCache: true });
     if (accessLevel?.canShare) return true;
 
     // Check if owner or admin

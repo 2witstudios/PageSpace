@@ -61,7 +61,7 @@ export async function POST(
     }
 
     // Check if user has edit permission to post in this channel
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
     if (!canEdit) {
       return NextResponse.json({
         error: 'You need edit permission to upload files in this channel',

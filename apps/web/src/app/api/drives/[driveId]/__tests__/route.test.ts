@@ -103,6 +103,7 @@ const createDriveWithAccessFixture = (
   drivePrompt: overrides.drivePrompt ?? null,
   isOwned: overrides.isOwned ?? true,
   role: overrides.role ?? 'OWNER',
+  lastAccessedAt: overrides.lastAccessedAt ?? null,
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 
