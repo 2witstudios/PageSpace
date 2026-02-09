@@ -355,6 +355,12 @@ export function useAuth(): {
       };
       loadAndCleanup();
     } else {
+      // Multiple components can mount useAuth simultaneously.
+      // If another instance already started loadSession(), keep loading true
+      // until that shared auth promise settles.
+      const hasInFlightSessionLoad = !!useAuthStore.getState()._authPromise;
+      if (hasInFlightSessionLoad) return;
+
       // Session check not needed (e.g., lastAuthCheck is recent) — unblock the UI
       useAuthStore.getState().setLoading(false);
     }
