@@ -514,16 +514,17 @@ describe('useAuthStore', () => {
     it('given overlapping force loads, should keep latest auth promise active', async () => {
       const user = createMockUser();
       let resolveFirstFetch!: (value: Response) => void;
+      let resolveSecondFetch!: (value: Response) => void;
       const firstFetch = new Promise<Response>((resolve) => {
         resolveFirstFetch = resolve;
+      });
+      const secondFetch = new Promise<Response>((resolve) => {
+        resolveSecondFetch = resolve;
       });
 
       vi.mocked(global.fetch)
         .mockImplementationOnce(() => firstFetch)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve(user),
-        } as Response);
+        .mockImplementationOnce(() => secondFetch);
 
       const firstLoad = useAuthStore.getState().loadSession(true);
       const secondLoad = useAuthStore.getState().loadSession(true);
@@ -541,6 +542,10 @@ describe('useAuthStore', () => {
       // Completing first request must not clear second in-flight promise.
       expect(useAuthStore.getState()._authPromise).toBe(activePromise);
 
+      resolveSecondFetch({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
       await secondLoad;
       expect(useAuthStore.getState()._authPromise).toBeNull();
     });
