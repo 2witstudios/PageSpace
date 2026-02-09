@@ -23,7 +23,9 @@ import { GET } from '../csrf/route';
 vi.mock('@pagespace/lib/auth', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('generated-csrf-token'),
   sessionService: {
-    validateSession: vi.fn() } }));
+    validateSession: vi.fn(),
+  },
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -31,10 +33,14 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
-  getSessionFromCookies: vi.fn() }));
+  getSessionFromCookies: vi.fn(),
+}));
 
 import { generateCSRFToken, sessionService } from '@pagespace/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
@@ -43,7 +49,8 @@ describe('/api/auth/csrf', () => {
   const mockSessionClaims = {
     userId: 'test-user-id',
     sessionId: 'test-session-id',
-    userRole: 'user' as const };
+    userRole: 'user' as const,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -59,7 +66,9 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token' } });
+          Cookie: 'session=valid-session-token',
+        },
+      });
 
       // Act
       const response = await GET(request);
@@ -75,7 +84,9 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token' } });
+          Cookie: 'session=valid-session-token',
+        },
+      });
 
       // Act
       await GET(request);
@@ -92,7 +103,8 @@ describe('/api/auth/csrf', () => {
       vi.mocked(getSessionFromCookies as unknown).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET' });
+        method: 'GET',
+      });
 
       // Act
       const response = await GET(request);
@@ -110,7 +122,9 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=invalid-session-token' } });
+          Cookie: 'session=invalid-session-token',
+        },
+      });
 
       // Act
       const response = await GET(request);
@@ -128,7 +142,9 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=expired-session-token' } });
+          Cookie: 'session=expired-session-token',
+        },
+      });
 
       // Act
       const response = await GET(request);
@@ -150,7 +166,9 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token' } });
+          Cookie: 'session=valid-session-token',
+        },
+      });
 
       // Act
       const response = await GET(request);
@@ -170,7 +188,9 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token' } });
+          Cookie: 'session=valid-session-token',
+        },
+      });
 
       // Act
       const response = await GET(request);

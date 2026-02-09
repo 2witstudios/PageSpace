@@ -17,13 +17,16 @@ import type { ReorderResult } from '@/services/api';
 vi.mock('@/services/api', () => ({
   pageReorderService: {
     validateMove: vi.fn(),
-    reorderPage: vi.fn() } }));
+    reorderPage: vi.fn(),
+  },
+}));
 
 // Mock external boundaries (auth, websocket, cache)
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
-  isMCPAuthResult: vi.fn().mockReturnValue(false) }));
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
+}));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
@@ -31,17 +34,23 @@ vi.mock('@/lib/websocket', () => ({
     driveId,
     pageId,
     type,
-    ...data })) }));
+    ...data,
+  })),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined) },
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
+  },
   loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 // Mock database for capturing current page state
 vi.mock('@pagespace/db', () => ({
@@ -49,9 +58,14 @@ vi.mock('@pagespace/db', () => ({
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([{ parentId: null, position: 0 }]) }) }) }) },
+          limit: vi.fn().mockResolvedValue([{ parentId: null, position: 0 }]),
+        }),
+      }),
+    }),
+  },
   pages: { id: 'id', parentId: 'parentId', position: 'position' },
-  eq: vi.fn() }));
+  eq: vi.fn(),
+}));
 
 import { pageReorderService } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -69,22 +83,26 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0 });
+  adminRoleVersion: 0,
+});
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
 
 const createRequest = (body: Record<string, unknown>) => {
   return new Request('https://example.com/api/pages/reorder', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body) });
+    body: JSON.stringify(body),
+  });
 };
 
 const successResult: ReorderResult = {
   success: true,
   driveId: mockDriveId,
-  pageTitle: 'Test Page' };
+  pageTitle: 'Test Page',
+};
 
 describe('PATCH /api/pages/reorder', () => {
   beforeEach(() => {
@@ -104,7 +122,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(response.status).toBe(401);
       // Service should NOT be called when auth fails
@@ -116,7 +135,8 @@ describe('PATCH /api/pages/reorder', () => {
     it('returns 400 when pageId is missing', async () => {
       const response = await PATCH(createRequest({
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(response.status).toBe(400);
       expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
@@ -125,7 +145,8 @@ describe('PATCH /api/pages/reorder', () => {
     it('returns 400 when newPosition is missing', async () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
-        newParentId: null }));
+        newParentId: null,
+      }));
 
       expect(response.status).toBe(400);
       expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
@@ -135,7 +156,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 'first' }));
+        newPosition: 'first',
+      }));
 
       expect(response.status).toBe(400);
       expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
@@ -145,7 +167,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: -1 }));
+        newPosition: -1,
+      }));
 
       expect(response.status).toBe(200);
       expect(pageReorderService.reorderPage).toHaveBeenCalledWith(
@@ -157,7 +180,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 2.5 }));
+        newPosition: 2.5,
+      }));
 
       expect(response.status).toBe(200);
       expect(pageReorderService.reorderPage).toHaveBeenCalledWith(
@@ -169,7 +193,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: Infinity }));
+        newPosition: Infinity,
+      }));
 
       expect(response.status).toBe(400);
       expect(pageReorderService.reorderPage).not.toHaveBeenCalled();
@@ -178,12 +203,14 @@ describe('PATCH /api/pages/reorder', () => {
     it('returns 400 when circular reference is detected', async () => {
       vi.mocked(pageReorderService.validateMove).mockResolvedValue({
         valid: false,
-        error: 'Cannot move page into its own descendant' });
+        error: 'Cannot move page into its own descendant',
+      });
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: 'child_page',
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -197,13 +224,15 @@ describe('PATCH /api/pages/reorder', () => {
       await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: 'parent_456',
-        newPosition: 5 }));
+        newPosition: 5,
+      }));
 
       expect(pageReorderService.reorderPage).toHaveBeenCalledWith({
         pageId: mockPageId,
         newParentId: 'parent_456',
         newPosition: 5,
-        userId: mockUserId });
+        userId: mockUserId,
+      });
     });
   });
 
@@ -212,12 +241,14 @@ describe('PATCH /api/pages/reorder', () => {
       vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Only drive owners and admins can reorder pages.',
-        status: 403 });
+        status: 403,
+      });
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(403);
@@ -231,12 +262,14 @@ describe('PATCH /api/pages/reorder', () => {
       vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Page not found.',
-        status: 404 });
+        status: 404,
+      });
 
       const response = await PATCH(createRequest({
         pageId: 'nonexistent',
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(response.status).toBe(404);
       expect(broadcastPageEvent).not.toHaveBeenCalled();
@@ -246,12 +279,14 @@ describe('PATCH /api/pages/reorder', () => {
       vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Parent page not found.',
-        status: 404 });
+        status: 404,
+      });
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: 'nonexistent_parent',
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(response.status).toBe(404);
     });
@@ -260,12 +295,14 @@ describe('PATCH /api/pages/reorder', () => {
       vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Cannot move pages between different drives.',
-        status: 400 });
+        status: 400,
+      });
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: 'page_in_other_drive',
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -278,7 +315,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(500);
@@ -292,7 +330,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
       const body = await response.json();
 
       expect(response.status).toBe(200);
@@ -303,7 +342,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(response.status).toBe(200);
     });
@@ -312,7 +352,8 @@ describe('PATCH /api/pages/reorder', () => {
       const response = await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 100 }));
+        newPosition: 100,
+      }));
 
       expect(response.status).toBe(200);
     });
@@ -323,14 +364,16 @@ describe('PATCH /api/pages/reorder', () => {
       await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: 'parent_456',
-        newPosition: 3 }));
+        newPosition: 3,
+      }));
 
       expect(createPageEventPayload).toHaveBeenCalledWith(
         mockDriveId,
         mockPageId,
         'moved',
         expect.objectContaining({
-          parentId: 'parent_456' })
+          parentId: 'parent_456',
+        })
       );
       // Verify broadcast receives the payload from createPageEventPayload
       expect(broadcastPageEvent).toHaveBeenCalledWith(
@@ -338,7 +381,8 @@ describe('PATCH /api/pages/reorder', () => {
           driveId: mockDriveId,
           pageId: mockPageId,
           type: 'moved',
-          parentId: 'parent_456' })
+          parentId: 'parent_456',
+        })
       );
     });
 
@@ -346,7 +390,8 @@ describe('PATCH /api/pages/reorder', () => {
       await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
     });
@@ -355,12 +400,14 @@ describe('PATCH /api/pages/reorder', () => {
       vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Page not found.',
-        status: 404 });
+        status: 404,
+      });
 
       await PATCH(createRequest({
         pageId: mockPageId,
         newParentId: null,
-        newPosition: 0 }));
+        newPosition: 0,
+      }));
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
       expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();

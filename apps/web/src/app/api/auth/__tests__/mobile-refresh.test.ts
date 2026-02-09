@@ -19,14 +19,20 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } } },
-  eq: vi.fn((field: string, value: string) => ({ field, value })) }));
+        findFirst: vi.fn(),
+      },
+    },
+  },
+  eq: vi.fn((field: string, value: string) => ({ field, value })),
+}));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn().mockResolvedValue({
     success: true,
     newToken: 'new-device-token',
-    deviceTokenId: 'dfh0haxfpzowht3oi213dtk1' }) }));
+    deviceTokenId: 'dfh0haxfpzowht3oi213dtk1',
+  }),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   validateDeviceToken: vi.fn(),
@@ -38,7 +44,10 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 vi.mock('@pagespace/lib/auth', () => ({
   hashToken: vi.fn((token) => `hashed-${token}`),
@@ -52,32 +61,41 @@ vi.mock('@pagespace/lib/auth', () => ({
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) }) } }));
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 9,
-    retryAfter: undefined }),
+    retryAfter: undefined,
+  }),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
-    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false } } }));
+    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
-  appendSessionCookie: vi.fn() }));
+  appendSessionCookie: vi.fn(),
+}));
 
 import { db } from '@pagespace/db';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import {
   validateDeviceToken,
-  updateDeviceTokenActivity } from '@pagespace/lib/server';
+  updateDeviceTokenActivity,
+} from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
-  DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
 import { getClientIP } from '@/lib/auth';
 
@@ -85,7 +103,8 @@ describe('/api/auth/mobile/refresh', () => {
   const mockUser = {
     id: 'rfh0haxfpzowht3oi213ref1',
     tokenVersion: 0,
-    role: 'user' as const };
+    role: 'user' as const,
+  };
 
   const mockDeviceRecord = {
     id: 'dfh0haxfpzowht3oi213dtk1',
@@ -98,7 +117,8 @@ describe('/api/auth/mobile/refresh', () => {
   const validRefreshPayload = {
     deviceToken: 'dt_valid-device-token',
     deviceId: 'ios-device-123',
-    platform: 'ios' as const };
+    platform: 'ios' as const,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,7 +127,8 @@ describe('/api/auth/mobile/refresh', () => {
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({
       allowed: true,
       attemptsRemaining: 9,
-      retryAfter: undefined });
+      retryAfter: undefined,
+    });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
     vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord);
     vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
@@ -120,11 +141,13 @@ describe('/api/auth/mobile/refresh', () => {
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) });
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    });
     vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
       success: true,
       newToken: 'new-device-token',
-      deviceTokenId: 'dfh0haxfpzowht3oi213dtk1' });
+      deviceTokenId: 'dfh0haxfpzowht3oi213dtk1',
+    });
     vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
   });
 
@@ -133,7 +156,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -148,7 +172,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       await POST(request);
 
@@ -163,8 +188,10 @@ describe('/api/auth/mobile/refresh', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validRefreshPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       await POST(request);
 
@@ -177,7 +204,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
 
@@ -197,7 +225,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -217,7 +246,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       await POST(request);
 
@@ -232,12 +262,14 @@ describe('/api/auth/mobile/refresh', () => {
       vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord);
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: false,
-        error: 'Token already rotated' });
+        error: 'Token already rotated',
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -255,12 +287,14 @@ describe('/api/auth/mobile/refresh', () => {
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: true,
         gracePeriodRetry: true,
-        deviceTokenId: 'replacement-token-id' });
+        deviceTokenId: 'replacement-token-id',
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -278,7 +312,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -293,7 +328,9 @@ describe('/api/auth/mobile/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validRefreshPayload,
-          deviceId: 'different-device-456' }) });
+          deviceId: 'different-device-456',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -308,7 +345,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -325,7 +363,9 @@ describe('/api/auth/mobile/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           deviceId: 'device-123',
-          platform: 'ios' }) });
+          platform: 'ios',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -340,7 +380,9 @@ describe('/api/auth/mobile/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           deviceToken: 'dt_some-token',
-          platform: 'ios' }) });
+          platform: 'ios',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -355,7 +397,9 @@ describe('/api/auth/mobile/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validRefreshPayload,
-          platform: 'windows' }) });
+          platform: 'windows',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -371,7 +415,9 @@ describe('/api/auth/mobile/refresh', () => {
         body: JSON.stringify({
           deviceToken: '',
           deviceId: 'device-123',
-          platform: 'ios' }) });
+          platform: 'ios',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -386,12 +432,14 @@ describe('/api/auth/mobile/refresh', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 300,
-        attemptsRemaining: 0 });
+        attemptsRemaining: 0,
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -405,12 +453,14 @@ describe('/api/auth/mobile/refresh', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 300,
-        attemptsRemaining: 0 });
+        attemptsRemaining: 0,
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
 
@@ -422,7 +472,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       await POST(request);
 
@@ -439,7 +490,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       await POST(request);
 
@@ -447,7 +499,8 @@ describe('/api/auth/mobile/refresh', () => {
         expect.objectContaining({
           userId: mockUser.id,
           expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-refresh' })
+          createdByService: 'mobile-refresh',
+        })
       );
     });
 
@@ -457,7 +510,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -474,7 +528,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -491,7 +546,9 @@ describe('/api/auth/mobile/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validRefreshPayload,
-          deviceId: 'mismatched-device' }) });
+          deviceId: 'mismatched-device',
+        }),
+      });
 
       await POST(request);
 
@@ -499,7 +556,8 @@ describe('/api/auth/mobile/refresh', () => {
         'Device token mismatch detected',
         expect.objectContaining({
           tokenDeviceId: mockDeviceRecord.deviceId,
-          providedDeviceId: 'mismatched-device' })
+          providedDeviceId: 'mismatched-device',
+        })
       );
     });
 
@@ -511,7 +569,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       const response = await POST(request);
 
@@ -525,7 +584,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validRefreshPayload, platform: 'ios' }) });
+        body: JSON.stringify({ ...validRefreshPayload, platform: 'ios' }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -535,7 +595,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validRefreshPayload, platform: 'android' }) });
+        body: JSON.stringify({ ...validRefreshPayload, platform: 'android' }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -545,7 +606,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validRefreshPayload, platform: 'desktop' }) });
+        body: JSON.stringify({ ...validRefreshPayload, platform: 'desktop' }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -557,7 +619,9 @@ describe('/api/auth/mobile/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           deviceToken: validRefreshPayload.deviceToken,
-          deviceId: validRefreshPayload.deviceId }) });
+          deviceId: validRefreshPayload.deviceId,
+        }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -572,7 +636,8 @@ describe('/api/auth/mobile/refresh', () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validRefreshPayload) });
+        body: JSON.stringify(validRefreshPayload),
+      });
 
       await POST(request);
 

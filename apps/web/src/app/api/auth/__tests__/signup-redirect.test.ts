@@ -11,13 +11,19 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } },
-    insert: vi.fn() },
-  eq: vi.fn((field: string, value: string | number) => ({ field, value })) }));
+        findFirst: vi.fn(),
+      },
+    },
+    insert: vi.fn(),
+  },
+  eq: vi.fn((field: string, value: string | number) => ({ field, value })),
+}));
 
 vi.mock('bcryptjs', () => ({
   default: {
-    hash: vi.fn() } }));
+    hash: vi.fn(),
+  },
+}));
 
 // Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
@@ -29,18 +35,22 @@ vi.mock('@pagespace/lib/auth', () => ({
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'] }),
+      scopes: ['*'],
+    }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    revokeSession: vi.fn().mockResolvedValue(undefined) },
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
-  BCRYPT_COST: 12 }));
+  BCRYPT_COST: 12,
+}));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
-  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token') }));
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   createNotification: vi.fn(),
@@ -49,9 +59,12 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
+      debug: vi.fn(),
+    },
+  },
   logAuthEvent: vi.fn(),
-  logSecurityEvent: vi.fn() }));
+  logSecurityEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
@@ -61,42 +74,56 @@ vi.mock('@pagespace/lib/security', () => ({
       maxAttempts: 3,
       windowMs: 3600000,
       blockDurationMs: 3600000,
-      progressiveDelay: false } } }));
+      progressiveDelay: false,
+    },
+  },
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/verification-utils', () => ({
-  createVerificationToken: vi.fn() }));
+  createVerificationToken: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/services/email-service', () => ({
-  sendEmail: vi.fn() }));
+  sendEmail: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
-  VerificationEmail: () => null }));
+  VerificationEmail: () => null,
+}));
 
 vi.mock('cookie', () => ({
   serialize: vi.fn(() => 'mock-cookie'),
-  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })) }));
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
+}));
 
 // Mock login CSRF validation
 vi.mock('@/lib/auth/login-csrf-utils', () => ({
-  validateLoginCSRFToken: vi.fn(() => true) }));
+  validateLoginCSRFToken: vi.fn(() => true),
+}));
 
 // Mock client IP extraction
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
-  getClientIP: vi.fn().mockReturnValue('unknown') }));
+  getClientIP: vi.fn().mockReturnValue('unknown'),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock-id') }));
+  createId: vi.fn(() => 'mock-id'),
+}));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn() }));
+  provisionGettingStartedDriveIfNeeded: vi.fn(),
+}));
 
 vi.mock('react', () => ({
   default: {
-    createElement: vi.fn().mockReturnValue({}) } }));
+    createElement: vi.fn().mockReturnValue({}),
+  },
+}));
 
 import { db, users, userAiSettings } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
@@ -116,7 +143,8 @@ describe('/api/auth/signup redirect', () => {
     vi.mocked(createNotification).mockResolvedValue(undefined);
 
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
-      driveId: 'drive-123' });
+      driveId: 'drive-123',
+    });
 
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
 
@@ -132,18 +160,23 @@ describe('/api/auth/signup redirect', () => {
                   name: 'Test User',
                   email: 'test@example.com',
                   tokenVersion: 0,
-                  role: 'user' },
+                  role: 'user',
+                },
               ])
-            ) })) };
+            ),
+          })),
+        };
       }
 
       if (table === userAiSettings) {
         return {
-          values: vi.fn(() => Promise.resolve(undefined)) };
+          values: vi.fn(() => Promise.resolve(undefined)),
+        };
       }
 
       return {
-        values: vi.fn(() => Promise.resolve(undefined)) };
+        values: vi.fn(() => Promise.resolve(undefined)),
+      };
     });
   });
 
@@ -153,13 +186,16 @@ describe('/api/auth/signup redirect', () => {
       headers: {
         'Content-Type': 'application/json',
         'X-Login-CSRF-Token': 'valid-csrf-token',
-        'Cookie': 'login_csrf=valid-csrf-token' },
+        'Cookie': 'login_csrf=valid-csrf-token',
+      },
       body: JSON.stringify({
         name: 'Test User',
         email: 'test@example.com',
         password: 'Password123456',
         confirmPassword: 'Password123456',
-        acceptedTos: true }) });
+        acceptedTos: true,
+      }),
+    });
 
     const response = await POST(request);
 
@@ -178,13 +214,16 @@ describe('/api/auth/signup redirect', () => {
       headers: {
         'Content-Type': 'application/json',
         'X-Login-CSRF-Token': 'valid-csrf-token',
-        'Cookie': 'login_csrf=valid-csrf-token' },
+        'Cookie': 'login_csrf=valid-csrf-token',
+      },
       body: JSON.stringify({
         name: 'Test User',
         email: 'test@example.com',
         password: 'Password123456',
         confirmPassword: 'Password123456',
-        acceptedTos: true }) });
+        acceptedTos: true,
+      }),
+    });
 
     const response = await POST(request);
 
@@ -203,13 +242,16 @@ describe('/api/auth/signup redirect', () => {
       headers: {
         'Content-Type': 'application/json',
         'X-Login-CSRF-Token': 'valid-csrf-token',
-        'Cookie': 'login_csrf=valid-csrf-token' },
+        'Cookie': 'login_csrf=valid-csrf-token',
+      },
       body: JSON.stringify({
         name: 'Test User',
         email: 'test@example.com',
         password: 'Password123456',
         confirmPassword: 'Password123456',
-        acceptedTos: true }) });
+        acceptedTos: true,
+      }),
+    });
 
     const response = await POST(request);
 

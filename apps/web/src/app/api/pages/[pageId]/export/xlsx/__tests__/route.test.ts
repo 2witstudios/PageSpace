@@ -8,9 +8,13 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       pages: {
-        findFirst: vi.fn() } } },
+        findFirst: vi.fn(),
+      },
+    },
+  },
   pages: { id: 'pages.id' },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })) }));
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
@@ -19,23 +23,30 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 vi.mock('@pagespace/lib', () => ({
   generateExcel: vi.fn(),
-  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')) }));
+  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
+}));
 
 vi.mock('@pagespace/lib/client-safe', () => ({
   parseSheetContent: vi.fn(),
   sanitizeSheetData: vi.fn((data: unknown) => data),
-  evaluateSheet: vi.fn() }));
+  evaluateSheet: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackPageOperation: vi.fn() }));
+  trackPageOperation: vi.fn(),
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result) }));
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -51,11 +62,13 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0 });
+  adminRoleVersion: 0,
+});
 
 // Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
 
 // Helper to create mock page
 const mockPage = (overrides?: Partial<{
@@ -73,7 +86,8 @@ const mockPage = (overrides?: Partial<{
   position: 0,
   createdAt: new Date(),
   updatedAt: new Date(),
-  isTrashed: false });
+  isTrashed: false,
+});
 
 // Mock sheet data
 const mockSheetData = {
@@ -81,15 +95,18 @@ const mockSheetData = {
     'A1': { value: 'Name' },
     'B1': { value: 'Age' },
     'A2': { value: 'John' },
-    'B2': { value: '30' } },
-  columnWidths: {} };
+    'B2': { value: '30' },
+  },
+  columnWidths: {},
+};
 
 const mockEvaluation = {
   display: [
     ['Name', 'Age'],
     ['John', '30'],
   ],
-  errors: {} };
+  errors: {},
+};
 
 describe('GET /api/pages/[pageId]/export/xlsx', () => {
   const mockUserId = 'user_123';
@@ -97,7 +114,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
 
   const createRequest = () => {
     return new Request(`https://example.com/api/pages/${mockPageId}/export/xlsx`, {
-      method: 'GET' });
+      method: 'GET',
+    });
   };
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
@@ -194,7 +212,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         mockSheetData,
         expect.objectContaining({
           pageId: mockPageId,
-          pageTitle: 'Test Sheet' })
+          pageTitle: 'Test Sheet',
+        })
       );
       expect(generateExcel).toHaveBeenCalledWith(
         mockEvaluation.display,
@@ -252,7 +271,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         mockPageId,
         expect.objectContaining({
           exportFormat: 'xlsx',
-          pageTitle: 'Test Sheet' })
+          pageTitle: 'Test Sheet',
+        })
       );
     });
   });
@@ -299,13 +319,16 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         cells: {
           'A1': { value: '10' },
           'B1': { value: '20' },
-          'C1': { value: '=A1+B1' } },
-        columnWidths: {} };
+          'C1': { value: '=A1+B1' },
+        },
+        columnWidths: {},
+      };
       vi.mocked(parseSheetContent).mockReturnValue(formulaData);
       vi.mocked(sanitizeSheetData).mockReturnValue(formulaData);
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [['10', '20', '30']],
-        errors: {} });
+        errors: {},
+      });
 
       await GET(createRequest(), { params: mockParams });
 
@@ -319,12 +342,14 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     it('handles empty sheet', async () => {
       const emptyData = {
         cells: {},
-        columnWidths: {} };
+        columnWidths: {},
+      };
       vi.mocked(parseSheetContent).mockReturnValue(emptyData);
       vi.mocked(sanitizeSheetData).mockReturnValue(emptyData);
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [],
-        errors: {} });
+        errors: {},
+      });
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -343,7 +368,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       }
       vi.mocked(evaluateSheet).mockReturnValue({
         display: largeDisplay,
-        errors: {} });
+        errors: {},
+      });
       vi.mocked(generateExcel).mockReturnValue(Buffer.alloc(100000));
 
       const response = await GET(createRequest(), { params: mockParams });

@@ -23,18 +23,26 @@ vi.mock('google-auth-library', () => ({
         email: 'test@example.com',
         name: 'Test User',
         picture: 'https://example.com/avatar.png',
-        email_verified: true }) }) })) }));
+        email_verified: true,
+      }),
+    }),
+  })),
+}));
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } },
+        findFirst: vi.fn(),
+      },
+    },
     insert: vi.fn(),
-    update: vi.fn() },
+    update: vi.fn(),
+  },
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions) }));
+  or: vi.fn((...conditions: unknown[]) => conditions),
+}));
 
 // Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
@@ -46,17 +54,21 @@ vi.mock('@pagespace/lib/auth', () => ({
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'] }),
+      scopes: ['*'],
+    }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    revokeSession: vi.fn().mockResolvedValue(undefined) },
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000 }));
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
-  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token') }));
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   validateOrCreateDeviceToken: vi.fn(),
@@ -65,8 +77,11 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
@@ -76,19 +91,26 @@ vi.mock('@pagespace/lib/security', () => ({
       maxAttempts: 5,
       windowMs: 900000,
       blockDurationMs: 900000,
-      progressiveDelay: true } } }));
+      progressiveDelay: true,
+    },
+  },
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock-id') }));
+  createId: vi.fn(() => 'mock-id'),
+}));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn() }));
+  provisionGettingStartedDriveIfNeeded: vi.fn(),
+}));
 
 vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn(() => '127.0.0.1') }));
+  getClientIP: vi.fn(() => '127.0.0.1'),
+}));
 
 import { db, users } from '@pagespace/db';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
@@ -107,7 +129,8 @@ const mockNewUser = {
   tokenVersion: 0,
   role: 'user',
   provider: 'google',
-  password: null };
+  password: null,
+};
 
 const mockExistingUser = {
   id: 'existing-user-456',
@@ -117,11 +140,13 @@ const mockExistingUser = {
   tokenVersion: 1,
   role: 'user',
   provider: 'google',
-  password: null };
+  password: null,
+};
 
 const validOneTapPayload = {
   credential: 'valid-google-id-token',
-  platform: 'web' };
+  platform: 'web',
+};
 
 const createOneTapRequest = (
   payload: Record<string, unknown>,
@@ -131,8 +156,10 @@ const createOneTapRequest = (
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...additionalHeaders },
-    body: JSON.stringify(payload) });
+      ...additionalHeaders,
+    },
+    body: JSON.stringify(payload),
+  });
 };
 
 describe('POST /api/auth/google/one-tap', () => {
@@ -147,7 +174,8 @@ describe('POST /api/auth/google/one-tap', () => {
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
-      driveId: 'drive-123' });
+      driveId: 'drive-123',
+    });
 
     // Default to new user flow
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
@@ -156,16 +184,21 @@ describe('POST /api/auth/google/one-tap', () => {
       if (table === users) {
         return {
           values: vi.fn(() => ({
-            returning: vi.fn(() => Promise.resolve([mockNewUser])) })) };
+            returning: vi.fn(() => Promise.resolve([mockNewUser])),
+          })),
+        };
       }
 
       return {
-        values: vi.fn(() => Promise.resolve(undefined)) };
+        values: vi.fn(() => Promise.resolve(undefined)),
+      };
     });
 
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined) }) });
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
   });
 
   afterEach(() => {
@@ -222,7 +255,8 @@ describe('POST /api/auth/google/one-tap', () => {
         expect.objectContaining({
           userId: mockNewUser.id,
           type: 'user',
-          scopes: ['*'] })
+          scopes: ['*'],
+        })
       );
       expect(appendSessionCookie).toHaveBeenCalled();
     });
@@ -253,7 +287,8 @@ describe('POST /api/auth/google/one-tap', () => {
         'signup',
         expect.objectContaining({
           email: 'te***@example.com', // Masked email
-          provider: 'google-one-tap' })
+          provider: 'google-one-tap',
+        })
       );
     });
 
@@ -295,7 +330,8 @@ describe('POST /api/auth/google/one-tap', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         attemptsRemaining: 0,
-        retryAfter: 900 });
+        retryAfter: 900,
+      });
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -314,7 +350,8 @@ describe('POST /api/auth/google/one-tap', () => {
 
       const request = createOneTapRequest({
         credential: 'valid-token',
-        platform: 'desktop' });
+        platform: 'desktop',
+      });
       const response = await POST(request);
       const body = await response.json();
 
@@ -327,13 +364,15 @@ describe('POST /api/auth/google/one-tap', () => {
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
       vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
         deviceToken: 'desktop-device-token',
-        deviceTokenRecordId: 'device-record-id' });
+        deviceTokenRecordId: 'device-record-id',
+      });
 
       const request = createOneTapRequest({
         credential: 'valid-token',
         platform: 'desktop',
         deviceId: 'desktop-device-123',
-        deviceName: 'Desktop App' });
+        deviceName: 'Desktop App',
+      });
       const response = await POST(request);
       const body = await response.json();
 

@@ -18,12 +18,14 @@ import type { ActivityActionPreview } from '../../../../../../types/activity-act
 vi.mock('../../../../../../services/api', () => ({
   executeRollback: vi.fn(),
   previewRollback: vi.fn(),
-  getActivityById: vi.fn() }));
+  getActivityById: vi.fn(),
+}));
 
 // Mock auth
 vi.mock('../../../../../../lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result) }));
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
 
 // Mock database for idempotency check
 vi.mock('@pagespace/db', () => ({
@@ -32,17 +34,24 @@ vi.mock('@pagespace/db', () => ({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
           limit: vi.fn().mockResolvedValue([]), // No existing rollback by default
-        }) }) }),
-    transaction: vi.fn((callback: (tx: object) => Promise<unknown>) => callback({})) },
+        }),
+      }),
+    }),
+    transaction: vi.fn((callback: (tx: object) => Promise<unknown>) => callback({})),
+  },
   activityLogs: { id: 'id', operation: 'operation', rollbackFromActivityId: 'rollbackFromActivityId' },
   eq: vi.fn(),
-  and: vi.fn() }));
+  and: vi.fn(),
+}));
 
 // Mock loggers
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     api: {
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 // Mock websocket broadcasts
 vi.mock('../../../../../../lib/websocket', () => ({
@@ -51,11 +60,13 @@ vi.mock('../../../../../../lib/websocket', () => ({
   broadcastDriveEvent: vi.fn(),
   createDriveEventPayload: vi.fn(),
   broadcastDriveMemberEvent: vi.fn(),
-  createDriveMemberEventPayload: vi.fn() }));
+  createDriveMemberEventPayload: vi.fn(),
+}));
 
 // Mock mask utility
 vi.mock('../../../../../../lib/logging/mask', () => ({
-  maskIdentifier: vi.fn((id: string) => `***${id.slice(-4)}`) }));
+  maskIdentifier: vi.fn((id: string) => `***${id.slice(-4)}`),
+}));
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
@@ -77,7 +88,8 @@ const createMockPreview = (overrides: Partial<ActivityActionPreview> = {}): Acti
   targetValues: null,
   changes: [],
   affectedResources: [],
-  ...overrides });
+  ...overrides,
+});
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -85,16 +97,19 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0 });
+  adminRoleVersion: 0,
+});
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
 
 const createRequest = (body: object) => {
   return new Request(`https://example.com/api/activities/${mockActivityId}/rollback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body) });
+    body: JSON.stringify(body),
+  });
 };
 
 const mockParams = Promise.resolve({ activityId: mockActivityId });
@@ -124,7 +139,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       vi.mocked(executeRollback).mockResolvedValue({
         success: true,
         message: 'OK',
-        warnings: [] });
+        warnings: [],
+      });
 
       // Verify auth was called with CSRF requirement
       await POST(createRequest({ context: 'page' }), { params: mockParams });
@@ -145,7 +161,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       const request = new Request(`https://example.com/api/activities/${mockActivityId}/rollback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: 'not valid json' });
+        body: 'not valid json',
+      });
 
       const response = await POST(request, { params: mockParams });
       const body = await response.json();
@@ -179,7 +196,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         vi.mocked(executeRollback).mockResolvedValue({
           success: true,
           message: 'Rollback successful',
-          warnings: [] });
+          warnings: [],
+        });
 
         const response = await POST(createRequest({ context }), { params: mockParams });
 
@@ -203,9 +221,11 @@ describe('POST /api/activities/[activityId]/rollback', () => {
             id: mockActivityId,
             label: 'Undo Update',
             description: 'Test Page',
-            fields: ['title'] },
+            fields: ['title'],
+          },
         ],
-        affectedResources: [{ type: 'page', id: 'page_123', title: 'Test Page' }] });
+        affectedResources: [{ type: 'page', id: 'page_123', title: 'Test Page' }],
+      });
 
       vi.mocked(previewRollback).mockResolvedValue(mockPreview);
 
@@ -224,7 +244,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       vi.mocked(previewRollback).mockResolvedValue(
         createMockPreview({
           canExecute: false,
-          reason: 'Activity not found' })
+          reason: 'Activity not found',
+        })
       );
 
       const response = await POST(
@@ -250,7 +271,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         rollbackActivityId: 'rollback_activity_123',
         restoredValues: { title: 'Previous Title' },
         message: 'Change undone',
-        warnings: [] });
+        warnings: [],
+      });
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -265,7 +287,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       vi.mocked(executeRollback).mockResolvedValue({
         success: false,
         message: 'You need edit permission to rollback changes to this page',
-        warnings: [] });
+        warnings: [],
+      });
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -279,7 +302,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         success: true,
         message: 'Rollback completed',
         warnings: ['Resource has been modified since this change'],
-        restoredValues: {} });
+        restoredValues: {},
+      });
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -292,7 +316,8 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       vi.mocked(executeRollback).mockResolvedValue({
         success: true,
         message: 'OK',
-        warnings: [] });
+        warnings: [],
+      });
 
       await POST(createRequest({ context: 'drive' }), { params: mockParams });
 

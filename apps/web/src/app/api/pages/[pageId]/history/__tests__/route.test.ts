@@ -16,20 +16,24 @@ import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
 // Mock service boundary
 vi.mock('../../../../../../services/api', () => ({
   getPageVersionHistory: vi.fn(),
-  getUserRetentionDays: vi.fn() }));
+  getUserRetentionDays: vi.fn(),
+}));
 
 // Mock auth
 vi.mock('../../../../../../lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result) }));
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
 
 // Mock permissions
 vi.mock('@pagespace/lib', () => ({
-  canUserViewPage: vi.fn() }));
+  canUserViewPage: vi.fn(),
+}));
 
 // Mock the permission helper from lib/permissions
 vi.mock('@pagespace/lib/permissions', () => ({
-  isActivityEligibleForRollback: vi.fn() }));
+  isActivityEligibleForRollback: vi.fn(),
+}));
 
 import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
@@ -46,10 +50,12 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0 });
+  adminRoleVersion: 0,
+});
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
 
 const createRequest = (queryParams: Record<string, string> = {}) => {
   const url = new URL(`https://example.com/api/pages/${mockPageId}/history`);
@@ -77,7 +83,8 @@ const createMockActivity = (overrides = {}) => ({
   previousValues: { title: 'Old' },
   newValues: { title: 'New' },
   contentSnapshot: null,
-  ...overrides });
+  ...overrides,
+});
 
 describe('GET /api/pages/[pageId]/history', () => {
   beforeEach(() => {
@@ -90,7 +97,8 @@ describe('GET /api/pages/[pageId]/history', () => {
     vi.mocked(getUserRetentionDays).mockResolvedValue(30);
     vi.mocked(getPageVersionHistory).mockResolvedValue({
       activities: [],
-      total: 0 });
+      total: 0,
+    });
     vi.mocked(isActivityEligibleForRollback).mockReturnValue(true);
   });
 
@@ -119,7 +127,8 @@ describe('GET /api/pages/[pageId]/history', () => {
         expect.any(Request),
         expect.objectContaining({
           allow: ['session', 'mcp'],
-          requireCSRF: false })
+          requireCSRF: false,
+        })
       );
     });
   });
@@ -148,7 +157,8 @@ describe('GET /api/pages/[pageId]/history', () => {
     it('uses default limit of 50', async () => {
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [],
-        total: 0 });
+        total: 0,
+      });
 
       await GET(createRequest(), { params: mockParams });
 
@@ -195,7 +205,8 @@ describe('GET /api/pages/[pageId]/history', () => {
       await GET(
         createRequest({
           startDate: '2024-01-01',
-          endDate: '2024-12-31' }),
+          endDate: '2024-12-31',
+        }),
         { params: mockParams }
       );
 
@@ -204,7 +215,8 @@ describe('GET /api/pages/[pageId]/history', () => {
         mockUserId,
         expect.objectContaining({
           startDate: expect.any(Date),
-          endDate: expect.any(Date) })
+          endDate: expect.any(Date),
+        })
       );
     });
 
@@ -336,7 +348,8 @@ describe('GET /api/pages/[pageId]/history', () => {
       vi.mocked(getUserRetentionDays).mockResolvedValue(30);
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [],
-        total: 0 });
+        total: 0,
+      });
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -358,7 +371,8 @@ describe('GET /api/pages/[pageId]/history', () => {
 
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: mockActivities,
-        total: 2 });
+        total: 2,
+      });
 
       vi.mocked(isActivityEligibleForRollback)
         .mockReturnValueOnce(true)
@@ -375,7 +389,8 @@ describe('GET /api/pages/[pageId]/history', () => {
     it('includes pagination metadata', async () => {
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [createMockActivity()],
-        total: 100 });
+        total: 100,
+      });
 
       const response = await GET(createRequest({ limit: '10', offset: '20' }), { params: mockParams });
       const body = await response.json();
@@ -384,13 +399,15 @@ describe('GET /api/pages/[pageId]/history', () => {
         total: 100,
         limit: 10,
         offset: 20,
-        hasMore: true });
+        hasMore: true,
+      });
     });
 
     it('hasMore is false when at end', async () => {
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [createMockActivity()],
-        total: 21 });
+        total: 21,
+      });
 
       const response = await GET(createRequest({ limit: '10', offset: '20' }), { params: mockParams });
       const body = await response.json();

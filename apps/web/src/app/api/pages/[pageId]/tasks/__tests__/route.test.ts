@@ -5,28 +5,35 @@ import { NextResponse } from 'next/server';
 // Mock dependencies
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result) }));
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
-  canUserEditPage: vi.fn() }));
+  canUserEditPage: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib', () => ({
   PageType: {
     DOCUMENT: 'DOCUMENT',
     FOLDER: 'FOLDER',
-    TASK_LIST: 'TASK_LIST' },
+    TASK_LIST: 'TASK_LIST',
+  },
   getDefaultContent: vi.fn(() => '{}'),
   logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
-      debug: vi.fn() })) } }));
+      debug: vi.fn(),
+    })),
+  },
+}));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@test.com' }),
-  logPageActivity: vi.fn() }));
+  logPageActivity: vi.fn(),
+}));
 
 // Track mock values for transaction
 let transactionPageResult = [{ id: 'mock-page-id', title: 'Mock Page' }];
@@ -35,20 +42,27 @@ let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
 vi.mock('@pagespace/db', () => {
   const mockInsert = vi.fn(() => ({
     values: vi.fn(() => ({
-      returning: vi.fn() })) }));
+      returning: vi.fn(),
+    })),
+  }));
 
   return {
     db: {
       query: {
         taskLists: {
-          findFirst: vi.fn() },
+          findFirst: vi.fn(),
+        },
         taskItems: {
           findFirst: vi.fn(),
-          findMany: vi.fn() },
+          findMany: vi.fn(),
+        },
         taskStatusConfigs: {
-          findMany: vi.fn().mockResolvedValue([]) },
+          findMany: vi.fn().mockResolvedValue([]),
+        },
         pages: {
-          findFirst: vi.fn() } },
+          findFirst: vi.fn(),
+        },
+      },
       insert: mockInsert,
       transaction: vi.fn(async (callback) => {
         let insertCallCount = 0;
@@ -60,9 +74,13 @@ vi.mock('@pagespace/db', () => {
                 insertCallCount++;
                 // First insert is for pages, second is for taskItems
                 return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
-              }) })) })) };
+              }),
+            })),
+          })),
+        };
         return callback(tx);
-      }) },
+      }),
+    },
     taskLists: {},
     taskItems: {},
     taskStatusConfigs: {},
@@ -77,13 +95,15 @@ vi.mock('@pagespace/db', () => {
     eq: vi.fn((field, value) => ({ field, value })),
     and: vi.fn((...conditions) => conditions),
     asc: vi.fn((col) => ({ type: 'asc', col })),
-    desc: vi.fn((col) => ({ type: 'desc', col })) };
+    desc: vi.fn((col) => ({ type: 'desc', col })),
+  };
 });
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn(),
   broadcastPageEvent: vi.fn(),
-  createPageEventPayload: vi.fn(() => ({})) }));
+  createPageEventPayload: vi.fn(() => ({})),
+}));
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
@@ -104,7 +124,8 @@ describe('Task API Routes', () => {
   describe('GET /api/pages/[pageId]/tasks', () => {
     const createRequest = (searchParams = '') => {
       return new Request(`https://example.com/api/pages/${mockPageId}/tasks${searchParams}`, {
-        method: 'GET' });
+        method: 'GET',
+      });
     };
 
     const mockParams = Promise.resolve({ pageId: mockPageId });
@@ -161,7 +182,10 @@ describe('Task API Routes', () => {
         const tx = {
           insert: vi.fn(() => ({
             values: vi.fn(() => ({
-              returning: vi.fn().mockResolvedValue([mockInsertedTaskList]) })) })) };
+              returning: vi.fn().mockResolvedValue([mockInsertedTaskList]),
+            })),
+          })),
+        };
         return callback(tx);
       });
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([]);
@@ -198,7 +222,8 @@ describe('Task API Routes', () => {
       return new Request(`https://example.com/api/pages/${mockPageId}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body) });
+        body: JSON.stringify(body),
+      });
     };
 
     const mockParams = Promise.resolve({ pageId: mockPageId });
@@ -252,11 +277,13 @@ describe('Task API Routes', () => {
         title: 'New Task',
         status: 'pending',
         priority: 'medium',
-        position: 0 };
+        position: 0,
+      };
       const mockNewPage = {
         id: 'new-page',
         title: 'New Task',
-        type: 'DOCUMENT' };
+        type: 'DOCUMENT',
+      };
 
       // Configure transaction to return expected values
       transactionPageResult = [mockNewPage];
@@ -285,7 +312,8 @@ describe('Task API Routes', () => {
       expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
         type: 'task_added',
         taskId: 'new-task',
-        pageId: mockPageId }));
+        pageId: mockPageId,
+      }));
     });
 
     it('creates task with all optional fields', async () => {
@@ -298,11 +326,13 @@ describe('Task API Routes', () => {
         priority: 'high',
         position: 1,
         dueDate: '2024-12-31',
-        assigneeId: 'user-456' };
+        assigneeId: 'user-456',
+      };
       const mockNewPage = {
         id: 'new-page',
         title: 'Complete Task',
-        type: 'DOCUMENT' };
+        type: 'DOCUMENT',
+      };
 
       // Configure transaction to return expected values
       transactionPageResult = [mockNewPage];
@@ -330,7 +360,8 @@ describe('Task API Routes', () => {
         status: 'in_progress',
         priority: 'high',
         dueDate: '2024-12-31',
-        assigneeId: 'user-456' }), { params: mockParams });
+        assigneeId: 'user-456',
+      }), { params: mockParams });
 
       expect(response.status).toBe(201);
     });

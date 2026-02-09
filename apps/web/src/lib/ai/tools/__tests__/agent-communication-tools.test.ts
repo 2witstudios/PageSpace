@@ -8,13 +8,16 @@ vi.mock('@pagespace/db', () => ({
     where: vi.fn(),
     orderBy: vi.fn().mockReturnThis(),
     query: {
-      pages: { findFirst: vi.fn() } } },
+      pages: { findFirst: vi.fn() },
+    },
+  },
   pages: { id: 'id', driveId: 'driveId', type: 'type', title: 'title' },
   drives: { id: 'id', ownerId: 'ownerId' },
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId' },
   eq: vi.fn(),
   and: vi.fn(),
-  sql: vi.fn() }));
+  sql: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
@@ -23,31 +26,42 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 vi.mock('ai', () => ({
   tool: vi.fn((config) => config),
   stepCountIs: vi.fn(() => () => false),
   generateText: vi.fn(),
   convertToModelMessages: vi.fn(),
-  UIMessage: {} }));
+  UIMessage: {},
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock-cuid') }));
+  createId: vi.fn(() => 'mock-cuid'),
+}));
 
 // Mock sibling tools to avoid circular imports
 vi.mock('../drive-tools', () => ({
-  driveTools: { list_drives: { name: 'list_drives' } } }));
+  driveTools: { list_drives: { name: 'list_drives' } },
+}));
 vi.mock('../page-read-tools', () => ({
-  pageReadTools: { list_pages: { name: 'list_pages' } } }));
+  pageReadTools: { list_pages: { name: 'list_pages' } },
+}));
 vi.mock('../page-write-tools', () => ({
-  pageWriteTools: { create_page: { name: 'create_page' } } }));
+  pageWriteTools: { create_page: { name: 'create_page' } },
+}));
 vi.mock('../search-tools', () => ({
-  searchTools: { regex_search: { name: 'regex_search' } } }));
+  searchTools: { regex_search: { name: 'regex_search' } },
+}));
 vi.mock('../task-management-tools', () => ({
-  taskManagementTools: { update_task: { name: 'update_task' } } }));
+  taskManagementTools: { update_task: { name: 'update_task' } },
+}));
 vi.mock('../agent-tools', () => ({
-  agentTools: { update_agent_config: { name: 'update_agent_config' } } }));
+  agentTools: { update_agent_config: { name: 'update_agent_config' } },
+}));
 
 // Mock core AI modules
 vi.mock('../../core', () => ({
@@ -58,7 +72,8 @@ vi.mock('../../core', () => ({
   isProviderError: vi.fn(() => false),
   buildTimestampSystemPrompt: vi.fn(() => ''),
   AI_PROVIDERS: { pagespace: { name: 'PageSpace' } },
-  getModelDisplayName: vi.fn(() => 'Test Model') }));
+  getModelDisplayName: vi.fn(() => 'Test Model'),
+}));
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db';
@@ -70,15 +85,13 @@ import { generateText } from 'ai';
 const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 
-type MockFn = ReturnType<typeof vi.fn>;
-
 interface MockDb {
-  select: MockFn;
-  from: MockFn;
-  where: MockFn;
-  orderBy: MockFn;
+  select: Mock;
+  from: Mock;
+  where: Mock;
+  orderBy: Mock;
   query: {
-    pages: { findFirst: MockFn };
+    pages: { findFirst: Mock };
   };
 }
 
@@ -109,7 +122,8 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext };
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
 
       const result = await agentCommunicationTools.list_agents!.execute!(
         { driveId: 'non-existent', includeSystemPrompt: false, includeTools: false },
@@ -156,7 +170,8 @@ describe('agent-communication-tools', () => {
           {
             agentPath: '/drive/agent',
             agentId: 'agent-1',
-            question: 'What is 2+2?' },
+            question: 'What is 2+2?',
+          },
           context
         )
       ).rejects.toThrow('User authentication required');
@@ -167,13 +182,15 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext };
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
 
       const result = await agentCommunicationTools.ask_agent!.execute!(
         {
           agentPath: '/drive/agent',
           agentId: 'non-existent',
-          question: 'Test question' },
+          question: 'Test question',
+        },
         context
       );
 
@@ -191,18 +208,21 @@ describe('agent-communication-tools', () => {
         systemPrompt: 'I am helpful',
         enabledTools: null,
         aiProvider: null,
-        aiModel: null });
+        aiModel: null,
+      });
       mockCanUserViewPage.mockResolvedValue(false);
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext };
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
 
       const result = await agentCommunicationTools.ask_agent!.execute!(
         {
           agentPath: '/drive/agent',
           agentId: 'agent-1',
-          question: 'Test question' },
+          question: 'Test question',
+        },
         context
       );
 
@@ -216,7 +236,8 @@ describe('agent-communication-tools', () => {
         id: 'agent-1',
         title: 'Agent',
         type: 'AI_CHAT',
-        driveId: 'drive-1' });
+        driveId: 'drive-1',
+      });
 
       // Context with max depth reached
       const context = {
@@ -224,14 +245,16 @@ describe('agent-communication-tools', () => {
         experimental_context: {
           userId: 'user-123',
           agentCallDepth: 3, // MAX_AGENT_DEPTH
-        } as ToolExecutionContext & { agentCallDepth: number } };
+        } as ToolExecutionContext & { agentCallDepth: number },
+      };
 
       await expect(
         agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/drive/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         )
       ).rejects.toThrow('Maximum agent consultation depth');
@@ -247,7 +270,8 @@ describe('agent-communication-tools', () => {
         enabledTools: null,
         aiProvider: null,
         aiModel: null,
-        isTrashed: false };
+        isTrashed: false,
+      };
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
@@ -255,12 +279,17 @@ describe('agent-communication-tools', () => {
         vi.mocked(mockDb.select).mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([]) }) }) });
+              orderBy: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        });
         vi.mocked(createAIProvider).mockResolvedValue({
-          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never } as Awaited<ReturnType<typeof createAIProvider>>);
+          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+        } as Awaited<ReturnType<typeof createAIProvider>>);
         vi.mocked(generateText).mockResolvedValue({
           text: 'Agent response',
-          steps: [] } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
+          steps: [],
+        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
         vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
       });
 
@@ -273,13 +302,17 @@ describe('agent-communication-tools', () => {
             userId: 'user-123',
             locationContext: {
               currentPage: { id: parentAgentPageId, title: 'Parent Agent', type: 'AI_CHAT' },
-              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' } } } as ToolExecutionContext };
+              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
+            },
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
@@ -287,7 +320,9 @@ describe('agent-communication-tools', () => {
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              parentAgentId: parentAgentPageId }) })
+              parentAgentId: parentAgentPageId,
+            }),
+          })
         );
       });
 
@@ -297,13 +332,16 @@ describe('agent-communication-tools', () => {
           messages: [],
           experimental_context: {
             userId: 'user-123',
-            agentChain: ['root-agent'] } as ToolExecutionContext };
+            agentChain: ['root-agent'],
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
@@ -311,7 +349,9 @@ describe('agent-communication-tools', () => {
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              agentChain: ['root-agent', 'agent-1'] }) })
+              agentChain: ['root-agent', 'agent-1'],
+            }),
+          })
         );
       });
 
@@ -320,20 +360,25 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123' } as ToolExecutionContext };
+            userId: 'user-123',
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              requestOrigin: 'agent' }) })
+              requestOrigin: 'agent',
+            }),
+          })
         );
       });
 
@@ -344,20 +389,25 @@ describe('agent-communication-tools', () => {
           messages: [],
           experimental_context: {
             userId: 'user-123',
-            conversationId: parentConversationId } as ToolExecutionContext };
+            conversationId: parentConversationId,
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              parentConversationId: parentConversationId }) })
+              parentConversationId: parentConversationId,
+            }),
+          })
         );
       });
 
@@ -369,20 +419,25 @@ describe('agent-communication-tools', () => {
           messages: [],
           experimental_context: {
             userId: 'user-123',
-            agentChain: existingChain } as ToolExecutionContext };
+            agentChain: existingChain,
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              agentChain: ['grandparent-agent', 'parent-agent', 'agent-1'] }) })
+              agentChain: ['grandparent-agent', 'parent-agent', 'agent-1'],
+            }),
+          })
         );
       });
 
@@ -394,20 +449,24 @@ describe('agent-communication-tools', () => {
           experimental_context: {
             userId: 'user-123',
             // No agentChain
-          } as ToolExecutionContext };
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              agentChain: ['agent-1'] }) })
+              agentChain: ['agent-1'],
+            }),
+          })
         );
       });
 
@@ -417,20 +476,25 @@ describe('agent-communication-tools', () => {
           messages: [],
           experimental_context: {
             userId: 'user-123',
-            agentCallDepth: 1 } as ToolExecutionContext & { agentCallDepth: number } };
+            agentCallDepth: 1,
+          } as ToolExecutionContext & { agentCallDepth: number },
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
         expect(generateText).toHaveBeenCalledWith(
           expect.objectContaining({
             experimental_context: expect.objectContaining({
-              agentCallDepth: 2 }) })
+              agentCallDepth: 2,
+            }),
+          })
         );
       });
     });
@@ -445,7 +509,8 @@ describe('agent-communication-tools', () => {
         enabledTools: null,
         aiProvider: null,
         aiModel: null,
-        isTrashed: false };
+        isTrashed: false,
+      };
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
@@ -453,12 +518,17 @@ describe('agent-communication-tools', () => {
         vi.mocked(mockDb.select).mockReturnValue({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([]) }) }) });
+              orderBy: vi.fn().mockResolvedValue([]),
+            }),
+          }),
+        });
         vi.mocked(createAIProvider).mockResolvedValue({
-          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never } as Awaited<ReturnType<typeof createAIProvider>>);
+          model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
+        } as Awaited<ReturnType<typeof createAIProvider>>);
         vi.mocked(generateText).mockResolvedValue({
           text: 'Agent response',
-          steps: [] } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
+          steps: [],
+        } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
         vi.mocked(saveMessageToDatabase).mockResolvedValue(undefined);
       });
 
@@ -471,13 +541,17 @@ describe('agent-communication-tools', () => {
             userId: 'user-123',
             locationContext: {
               currentPage: { id: sourceAgentPageId, title: 'Global Assistant', type: 'AI_CHAT' },
-              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' } } } as ToolExecutionContext };
+              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
+            },
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
-            question: 'Test question from another agent' },
+            question: 'Test question from another agent',
+          },
           context
         );
 
@@ -488,7 +562,8 @@ describe('agent-communication-tools', () => {
         expect(userMessageCall).toBeDefined();
         expect(userMessageCall![0]).toMatchObject({
           sourceAgentId: sourceAgentPageId,
-          role: 'user' });
+          role: 'user',
+        });
       });
 
       it('should pass null sourceAgentId when called from non-AI_CHAT context', async () => {
@@ -499,13 +574,17 @@ describe('agent-communication-tools', () => {
             userId: 'user-123',
             locationContext: {
               currentPage: { id: 'doc-page-id', title: 'Some Document', type: 'DOCUMENT' },
-              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' } } } as ToolExecutionContext };
+              currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
+            },
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
@@ -516,7 +595,8 @@ describe('agent-communication-tools', () => {
         expect(userMessageCall).toBeDefined();
         expect(userMessageCall![0]).toMatchObject({
           sourceAgentId: null,
-          role: 'user' });
+          role: 'user',
+        });
       });
 
       it('should pass null sourceAgentId when no location context', async () => {
@@ -526,13 +606,15 @@ describe('agent-communication-tools', () => {
           experimental_context: {
             userId: 'user-123',
             // No locationContext
-          } as ToolExecutionContext };
+          } as ToolExecutionContext,
+        };
 
         await agentCommunicationTools.ask_agent!.execute!(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
-            question: 'Test question' },
+            question: 'Test question',
+          },
           context
         );
 
@@ -543,7 +625,8 @@ describe('agent-communication-tools', () => {
         expect(userMessageCall).toBeDefined();
         expect(userMessageCall![0]).toMatchObject({
           sourceAgentId: null,
-          role: 'user' });
+          role: 'user',
+        });
       });
     });
   });

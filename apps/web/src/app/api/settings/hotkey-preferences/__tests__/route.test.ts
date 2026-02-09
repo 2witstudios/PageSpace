@@ -20,18 +20,25 @@ vi.mock('@pagespace/db', () => ({
     update: mockUpdate,
     query: {
       userHotkeyPreferences: {
-        findFirst: mockFindFirst } } },
+        findFirst: mockFindFirst,
+      },
+    },
+  },
   userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId' },
   eq: vi.fn((a, b) => ({ field: a, value: b })),
-  and: vi.fn((...args) => args) }));
+  and: vi.fn((...args) => args),
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result) }));
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
-    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } }));
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  },
+}));
 
 vi.mock('@/lib/hotkeys/registry', () => ({
   getHotkeyDefinition: vi.fn((id: string) => {
@@ -39,7 +46,8 @@ vi.mock('@/lib/hotkeys/registry', () => ({
       return { id, label: 'Test', defaultBinding: 'Ctrl+Tab' };
     }
     return undefined;
-  }) }));
+  }),
+}));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -50,10 +58,12 @@ const mockSessionAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0 });
+  adminRoleVersion: 0,
+});
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+});
 
 describe('GET /api/settings/hotkey-preferences', () => {
   beforeEach(() => {
@@ -123,7 +133,8 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     const request = new Request('https://example.com/api/settings/hotkey-preferences', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'Alt+Tab' }) });
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'Alt+Tab' }),
+    });
 
     const response = await PATCH(request);
     const body = await response.json();
@@ -140,7 +151,8 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     const request = new Request('https://example.com/api/settings/hotkey-preferences', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'Alt+Tab' }) });
+      body: JSON.stringify({ hotkeyId: 'tabs.cycle-next', binding: 'Alt+Tab' }),
+    });
 
     const response = await PATCH(request);
     await response.json();
@@ -153,7 +165,8 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     const request = new Request('https://example.com/api/settings/hotkey-preferences', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ binding: 'Alt+Tab' }) });
+      body: JSON.stringify({ binding: 'Alt+Tab' }),
+    });
 
     const response = await PATCH(request);
 
@@ -164,7 +177,8 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     const request = new Request('https://example.com/api/settings/hotkey-preferences', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hotkeyId: 'invalid.hotkey', binding: 'Alt+Tab' }) });
+      body: JSON.stringify({ hotkeyId: 'invalid.hotkey', binding: 'Alt+Tab' }),
+    });
 
     const response = await PATCH(request);
 

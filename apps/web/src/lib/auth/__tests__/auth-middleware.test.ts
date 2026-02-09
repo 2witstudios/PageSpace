@@ -8,35 +8,47 @@ import {
   validateSessionToken,
   isAuthError,
   isMCPAuthResult,
-  isSessionAuthResult } from '../index';
+  isSessionAuthResult,
+} from '../index';
 
 // Mock dependencies
 vi.mock('@pagespace/lib/auth', () => ({
   hashToken: vi.fn().mockReturnValue('mocked-hash'),
   sessionService: {
-    validateSession: vi.fn() } }));
+    validateSession: vi.fn(),
+  },
+}));
 
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       mcpTokens: {
-        findFirst: vi.fn() } },
+        findFirst: vi.fn(),
+      },
+    },
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined) }) }) },
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    }),
+  },
   mcpTokens: {},
   eq: vi.fn((field, value) => ({ field, value })),
   and: vi.fn((...conditions) => conditions),
-  isNull: vi.fn((field) => ({ field, isNull: true })) }));
+  isNull: vi.fn((field) => ({ field, isNull: true })),
+}));
 
 vi.mock('../csrf-validation', () => ({
-  validateCSRF: vi.fn().mockResolvedValue(null) }));
+  validateCSRF: vi.fn().mockResolvedValue(null),
+}));
 
 vi.mock('../origin-validation', () => ({
-  validateOrigin: vi.fn().mockReturnValue(null) }));
+  validateOrigin: vi.fn().mockReturnValue(null),
+}));
 
 vi.mock('../cookie-config', () => ({
-  getSessionFromCookies: vi.fn() }));
+  getSessionFromCookies: vi.fn(),
+}));
 
 import { sessionService } from '@pagespace/lib/auth';
 import { db } from '@pagespace/db';
@@ -53,7 +65,8 @@ describe('Auth Middleware', () => {
     adminRoleVersion: 0,
     type: 'user' as const,
     scopes: ['*'],
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) };
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -146,8 +159,10 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user' as const,
           tokenVersion: 0,
-          adminRoleVersion: 0 },
-        driveScopes: [] };
+          adminRoleVersion: 0,
+        },
+        driveScopes: [],
+      };
       vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
 
       // Act
@@ -160,7 +175,8 @@ describe('Auth Middleware', () => {
         tokenVersion: 0,
         adminRoleVersion: 0,
         tokenId: 'token-id',
-        allowedDriveIds: [] });
+        allowedDriveIds: [],
+      });
     });
 
     it('updates lastUsed timestamp on valid token', async () => {
@@ -172,8 +188,10 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user',
           tokenVersion: 0,
-          adminRoleVersion: 0 },
-        driveScopes: [] };
+          adminRoleVersion: 0,
+        },
+        driveScopes: [],
+      };
       vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
 
       // Capture the values passed to set()
@@ -181,7 +199,8 @@ describe('Auth Middleware', () => {
       const mockSet = vi.fn().mockImplementation((vals) => {
         capturedSetValues = vals;
         return {
-          where: vi.fn().mockResolvedValue(undefined) };
+          where: vi.fn().mockResolvedValue(undefined),
+        };
       });
       vi.mocked(db.update).mockReturnValue({ set: mockSet });
 
@@ -202,7 +221,8 @@ describe('Auth Middleware', () => {
       vi.mocked(getSessionFromCookies).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/test', {
-        method: 'GET' });
+        method: 'GET',
+      });
 
       // Act
       const result = await authenticateSessionRequest(request);
@@ -219,7 +239,9 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer mcp_some-token' } });
+          Authorization: 'Bearer mcp_some-token',
+        },
+      });
 
       // Act
       const result = await authenticateSessionRequest(request);
@@ -241,7 +263,9 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Cookie: 'session=ps_sess_valid' } });
+          Cookie: 'session=ps_sess_valid',
+        },
+      });
 
       // Act
       const result = await authenticateSessionRequest(request);
@@ -263,7 +287,9 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Cookie: 'session=ps_sess_invalid' } });
+          Cookie: 'session=ps_sess_invalid',
+        },
+      });
 
       // Act
       const result = await authenticateSessionRequest(request);
@@ -281,7 +307,8 @@ describe('Auth Middleware', () => {
     it('returns error when no token provided', async () => {
       // Arrange
       const request = new Request('http://localhost/api/test', {
-        method: 'GET' });
+        method: 'GET',
+      });
 
       // Act
       const result = await authenticateMCPRequest(request);
@@ -299,7 +326,9 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer regular-token' } });
+          Authorization: 'Bearer regular-token',
+        },
+      });
 
       // Act
       const result = await authenticateMCPRequest(request);
@@ -319,7 +348,9 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer mcp_invalid-token' } });
+          Authorization: 'Bearer mcp_invalid-token',
+        },
+      });
 
       // Act
       const result = await authenticateMCPRequest(request);
@@ -341,14 +372,18 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user',
           tokenVersion: 0,
-          adminRoleVersion: 0 },
-        driveScopes: [] };
+          adminRoleVersion: 0,
+        },
+        driveScopes: [],
+      };
       vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer mcp_valid-token' } });
+          Authorization: 'Bearer mcp_valid-token',
+        },
+      });
 
       // Act
       const result = await authenticateMCPRequest(request);
@@ -368,11 +403,13 @@ describe('Auth Middleware', () => {
       it('returns error when no token types allowed', async () => {
         // Arrange
         const request = new Request('http://localhost/api/test', {
-          method: 'GET' });
+          method: 'GET',
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: [] });
+          allow: [],
+        });
 
         // Assert
         expect(isAuthError(result)).toBe(true);
@@ -386,11 +423,14 @@ describe('Auth Middleware', () => {
         const request = new Request('http://localhost/api/test', {
           method: 'GET',
           headers: {
-            Authorization: 'Bearer mcp_some-token' } });
+            Authorization: 'Bearer mcp_some-token',
+          },
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['session'] });
+          allow: ['session'],
+        });
 
         // Assert
         expect(isAuthError(result)).toBe(true);
@@ -409,18 +449,23 @@ describe('Auth Middleware', () => {
             id: 'test-user-id',
             role: 'user',
             tokenVersion: 0,
-            adminRoleVersion: 0 },
-          driveScopes: [] };
+            adminRoleVersion: 0,
+          },
+          driveScopes: [],
+        };
         vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
 
         const request = new Request('http://localhost/api/test', {
           method: 'GET',
           headers: {
-            Authorization: 'Bearer mcp_valid-token' } });
+            Authorization: 'Bearer mcp_valid-token',
+          },
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
-          allow: ['mcp', 'session'] });
+          allow: ['mcp', 'session'],
+        });
 
         // Assert
         expect(isAuthError(result)).toBe(false);
@@ -438,12 +483,15 @@ describe('Auth Middleware', () => {
           method: 'POST',
           headers: {
             Cookie: 'session=ps_sess_valid',
-            'X-CSRF-Token': 'valid-csrf-token' } });
+            'X-CSRF-Token': 'valid-csrf-token',
+          },
+        });
 
         // Act
         await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireCSRF: true });
+          requireCSRF: true,
+        });
 
         // Assert
         expect(validateCSRF).toHaveBeenCalledWith(request);
@@ -460,12 +508,15 @@ describe('Auth Middleware', () => {
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Cookie: 'session=ps_sess_valid' } });
+            Cookie: 'session=ps_sess_valid',
+          },
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireCSRF: true });
+          requireCSRF: true,
+        });
 
         // Assert
         expect(isAuthError(result)).toBe(true);
@@ -481,12 +532,15 @@ describe('Auth Middleware', () => {
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Authorization: 'Bearer ps_sess_valid' } });
+            Authorization: 'Bearer ps_sess_valid',
+          },
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireCSRF: true });
+          requireCSRF: true,
+        });
 
         // Assert - authentication passes
         expect(isAuthError(result)).toBe(false);
@@ -512,12 +566,15 @@ describe('Auth Middleware', () => {
           headers: {
             Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
-            Origin: 'http://localhost' } });
+            Origin: 'http://localhost',
+          },
+        });
 
         // Act
         await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireCSRF: true });
+          requireCSRF: true,
+        });
 
         // Assert - origin validation is called for session auth when requireCSRF is true
         expect(validateOrigin).toHaveBeenCalledWith(request);
@@ -532,12 +589,15 @@ describe('Auth Middleware', () => {
           method: 'POST',
           headers: {
             Cookie: 'session=ps_sess_valid',
-            Origin: 'http://localhost' } });
+            Origin: 'http://localhost',
+          },
+        });
 
         // Act
         await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireOriginValidation: true });
+          requireOriginValidation: true,
+        });
 
         // Assert
         expect(validateOrigin).toHaveBeenCalledWith(request);
@@ -560,12 +620,15 @@ describe('Auth Middleware', () => {
           headers: {
             Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
-            Origin: 'https://evil.example.com' } });
+            Origin: 'https://evil.example.com',
+          },
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireCSRF: true });
+          requireCSRF: true,
+        });
 
         // Assert - origin failure returns 403
         expect(isAuthError(result)).toBe(true);
@@ -591,12 +654,15 @@ describe('Auth Middleware', () => {
           headers: {
             Cookie: 'session=ps_sess_valid',
             'X-CSRF-Token': 'valid-csrf-token',
-            Origin: 'http://localhost' } });
+            Origin: 'http://localhost',
+          },
+        });
 
         // Act
         const result = await authenticateRequestWithOptions(request, {
           allow: ['session'],
-          requireCSRF: true });
+          requireCSRF: true,
+        });
 
         // Assert - authentication passes
         expect(isAuthError(result)).toBe(false);
@@ -619,20 +685,25 @@ describe('Auth Middleware', () => {
             id: 'test-user-id',
             role: 'user',
             tokenVersion: 0,
-            adminRoleVersion: 0 },
-          driveScopes: [] };
+            adminRoleVersion: 0,
+          },
+          driveScopes: [],
+        };
         vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
           headers: {
-            Authorization: 'Bearer mcp_valid-token' } });
+            Authorization: 'Bearer mcp_valid-token',
+          },
+        });
 
         // Act
         await authenticateRequestWithOptions(request, {
           allow: ['mcp', 'session'],
           requireCSRF: true,
-          requireOriginValidation: true });
+          requireOriginValidation: true,
+        });
 
         // Assert - origin validation not called for MCP token auth
         expect(validateOrigin).not.toHaveBeenCalled();
@@ -647,7 +718,9 @@ describe('Auth Middleware', () => {
           method: 'POST',
           headers: {
             Cookie: 'session=ps_sess_valid',
-            'X-CSRF-Token': 'valid-csrf-token' } });
+            'X-CSRF-Token': 'valid-csrf-token',
+          },
+        });
 
         // Act
         await authenticateRequestWithOptions(request, {
@@ -673,7 +746,9 @@ describe('Auth Middleware', () => {
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Cookie: 'session=ps_sess_valid' } });
+          Cookie: 'session=ps_sess_valid',
+        },
+      });
 
       // Act
       const result = await authenticateHybridRequest(request);
@@ -694,14 +769,18 @@ describe('Auth Middleware', () => {
           id: 'test-user-id',
           role: 'user',
           tokenVersion: 0,
-          adminRoleVersion: 0 },
-        driveScopes: [] };
+          adminRoleVersion: 0,
+        },
+        driveScopes: [],
+      };
       vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
         headers: {
-          Authorization: 'Bearer mcp_valid-token' } });
+          Authorization: 'Bearer mcp_valid-token',
+        },
+      });
 
       // Act
       const result = await authenticateHybridRequest(request);
@@ -720,7 +799,8 @@ describe('Auth Middleware', () => {
     describe('isAuthError', () => {
       it('returns true for error result', () => {
         const errorResult = {
-          error: Response.json({ error: 'Test' }, { status: 401 }) } as unknown as import('@/lib/auth').AuthError;
+          error: Response.json({ error: 'Test' }, { status: 401 }),
+        } as unknown as import('@/lib/auth').AuthError;
         expect(isAuthError(errorResult)).toBe(true);
       });
 
@@ -731,7 +811,8 @@ describe('Auth Middleware', () => {
           tokenVersion: 0,
           adminRoleVersion: 0,
           tokenType: 'session' as const,
-          sessionId: 'test-session-id' };
+          sessionId: 'test-session-id',
+        };
         expect(isAuthError(successResult)).toBe(false);
       });
     });
@@ -745,7 +826,8 @@ describe('Auth Middleware', () => {
           adminRoleVersion: 0,
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
-          allowedDriveIds: [] };
+          allowedDriveIds: [],
+        };
         expect(isMCPAuthResult(mcpResult)).toBe(true);
       });
 
@@ -756,7 +838,8 @@ describe('Auth Middleware', () => {
           tokenVersion: 0,
           adminRoleVersion: 0,
           tokenType: 'session' as const,
-          sessionId: 'test-session-id' };
+          sessionId: 'test-session-id',
+        };
         expect(isMCPAuthResult(sessionResult)).toBe(false);
       });
     });
@@ -769,7 +852,8 @@ describe('Auth Middleware', () => {
           tokenVersion: 0,
           adminRoleVersion: 0,
           tokenType: 'session' as const,
-          sessionId: 'test-session-id' };
+          sessionId: 'test-session-id',
+        };
         expect(isSessionAuthResult(sessionResult)).toBe(true);
       });
 
@@ -781,7 +865,8 @@ describe('Auth Middleware', () => {
           adminRoleVersion: 0,
           tokenType: 'mcp' as const,
           tokenId: 'token-id',
-          allowedDriveIds: [] };
+          allowedDriveIds: [],
+        };
         expect(isSessionAuthResult(mcpResult)).toBe(false);
       });
     });

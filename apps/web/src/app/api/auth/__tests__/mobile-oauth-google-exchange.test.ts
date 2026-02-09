@@ -17,19 +17,24 @@ import { POST } from '../mobile/oauth/google/exchange/route';
 vi.mock('@pagespace/lib/server', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token' }),
+    deviceToken: 'mock-device-token',
+  }),
   verifyOAuthIdToken: vi.fn(),
   createOrLinkOAuthUser: vi.fn(),
   OAuthProvider: {
     GOOGLE: 'google',
-    APPLE: 'apple' },
+    APPLE: 'apple',
+  },
   loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
@@ -41,35 +46,45 @@ vi.mock('@pagespace/lib/auth', () => ({
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) }) } }));
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
-    retryAfter: undefined }),
+    retryAfter: undefined,
+  }),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
     REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
-    OAUTH_VERIFY: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false } } }));
+    OAUTH_VERIFY: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn().mockReturnValue('192.168.1.1') }));
+  getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
+}));
 
 import {
   verifyOAuthIdToken,
   createOrLinkOAuthUser,
   validateOrCreateDeviceToken,
-  logAuthEvent } from '@pagespace/lib/server';
+  logAuthEvent,
+} from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
-  DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { sessionService } from '@pagespace/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
@@ -80,7 +95,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     email: 'oauth@example.com',
     emailVerified: true,
     name: 'OAuth User',
-    picture: 'https://example.com/avatar.png' };
+    picture: 'https://example.com/avatar.png',
+  };
 
   const mockUser = {
     id: 'ofh0haxfpzowht3oi213oau1',
@@ -89,14 +105,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     image: 'https://example.com/avatar.png',
     tokenVersion: 0,
     role: 'user' as const,
-    provider: 'google' };
+    provider: 'google',
+  };
 
   const validExchangePayload = {
     idToken: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.valid-google-id-token',
     deviceId: 'ios-device-789',
     platform: 'ios' as const,
     deviceName: 'iPhone 15 Pro Max',
-    appVersion: '1.0.0' };
+    appVersion: '1.0.0',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,14 +123,17 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({
       allowed: true,
       attemptsRemaining: 4,
-      retryAfter: undefined });
+      retryAfter: undefined,
+    });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
     vi.mocked(verifyOAuthIdToken).mockResolvedValue({
       success: true,
-      userInfo: mockUserInfo });
+      userInfo: mockUserInfo,
+    });
     vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser);
     vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
-      deviceToken: 'mock-device-token' });
+      deviceToken: 'mock-device-token',
+    });
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_oauth-token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'sfh0haxfpzowht3oi213oas1',
@@ -121,7 +142,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) });
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    });
   });
 
   describe('successful OAuth exchange', () => {
@@ -129,7 +151,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -148,7 +171,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -162,7 +186,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -173,7 +198,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -182,7 +208,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
           userId: mockUser.id,
           deviceId: 'ios-device-789',
           platform: 'ios',
-          deviceName: 'iPhone 15 Pro Max' })
+          deviceName: 'iPhone 15 Pro Max',
+        })
       );
     });
 
@@ -190,7 +217,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -207,7 +235,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -217,7 +246,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         expect.objectContaining({
           provider: 'google',
           platform: 'ios',
-          appVersion: '1.0.0' })
+          appVersion: '1.0.0',
+        })
       );
     });
 
@@ -225,7 +255,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -246,7 +277,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validExchangePayload, platform: 'ios' }) });
+        body: JSON.stringify({ ...validExchangePayload, platform: 'ios' }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -256,7 +288,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validExchangePayload, platform: 'android' }) });
+        body: JSON.stringify({ ...validExchangePayload, platform: 'android' }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -266,7 +299,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validExchangePayload, platform: 'desktop' }) });
+        body: JSON.stringify({ ...validExchangePayload, platform: 'desktop' }),
+      });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
@@ -278,13 +312,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           idToken: validExchangePayload.idToken,
-          deviceId: validExchangePayload.deviceId }) });
+          deviceId: validExchangePayload.deviceId,
+        }),
+      });
 
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          platform: 'ios' })
+          platform: 'ios',
+        })
       );
     });
   });
@@ -293,12 +330,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     it('returns 401 for invalid ID token', async () => {
       vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
-        error: 'Invalid token signature' });
+        error: 'Invalid token signature',
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -310,12 +349,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     it('returns 401 for expired ID token', async () => {
       vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
-        error: 'Token expired' });
+        error: 'Token expired',
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -327,12 +368,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     it('returns 401 for wrong audience in ID token', async () => {
       vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
-        error: 'Invalid audience' });
+        error: 'Invalid audience',
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -344,12 +387,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     it('tracks failed OAuth attempt on verification failure', async () => {
       vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
-        error: 'Verification failed' });
+        error: 'Verification failed',
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -358,7 +403,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         'failed_oauth',
         expect.objectContaining({
           provider: 'google',
-          reason: 'Verification failed' })
+          reason: 'Verification failed',
+        })
       );
     });
   });
@@ -370,7 +416,9 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           deviceId: 'device-123',
-          platform: 'ios' }) });
+          platform: 'ios',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -385,7 +433,9 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           idToken: 'some-token',
-          platform: 'ios' }) });
+          platform: 'ios',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -400,7 +450,9 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validExchangePayload,
-          platform: 'windows' }) });
+          platform: 'windows',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -415,7 +467,9 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validExchangePayload,
-          idToken: '' }) });
+          idToken: '',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -434,7 +488,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -452,7 +507,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -470,7 +526,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -483,12 +540,14 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 900,
-        attemptsRemaining: 0 });
+        attemptsRemaining: 0,
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
 
@@ -500,7 +559,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -524,7 +584,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -532,7 +593,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         expect.objectContaining({
           userId: mockUser.id,
           expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-oauth-google' })
+          createdByService: 'mobile-oauth-google',
+        })
       );
     });
 
@@ -542,7 +604,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -559,7 +622,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -574,7 +638,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -583,7 +648,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         'failed_oauth',
         expect.objectContaining({
           provider: 'google',
-          error: 'Unexpected' })
+          error: 'Unexpected',
+        })
       );
     });
 
@@ -593,7 +659,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
 
@@ -608,7 +675,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
@@ -628,13 +696,16 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validExchangePayload,
-          deviceToken: existingDeviceToken }) });
+          deviceToken: existingDeviceToken,
+        }),
+      });
 
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          providedDeviceToken: existingDeviceToken })
+          providedDeviceToken: existingDeviceToken,
+        })
       );
     });
 
@@ -642,13 +713,15 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          providedDeviceToken: undefined })
+          providedDeviceToken: undefined,
+        })
       );
     });
   });
@@ -658,7 +731,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -670,7 +744,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -682,7 +757,8 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validExchangePayload) });
+        body: JSON.stringify(validExchangePayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();

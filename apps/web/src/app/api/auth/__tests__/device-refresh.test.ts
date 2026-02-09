@@ -8,17 +8,26 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } },
+        findFirst: vi.fn(),
+      },
+    },
     insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined) }),
+      values: vi.fn().mockResolvedValue(undefined),
+    }),
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'device-token-id', deviceId: 'device-123' }]) }) }) }) },
-  eq: vi.fn((field, value) => ({ field, value })) }));
+          returning: vi.fn().mockResolvedValue([{ id: 'device-token-id', deviceId: 'device-123' }]),
+        }),
+      }),
+    }),
+  },
+  eq: vi.fn((field, value) => ({ field, value })),
+}));
 
 vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
-  atomicDeviceTokenRotation: vi.fn() }));
+  atomicDeviceTokenRotation: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   validateDeviceToken: vi.fn(),
@@ -31,17 +40,23 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn().mockReturnValue('mock-cuid') }));
+  createId: vi.fn().mockReturnValue('mock-cuid'),
+}));
 
 vi.mock('cookie', () => ({
-  serialize: vi.fn().mockReturnValue('mock-cookie') }));
+  serialize: vi.fn().mockReturnValue('mock-cookie'),
+}));
 
 vi.mock('@pagespace/lib/auth', () => ({
   hashToken: vi.fn().mockReturnValue('mock-token-hash'),
@@ -55,11 +70,15 @@ vi.mock('@pagespace/lib/auth', () => ({
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) }) } }));
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
-  appendSessionCookie: vi.fn() }));
+  appendSessionCookie: vi.fn(),
+}));
 
 import { db } from '@pagespace/db';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
@@ -67,7 +86,8 @@ import {
   validateDeviceToken,
   updateDeviceTokenActivity,
   logAuthEvent,
-  loggers } from '@pagespace/lib/server';
+  loggers,
+} from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth';
@@ -78,7 +98,8 @@ describe('/api/auth/device/refresh', () => {
     email: 'test@example.com',
     name: 'Test User',
     tokenVersion: 0,
-    role: 'user' as const };
+    role: 'user' as const,
+  };
 
   const mockDeviceRecord = {
     id: 'device-token-record-id',
@@ -94,7 +115,8 @@ describe('/api/auth/device/refresh', () => {
     deviceToken: 'valid-device-token',
     deviceId: 'device-123',
     userAgent: 'TestApp/1.0',
-    appVersion: '1.0.0' };
+    appVersion: '1.0.0',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -112,7 +134,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -134,7 +157,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -153,7 +177,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       await POST(request);
@@ -163,7 +188,8 @@ describe('/api/auth/device/refresh', () => {
         expect.objectContaining({
           userId: mockUser.id,
           type: 'user',
-          scopes: ['*'] })
+          scopes: ['*'],
+        })
       );
     });
 
@@ -173,8 +199,10 @@ describe('/api/auth/device/refresh', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       await POST(request);
@@ -192,8 +220,10 @@ describe('/api/auth/device/refresh', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       await POST(request);
@@ -211,7 +241,8 @@ describe('/api/auth/device/refresh', () => {
         'refresh',
         expect.objectContaining({
           platform: 'desktop',
-          appVersion: '1.0.0' })
+          appVersion: '1.0.0',
+        })
       );
     });
   });
@@ -221,17 +252,20 @@ describe('/api/auth/device/refresh', () => {
       // Arrange - token expires in 30 days (within 60-day rotation window)
       const nearExpiryRecord = {
         ...mockDeviceRecord,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) };
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      };
       vi.mocked(validateDeviceToken).mockResolvedValue(nearExpiryRecord);
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: true,
         newToken: 'ps_dev_rotated_token', // Opaque format
-        deviceTokenId: 'new-device-token-record-id' });
+        deviceTokenId: 'new-device-token-record-id',
+      });
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -246,13 +280,15 @@ describe('/api/auth/device/refresh', () => {
       // Arrange - token expires in 80 days (outside 60-day rotation window)
       const farExpiryRecord = {
         ...mockDeviceRecord,
-        expiresAt: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000) };
+        expiresAt: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+      };
       vi.mocked(validateDeviceToken).mockResolvedValue(farExpiryRecord);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       await POST(request);
@@ -270,7 +306,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -288,7 +325,9 @@ describe('/api/auth/device/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validPayload,
-          deviceId: 'different-device-456' }) });
+          deviceId: 'different-device-456',
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -309,7 +348,9 @@ describe('/api/auth/device/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validPayload,
-          deviceId: 'new-device-id' }) });
+          deviceId: 'new-device-id',
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -329,7 +370,9 @@ describe('/api/auth/device/refresh', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validPayload,
-          deviceId: 'stolen-device-999' }) });
+          deviceId: 'stolen-device-999',
+        }),
+      });
 
       // Act
       await POST(request);
@@ -339,7 +382,8 @@ describe('/api/auth/device/refresh', () => {
         'Device token mismatch detected - possible stolen token',
         expect.objectContaining({
           tokenDeviceId: 'device-123',
-          providedDeviceId: 'stolen-device-999' })
+          providedDeviceId: 'stolen-device-999',
+        })
       );
     });
   });
@@ -350,7 +394,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId: 'device-123' }) });
+        body: JSON.stringify({ deviceId: 'device-123' }),
+      });
 
       // Act
       const response = await POST(request);
@@ -366,7 +411,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceToken: 'valid-token' }) });
+        body: JSON.stringify({ deviceToken: 'valid-token' }),
+      });
 
       // Act
       const response = await POST(request);
@@ -386,7 +432,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -406,7 +453,8 @@ describe('/api/auth/device/refresh', () => {
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validPayload) });
+        body: JSON.stringify(validPayload),
+      });
 
       // Act
       const response = await POST(request);

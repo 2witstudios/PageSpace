@@ -22,32 +22,45 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } },
+        findFirst: vi.fn(),
+      },
+    },
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([]) }) }) },
-  eq: vi.fn((field: string, value: string) => ({ field, value })) }));
+        returning: vi.fn().mockResolvedValue([]),
+      }),
+    }),
+  },
+  eq: vi.fn((field: string, value: string) => ({ field, value })),
+}));
 
 vi.mock('bcryptjs', () => ({
   default: {
-    hash: vi.fn().mockResolvedValue('$2a$12$hashedpassword') } }));
+    hash: vi.fn().mockResolvedValue('$2a$12$hashedpassword'),
+  },
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'pfh0haxfpzowht3oi213cqos') }));
+  createId: vi.fn(() => 'pfh0haxfpzowht3oi213cqos'),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   slugify: vi.fn((name: string) => name.toLowerCase().replace(/\s+/g, '-')),
   createNotification: vi.fn().mockResolvedValue(undefined),
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token' }),
+    deviceToken: 'mock-device-token',
+  }),
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
@@ -59,46 +72,60 @@ vi.mock('@pagespace/lib/auth', () => ({
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) }) },
-  BCRYPT_COST: 12 }));
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
+  BCRYPT_COST: 12,
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 2,
-    retryAfter: undefined }),
+    retryAfter: undefined,
+  }),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
-    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false } } }));
+    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
+  },
+}));
 
 vi.mock('@pagespace/lib/verification-utils', () => ({
-  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token') }));
+  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
+}));
 
 vi.mock('@pagespace/lib/services/email-service', () => ({
-  sendEmail: vi.fn().mockResolvedValue(undefined) }));
+  sendEmail: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
-  VerificationEmail: vi.fn() }));
+  VerificationEmail: vi.fn(),
+}));
 
 vi.mock('@/lib/onboarding/drive-setup', () => ({
-  populateUserDrive: vi.fn().mockResolvedValue(undefined) }));
+  populateUserDrive: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn().mockReturnValue('192.168.1.1') }));
+  getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
+}));
 
 import { db, drives, userAiSettings } from '@pagespace/db';
 import {
   validateOrCreateDeviceToken,
   logAuthEvent,
-  createNotification } from '@pagespace/lib/server';
+  createNotification,
+} from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
-  resetDistributedRateLimit } from '@pagespace/lib/security';
+  resetDistributedRateLimit,
+} from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
@@ -113,13 +140,15 @@ describe('/api/auth/mobile/signup', () => {
     tokenVersion: 0,
     role: 'user' as const,
     storageUsedBytes: 0,
-    subscriptionTier: 'free' };
+    subscriptionTier: 'free',
+  };
 
   const mockDrive = {
     id: 'mfh0haxfpzowht3oi213cqdr',
     name: 'Getting Started',
     slug: 'getting-started',
-    ownerId: 'pfh0haxfpzowht3oi213cqos' };
+    ownerId: 'pfh0haxfpzowht3oi213cqos',
+  };
 
   const validSignupPayload = {
     name: 'New User',
@@ -129,7 +158,8 @@ describe('/api/auth/mobile/signup', () => {
     deviceId: 'ios-device-456',
     platform: 'ios' as const,
     deviceName: 'iPhone 15 Pro',
-    appVersion: '1.0.0' };
+    appVersion: '1.0.0',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -138,7 +168,9 @@ describe('/api/auth/mobile/signup', () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null); // No existing user
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([mockNewUser]) }) });
+        returning: vi.fn().mockResolvedValue([mockNewUser]),
+      }),
+    });
   });
 
   describe('successful mobile signup', () => {
@@ -153,12 +185,15 @@ describe('/api/auth/mobile/signup', () => {
               return Promise.resolve([mockNewUser]);
             }
             return Promise.resolve([mockDrive]);
-          }) }) }));
+          }),
+        }),
+      }));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -175,7 +210,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -187,7 +223,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -196,7 +233,8 @@ describe('/api/auth/mobile/signup', () => {
           userId: 'pfh0haxfpzowht3oi213cqos',
           deviceId: 'ios-device-456',
           platform: 'ios',
-          deviceName: 'iPhone 15 Pro' })
+          deviceName: 'iPhone 15 Pro',
+        })
       );
     });
 
@@ -204,7 +242,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -216,7 +255,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -224,7 +264,8 @@ describe('/api/auth/mobile/signup', () => {
       expect(sendEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           to: validSignupPayload.email,
-          subject: 'Verify your PageSpace email' })
+          subject: 'Verify your PageSpace email',
+        })
       );
     });
 
@@ -232,14 +273,16 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
       expect(createNotification).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'pfh0haxfpzowht3oi213cqos',
-          type: 'EMAIL_VERIFICATION_REQUIRED' })
+          type: 'EMAIL_VERIFICATION_REQUIRED',
+        })
       );
     });
 
@@ -248,8 +291,10 @@ describe('/api/auth/mobile/signup', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validSignupPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -263,7 +308,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -279,7 +325,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -289,7 +336,8 @@ describe('/api/auth/mobile/signup', () => {
         expect.objectContaining({
           platform: 'ios',
           appVersion: '1.0.0',
-          email: validSignupPayload.email })
+          email: validSignupPayload.email,
+        })
       );
     });
   });
@@ -299,7 +347,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validSignupPayload, platform: 'ios' }) });
+        body: JSON.stringify({ ...validSignupPayload, platform: 'ios' }),
+      });
 
       const response = await POST(request);
 
@@ -310,7 +359,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validSignupPayload, platform: 'android' }) });
+        body: JSON.stringify({ ...validSignupPayload, platform: 'android' }),
+      });
 
       const response = await POST(request);
 
@@ -321,7 +371,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validSignupPayload, platform: 'desktop' }) });
+        body: JSON.stringify({ ...validSignupPayload, platform: 'desktop' }),
+      });
 
       const response = await POST(request);
 
@@ -334,18 +385,21 @@ describe('/api/auth/mobile/signup', () => {
         email: 'test@example.com',
         password: 'ValidPassword123',
         confirmPassword: 'ValidPassword123',
-        deviceId: 'device-123' };
+        deviceId: 'device-123',
+      };
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadWithoutPlatform) });
+        body: JSON.stringify(payloadWithoutPlatform),
+      });
 
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          platform: 'ios' })
+          platform: 'ios',
+        })
       );
     });
   });
@@ -358,7 +412,9 @@ describe('/api/auth/mobile/signup', () => {
         body: JSON.stringify({
           ...validSignupPayload,
           password: 'Short1A',
-          confirmPassword: 'Short1A' }) });
+          confirmPassword: 'Short1A',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -374,7 +430,9 @@ describe('/api/auth/mobile/signup', () => {
         body: JSON.stringify({
           ...validSignupPayload,
           password: 'nouppercase123',
-          confirmPassword: 'nouppercase123' }) });
+          confirmPassword: 'nouppercase123',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -390,7 +448,9 @@ describe('/api/auth/mobile/signup', () => {
         body: JSON.stringify({
           ...validSignupPayload,
           password: 'NOLOWERCASE123',
-          confirmPassword: 'NOLOWERCASE123' }) });
+          confirmPassword: 'NOLOWERCASE123',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -406,7 +466,9 @@ describe('/api/auth/mobile/signup', () => {
         body: JSON.stringify({
           ...validSignupPayload,
           password: 'NoNumbersHere',
-          confirmPassword: 'NoNumbersHere' }) });
+          confirmPassword: 'NoNumbersHere',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -422,7 +484,9 @@ describe('/api/auth/mobile/signup', () => {
         body: JSON.stringify({
           ...validSignupPayload,
           password: 'ValidPassword123',
-          confirmPassword: 'DifferentPassword123' }) });
+          confirmPassword: 'DifferentPassword123',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -441,7 +505,9 @@ describe('/api/auth/mobile/signup', () => {
           email: 'test@example.com',
           password: 'ValidPassword123',
           confirmPassword: 'ValidPassword123',
-          deviceId: 'device-123' }) });
+          deviceId: 'device-123',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -456,7 +522,9 @@ describe('/api/auth/mobile/signup', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validSignupPayload,
-          email: 'not-an-email' }) });
+          email: 'not-an-email',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -473,7 +541,9 @@ describe('/api/auth/mobile/signup', () => {
           name: 'Test User',
           email: 'test@example.com',
           password: 'ValidPassword123',
-          confirmPassword: 'ValidPassword123' }) });
+          confirmPassword: 'ValidPassword123',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -488,7 +558,9 @@ describe('/api/auth/mobile/signup', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validSignupPayload,
-          platform: 'windows' }) });
+          platform: 'windows',
+        }),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -502,12 +574,14 @@ describe('/api/auth/mobile/signup', () => {
     it('returns 409 when email already exists', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user',
-        email: validSignupPayload.email });
+        email: validSignupPayload.email,
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -519,12 +593,14 @@ describe('/api/auth/mobile/signup', () => {
     it('logs failed signup for existing email', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user',
-        email: validSignupPayload.email });
+        email: validSignupPayload.email,
+      });
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -547,7 +623,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -565,7 +642,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -582,7 +660,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
 
@@ -598,7 +677,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -613,7 +693,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
 
@@ -627,7 +708,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       const response = await POST(request);
 
@@ -641,7 +723,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 
@@ -649,7 +732,8 @@ describe('/api/auth/mobile/signup', () => {
       expect(sessionService.createSession).toHaveBeenCalledWith(
         expect.objectContaining({
           expiresInMs: 90 * 24 * 60 * 60 * 1000,
-          createdByService: 'mobile-signup' })
+          createdByService: 'mobile-signup',
+        })
       );
     });
   });
@@ -659,7 +743,8 @@ describe('/api/auth/mobile/signup', () => {
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validSignupPayload) });
+        body: JSON.stringify(validSignupPayload),
+      });
 
       await POST(request);
 

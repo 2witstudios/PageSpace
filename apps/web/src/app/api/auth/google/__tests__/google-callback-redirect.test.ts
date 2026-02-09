@@ -13,26 +13,36 @@ vi.mock('google-auth-library', () => ({
     getToken: vi.fn().mockResolvedValue({
       tokens: {
         id_token: 'valid-id-token',
-        access_token: 'access-token' } }),
+        access_token: 'access-token',
+      },
+    }),
     verifyIdToken: vi.fn().mockResolvedValue({
       getPayload: () => ({
         sub: 'google-id-123',
         email: 'test@example.com',
         name: 'Test User',
         picture: 'https://example.com/avatar.png',
-        email_verified: true }) }) })) }));
+        email_verified: true,
+      }),
+    }),
+  })),
+}));
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } },
+        findFirst: vi.fn(),
+      },
+    },
     insert: vi.fn(),
-    update: vi.fn() },
+    update: vi.fn(),
+  },
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
   or: vi.fn((...conditions: unknown[]) => conditions),
-  and: vi.fn((...conditions: unknown[]) => conditions) }));
+  and: vi.fn((...conditions: unknown[]) => conditions),
+}));
 
 // Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
@@ -44,17 +54,21 @@ vi.mock('@pagespace/lib/auth', () => ({
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'] }),
+      scopes: ['*'],
+    }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    revokeSession: vi.fn().mockResolvedValue(undefined) },
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000 }));
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
-  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token') }));
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -62,8 +76,11 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
@@ -73,16 +90,22 @@ vi.mock('@pagespace/lib/security', () => ({
       maxAttempts: 5,
       windowMs: 900000,
       blockDurationMs: 900000,
-      progressiveDelay: true } } }));
+      progressiveDelay: true,
+    },
+  },
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock-id') }));
+  createId: vi.fn(() => 'mock-id'),
+}));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn() }));
+  provisionGettingStartedDriveIfNeeded: vi.fn(),
+}));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
@@ -100,7 +123,8 @@ vi.mock('@/lib/auth', () => ({
       return false;
     }
     return true;
-  } }));
+  },
+}));
 
 vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
@@ -110,7 +134,11 @@ vi.mock('crypto', async () => {
       ...(actual as object),
       createHmac: vi.fn().mockReturnValue({
         update: vi.fn().mockReturnValue({
-          digest: vi.fn().mockReturnValue('valid-signature') }) }) } };
+          digest: vi.fn().mockReturnValue('valid-signature'),
+        }),
+      }),
+    },
+  };
 });
 
 import { db } from '@pagespace/db';
@@ -128,7 +156,8 @@ const mockExistingUser = {
   tokenVersion: 1,
   role: 'user',
   provider: 'google',
-  password: null };
+  password: null,
+};
 
 const createCallbackRequest = (params: Record<string, string>) => {
   const url = new URL('http://localhost/api/auth/google/callback');
@@ -136,13 +165,15 @@ const createCallbackRequest = (params: Record<string, string>) => {
     url.searchParams.set(key, value);
   });
   return new Request(url.toString(), {
-    method: 'GET' });
+    method: 'GET',
+  });
 };
 
 const createSignedState = (data: Record<string, unknown>) => {
   const stateData = {
     data,
-    sig: 'valid-signature' };
+    sig: 'valid-signature',
+  };
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
@@ -168,11 +199,15 @@ describe('GET /api/auth/google/callback', () => {
 
     vi.mocked(db.insert).mockImplementation(() => ({
       values: vi.fn(() => ({
-        returning: vi.fn(() => Promise.resolve([mockExistingUser])) })) }));
+        returning: vi.fn(() => Promise.resolve([mockExistingUser])),
+      })),
+    }));
 
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined) }) });
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
   });
 
   afterEach(() => {
@@ -183,11 +218,13 @@ describe('GET /api/auth/google/callback', () => {
     it('given successful OAuth, should create session and redirect with CSRF token', async () => {
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '/dashboard' });
+        returnUrl: '/dashboard',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 
@@ -196,7 +233,8 @@ describe('GET /api/auth/google/callback', () => {
         expect.objectContaining({
           userId: mockExistingUser.id,
           type: 'user',
-          scopes: ['*'] })
+          scopes: ['*'],
+        })
       );
 
       // Verify session cookie is set
@@ -214,11 +252,13 @@ describe('GET /api/auth/google/callback', () => {
     it('should revoke existing sessions on login (session fixation prevention)', async () => {
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '/dashboard' });
+        returnUrl: '/dashboard',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       await GET(request);
 
@@ -230,15 +270,18 @@ describe('GET /api/auth/google/callback', () => {
 
     it('given provisioned drive, should redirect to that drive', async () => {
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
-        driveId: 'new-drive-123' });
+        driveId: 'new-drive-123',
+      });
 
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '/dashboard' });
+        returnUrl: '/dashboard',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 
@@ -250,11 +293,13 @@ describe('GET /api/auth/google/callback', () => {
     it('given custom returnUrl, should redirect to that path', async () => {
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '/dashboard/my-drive' });
+        returnUrl: '/dashboard/my-drive',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 
@@ -268,7 +313,8 @@ describe('GET /api/auth/google/callback', () => {
   describe('error handling', () => {
     it('given OAuth error, should redirect to signin with error', async () => {
       const request = createCallbackRequest({
-        error: 'access_denied' });
+        error: 'access_denied',
+      });
 
       const response = await GET(request);
 
@@ -282,15 +328,18 @@ describe('GET /api/auth/google/callback', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         attemptsRemaining: 0,
-        retryAfter: 900 });
+        retryAfter: 900,
+      });
 
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '/dashboard' });
+        returnUrl: '/dashboard',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 

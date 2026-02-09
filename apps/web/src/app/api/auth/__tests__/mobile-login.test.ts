@@ -7,24 +7,34 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       users: {
-        findFirst: vi.fn() } } },
-  eq: vi.fn((field: string, value: string) => ({ field, value })) }));
+        findFirst: vi.fn(),
+      },
+    },
+  },
+  eq: vi.fn((field: string, value: string) => ({ field, value })),
+}));
 
 vi.mock('bcryptjs', () => ({
   default: {
-    compare: vi.fn() } }));
+    compare: vi.fn(),
+  },
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   validateOrCreateDeviceToken: vi.fn().mockResolvedValue({
-    deviceToken: 'mock-device-token' }),
+    deviceToken: 'mock-device-token',
+  }),
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   loggers: {
     auth: {
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/auth', () => ({
   sessionService: {
@@ -36,32 +46,41 @@ vi.mock('@pagespace/lib/auth', () => ({
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) }) } }));
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    }),
+  },
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 // Mock distributed rate limiting (P1-T5)
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
-    retryAfter: undefined }),
+    retryAfter: undefined,
+  }),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
-    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false } } }));
+    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
+  },
+}));
 
 import { db } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import {
   validateOrCreateDeviceToken,
-  logAuthEvent } from '@pagespace/lib/server';
+  logAuthEvent,
+} from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
-  DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
+  DISTRIBUTED_RATE_LIMITS,
+} from '@pagespace/lib/security';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 describe('/api/auth/mobile/login', () => {
@@ -72,7 +91,8 @@ describe('/api/auth/mobile/login', () => {
     image: 'https://example.com/avatar.png',
     password: '$2a$12$hashedpassword',
     tokenVersion: 0,
-    role: 'user' as const };
+    role: 'user' as const,
+  };
 
   const validLoginPayload = {
     email: 'test@example.com',
@@ -80,7 +100,8 @@ describe('/api/auth/mobile/login', () => {
     deviceId: 'ios-device-123',
     platform: 'ios' as const,
     deviceName: 'iPhone 15',
-    appVersion: '1.0.0' };
+    appVersion: '1.0.0',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -96,7 +117,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -117,7 +139,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -132,7 +155,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -143,7 +167,8 @@ describe('/api/auth/mobile/login', () => {
           userId: mockUser.id,
           deviceId: 'ios-device-123',
           platform: 'ios',
-          deviceName: 'iPhone 15' })
+          deviceName: 'iPhone 15',
+        })
       );
     });
 
@@ -153,8 +178,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -170,8 +197,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -182,7 +211,8 @@ describe('/api/auth/mobile/login', () => {
         'login',
         expect.objectContaining({
           platform: 'ios',
-          appVersion: '1.0.0' })
+          appVersion: '1.0.0',
+        })
       );
     });
   });
@@ -193,7 +223,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validLoginPayload, platform: 'ios' }) });
+        body: JSON.stringify({ ...validLoginPayload, platform: 'ios' }),
+      });
 
       // Act
       const response = await POST(request);
@@ -207,7 +238,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validLoginPayload, platform: 'android' }) });
+        body: JSON.stringify({ ...validLoginPayload, platform: 'android' }),
+      });
 
       // Act
       const response = await POST(request);
@@ -221,7 +253,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...validLoginPayload, platform: 'desktop' }) });
+        body: JSON.stringify({ ...validLoginPayload, platform: 'desktop' }),
+      });
 
       // Act
       const response = await POST(request);
@@ -235,12 +268,14 @@ describe('/api/auth/mobile/login', () => {
       const payloadWithoutPlatform = {
         email: 'test@example.com',
         password: 'validPassword123',
-        deviceId: 'device-123' };
+        deviceId: 'device-123',
+      };
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadWithoutPlatform) });
+        body: JSON.stringify(payloadWithoutPlatform),
+      });
 
       // Act
       await POST(request);
@@ -248,7 +283,8 @@ describe('/api/auth/mobile/login', () => {
       // Assert
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          platform: 'ios' })
+          platform: 'ios',
+        })
       );
     });
   });
@@ -264,7 +300,9 @@ describe('/api/auth/mobile/login', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validLoginPayload,
-          email: 'nonexistent@example.com' }) });
+          email: 'nonexistent@example.com',
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -284,7 +322,9 @@ describe('/api/auth/mobile/login', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...validLoginPayload,
-          password: 'wrongpassword' }) });
+          password: 'wrongpassword',
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -302,7 +342,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -331,8 +372,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -356,7 +399,9 @@ describe('/api/auth/mobile/login', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           password: 'somepassword',
-          deviceId: 'device-123' }) });
+          deviceId: 'device-123',
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -374,7 +419,9 @@ describe('/api/auth/mobile/login', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: 'test@example.com',
-          password: 'somepassword' }) });
+          password: 'somepassword',
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -393,7 +440,8 @@ describe('/api/auth/mobile/login', () => {
         body: JSON.stringify({
           ...validLoginPayload,
           platform: 'windows', // Invalid platform
-        }) });
+        }),
+      });
 
       // Act
       const response = await POST(request);
@@ -416,8 +464,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.1' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -438,7 +488,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -458,7 +509,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -477,8 +529,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.100' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '192.168.1.100',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -503,7 +557,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -526,7 +581,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -545,8 +601,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '192.168.1.100' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '192.168.1.100',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);
@@ -561,7 +619,8 @@ describe('/api/auth/mobile/login', () => {
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validLoginPayload) });
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       const response = await POST(request);
@@ -578,8 +637,10 @@ describe('/api/auth/mobile/login', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-forwarded-for': '10.0.0.1' },
-        body: JSON.stringify(validLoginPayload) });
+          'x-forwarded-for': '10.0.0.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
 
       // Act
       await POST(request);

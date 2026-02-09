@@ -22,21 +22,26 @@ vi.mock('@pagespace/lib/auth', () => ({
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'] }),
+      scopes: ['*'],
+    }),
     revokeSession: vi.fn().mockResolvedValue(undefined),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token') },
-  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token') }));
+    createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
+  },
+  generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
+}));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
   appendSessionCookie: vi.fn(),
-  appendClearCookies: vi.fn() }));
+  appendClearCookies: vi.fn(),
+}));
 
 // Mock client IP extraction
 vi.mock('@/lib/auth', () => ({
-  getClientIP: vi.fn().mockReturnValue('unknown') }));
+  getClientIP: vi.fn().mockReturnValue('unknown'),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -44,11 +49,15 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 import { sessionService } from '@pagespace/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
@@ -68,7 +77,8 @@ describe('/api/auth/logout', () => {
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'] });
+      scopes: ['*'],
+    });
     vi.mocked(getClientIP).mockReturnValue('unknown');
   });
 
@@ -78,7 +88,9 @@ describe('/api/auth/logout', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'session=ps_sess_mock_session_token' } });
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -92,7 +104,9 @@ describe('/api/auth/logout', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'session=ps_sess_mock_session_token' } });
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
 
       await POST(request);
 
@@ -107,7 +121,9 @@ describe('/api/auth/logout', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'session=ps_sess_mock_session_token' } });
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
 
       await POST(request);
 
@@ -122,7 +138,9 @@ describe('/api/auth/logout', () => {
         headers: {
           'Content-Type': 'application/json',
           Cookie: 'session=ps_sess_mock_session_token',
-          'x-forwarded-for': '192.168.1.1' } });
+          'x-forwarded-for': '192.168.1.1',
+        },
+      });
 
       await POST(request);
 
@@ -136,7 +154,8 @@ describe('/api/auth/logout', () => {
         'test-user-id',
         'logout',
         expect.objectContaining({
-          ip: '192.168.1.1' })
+          ip: '192.168.1.1',
+        })
       );
     });
   });
@@ -148,7 +167,9 @@ describe('/api/auth/logout', () => {
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json' } });
+          'Content-Type': 'application/json',
+        },
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -169,7 +190,9 @@ describe('/api/auth/logout', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'session=invalid_session_token' } });
+          Cookie: 'session=invalid_session_token',
+        },
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -192,7 +215,9 @@ describe('/api/auth/logout', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'session=ps_sess_mock_session_token' } });
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
 
       const response = await POST(request);
       const body = await response.json();
@@ -211,7 +236,9 @@ describe('/api/auth/logout', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: 'session=ps_sess_mock_session_token' } });
+          Cookie: 'session=ps_sess_mock_session_token',
+        },
+      });
 
       await POST(request);
 

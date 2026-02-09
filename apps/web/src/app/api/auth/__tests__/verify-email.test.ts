@@ -5,7 +5,8 @@ import { NextRequest } from 'next/server';
 // Mock dependencies
 vi.mock('@pagespace/lib/verification-utils', () => ({
   verifyToken: vi.fn(),
-  markEmailVerified: vi.fn().mockResolvedValue(undefined) }));
+  markEmailVerified: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -13,10 +14,14 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } } }));
+      debug: vi.fn(),
+    },
+  },
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 import { verifyToken, markEmailVerified } from '@pagespace/lib/verification-utils';
 import { loggers } from '@pagespace/lib/server';
@@ -78,7 +83,8 @@ describe('/api/auth/verify-email', () => {
 
       // Assert
       expect(loggers.auth.info).toHaveBeenCalledWith('Email verified', {
-        userId: 'test-user-id' });
+        userId: 'test-user-id',
+      });
     });
 
     it('tracks email_verified event', async () => {

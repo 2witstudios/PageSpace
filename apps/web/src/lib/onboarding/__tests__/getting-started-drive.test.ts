@@ -4,25 +4,31 @@ vi.mock('@pagespace/db', () => ({
   drives: { ownerId: 'ownerId', isTrashed: 'isTrashed' },
   users: { id: 'id' },
   db: {
-    transaction: vi.fn() },
+    transaction: vi.fn(),
+  },
   and: vi.fn((...conditions: unknown[]) => conditions),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
     strings,
-    values })) }));
+    values,
+  })),
+}));
 
 vi.mock('@pagespace/lib/server', () => ({
-  slugify: vi.fn() }));
+  slugify: vi.fn(),
+}));
 
 vi.mock('@/lib/onboarding/drive-setup', () => ({
-  populateUserDrive: vi.fn() }));
+  populateUserDrive: vi.fn(),
+}));
 
 import { db, drives, sql } from '@pagespace/db';
 import { slugify } from '@pagespace/lib/server';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 import {
   GETTING_STARTED_DRIVE_NAME,
-  provisionGettingStartedDriveIfNeeded } from '../getting-started-drive';
+  provisionGettingStartedDriveIfNeeded,
+} from '../getting-started-drive';
 
 describe('provisionGettingStartedDriveIfNeeded', () => {
   beforeEach(() => {
@@ -35,8 +41,11 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       execute: vi.fn().mockResolvedValue(undefined),
       query: {
         drives: {
-          findFirst: vi.fn().mockResolvedValue({ id: 'drive-existing' }) } },
-      insert: vi.fn() };
+          findFirst: vi.fn().mockResolvedValue({ id: 'drive-existing' }),
+        },
+      },
+      insert: vi.fn(),
+    };
 
     vi.mocked(db.transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
 
@@ -59,8 +68,11 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       execute: vi.fn().mockResolvedValue(undefined),
       query: {
         drives: {
-          findFirst: vi.fn().mockResolvedValue(null) } },
-      insert };
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+      },
+      insert,
+    };
 
     vi.mocked(populateUserDrive).mockResolvedValue(undefined);
     vi.mocked(db.transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));

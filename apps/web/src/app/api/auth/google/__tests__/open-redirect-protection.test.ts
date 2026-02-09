@@ -16,15 +16,20 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn() } },
-  logAuthEvent: vi.fn() }));
+      debug: vi.fn(),
+    },
+  },
+  logAuthEvent: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({ allowed: true, attemptsRemaining: 5 }),
   resetDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, blockDurationMs: 900000, progressiveDelay: true },
-    REFRESH: { maxAttempts: 10, windowMs: 60000 } } }));
+    REFRESH: { maxAttempts: 10, windowMs: 60000 },
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
@@ -42,19 +47,25 @@ vi.mock('@/lib/auth', () => ({
       return false;
     }
     return true;
-  } }));
+  },
+}));
 
 vi.mock('google-auth-library', () => ({
   OAuth2Client: vi.fn().mockImplementation(() => ({
     getToken: vi.fn().mockResolvedValue({
-      tokens: { id_token: 'valid-id-token', access_token: 'access-token' } }),
+      tokens: { id_token: 'valid-id-token', access_token: 'access-token' },
+    }),
     verifyIdToken: vi.fn().mockResolvedValue({
       getPayload: () => ({
         sub: 'google-id-123',
         email: 'test@example.com',
         name: 'Test User',
         picture: 'https://example.com/avatar.png',
-        email_verified: true }) }) })) }));
+        email_verified: true,
+      }),
+    }),
+  })),
+}));
 
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', googleId: 'googleId', email: 'email' },
@@ -69,15 +80,23 @@ vi.mock('@pagespace/db', () => ({
           tokenVersion: 1,
           role: 'user',
           provider: 'google',
-          password: null }) } },
+          password: null,
+        }),
+      },
+    },
     insert: vi.fn().mockImplementation(() => ({
-      values: vi.fn().mockResolvedValue(undefined) })),
+      values: vi.fn().mockResolvedValue(undefined),
+    })),
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined) }) }) },
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    }),
+  },
   eq: vi.fn(),
   or: vi.fn(),
-  and: vi.fn() }));
+  and: vi.fn(),
+}));
 
 // Mock session service from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
@@ -89,26 +108,33 @@ vi.mock('@pagespace/lib/auth', () => ({
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'] }),
+      scopes: ['*'],
+    }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    revokeSession: vi.fn().mockResolvedValue(undefined) },
+    revokeSession: vi.fn().mockResolvedValue(undefined),
+  },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
-  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000 }));
+  SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
+}));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
-  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token') }));
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
+}));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn() }));
+  trackAuthEvent: vi.fn(),
+}));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn().mockReturnValue('mock-id') }));
+  createId: vi.fn().mockReturnValue('mock-id'),
+}));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null) }));
+  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
+}));
 
 vi.mock('crypto', async () => {
   const actual = await vi.importActual('crypto');
@@ -118,14 +144,19 @@ vi.mock('crypto', async () => {
       ...(actual as object),
       createHmac: vi.fn().mockReturnValue({
         update: vi.fn().mockReturnValue({
-          digest: vi.fn().mockReturnValue('valid-signature') }) }) } };
+          digest: vi.fn().mockReturnValue('valid-signature'),
+        }),
+      }),
+    },
+  };
 });
 
 const createSigninRequest = (body: Record<string, unknown>) => {
   return new Request('http://localhost/api/auth/google/signin', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body) });
+    body: JSON.stringify(body),
+  });
 };
 
 const createCallbackRequest = (params: Record<string, string>) => {
@@ -166,7 +197,8 @@ describe('Open Redirect Protection', () => {
     it('given valid relative returnUrl, should accept and include in OAuth URL', async () => {
       const request = createSigninRequest({
         returnUrl: '/dashboard/my-drive',
-        platform: 'web' });
+        platform: 'web',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -179,7 +211,8 @@ describe('Open Redirect Protection', () => {
       const request = createSigninRequest({
         returnUrl: 'https://evil.com/steal',
         platform: 'web',
-        deviceId: 'device-123' });
+        deviceId: 'device-123',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -192,7 +225,8 @@ describe('Open Redirect Protection', () => {
       const request = createSigninRequest({
         returnUrl: '//evil.com/steal',
         platform: 'web',
-        deviceId: 'device-123' });
+        deviceId: 'device-123',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -205,7 +239,8 @@ describe('Open Redirect Protection', () => {
       const request = createSigninRequest({
         returnUrl: '/\\evil.com/steal',
         platform: 'web',
-        deviceId: 'device-123' });
+        deviceId: 'device-123',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -217,7 +252,8 @@ describe('Open Redirect Protection', () => {
     it('given javascript: URL, should reject with 400', async () => {
       const request = createSigninRequest({
         returnUrl: '/dashboard?next=javascript:alert(1)',
-        platform: 'web' });
+        platform: 'web',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -230,7 +266,8 @@ describe('Open Redirect Protection', () => {
       // %2f%2f = //
       const request = createSigninRequest({
         returnUrl: '/%2f%2fevil.com',
-        platform: 'web' });
+        platform: 'web',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -241,7 +278,8 @@ describe('Open Redirect Protection', () => {
 
     it('given no returnUrl, should accept (defaults to /dashboard)', async () => {
       const request = createSigninRequest({
-        platform: 'web' });
+        platform: 'web',
+      });
 
       const response = await POST(request);
       const data = await response.json();
@@ -257,11 +295,13 @@ describe('Open Redirect Protection', () => {
       const state = createSignedState({
         platform: 'web',
         deviceId: 'device-123',
-        returnUrl: 'https://evil.com/steal' });
+        returnUrl: 'https://evil.com/steal',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 
@@ -277,11 +317,13 @@ describe('Open Redirect Protection', () => {
     it('given safe returnUrl in state, should redirect to that path with CSRF token', async () => {
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '/dashboard/my-drive' });
+        returnUrl: '/dashboard/my-drive',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 
@@ -295,11 +337,13 @@ describe('Open Redirect Protection', () => {
     it('given protocol-relative URL in legacy state, should redirect to /dashboard', async () => {
       const state = createSignedState({
         platform: 'web',
-        returnUrl: '//evil.com/steal' });
+        returnUrl: '//evil.com/steal',
+      });
 
       const request = createCallbackRequest({
         code: 'valid-auth-code',
-        state });
+        state,
+      });
 
       const response = await GET(request);
 
