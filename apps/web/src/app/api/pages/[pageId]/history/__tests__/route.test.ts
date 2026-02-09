@@ -8,7 +8,7 @@
  * - Success: 200 with versions, pagination, and retention info
  * - Retention: Applies tier-based retention limits
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
@@ -16,24 +16,20 @@ import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
 // Mock service boundary
 vi.mock('../../../../../../services/api', () => ({
   getPageVersionHistory: vi.fn(),
-  getUserRetentionDays: vi.fn(),
-}));
+  getUserRetentionDays: vi.fn() }));
 
 // Mock auth
 vi.mock('../../../../../../lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
-}));
+  isAuthError: vi.fn((result) => 'error' in result) }));
 
 // Mock permissions
 vi.mock('@pagespace/lib', () => ({
-  canUserViewPage: vi.fn(),
-}));
+  canUserViewPage: vi.fn() }));
 
 // Mock the permission helper from lib/permissions
 vi.mock('@pagespace/lib/permissions', () => ({
-  isActivityEligibleForRollback: vi.fn(),
-}));
+  isActivityEligibleForRollback: vi.fn() }));
 
 import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../services/api';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
@@ -50,12 +46,10 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0,
-});
+  adminRoleVersion: 0 });
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
 
 const createRequest = (queryParams: Record<string, string> = {}) => {
   const url = new URL(`https://example.com/api/pages/${mockPageId}/history`);
@@ -83,8 +77,7 @@ const createMockActivity = (overrides = {}) => ({
   previousValues: { title: 'Old' },
   newValues: { title: 'New' },
   contentSnapshot: null,
-  ...overrides,
-});
+  ...overrides });
 
 describe('GET /api/pages/[pageId]/history', () => {
   beforeEach(() => {
@@ -92,14 +85,13 @@ describe('GET /api/pages/[pageId]/history', () => {
     // Use fake timers to ensure deterministic date comparisons in retention tests
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-06-15T12:00:00Z'));
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (canUserViewPage as Mock).mockResolvedValue(true);
-    (getUserRetentionDays as Mock).mockResolvedValue(30);
-    (getPageVersionHistory as Mock).mockResolvedValue({
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(getUserRetentionDays).mockResolvedValue(30);
+    vi.mocked(getPageVersionHistory).mockResolvedValue({
       activities: [],
-      total: 0,
-    });
-    (isActivityEligibleForRollback as Mock).mockReturnValue(true);
+      total: 0 });
+    vi.mocked(isActivityEligibleForRollback).mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -112,7 +104,7 @@ describe('GET /api/pages/[pageId]/history', () => {
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -127,8 +119,7 @@ describe('GET /api/pages/[pageId]/history', () => {
         expect.any(Request),
         expect.objectContaining({
           allow: ['session', 'mcp'],
-          requireCSRF: false,
-        })
+          requireCSRF: false })
       );
     });
   });
@@ -139,7 +130,7 @@ describe('GET /api/pages/[pageId]/history', () => {
 
   describe('authorization', () => {
     it('returns 403 when user cannot view page', async () => {
-      (canUserViewPage as Mock).mockResolvedValue(false);
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -155,10 +146,9 @@ describe('GET /api/pages/[pageId]/history', () => {
 
   describe('query parameters', () => {
     it('uses default limit of 50', async () => {
-      (getPageVersionHistory as Mock).mockResolvedValue({
+      vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [],
-        total: 0,
-      });
+        total: 0 });
 
       await GET(createRequest(), { params: mockParams });
 
@@ -205,8 +195,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       await GET(
         createRequest({
           startDate: '2024-01-01',
-          endDate: '2024-12-31',
-        }),
+          endDate: '2024-12-31' }),
         { params: mockParams }
       );
 
@@ -215,8 +204,7 @@ describe('GET /api/pages/[pageId]/history', () => {
         mockUserId,
         expect.objectContaining({
           startDate: expect.any(Date),
-          endDate: expect.any(Date),
-        })
+          endDate: expect.any(Date) })
       );
     });
 
@@ -257,12 +245,12 @@ describe('GET /api/pages/[pageId]/history', () => {
 
   describe('retention', () => {
     it('applies retention limit to startDate for free tier (7 days)', async () => {
-      (getUserRetentionDays as Mock).mockResolvedValue(7);
+      vi.mocked(getUserRetentionDays).mockResolvedValue(7);
 
       await GET(createRequest(), { params: mockParams });
 
       // Should have called with a startDate approximately 7 days ago
-      const call = (getPageVersionHistory as Mock).mock.calls[0];
+      const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2];
 
       expect(options.startDate).toBeDefined();
@@ -273,11 +261,11 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('applies retention limit to startDate for pro tier (30 days)', async () => {
-      (getUserRetentionDays as Mock).mockResolvedValue(30);
+      vi.mocked(getUserRetentionDays).mockResolvedValue(30);
 
       await GET(createRequest(), { params: mockParams });
 
-      const call = (getPageVersionHistory as Mock).mock.calls[0];
+      const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2];
 
       expect(options.startDate).toBeDefined();
@@ -288,11 +276,11 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('does not limit startDate for unlimited tier (-1)', async () => {
-      (getUserRetentionDays as Mock).mockResolvedValue(-1);
+      vi.mocked(getUserRetentionDays).mockResolvedValue(-1);
 
       await GET(createRequest(), { params: mockParams });
 
-      const call = (getPageVersionHistory as Mock).mock.calls[0];
+      const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2];
 
       // Should not have an effective start date when unlimited
@@ -300,7 +288,7 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('respects user-provided startDate if within retention', async () => {
-      (getUserRetentionDays as Mock).mockResolvedValue(30);
+      vi.mocked(getUserRetentionDays).mockResolvedValue(30);
 
       // Request history from 10 days ago (within 30 day retention)
       const tenDaysAgo = new Date();
@@ -311,7 +299,7 @@ describe('GET /api/pages/[pageId]/history', () => {
         { params: mockParams }
       );
 
-      const call = (getPageVersionHistory as Mock).mock.calls[0];
+      const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2];
 
       // Should use user-provided date since it's within retention
@@ -323,7 +311,7 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('clamps startDate to retention limit if user requests beyond', async () => {
-      (getUserRetentionDays as Mock).mockResolvedValue(7);
+      vi.mocked(getUserRetentionDays).mockResolvedValue(7);
 
       // Request history from 30 days ago (beyond 7 day retention)
       const thirtyDaysAgo = new Date();
@@ -334,7 +322,7 @@ describe('GET /api/pages/[pageId]/history', () => {
         { params: mockParams }
       );
 
-      const call = (getPageVersionHistory as Mock).mock.calls[0];
+      const call = vi.mocked(getPageVersionHistory).mock.calls[0];
       const options = call[2];
 
       // Should clamp to retention limit
@@ -345,11 +333,10 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('includes retentionDays in response', async () => {
-      (getUserRetentionDays as Mock).mockResolvedValue(30);
-      (getPageVersionHistory as Mock).mockResolvedValue({
+      vi.mocked(getUserRetentionDays).mockResolvedValue(30);
+      vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [],
-        total: 0,
-      });
+        total: 0 });
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -369,12 +356,11 @@ describe('GET /api/pages/[pageId]/history', () => {
         createMockActivity({ id: 'act_2', operation: 'create' }),
       ];
 
-      (getPageVersionHistory as Mock).mockResolvedValue({
+      vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: mockActivities,
-        total: 2,
-      });
+        total: 2 });
 
-      (isActivityEligibleForRollback as Mock)
+      vi.mocked(isActivityEligibleForRollback)
         .mockReturnValueOnce(true)
         .mockReturnValueOnce(false);
 
@@ -387,10 +373,9 @@ describe('GET /api/pages/[pageId]/history', () => {
     });
 
     it('includes pagination metadata', async () => {
-      (getPageVersionHistory as Mock).mockResolvedValue({
+      vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [createMockActivity()],
-        total: 100,
-      });
+        total: 100 });
 
       const response = await GET(createRequest({ limit: '10', offset: '20' }), { params: mockParams });
       const body = await response.json();
@@ -399,15 +384,13 @@ describe('GET /api/pages/[pageId]/history', () => {
         total: 100,
         limit: 10,
         offset: 20,
-        hasMore: true,
-      });
+        hasMore: true });
     });
 
     it('hasMore is false when at end', async () => {
-      (getPageVersionHistory as Mock).mockResolvedValue({
+      vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [createMockActivity()],
-        total: 21,
-      });
+        total: 21 });
 
       const response = await GET(createRequest({ limit: '10', offset: '20' }), { params: mockParams });
       const body = await response.json();

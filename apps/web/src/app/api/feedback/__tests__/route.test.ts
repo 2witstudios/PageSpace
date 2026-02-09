@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -28,11 +28,8 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockResolvedValue(undefined),
-    }),
-  },
-  feedbackSubmissions: {},
-}));
+      values: vi.fn().mockResolvedValue(undefined) }) },
+  feedbackSubmissions: {} }));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -40,26 +37,19 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-}));
+      debug: vi.fn() } } }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
-}));
+  isAuthError: vi.fn() }));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
-    CONTACT_FORM: { maxRequests: 5, windowMs: 3600000 },
-  },
-}));
+    CONTACT_FORM: { maxRequests: 5, windowMs: 3600000 } } }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn().mockReturnValue('test-feedback-id'),
-}));
+  createId: vi.fn().mockReturnValue('test-feedback-id') }));
 
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
@@ -73,12 +63,10 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0,
-});
+  adminRoleVersion: 0 });
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
 
 // Valid base64-encoded images for testing
 const VALID_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
@@ -91,10 +79,8 @@ const createRequest = (body: object) => {
     headers: {
       'Content-Type': 'application/json',
       'Cookie': 'session=valid-session',
-      'X-CSRF-Token': 'valid-csrf-token',
-    },
-    body: JSON.stringify(body),
-  });
+      'X-CSRF-Token': 'valid-csrf-token' },
+    body: JSON.stringify(body) });
 };
 
 describe('/api/feedback', () => {
@@ -102,16 +88,15 @@ describe('/api/feedback', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user, rate limit allowed
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockWebAuth('user-123'));
-    (isAuthError as unknown as Mock).mockReturnValue(false);
-    (checkDistributedRateLimit as unknown as Mock).mockResolvedValue({ allowed: true });
+    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockWebAuth('user-123'));
+    vi.mocked(isAuthError as unknown).mockReturnValue(false);
+    vi.mocked(checkDistributedRateLimit as unknown).mockResolvedValue({ allowed: true });
   });
 
   describe('successful feedback submission', () => {
     it('POST_withValidFeedback_returns201', async () => {
       const request = createRequest({
-        message: 'Great product! Love the new features.',
-      });
+        message: 'Great product! Love the new features.' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -127,10 +112,8 @@ describe('/api/feedback', () => {
           {
             name: 'screenshot.png',
             type: 'image/png',
-            data: VALID_PNG_DATA_URL,
-          },
-        ],
-      });
+            data: VALID_PNG_DATA_URL },
+        ] });
 
       const response = await POST(request);
       const body = await response.json();
@@ -147,29 +130,25 @@ describe('/api/feedback', () => {
           userAgent: 'Mozilla/5.0',
           screenSize: '1920x1080',
           viewportSize: '1280x720',
-          appVersion: '1.0.0',
-        },
-      });
+          appVersion: '1.0.0' } });
 
       await POST(request);
 
       expect(db.insert).toHaveBeenCalled();
-      const insertMock = db.insert as unknown as Mock;
-      const valuesMock = insertMock.mock.results[0].value.values as Mock;
+      const insertMock = vi.mocked(db.insert);
+      const valuesMock = (insertMock.mock.results[0].value as { values: ReturnType<typeof vi.fn> }).values;
       expect(valuesMock).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-123',
           message: 'Test feedback message',
           pageUrl: 'https://example.com/page',
-          viewportSize: '1280x720',
-        })
+          viewportSize: '1280x720' })
       );
     });
 
     it('POST_withValidFeedback_logsSubmission', async () => {
       const request = createRequest({
-        message: 'Test feedback',
-      });
+        message: 'Test feedback' });
 
       await POST(request);
 
@@ -177,16 +156,15 @@ describe('/api/feedback', () => {
         'Feedback submission received',
         expect.objectContaining({
           userId: 'user-123',
-          feedbackId: 'test-feedback-id',
-        })
+          feedbackId: 'test-feedback-id' })
       );
     });
   });
 
   describe('authentication errors (401)', () => {
     it('POST_withNoSession_returns401', async () => {
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockAuthError(401));
-      (isAuthError as unknown as Mock).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockAuthError(401));
+      vi.mocked(isAuthError as unknown).mockReturnValue(true);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -195,8 +173,8 @@ describe('/api/feedback', () => {
     });
 
     it('POST_withInvalidSession_returns401', async () => {
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockAuthError(401));
-      (isAuthError as unknown as Mock).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockAuthError(401));
+      vi.mocked(isAuthError as unknown).mockReturnValue(true);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -207,10 +185,9 @@ describe('/api/feedback', () => {
 
   describe('rate limiting (429)', () => {
     it('POST_whenRateLimitExceeded_returns429', async () => {
-      (checkDistributedRateLimit as unknown as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit as unknown).mockResolvedValue({
         allowed: false,
-        retryAfter: 1800,
-      });
+        retryAfter: 1800 });
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -222,10 +199,9 @@ describe('/api/feedback', () => {
     });
 
     it('POST_whenRateLimitExceeded_logsWarning', async () => {
-      (checkDistributedRateLimit as unknown as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit as unknown).mockResolvedValue({
         allowed: false,
-        retryAfter: 3600,
-      });
+        retryAfter: 3600 });
 
       const request = createRequest({ message: 'Test' });
       await POST(request);
@@ -260,13 +236,11 @@ describe('/api/feedback', () => {
       const attachments = Array(6).fill({
         name: 'test.png',
         type: 'image/png',
-        data: VALID_PNG_DATA_URL,
-      });
+        data: VALID_PNG_DATA_URL });
 
       const request = createRequest({
         message: 'Test',
-        attachments,
-      });
+        attachments });
       const response = await POST(request);
       const body = await response.json();
 
@@ -281,10 +255,8 @@ describe('/api/feedback', () => {
           {
             name: 'script.svg',
             type: 'image/svg+xml',
-            data: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
-          },
-        ],
-      });
+            data: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' },
+        ] });
       const response = await POST(request);
       const body = await response.json();
 
@@ -302,10 +274,8 @@ describe('/api/feedback', () => {
           {
             name: 'large.png',
             type: 'image/png',
-            data: largeData,
-          },
-        ],
-      });
+            data: largeData },
+        ] });
       const response = await POST(request);
       const body = await response.json();
 
@@ -322,10 +292,8 @@ describe('/api/feedback', () => {
           {
             name: 'fake.png',
             type: 'image/png',
-            data: SPOOFED_PNG_DATA_URL,
-          },
-        ],
-      });
+            data: SPOOFED_PNG_DATA_URL },
+        ] });
       const response = await POST(request);
       const body = await response.json();
 
@@ -342,8 +310,7 @@ describe('/api/feedback', () => {
             type: 'image/png',
             data: VALID_JPEG_DATA_URL, // JPEG data but declared as PNG
           },
-        ],
-      });
+        ] });
       const response = await POST(request);
       const body = await response.json();
 
@@ -358,10 +325,8 @@ describe('/api/feedback', () => {
           {
             name: 'test.png',
             type: 'image/png',
-            data: 'not-a-valid-data-url',
-          },
-        ],
-      });
+            data: 'not-a-valid-data-url' },
+        ] });
       const response = await POST(request);
       const body = await response.json();
 
@@ -376,10 +341,8 @@ describe('/api/feedback', () => {
           {
             name: 'fake.png',
             type: 'image/png',
-            data: SPOOFED_PNG_DATA_URL,
-          },
-        ],
-      });
+            data: SPOOFED_PNG_DATA_URL },
+        ] });
 
       await POST(request);
 
@@ -388,18 +351,16 @@ describe('/api/feedback', () => {
         expect.objectContaining({
           userId: 'user-123',
           fileName: 'fake.png',
-          declaredType: 'image/png',
-        })
+          declaredType: 'image/png' })
       );
     });
   });
 
   describe('error handling (500)', () => {
     it('POST_whenDatabaseThrows_returns500WithGenericError', async () => {
-      const insertMock = db.insert as unknown as Mock;
+      const insertMock = vi.mocked(db.insert);
       insertMock.mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('DB connection failed')),
-      });
+        values: vi.fn().mockRejectedValue(new Error('DB connection failed')) });
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -411,10 +372,9 @@ describe('/api/feedback', () => {
     });
 
     it('POST_whenUnexpectedError_logsError', async () => {
-      const insertMock = db.insert as unknown as Mock;
+      const insertMock = vi.mocked(db.insert);
       insertMock.mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('Unexpected error')),
-      });
+        values: vi.fn().mockRejectedValue(new Error('Unexpected error')) });
 
       const request = createRequest({ message: 'Test' });
       await POST(request);

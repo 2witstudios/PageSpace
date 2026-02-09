@@ -1,39 +1,33 @@
-import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 
 vi.mock('@pagespace/db', () => ({
   drives: { ownerId: 'ownerId', isTrashed: 'isTrashed' },
   users: { id: 'id' },
   db: {
-    transaction: vi.fn(),
-  },
+    transaction: vi.fn() },
   and: vi.fn((...conditions: unknown[]) => conditions),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
     strings,
-    values,
-  })),
-}));
+    values })) }));
 
 vi.mock('@pagespace/lib/server', () => ({
-  slugify: vi.fn(),
-}));
+  slugify: vi.fn() }));
 
 vi.mock('@/lib/onboarding/drive-setup', () => ({
-  populateUserDrive: vi.fn(),
-}));
+  populateUserDrive: vi.fn() }));
 
 import { db, drives, sql } from '@pagespace/db';
 import { slugify } from '@pagespace/lib/server';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 import {
   GETTING_STARTED_DRIVE_NAME,
-  provisionGettingStartedDriveIfNeeded,
-} from '../getting-started-drive';
+  provisionGettingStartedDriveIfNeeded } from '../getting-started-drive';
 
 describe('provisionGettingStartedDriveIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (slugify as Mock).mockReturnValue('getting-started');
+    vi.mocked(slugify).mockReturnValue('getting-started');
   });
 
   test('given user already owns a drive, should return null', async () => {
@@ -41,13 +35,10 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       execute: vi.fn().mockResolvedValue(undefined),
       query: {
         drives: {
-          findFirst: vi.fn().mockResolvedValue({ id: 'drive-existing' }),
-        },
-      },
-      insert: vi.fn(),
-    };
+          findFirst: vi.fn().mockResolvedValue({ id: 'drive-existing' }) } },
+      insert: vi.fn() };
 
-    (db.transaction as Mock).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
+    vi.mocked(db.transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
 
     const result = await provisionGettingStartedDriveIfNeeded('user-123');
 
@@ -68,14 +59,11 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       execute: vi.fn().mockResolvedValue(undefined),
       query: {
         drives: {
-          findFirst: vi.fn().mockResolvedValue(null),
-        },
-      },
-      insert,
-    };
+          findFirst: vi.fn().mockResolvedValue(null) } },
+      insert };
 
-    (populateUserDrive as Mock).mockResolvedValue(undefined);
-    (db.transaction as Mock).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
+    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(db.transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
 
     const result = await provisionGettingStartedDriveIfNeeded('user-123');
 

@@ -7,7 +7,7 @@
  * - Response mapping → service results mapped to HTTP responses
  * - Side effects → broadcasts/cache with correct payload essentials
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -16,17 +16,14 @@ import type { CreatePageResult, PageData } from '@/services/api';
 // Mock service boundary - this is the ONLY mock of internal implementation
 vi.mock('@/services/api', () => ({
   pageService: {
-    createPage: vi.fn(),
-  },
-}));
+    createPage: vi.fn() } }));
 
 // Mock external boundaries
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
-  isMCPAuthResult: vi.fn().mockReturnValue(false),
-}));
+  isMCPAuthResult: vi.fn().mockReturnValue(false) }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
@@ -34,35 +31,26 @@ vi.mock('@/lib/websocket', () => ({
     driveId,
     pageId,
     type,
-    ...data,
-  })),
-}));
+    ...data })) }));
 
 vi.mock('@pagespace/lib/server', () => ({
   agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
-  },
+    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined) },
   pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined) },
   loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
-}));
+      debug: vi.fn() } },
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }) }));
 
 vi.mock('@pagespace/lib', () => ({
-  logPageActivity: vi.fn(),
-}));
+  logPageActivity: vi.fn() }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackPageOperation: vi.fn(),
-}));
+  trackPageOperation: vi.fn() }));
 
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions, isMCPAuthResult } from '@/lib/auth';
@@ -80,12 +68,10 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0,
-});
+  adminRoleVersion: 0 });
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
 
 const mockPage: PageData = {
   id: mockPageId,
@@ -105,40 +91,36 @@ const mockPage: PageData = {
   aiModel: null,
   systemPrompt: null,
   enabledTools: null,
-  isPaginated: null,
-};
+  isPaginated: null };
 
 describe('POST /api/pages', () => {
   const createRequest = (body: Record<string, unknown>) => {
     return new Request('https://example.com/api/pages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+      body: JSON.stringify(body) });
   };
 
   const successResult: CreatePageResult = {
     success: true,
     page: mockPage,
     driveId: mockDriveId,
-    isAIChatPage: false,
-  };
+    isAIChatPage: false };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.createPage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.createPage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
 
       expect(response.status).toBe(401);
       expect(pageService.createPage).not.toHaveBeenCalled();
@@ -150,8 +132,7 @@ describe('POST /api/pages', () => {
       // Route-level Zod validation - service not called
       const response = await POST(createRequest({
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -163,8 +144,7 @@ describe('POST /api/pages', () => {
       // Route-level Zod validation - service not called
       const response = await POST(createRequest({
         title: 'Test Page',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -176,8 +156,7 @@ describe('POST /api/pages', () => {
       // Route-level Zod validation - service not called
       const response = await POST(createRequest({
         title: 'Test Page',
-        type: 'DOCUMENT',
-      }));
+        type: 'DOCUMENT' }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -186,17 +165,15 @@ describe('POST /api/pages', () => {
     });
 
     it('returns 400 when page validation fails', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
         error: 'Title too long. Invalid characters in title',
-        status: 400,
-      });
+        status: 400 });
 
       const response = await POST(createRequest({
         title: 'x'.repeat(1000),
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -204,18 +181,16 @@ describe('POST /api/pages', () => {
     });
 
     it('returns 400 when AI chat tool validation fails', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
         error: 'Unknown tool: invalid_tool',
-        status: 400,
-      });
+        status: 400 });
 
       const response = await POST(createRequest({
         title: 'AI Chat',
         type: 'AI_CHAT',
         driveId: mockDriveId,
-        enabledTools: ['invalid_tool'],
-      }));
+        enabledTools: ['invalid_tool'] }));
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -225,17 +200,15 @@ describe('POST /api/pages', () => {
 
   describe('authorization', () => {
     it('returns 404 when drive does not exist', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
         error: 'Drive not found',
-        status: 404,
-      });
+        status: 404 });
 
       const response = await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
-        driveId: 'nonexistent_drive',
-      }));
+        driveId: 'nonexistent_drive' }));
       const body = await response.json();
 
       expect(response.status).toBe(404);
@@ -243,17 +216,15 @@ describe('POST /api/pages', () => {
     });
 
     it('returns 403 when user is not owner or admin', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
         error: 'Only drive owners and admins can create pages',
-        status: 403,
-      });
+        status: 403 });
 
       const response = await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(403);
@@ -268,8 +239,7 @@ describe('POST /api/pages', () => {
         type: 'DOCUMENT',
         driveId: mockDriveId,
         parentId: 'parent_123',
-        content: '<p>Custom content</p>',
-      }));
+        content: '<p>Custom content</p>' }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
         mockUserId,
@@ -278,18 +248,16 @@ describe('POST /api/pages', () => {
           type: 'DOCUMENT',
           driveId: mockDriveId,
           parentId: 'parent_123',
-          content: '<p>Custom content</p>',
-        }),
+          content: '<p>Custom content</p>' }),
         undefined,
       );
     });
 
     it('passes AI settings for AI_CHAT pages', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         ...successResult,
         isAIChatPage: true,
-        page: { ...mockPage, type: 'AI_CHAT' },
-      });
+        page: { ...mockPage, type: 'AI_CHAT' } });
 
       await POST(createRequest({
         title: 'AI Assistant',
@@ -298,8 +266,7 @@ describe('POST /api/pages', () => {
         systemPrompt: 'You are a helpful assistant',
         enabledTools: ['read_page'],
         aiProvider: 'anthropic',
-        aiModel: 'claude-3',
-      }));
+        aiModel: 'claude-3' }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
         mockUserId,
@@ -307,8 +274,7 @@ describe('POST /api/pages', () => {
           systemPrompt: 'You are a helpful assistant',
           enabledTools: ['read_page'],
           aiProvider: 'anthropic',
-          aiModel: 'claude-3',
-        }),
+          aiModel: 'claude-3' }),
         undefined,
       );
     });
@@ -319,8 +285,7 @@ describe('POST /api/pages', () => {
       await POST(createRequest({
         title: 'MCP Page',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
         mockUserId,
@@ -335,8 +300,7 @@ describe('POST /api/pages', () => {
       const response = await POST(createRequest({
         title: 'New Document',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(201);
@@ -345,16 +309,14 @@ describe('POST /api/pages', () => {
     });
 
     it('creates FOLDER page successfully', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         ...successResult,
-        page: { ...mockPage, type: 'FOLDER' },
-      });
+        page: { ...mockPage, type: 'FOLDER' } });
 
       const response = await POST(createRequest({
         title: 'New Folder',
         type: 'FOLDER',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(201);
@@ -362,17 +324,15 @@ describe('POST /api/pages', () => {
     });
 
     it('creates AI_CHAT page successfully', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         ...successResult,
         isAIChatPage: true,
-        page: { ...mockPage, type: 'AI_CHAT' },
-      });
+        page: { ...mockPage, type: 'AI_CHAT' } });
 
       const response = await POST(createRequest({
         title: 'AI Chat',
         type: 'AI_CHAT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(201);
@@ -383,12 +343,11 @@ describe('POST /api/pages', () => {
   describe('side effects (boundary obligations)', () => {
     it('broadcasts page created event with correct payload from result values', async () => {
       // Mock service to return specific values that should be used in broadcast
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         success: true,
         page: { ...mockPage, title: 'Created Document', parentId: 'parent_123' },
         driveId: mockDriveId,
-        isAIChatPage: false,
-      });
+        isAIChatPage: false });
 
       await POST(createRequest({
         title: 'Input Title',  // Route should use result values, not input
@@ -415,23 +374,20 @@ describe('POST /api/pages', () => {
       await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
 
       expect(pageTreeCache.invalidateDriveTree).toHaveBeenCalledWith(mockDriveId);
     });
 
     it('invalidates agent awareness cache for AI_CHAT pages', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         ...successResult,
-        isAIChatPage: true,
-      });
+        isAIChatPage: true });
 
       await POST(createRequest({
         title: 'AI Chat',
         type: 'AI_CHAT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
 
       expect(agentAwarenessCache.invalidateDriveAgents).toHaveBeenCalledWith(mockDriveId);
     });
@@ -440,24 +396,21 @@ describe('POST /api/pages', () => {
       await POST(createRequest({
         title: 'Document',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
 
       expect(agentAwarenessCache.invalidateDriveAgents).not.toHaveBeenCalled();
     });
 
     it('does NOT broadcast or invalidate cache on service failure', async () => {
-      (pageService.createPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
         error: 'Drive not found',
-        status: 404,
-      });
+        status: 404 });
 
       await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
-        driveId: 'nonexistent',
-      }));
+        driveId: 'nonexistent' }));
 
       expect(broadcastPageEvent).not.toHaveBeenCalled();
       expect(pageTreeCache.invalidateDriveTree).not.toHaveBeenCalled();
@@ -466,13 +419,12 @@ describe('POST /api/pages', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.createPage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.createPage).mockRejectedValue(new Error('Database error'));
 
       const response = await POST(createRequest({
         title: 'Test Page',
         type: 'DOCUMENT',
-        driveId: mockDriveId,
-      }));
+        driveId: mockDriveId }));
       const body = await response.json();
 
       expect(response.status).toBe(500);

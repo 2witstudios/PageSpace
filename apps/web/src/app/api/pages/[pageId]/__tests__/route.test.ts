@@ -7,7 +7,7 @@
  * - Response mapping → service results mapped to HTTP responses
  * - Side effects → broadcasts/cache with correct payload essentials
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -18,9 +18,7 @@ vi.mock('@/services/api', () => ({
   pageService: {
     getPage: vi.fn(),
     updatePage: vi.fn(),
-    trashPage: vi.fn(),
-  },
-}));
+    trashPage: vi.fn() } }));
 
 // Mock external boundaries
 vi.mock('@/lib/auth', () => ({
@@ -28,8 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  isMCPAuthResult: vi.fn().mockReturnValue(false),
-}));
+  isMCPAuthResult: vi.fn().mockReturnValue(false) }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
@@ -37,39 +34,29 @@ vi.mock('@/lib/websocket', () => ({
     driveId,
     pageId,
     type,
-    ...data,
-  })),
-}));
+    ...data })) }));
 
 vi.mock('@pagespace/lib/server', () => ({
   agentAwarenessCache: {
-    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined),
-  },
+    invalidateDriveAgents: vi.fn().mockResolvedValue(undefined) },
   pageTreeCache: {
-    invalidateDriveTree: vi.fn().mockResolvedValue(undefined),
-  },
+    invalidateDriveTree: vi.fn().mockResolvedValue(undefined) },
   loggers: {
     api: {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
-}));
+      debug: vi.fn() } },
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }) }));
 
 vi.mock('@pagespace/lib', () => ({
-  logPageActivity: vi.fn(),
-}));
+  logPageActivity: vi.fn() }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackPageOperation: vi.fn(),
-}));
+  trackPageOperation: vi.fn() }));
 
 vi.mock('@pagespace/lib/api-utils', () => ({
-  jsonResponse: vi.fn((data) => NextResponse.json(data)),
-}));
+  jsonResponse: vi.fn((data) => NextResponse.json(data)) }));
 
 import { pageService } from '@/services/api';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -87,12 +74,10 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0,
-});
+  adminRoleVersion: 0 });
 
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
 
 const mockPage: PageWithDetails = {
   id: mockPageId,
@@ -114,14 +99,12 @@ const mockPage: PageWithDetails = {
   enabledTools: null,
   isPaginated: null,
   children: [],
-  messages: [],
-};
+  messages: [] };
 
 describe('GET /api/pages/[pageId]', () => {
   const createRequest = () => {
     return new Request(`https://example.com/api/pages/${mockPageId}`, {
-      method: 'GET',
-    });
+      method: 'GET' });
   };
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
@@ -129,18 +112,17 @@ describe('GET /api/pages/[pageId]', () => {
   const successResult: GetPageResult = {
     success: true,
     page: mockPage,
-    driveId: mockDriveId,
-  };
+    driveId: mockDriveId };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.getPage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.getPage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -151,11 +133,10 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks view permission', async () => {
-      (pageService.getPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.getPage).mockResolvedValue({
         success: false,
         error: 'You do not have permission to view this page',
-        status: 403,
-      });
+        status: 403 });
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -165,11 +146,10 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('page retrieval', () => {
     it('returns 404 when page does not exist', async () => {
-      (pageService.getPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.getPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
-        status: 404,
-      });
+        status: 404 });
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -195,7 +175,7 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.getPage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.getPage).mockRejectedValue(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -211,8 +191,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     return new Request(`https://example.com/api/pages/${mockPageId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+      body: JSON.stringify(body) });
   };
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
@@ -222,18 +201,17 @@ describe('PATCH /api/pages/[pageId]', () => {
     page: mockPage,
     driveId: mockDriveId,
     updatedFields: ['title'],
-    isAIChatPage: false,
-  };
+    isAIChatPage: false };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.updatePage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
@@ -244,11 +222,10 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks edit permission', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'You need edit permission to modify this page',
-        status: 403,
-      });
+        status: 403 });
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
       const body = await response.json();
@@ -260,11 +237,10 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('validation', () => {
     it('returns 400 when parent change creates circular reference', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'Cannot move page into its own descendant',
-        status: 400,
-      });
+        status: 400 });
 
       const response = await PATCH(
         createRequest({ parentId: 'child_page' }),
@@ -289,8 +265,7 @@ describe('PATCH /api/pages/[pageId]', () => {
         mockUserId,
         expect.objectContaining({
           title: 'Updated Title',
-          content: '<p>New content</p>',
-        }),
+          content: '<p>New content</p>' }),
         expect.objectContaining({ expectedRevision: undefined })
       );
     });
@@ -315,17 +290,15 @@ describe('PATCH /api/pages/[pageId]', () => {
         mockPageId,
         'updated',
         expect.objectContaining({
-          title: 'Updated Title',
-        })
+          title: 'Updated Title' })
       );
       expect(broadcastPageEvent).toHaveBeenCalled();
     });
 
     it('broadcasts content update event with correct payload', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         ...successResult,
-        updatedFields: ['content'],
-      });
+        updatedFields: ['content'] });
 
       await PATCH(createRequest({ content: '<p>New content</p>' }), { params: mockParams });
 
@@ -345,10 +318,9 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('invalidates agent cache when AI_CHAT title changes', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         ...successResult,
-        isAIChatPage: true,
-      });
+        isAIChatPage: true });
 
       await PATCH(createRequest({ title: 'AI Agent' }), { params: mockParams });
 
@@ -356,11 +328,10 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('does NOT broadcast or invalidate cache on service failure', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'Not found',
-        status: 404,
-      });
+        status: 404 });
 
       await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
@@ -371,7 +342,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.updatePage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.updatePage).mockRejectedValue(new Error('Database error'));
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
       const body = await response.json();
@@ -387,8 +358,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     return new Request(`https://example.com/api/pages/${mockPageId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+      body: JSON.stringify(body) });
   };
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
@@ -399,18 +369,17 @@ describe('DELETE /api/pages/[pageId]', () => {
     pageTitle: 'Test Page',
     pageType: 'DOCUMENT',
     parentId: null,
-    isAIChatPage: false,
-  };
+    isAIChatPage: false };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.trashPage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await DELETE(createRequest({}), { params: mockParams });
 
@@ -421,11 +390,10 @@ describe('DELETE /api/pages/[pageId]', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks delete permission', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'You need delete permission to remove this page',
-        status: 403,
-      });
+        status: 403 });
 
       const response = await DELETE(createRequest({}), { params: mockParams });
       const body = await response.json();
@@ -467,11 +435,10 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('returns 404 when page not found', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
-        status: 404,
-      });
+        status: 404 });
 
       const response = await DELETE(createRequest({}), { params: mockParams });
 
@@ -488,8 +455,7 @@ describe('DELETE /api/pages/[pageId]', () => {
         mockPageId,
         'trashed',
         expect.objectContaining({
-          title: 'Test Page',
-        })
+          title: 'Test Page' })
       );
       expect(broadcastPageEvent).toHaveBeenCalled();
     });
@@ -501,10 +467,9 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('invalidates agent cache when AI_CHAT page is trashed', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         ...successResult,
-        isAIChatPage: true,
-      });
+        isAIChatPage: true });
 
       await DELETE(createRequest({}), { params: mockParams });
 
@@ -512,11 +477,10 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('does NOT broadcast or invalidate cache on service failure', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
-        status: 404,
-      });
+        status: 404 });
 
       await DELETE(createRequest({}), { params: mockParams });
 
@@ -527,7 +491,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.trashPage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.trashPage).mockRejectedValue(new Error('Database error'));
 
       const response = await DELETE(createRequest({}), { params: mockParams });
       const body = await response.json();

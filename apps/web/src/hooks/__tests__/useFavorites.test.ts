@@ -3,7 +3,7 @@
  * Tests for favorites state management with database sync
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useFavorites } from '../useFavorites';
 import type { FavoriteItem } from '@/app/api/user/favorites/route';
 
@@ -11,8 +11,7 @@ import type { FavoriteItem } from '@/app/api/user/favorites/route';
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
   post: vi.fn(),
-  del: vi.fn(),
-}));
+  del: vi.fn() }));
 
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 
@@ -23,8 +22,7 @@ const mockLocalStorage = (() => {
     getItem: vi.fn((key: string) => store[key] || null),
     setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
     removeItem: vi.fn((key: string) => { delete store[key]; }),
-    clear: vi.fn(() => { store = {}; }),
-  };
+    clear: vi.fn(() => { store = {}; }) };
 })();
 
 Object.defineProperty(global, 'localStorage', { value: mockLocalStorage });
@@ -41,10 +39,8 @@ function createMockFavorite(overrides: Partial<FavoriteItem> = {}): FavoriteItem
       title: 'Test Page',
       type: 'DOCUMENT',
       driveId: 'drive-1',
-      driveName: 'Test Drive',
-    },
-    ...overrides,
-  };
+      driveName: 'Test Drive' },
+    ...overrides };
 }
 
 describe('useFavorites', () => {
@@ -55,8 +51,7 @@ describe('useFavorites', () => {
       pageIds: new Set(),
       driveIds: new Set(),
       isLoading: false,
-      isSynced: false,
-    });
+      isSynced: false });
     mockLocalStorage.clear();
     vi.clearAllMocks();
   });
@@ -82,10 +77,9 @@ describe('useFavorites', () => {
         createMockFavorite({ id: 'fav-2', itemType: 'drive', page: undefined, drive: { id: 'drive-1', name: 'Test Drive' } }),
       ];
 
-      (fetchWithAuth as Mock).mockResolvedValue({
+      vi.mocked(fetchWithAuth).mockResolvedValue({
         ok: true,
-        json: async () => ({ favorites: mockFavorites }),
-      });
+        json: async () => ({ favorites: mockFavorites }) });
 
       await useFavorites.getState().fetchFavorites();
 
@@ -97,7 +91,7 @@ describe('useFavorites', () => {
     });
 
     it('given API fails, should handle error gracefully', async () => {
-      (fetchWithAuth as Mock).mockRejectedValue(new Error('Network error'));
+      vi.mocked(fetchWithAuth).mockRejectedValue(new Error('Network error'));
 
       await useFavorites.getState().fetchFavorites();
 
@@ -120,8 +114,7 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ page: { id: 'page-123', title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
         pageIds: new Set(['page-123']),
-        driveIds: new Set(),
-      });
+        driveIds: new Set() });
 
       expect(useFavorites.getState().isFavorite('page-123')).toBe(true);
       expect(useFavorites.getState().isFavorite('page-123', 'page')).toBe(true);
@@ -131,8 +124,7 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ itemType: 'drive', page: undefined, drive: { id: 'drive-1', name: 'Test' } })],
         pageIds: new Set(),
-        driveIds: new Set(['drive-1']),
-      });
+        driveIds: new Set(['drive-1']) });
 
       expect(useFavorites.getState().isFavorite('drive-1', 'drive')).toBe(true);
       // Without itemType, defaults to page
@@ -146,11 +138,10 @@ describe('useFavorites', () => {
 
   describe('addFavorite', () => {
     it('given a page ID, should optimistically add and call API', async () => {
-      (post as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockResolvedValue({
+      vi.mocked(post).mockResolvedValue({});
+      vi.mocked(fetchWithAuth).mockResolvedValue({
         ok: true,
-        json: async () => ({ favorites: [createMockFavorite()] }),
-      });
+        json: async () => ({ favorites: [createMockFavorite()] }) });
 
       await useFavorites.getState().addFavorite('page-123', 'page');
 
@@ -159,11 +150,10 @@ describe('useFavorites', () => {
     });
 
     it('given a drive ID, should add to driveIds', async () => {
-      (post as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockResolvedValue({
+      vi.mocked(post).mockResolvedValue({});
+      vi.mocked(fetchWithAuth).mockResolvedValue({
         ok: true,
-        json: async () => ({ favorites: [] }),
-      });
+        json: async () => ({ favorites: [] }) });
 
       const addPromise = useFavorites.getState().addFavorite('drive-1', 'drive');
 
@@ -174,7 +164,7 @@ describe('useFavorites', () => {
     });
 
     it('given API fails, should rollback optimistic update', async () => {
-      (post as Mock).mockRejectedValue(new Error('API error'));
+      vi.mocked(post).mockRejectedValue(new Error('API error'));
 
       await expect(useFavorites.getState().addFavorite('page-123', 'page')).rejects.toThrow();
 
@@ -188,10 +178,9 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ id: 'fav-1', page: { id: 'page-123', title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
         pageIds: new Set(['page-123']),
-        driveIds: new Set(),
-      });
+        driveIds: new Set() });
 
-      (del as Mock).mockResolvedValue({});
+      vi.mocked(del).mockResolvedValue({});
 
       const removePromise = useFavorites.getState().removeFavorite('page-123', 'page');
 
@@ -208,8 +197,7 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [],
         pageIds: new Set(['page-123']), // In local set but not synced
-        driveIds: new Set(),
-      });
+        driveIds: new Set() });
 
       await useFavorites.getState().removeFavorite('page-123', 'page');
 
@@ -223,10 +211,9 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ id: 'fav-1', page: { id: 'page-123', title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
         pageIds: new Set(['page-123']),
-        driveIds: new Set(),
-      });
+        driveIds: new Set() });
 
-      (del as Mock).mockResolvedValue({});
+      vi.mocked(del).mockResolvedValue({});
 
       await useFavorites.getState().removeFavoriteById('fav-1');
 
@@ -246,8 +233,7 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ id: 'fav-1', page: { id: 'page-123', title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } })],
         pageIds: new Set(['page-123']),
-        driveIds: new Set(),
-      });
+        driveIds: new Set() });
 
       expect(useFavorites.getState().getFavoriteId('page-123', 'page')).toBe('fav-1');
     });
@@ -256,8 +242,7 @@ describe('useFavorites', () => {
       useFavorites.setState({
         favorites: [createMockFavorite({ id: 'fav-2', itemType: 'drive', page: undefined, drive: { id: 'drive-1', name: 'Test' } })],
         pageIds: new Set(),
-        driveIds: new Set(['drive-1']),
-      });
+        driveIds: new Set(['drive-1']) });
 
       expect(useFavorites.getState().getFavoriteId('drive-1', 'drive')).toBe('fav-2');
     });
@@ -273,22 +258,20 @@ describe('useFavorites', () => {
       const addedFavorites: FavoriteItem[] = [];
 
       // Setup mocks
-      (post as Mock).mockImplementation(async (_url: string, body: { itemType: string; itemId: string }) => {
+      vi.mocked(post).mockImplementation(async (_url: string, body: { itemType: string; itemId: string }) => {
         // Simulate API adding the favorite
         const newFav = createMockFavorite({
           id: `fav-${body.itemId}`,
           itemType: body.itemType as 'page' | 'drive',
           page: body.itemType === 'page' ? { id: body.itemId, title: 'Test', type: 'DOCUMENT', driveId: 'd1', driveName: 'D' } : undefined,
-          drive: body.itemType === 'drive' ? { id: body.itemId, name: 'Test Drive' } : undefined,
-        });
+          drive: body.itemType === 'drive' ? { id: body.itemId, name: 'Test Drive' } : undefined });
         addedFavorites.push(newFav);
         return {};
       });
-      (del as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockImplementation(async () => ({
+      vi.mocked(del).mockResolvedValue({});
+      vi.mocked(fetchWithAuth).mockImplementation(async () => ({
         ok: true,
-        json: async () => ({ favorites: [...addedFavorites] }),
-      }));
+        json: async () => ({ favorites: [...addedFavorites] }) }));
 
       // User favorites a page
       await useFavorites.getState().addFavorite('page-1', 'page');

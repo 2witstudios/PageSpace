@@ -2,20 +2,16 @@
  * Tests for login redirect functionality to Getting Started drive
  */
 
-import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { POST } from '../login/route';
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByEmail: vi.fn(),
-  },
-}));
+    findUserByEmail: vi.fn() } }));
 
 vi.mock('bcryptjs', () => ({
   default: {
-    compare: vi.fn(),
-  },
-}));
+    compare: vi.fn() } }));
 
 // Mock session service and account lockout from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
@@ -27,24 +23,20 @@ vi.mock('@pagespace/lib/auth', () => ({
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
-      scopes: ['*'],
-    }),
+      scopes: ['*'] }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    revokeSession: vi.fn().mockResolvedValue(undefined),
-  },
+    revokeSession: vi.fn().mockResolvedValue(undefined) },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
   isAccountLockedByEmail: vi.fn().mockResolvedValue({ isLocked: false, lockedUntil: null }),
   recordFailedLoginAttemptByEmail: vi.fn().mockResolvedValue({ success: true }),
-  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
-}));
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined) }));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
-  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
-}));
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token') }));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -52,12 +44,9 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
+      debug: vi.fn() } },
   logAuthEvent: vi.fn(),
-  logSecurityEvent: vi.fn(),
-}));
+  logSecurityEvent: vi.fn() }));
 
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
@@ -67,38 +56,29 @@ vi.mock('@pagespace/lib/security', () => ({
       maxAttempts: 5,
       windowMs: 900000,
       blockDurationMs: 900000,
-      progressiveDelay: true,
-    },
-  },
-}));
+      progressiveDelay: true } } }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn(),
-}));
+  trackAuthEvent: vi.fn() }));
 
 vi.mock('cookie', () => ({
   serialize: vi.fn(() => 'mock-cookie'),
-  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
-}));
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })) }));
 
 // Mock login CSRF validation
 vi.mock('@/lib/auth/login-csrf-utils', () => ({
-  validateLoginCSRFToken: vi.fn(() => true),
-}));
+  validateLoginCSRFToken: vi.fn(() => true) }));
 
 // Mock client IP extraction
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
-  getClientIP: vi.fn().mockReturnValue('unknown'),
-}));
+  getClientIP: vi.fn().mockReturnValue('unknown') }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
-  createId: vi.fn(() => 'mock-id'),
-}));
+  createId: vi.fn(() => 'mock-id') }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn(),
-}));
+  provisionGettingStartedDriveIfNeeded: vi.fn() }));
 
 import bcrypt from 'bcryptjs';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -109,11 +89,10 @@ describe('/api/auth/login redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (bcrypt.compare as Mock).mockResolvedValue(true);
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
-      driveId: 'drive-123',
-    });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    vi.mocked(bcrypt.compare).mockResolvedValue(true);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      driveId: 'drive-123' });
 
     vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
       id: 'user-123',
@@ -142,8 +121,7 @@ describe('/api/auth/login redirect', () => {
       suspendedReason: null,
       timezone: null,
       createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+      updatedAt: new Date() });
   });
 
   test('given user has no drives, should return redirectTo Getting Started drive', async () => {
@@ -152,13 +130,10 @@ describe('/api/auth/login redirect', () => {
       headers: {
         'Content-Type': 'application/json',
         'X-Login-CSRF-Token': 'valid-csrf-token',
-        'Cookie': 'login_csrf=valid-csrf-token',
-      },
+        'Cookie': 'login_csrf=valid-csrf-token' },
       body: JSON.stringify({
         email: 'test@example.com',
-        password: 'Password123456',
-      }),
-    });
+        password: 'Password123456' }) });
 
     const response = await POST(request);
     const body = await response.json();
@@ -168,20 +143,17 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given user already has drives, should not include redirectTo', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Login-CSRF-Token': 'valid-csrf-token',
-        'Cookie': 'login_csrf=valid-csrf-token',
-      },
+        'Cookie': 'login_csrf=valid-csrf-token' },
       body: JSON.stringify({
         email: 'test@example.com',
-        password: 'Password123456',
-      }),
-    });
+        password: 'Password123456' }) });
 
     const response = await POST(request);
     const body = await response.json();
@@ -191,20 +163,17 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given provisioning throws error, should still return 200 without redirectTo', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Login-CSRF-Token': 'valid-csrf-token',
-        'Cookie': 'login_csrf=valid-csrf-token',
-      },
+        'Cookie': 'login_csrf=valid-csrf-token' },
       body: JSON.stringify({
         email: 'test@example.com',
-        password: 'Password123456',
-      }),
-    });
+        password: 'Password123456' }) });
 
     const response = await POST(request);
     const body = await response.json();

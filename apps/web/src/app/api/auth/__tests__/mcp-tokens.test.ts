@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../mcp-tokens/route';
 import { DELETE } from '../mcp-tokens/[tokenId]/route';
 import { NextRequest } from 'next/server';
@@ -13,69 +13,50 @@ vi.mock('@pagespace/db', () => ({
             id: 'new-mcp-token-id',
             name: 'Test Token',
             token: 'mcp_generated-token',
-            createdAt: new Date(),
-          },
-        ]),
-      }),
-    }),
+            createdAt: new Date() },
+        ]) }) }),
     // Support for db.transaction() - executes callback with a mock tx object
     transaction: vi.fn(),
     query: {
       mcpTokens: {
         findMany: vi.fn(),
-        findFirst: vi.fn().mockResolvedValue({ id: 'token-123', name: 'Test Token' }),
-      },
-    },
+        findFirst: vi.fn().mockResolvedValue({ id: 'token-123', name: 'Test Token' }) } },
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'token-id' }]),
-        }),
-      }),
-    }),
-  },
+          returning: vi.fn().mockResolvedValue([{ id: 'token-id' }]) }) }) }) },
   mcpTokens: {},
   mcpTokenDrives: {},
   eq: vi.fn((field, value) => ({ field, value })),
-  and: vi.fn((...conditions) => conditions),
-}));
+  and: vi.fn((...conditions) => conditions) }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
-}));
+  isAuthError: vi.fn() }));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     auth: {
       error: vi.fn(),
-      info: vi.fn(),
-    },
-  },
-}));
+      info: vi.fn() } } }));
 
 vi.mock('@pagespace/lib/auth', () => ({
   generateToken: vi.fn().mockReturnValue({
     token: 'mcp_randomBase64UrlString',
     hash: 'mockTokenHash123',
-    tokenPrefix: 'mcp_randomBas',
-  }),
-}));
+    tokenPrefix: 'mcp_randomBas' }) }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com' }),
-  logTokenActivity: vi.fn(),
-}));
+  logTokenActivity: vi.fn() }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn().mockResolvedValue({
     isOwner: true,
     isAdmin: true,
     isMember: true,
-    role: 'OWNER',
-  }),
-  listAccessibleDrives: vi.fn().mockResolvedValue([]),
-}));
+    role: 'OWNER' }),
+  listAccessibleDrives: vi.fn().mockResolvedValue([]) }));
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -83,7 +64,7 @@ import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Helper to create a mock transaction that executes callback with a mock tx
 const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
-  (db.transaction as unknown as Mock).mockImplementation(async (callback) => {
+  vi.mocked(db.transaction as unknown).mockImplementation(async (callback) => {
     const tx = { insert: insertMock };
     return callback(tx);
   });
@@ -94,14 +75,13 @@ describe('/api/auth/mcp-tokens', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
+    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'session',
-      sessionId: 'test-session-id',
-    });
-    (isAuthError as unknown as Mock).mockReturnValue(false);
+      sessionId: 'test-session-id' });
+    vi.mocked(isAuthError as unknown).mockReturnValue(false);
 
     // Default transaction mock that returns a basic token
     const defaultInsertMock = vi.fn().mockReturnValue({
@@ -110,11 +90,8 @@ describe('/api/auth/mcp-tokens', () => {
           {
             id: 'new-mcp-token-id',
             name: 'Test Token',
-            createdAt: new Date(),
-          },
-        ]),
-      }),
-    });
+            createdAt: new Date() },
+        ]) }) });
     setupTransactionMock(defaultInsertMock);
   });
 
@@ -131,12 +108,9 @@ describe('/api/auth/mcp-tokens', () => {
                 {
                   id: 'new-mcp-token-id',
                   name: vals.name,
-                  createdAt: new Date(),
-                },
-              ]),
-            };
-          }),
-        });
+                  createdAt: new Date() },
+              ]) };
+          }) });
         setupTransactionMock(mockInsert);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -144,10 +118,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My API Token' }),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: 'My API Token' }) });
 
         // Act
         const response = await POST(request);
@@ -172,11 +144,9 @@ describe('/api/auth/mcp-tokens', () => {
           expect.objectContaining({
             tokenId: 'new-mcp-token-id',
             tokenType: 'mcp',
-            tokenName: 'My API Token',
-          }),
+            tokenName: 'My API Token' }),
           expect.objectContaining({
-            actorEmail: 'test@example.com',
-          })
+            actorEmail: 'test@example.com' })
         );
       });
 
@@ -186,9 +156,7 @@ describe('/api/auth/mcp-tokens', () => {
           values: vi.fn().mockImplementation((vals) => ({
             returning: vi.fn().mockResolvedValue([
               { id: 'id', name: vals.name, createdAt: new Date() },
-            ]),
-          })),
-        });
+            ]) })) });
         setupTransactionMock(mockInsert);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -196,10 +164,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: 'My Token' }) });
 
         // Act
         const response = await POST(request);
@@ -220,10 +186,8 @@ describe('/api/auth/mcp-tokens', () => {
             return {
               returning: vi.fn().mockResolvedValue([
                 { id: 'id', name: vals.name, createdAt: new Date() },
-              ]),
-            };
-          }),
-        });
+              ]) };
+          }) });
         setupTransactionMock(mockInsert);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -231,10 +195,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: 'My Token' }) });
 
         // Act
         await POST(request);
@@ -253,10 +215,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({}),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({}) });
 
         // Act
         const response = await POST(request);
@@ -274,10 +234,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: '' }),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: '' }) });
 
         // Act
         const response = await POST(request);
@@ -296,10 +254,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: longName }),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: longName }) });
 
         // Act
         const response = await POST(request);
@@ -315,18 +271,15 @@ describe('/api/auth/mcp-tokens', () => {
       it('returns 401 when not authenticated', async () => {
         // Arrange
         const mockError = {
-          error: Response.json({ error: 'Unauthorized' }, { status: 401 }),
-        };
-        (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockError);
-        (isAuthError as unknown as Mock).mockReturnValue(true);
+          error: Response.json({ error: 'Unauthorized' }, { status: 401 }) };
+        vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockError);
+        vi.mocked(isAuthError as unknown).mockReturnValue(true);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
+            'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }) });
 
         // Act
         const response = await POST(request);
@@ -342,10 +295,8 @@ describe('/api/auth/mcp-tokens', () => {
           headers: {
             'Content-Type': 'application/json',
             Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
+            'X-CSRF-Token': 'valid-csrf-token' },
+          body: JSON.stringify({ name: 'My Token' }) });
 
         // Act
         await POST(request);
@@ -354,8 +305,7 @@ describe('/api/auth/mcp-tokens', () => {
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
           expect.objectContaining({
-            requireCSRF: true,
-          })
+            requireCSRF: true })
         );
       });
     });
@@ -363,21 +313,19 @@ describe('/api/auth/mcp-tokens', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     beforeEach(() => {
-      (db.query.mcpTokens.findMany as unknown as Mock).mockResolvedValue([
+      vi.mocked(db.query.mcpTokens.findMany as unknown).mockResolvedValue([
         {
           id: 'token-1',
           name: 'Token 1',
           lastUsed: new Date(),
           createdAt: new Date(),
-          driveScopes: [{ driveId: 'drive-1', drive: { id: 'drive-1', name: 'Work Drive' } }],
-        },
+          driveScopes: [{ driveId: 'drive-1', drive: { id: 'drive-1', name: 'Work Drive' } }] },
         {
           id: 'token-2',
           name: 'Token 2',
           lastUsed: null,
           createdAt: new Date(),
-          driveScopes: [],
-        },
+          driveScopes: [] },
       ]);
     });
 
@@ -387,9 +335,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'ps_session=valid-token',
-          },
-        });
+            Cookie: 'ps_session=valid-token' } });
 
         // Act
         const response = await GET(request);
@@ -406,9 +352,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'ps_session=valid-token',
-          },
-        });
+            Cookie: 'ps_session=valid-token' } });
 
         // Act
         const response = await GET(request);
@@ -419,7 +363,7 @@ describe('/api/auth/mcp-tokens', () => {
           // Token should either be undefined OR not match the real token pattern
           if (token.token !== undefined) {
             // If present, it should be masked/preview, not a real mcp_ token
-            expect(token.token).not.toMatch(/^mcp_[A-Za-z0-9]{20,}$/);
+            expect(token.token).not.toMatch(/^mcp_[A-Za-z0-9]{20 }$/);
           }
         });
       });
@@ -429,9 +373,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'ps_session=valid-token',
-          },
-        });
+            Cookie: 'ps_session=valid-token' } });
 
         // Act
         const response = await GET(request);
@@ -446,14 +388,12 @@ describe('/api/auth/mcp-tokens', () => {
     describe('empty list', () => {
       it('returns empty array when user has no tokens', async () => {
         // Arrange
-        (db.query.mcpTokens.findMany as Mock).mockResolvedValue([]);
+        vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([]);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'ps_session=valid-token',
-          },
-        });
+            Cookie: 'ps_session=valid-token' } });
 
         // Act
         const response = await GET(request);
@@ -471,9 +411,7 @@ describe('/api/auth/mcp-tokens', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: {
-            Cookie: 'ps_session=valid-token',
-          },
-        });
+            Cookie: 'ps_session=valid-token' } });
 
         // Act
         await GET(request);
@@ -482,8 +420,7 @@ describe('/api/auth/mcp-tokens', () => {
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
           expect.objectContaining({
-            requireCSRF: false,
-          })
+            requireCSRF: false })
         );
       });
     });
@@ -499,9 +436,7 @@ describe('/api/auth/mcp-tokens', () => {
             method: 'DELETE',
             headers: {
               Cookie: 'ps_session=valid-token',
-              'X-CSRF-Token': 'valid-csrf-token',
-            },
-          }
+              'X-CSRF-Token': 'valid-csrf-token' } }
         );
         const context = { params: Promise.resolve({ tokenId: 'token-123' }) };
 
@@ -520,11 +455,9 @@ describe('/api/auth/mcp-tokens', () => {
           expect.objectContaining({
             tokenId: 'token-123',
             tokenType: 'mcp',
-            tokenName: 'Test Token',
-          }),
+            tokenName: 'Test Token' }),
           expect.objectContaining({
-            actorEmail: 'test@example.com',
-          })
+            actorEmail: 'test@example.com' })
         );
       });
 
@@ -535,11 +468,9 @@ describe('/api/auth/mcp-tokens', () => {
           capturedSetValues = vals;
           return {
             where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([{ id: 'token-123' }]),
-            }),
-          };
+              returning: vi.fn().mockResolvedValue([{ id: 'token-123' }]) }) };
         });
-        (db.update as unknown as Mock).mockReturnValue({ set: mockSet });
+        vi.mocked(db.update as unknown).mockReturnValue({ set: mockSet });
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',
@@ -547,9 +478,7 @@ describe('/api/auth/mcp-tokens', () => {
             method: 'DELETE',
             headers: {
               Cookie: 'ps_session=valid-token',
-              'X-CSRF-Token': 'valid-csrf-token',
-            },
-          }
+              'X-CSRF-Token': 'valid-csrf-token' } }
         );
         const context = { params: Promise.resolve({ tokenId: 'token-123' }) };
 
@@ -567,7 +496,7 @@ describe('/api/auth/mcp-tokens', () => {
     describe('token not found', () => {
       it('returns 404 when token does not exist', async () => {
         // Arrange - findFirst returns undefined when token doesn't exist
-        (db.query.mcpTokens.findFirst as Mock).mockResolvedValueOnce(undefined);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValueOnce(undefined);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/nonexistent-token',
@@ -575,9 +504,7 @@ describe('/api/auth/mcp-tokens', () => {
             method: 'DELETE',
             headers: {
               Cookie: 'ps_session=valid-token',
-              'X-CSRF-Token': 'valid-csrf-token',
-            },
-          }
+              'X-CSRF-Token': 'valid-csrf-token' } }
         );
         const context = { params: Promise.resolve({ tokenId: 'nonexistent-token' }) };
 
@@ -590,7 +517,7 @@ describe('/api/auth/mcp-tokens', () => {
 
       it('returns 404 when token belongs to different user', async () => {
         // Arrange - findFirst returns undefined when token doesn't match userId
-        (db.query.mcpTokens.findFirst as Mock).mockResolvedValueOnce(undefined);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValueOnce(undefined);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/other-user-token',
@@ -598,9 +525,7 @@ describe('/api/auth/mcp-tokens', () => {
             method: 'DELETE',
             headers: {
               Cookie: 'ps_session=valid-token',
-              'X-CSRF-Token': 'valid-csrf-token',
-            },
-          }
+              'X-CSRF-Token': 'valid-csrf-token' } }
         );
         const context = { params: Promise.resolve({ tokenId: 'other-user-token' }) };
 
@@ -621,9 +546,7 @@ describe('/api/auth/mcp-tokens', () => {
             method: 'DELETE',
             headers: {
               Cookie: 'ps_session=valid-token',
-              'X-CSRF-Token': 'valid-csrf-token',
-            },
-          }
+              'X-CSRF-Token': 'valid-csrf-token' } }
         );
         const context = { params: Promise.resolve({ tokenId: 'token-123' }) };
 
@@ -634,8 +557,7 @@ describe('/api/auth/mcp-tokens', () => {
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
           expect.objectContaining({
-            requireCSRF: true,
-          })
+            requireCSRF: true })
         );
       });
     });

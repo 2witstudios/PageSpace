@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock next/server - create a mock class so instanceof checks work
 vi.mock('next/server', () => {
@@ -26,47 +26,36 @@ vi.mock('@pagespace/db', () => ({
     from: vi.fn().mockReturnThis(),
     where: vi.fn(),
     update: vi.fn().mockReturnThis(),
-    set: vi.fn().mockReturnThis(),
-  },
+    set: vi.fn().mockReturnThis() },
   users: { id: 'id', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' },
-  eq: vi.fn((a, b) => ({ a, b })),
-}));
+  eq: vi.fn((a, b) => ({ a, b })) }));
 
 // Mock AI providers
 vi.mock('@openrouter/ai-sdk-provider', () => ({
   createOpenRouter: vi.fn(() => ({
-    chat: vi.fn(() => ({ modelId: 'openrouter-model' })),
-  })),
-}));
+    chat: vi.fn(() => ({ modelId: 'openrouter-model' })) })) }));
 
 vi.mock('@ai-sdk/google', () => ({
-  createGoogleGenerativeAI: vi.fn(() => vi.fn(() => ({ modelId: 'google-model' }))),
-}));
+  createGoogleGenerativeAI: vi.fn(() => vi.fn(() => ({ modelId: 'google-model' }))) }));
 
 vi.mock('@ai-sdk/openai', () => ({
-  createOpenAI: vi.fn(() => vi.fn(() => ({ modelId: 'openai-model' }))),
-}));
+  createOpenAI: vi.fn(() => vi.fn(() => ({ modelId: 'openai-model' }))) }));
 
 vi.mock('@ai-sdk/openai-compatible', () => ({
-  createOpenAICompatible: vi.fn(() => vi.fn(() => ({ modelId: 'openai-compatible-model' }))),
-}));
+  createOpenAICompatible: vi.fn(() => vi.fn(() => ({ modelId: 'openai-compatible-model' }))) }));
 
 vi.mock('@ai-sdk/anthropic', () => ({
-  createAnthropic: vi.fn(() => vi.fn(() => ({ modelId: 'anthropic-model' }))),
-}));
+  createAnthropic: vi.fn(() => vi.fn(() => ({ modelId: 'anthropic-model' }))) }));
 
 vi.mock('@ai-sdk/xai', () => ({
-  createXai: vi.fn(() => vi.fn(() => ({ modelId: 'xai-model' }))),
-}));
+  createXai: vi.fn(() => vi.fn(() => ({ modelId: 'xai-model' }))) }));
 
 vi.mock('ollama-ai-provider-v2', () => ({
-  createOllama: vi.fn(() => vi.fn(() => ({ modelId: 'ollama-model' }))),
-}));
+  createOllama: vi.fn(() => vi.fn(() => ({ modelId: 'ollama-model' }))) }));
 
 // Mock security validation
 vi.mock('@pagespace/lib/security', () => ({
-  validateLocalProviderURL: vi.fn(),
-}));
+  validateLocalProviderURL: vi.fn() }));
 
 // Mock ai-providers-config - provide real resolvePageSpaceModel + mockable requiresConsent
 vi.mock('../ai-providers-config', () => ({
@@ -74,15 +63,12 @@ vi.mock('../ai-providers-config', () => ({
     const aliases: Record<string, string> = { standard: 'glm-4.5-air', pro: 'glm-4.7' };
     return aliases[m?.toLowerCase()] || m;
   }),
-  requiresConsent: vi.fn(),
-}));
+  requiresConsent: vi.fn() }));
 
 // Mock consent repository (dynamically imported by provider-factory)
 vi.mock('@/lib/repositories/ai-consent-repository', () => ({
   aiConsentRepository: {
-    hasConsent: vi.fn(),
-  },
-}));
+    hasConsent: vi.fn() } }));
 
 // Mock ai-utils
 vi.mock('../ai-utils', () => ({
@@ -104,8 +90,7 @@ vi.mock('../ai-utils', () => ({
   getUserGLMSettings: vi.fn(),
   createGLMSettings: vi.fn(),
   getUserMiniMaxSettings: vi.fn(),
-  createMiniMaxSettings: vi.fn(),
-}));
+  createMiniMaxSettings: vi.fn() }));
 
 import { type LanguageModel } from 'ai';
 import {
@@ -113,8 +98,7 @@ import {
   isProviderError,
   type ProviderResult,
   createAIProvider,
-  updateUserProviderSettings,
-} from '../provider-factory';
+  updateUserProviderSettings } from '../provider-factory';
 import { db } from '@pagespace/db';
 import {
   getUserOpenRouterSettings,
@@ -127,8 +111,7 @@ import {
   getUserOllamaSettings,
   getUserLMStudioSettings,
   getUserGLMSettings,
-  getUserMiniMaxSettings,
-} from '../ai-utils';
+  getUserMiniMaxSettings } from '../ai-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -153,12 +136,14 @@ const mockGetUserLMStudioSettings = vi.mocked(getUserLMStudioSettings);
 const mockGetUserGLMSettings = vi.mocked(getUserGLMSettings);
 const mockGetUserMiniMaxSettings = vi.mocked(getUserMiniMaxSettings);
 
+type MockFn = ReturnType<typeof vi.fn>;
+
 interface MockDb {
-  select: Mock;
-  from: Mock;
-  where: Mock;
-  update: Mock;
-  set: Mock;
+  select: MockFn;
+  from: MockFn;
+  where: MockFn;
+  update: MockFn;
+  set: MockFn;
 }
 
 describe('provider-factory', () => {
@@ -172,8 +157,7 @@ describe('provider-factory', () => {
     vi.mocked(validateLocalProviderURL).mockResolvedValue({
       valid: true,
       url: new URL('http://localhost:11434'),
-      resolvedIPs: ['127.0.0.1'],
-    });
+      resolvedIPs: ['127.0.0.1'] });
     // Default mock: no consent required (so existing tests are unaffected)
     vi.mocked(requiresConsent).mockReturnValue(false);
   });
@@ -184,8 +168,7 @@ describe('provider-factory', () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
           provider: 'glm',
           apiKey: 'glm-api-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {});
 
@@ -195,8 +178,7 @@ describe('provider-factory', () => {
           expect(createOpenAICompatible).toHaveBeenCalledWith({
             name: 'glm',
             apiKey: 'glm-api-key',
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
+            baseURL: 'https://api.z.ai/api/coding/paas/v4' });
         }
       });
 
@@ -204,8 +186,7 @@ describe('provider-factory', () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
           provider: 'google',
           apiKey: 'google-api-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {});
 
@@ -213,8 +194,7 @@ describe('provider-factory', () => {
         if (!isProviderError(result)) {
           expect(result.provider).toBe('pagespace');
           expect(createGoogleGenerativeAI).toHaveBeenCalledWith({
-            apiKey: 'google-api-key',
-          });
+            apiKey: 'google-api-key' });
         }
       });
 
@@ -222,8 +202,7 @@ describe('provider-factory', () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue(null);
         mockGetUserGoogleSettings.mockResolvedValue({
           apiKey: 'user-google-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {});
 
@@ -249,8 +228,7 @@ describe('provider-factory', () => {
       it('returns error for unsupported pagespace provider type', async () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
           provider: 'unsupported',
-          apiKey: 'key',
-        } as never);
+          apiKey: 'key' } as never);
 
         const result = await createAIProvider('user-123', {});
 
@@ -265,13 +243,11 @@ describe('provider-factory', () => {
       it('creates OpenRouter provider with existing settings', async () => {
         mockGetUserOpenRouterSettings.mockResolvedValue({
           apiKey: 'openrouter-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openrouter',
-          selectedModel: 'anthropic/claude-3-sonnet',
-        });
+          selectedModel: 'anthropic/claude-3-sonnet' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -289,8 +265,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openrouter',
           selectedModel: 'anthropic/claude-3-sonnet',
-          openRouterApiKey: 'new-openrouter-key',
-        });
+          openRouterApiKey: 'new-openrouter-key' });
 
         expect(createOpenRouterSettings).toHaveBeenCalledWith('user-123', 'new-openrouter-key');
         expect(isProviderError(result)).toBe(false);
@@ -303,8 +278,7 @@ describe('provider-factory', () => {
         mockGetUserOpenRouterSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'openrouter',
-        });
+          selectedProvider: 'openrouter' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -317,13 +291,11 @@ describe('provider-factory', () => {
       it('uses same OpenRouter settings as regular OpenRouter', async () => {
         mockGetUserOpenRouterSettings.mockResolvedValue({
           apiKey: 'openrouter-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openrouter_free',
-          selectedModel: 'meta-llama/llama-3-8b:free',
-        });
+          selectedModel: 'meta-llama/llama-3-8b:free' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -336,13 +308,11 @@ describe('provider-factory', () => {
       it('creates Google provider with existing settings', async () => {
         mockGetUserGoogleSettings.mockResolvedValue({
           apiKey: 'google-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'google',
-          selectedModel: 'gemini-2.5-flash',
-        });
+          selectedModel: 'gemini-2.5-flash' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -355,8 +325,7 @@ describe('provider-factory', () => {
         mockGetUserGoogleSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'google',
-        });
+          selectedProvider: 'google' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -369,13 +338,11 @@ describe('provider-factory', () => {
       it('creates OpenAI provider with existing settings', async () => {
         mockGetUserOpenAISettings.mockResolvedValue({
           apiKey: 'openai-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openai',
-          selectedModel: 'gpt-4',
-        });
+          selectedModel: 'gpt-4' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -388,8 +355,7 @@ describe('provider-factory', () => {
         mockGetUserOpenAISettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'openai',
-        });
+          selectedProvider: 'openai' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -402,13 +368,11 @@ describe('provider-factory', () => {
       it('creates Anthropic provider with existing settings', async () => {
         mockGetUserAnthropicSettings.mockResolvedValue({
           apiKey: 'anthropic-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'anthropic',
-          selectedModel: 'claude-3-sonnet',
-        });
+          selectedModel: 'claude-3-sonnet' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -421,8 +385,7 @@ describe('provider-factory', () => {
         mockGetUserAnthropicSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'anthropic',
-        });
+          selectedProvider: 'anthropic' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -435,13 +398,11 @@ describe('provider-factory', () => {
       it('creates xAI provider with existing settings', async () => {
         mockGetUserXAISettings.mockResolvedValue({
           apiKey: 'xai-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'xai',
-          selectedModel: 'grok-1',
-        });
+          selectedModel: 'grok-1' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -454,8 +415,7 @@ describe('provider-factory', () => {
         mockGetUserXAISettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'xai',
-        });
+          selectedProvider: 'xai' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -468,20 +428,17 @@ describe('provider-factory', () => {
       it('creates Ollama provider with existing settings', async () => {
         mockGetUserOllamaSettings.mockResolvedValue({
           baseUrl: 'http://localhost:11434',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
-          selectedModel: 'llama2',
-        });
+          selectedModel: 'llama2' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           expect(result.provider).toBe('ollama');
           expect(createOllama).toHaveBeenCalledWith({
-            baseURL: 'http://localhost:11434/api',
-          });
+            baseURL: 'http://localhost:11434/api' });
         }
       });
 
@@ -489,8 +446,7 @@ describe('provider-factory', () => {
         mockGetUserOllamaSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'ollama',
-        });
+          selectedProvider: 'ollama' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -503,21 +459,18 @@ describe('provider-factory', () => {
       it('creates LM Studio provider with existing settings', async () => {
         mockGetUserLMStudioSettings.mockResolvedValue({
           baseUrl: 'http://localhost:1234/v1',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'lmstudio',
-          selectedModel: 'local-model',
-        });
+          selectedModel: 'local-model' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           expect(result.provider).toBe('lmstudio');
           expect(createOpenAICompatible).toHaveBeenCalledWith({
             name: 'lmstudio',
-            baseURL: 'http://localhost:1234/v1',
-          });
+            baseURL: 'http://localhost:1234/v1' });
         }
       });
 
@@ -525,8 +478,7 @@ describe('provider-factory', () => {
         mockGetUserLMStudioSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'lmstudio',
-        });
+          selectedProvider: 'lmstudio' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -539,13 +491,11 @@ describe('provider-factory', () => {
       it('creates GLM provider with existing settings', async () => {
         mockGetUserGLMSettings.mockResolvedValue({
           apiKey: 'glm-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'glm',
-          selectedModel: 'glm-4-flash',
-        });
+          selectedModel: 'glm-4-flash' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
@@ -553,8 +503,7 @@ describe('provider-factory', () => {
           expect(createOpenAICompatible).toHaveBeenCalledWith({
             name: 'glm',
             apiKey: 'glm-key',
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
+            baseURL: 'https://api.z.ai/api/coding/paas/v4' });
         }
       });
 
@@ -562,8 +511,7 @@ describe('provider-factory', () => {
         mockGetUserGLMSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'glm',
-        });
+          selectedProvider: 'glm' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -576,21 +524,18 @@ describe('provider-factory', () => {
       it('creates MiniMax provider with existing settings', async () => {
         mockGetUserMiniMaxSettings.mockResolvedValue({
           apiKey: 'minimax-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'minimax',
-          selectedModel: 'abab5.5-chat',
-        });
+          selectedModel: 'abab5.5-chat' });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           expect(result.provider).toBe('minimax');
           expect(createAnthropic).toHaveBeenCalledWith({
             apiKey: 'minimax-key',
-            baseURL: 'https://api.minimax.io/anthropic/v1',
-          });
+            baseURL: 'https://api.minimax.io/anthropic/v1' });
         }
       });
 
@@ -598,8 +543,7 @@ describe('provider-factory', () => {
         mockGetUserMiniMaxSettings.mockResolvedValue(null);
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'minimax',
-        });
+          selectedProvider: 'minimax' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -611,8 +555,7 @@ describe('provider-factory', () => {
     describe('unsupported provider', () => {
       it('returns error for unknown provider', async () => {
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'unknown-provider',
-        });
+          selectedProvider: 'unknown-provider' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -629,8 +572,7 @@ describe('provider-factory', () => {
         ]);
         mockGetUserGoogleSettings.mockResolvedValue({
           apiKey: 'google-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {});
 
@@ -647,8 +589,7 @@ describe('provider-factory', () => {
         mockGetUserGoogleSettings.mockRejectedValue(new Error('Database connection failed'));
 
         const result = await createAIProvider('user-123', {
-          selectedProvider: 'google',
-        });
+          selectedProvider: 'google' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -668,8 +609,7 @@ describe('provider-factory', () => {
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openai',
-          selectedModel: 'gpt-4o',
-        });
+          selectedModel: 'gpt-4o' });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -688,8 +628,7 @@ describe('provider-factory', () => {
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'openai',
-          selectedModel: 'gpt-4o',
-        });
+          selectedModel: 'gpt-4o' });
 
         expect(isProviderError(result)).toBe(false);
       });
@@ -702,13 +641,11 @@ describe('provider-factory', () => {
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
           provider: 'glm',
           apiKey: 'test-key',
-          isConfigured: true,
-        });
+          isConfigured: true });
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'pagespace',
-          selectedModel: 'glm-4.5-air',
-        });
+          selectedModel: 'glm-4.5-air' });
 
         expect(aiConsentRepository.hasConsent).not.toHaveBeenCalled();
         expect(isProviderError(result)).toBe(false);
@@ -760,8 +697,7 @@ describe('provider-factory', () => {
     it('creates NextResponse with error message and status', async () => {
       const response = createProviderErrorResponse({
         error: 'Test error message',
-        status: 403,
-      });
+        status: 403 });
 
       expect(response).toBeInstanceOf(NextResponse);
       expect(response.status).toBe(403);
@@ -773,8 +709,7 @@ describe('provider-factory', () => {
     it('uses provided status code', async () => {
       const response = createProviderErrorResponse({
         error: 'Not found',
-        status: 404,
-      });
+        status: 404 });
 
       expect(response.status).toBe(404);
 
@@ -797,14 +732,12 @@ describe('provider-factory', () => {
         provider: 'test-provider',
         modelId: 'test-model',
         doGenerate: vi.fn(),
-        doStream: vi.fn(),
-      } as unknown as LanguageModel;
+        doStream: vi.fn() } as unknown as LanguageModel;
 
       const result: ProviderResult = {
         model: mockModel,
         provider: 'google',
-        modelName: 'gemini-pro',
-      };
+        modelName: 'gemini-pro' };
 
       expect(isProviderError(result)).toBe(false);
     });
@@ -814,17 +747,14 @@ describe('provider-factory', () => {
     it('blocks Ollama with cloud metadata URL', async () => {
       mockGetUserOllamaSettings.mockResolvedValue({
         baseUrl: 'http://169.254.169.254',
-        isConfigured: true,
-      });
+        isConfigured: true });
       vi.mocked(validateLocalProviderURL).mockResolvedValue({
         valid: false,
-        error: 'IP address blocked: cloud metadata endpoint',
-      });
+        error: 'IP address blocked: cloud metadata endpoint' });
 
       const result = await createAIProvider('user-123', {
         selectedProvider: 'ollama',
-        selectedModel: 'llama3',
-      });
+        selectedModel: 'llama3' });
 
       expect(isProviderError(result)).toBe(true);
       if (isProviderError(result)) {
@@ -836,18 +766,15 @@ describe('provider-factory', () => {
     it('allows Ollama with localhost URL', async () => {
       mockGetUserOllamaSettings.mockResolvedValue({
         baseUrl: 'http://localhost:11434',
-        isConfigured: true,
-      });
+        isConfigured: true });
       vi.mocked(validateLocalProviderURL).mockResolvedValue({
         valid: true,
         url: new URL('http://localhost:11434'),
-        resolvedIPs: ['127.0.0.1'],
-      });
+        resolvedIPs: ['127.0.0.1'] });
 
       const result = await createAIProvider('user-123', {
         selectedProvider: 'ollama',
-        selectedModel: 'llama3',
-      });
+        selectedModel: 'llama3' });
 
       expect(isProviderError(result)).toBe(false);
     });
@@ -855,17 +782,14 @@ describe('provider-factory', () => {
     it('blocks LM Studio with cloud metadata URL', async () => {
       mockGetUserLMStudioSettings.mockResolvedValue({
         baseUrl: 'http://169.254.169.254',
-        isConfigured: true,
-      });
+        isConfigured: true });
       vi.mocked(validateLocalProviderURL).mockResolvedValue({
         valid: false,
-        error: 'IP address blocked: cloud metadata endpoint',
-      });
+        error: 'IP address blocked: cloud metadata endpoint' });
 
       const result = await createAIProvider('user-123', {
         selectedProvider: 'lmstudio',
-        selectedModel: 'local-model',
-      });
+        selectedModel: 'local-model' });
 
       expect(isProviderError(result)).toBe(true);
       if (isProviderError(result)) {
@@ -877,18 +801,15 @@ describe('provider-factory', () => {
     it('allows LM Studio with localhost URL', async () => {
       mockGetUserLMStudioSettings.mockResolvedValue({
         baseUrl: 'http://localhost:1234/v1',
-        isConfigured: true,
-      });
+        isConfigured: true });
       vi.mocked(validateLocalProviderURL).mockResolvedValue({
         valid: true,
         url: new URL('http://localhost:1234/v1'),
-        resolvedIPs: ['127.0.0.1'],
-      });
+        resolvedIPs: ['127.0.0.1'] });
 
       const result = await createAIProvider('user-123', {
         selectedProvider: 'lmstudio',
-        selectedModel: 'local-model',
-      });
+        selectedModel: 'local-model' });
 
       expect(isProviderError(result)).toBe(false);
     });

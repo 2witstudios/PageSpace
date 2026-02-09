@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -8,13 +8,9 @@ vi.mock('@pagespace/db', () => ({
   db: {
     query: {
       pages: {
-        findFirst: vi.fn(),
-      },
-    },
-  },
+        findFirst: vi.fn() } } },
   pages: { id: 'pages.id' },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-}));
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })) }));
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
@@ -23,24 +19,18 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-}));
+      debug: vi.fn() } } }));
 
 vi.mock('@pagespace/lib', () => ({
   generateDOCX: vi.fn(),
-  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')),
-}));
+  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9-_]/g, '_')) }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackPageOperation: vi.fn(),
-}));
+  trackPageOperation: vi.fn() }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
-}));
+  isAuthError: vi.fn((result) => 'error' in result) }));
 
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -55,13 +45,11 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   tokenType: 'session',
   sessionId: 'test-session-id',
   role: 'user',
-  adminRoleVersion: 0,
-});
+  adminRoleVersion: 0 });
 
 // Helper to create mock AuthError
 const mockAuthError = (status = 401): AuthError => ({
-  error: NextResponse.json({ error: 'Unauthorized' }, { status }),
-});
+  error: NextResponse.json({ error: 'Unauthorized' }, { status }) });
 
 // Helper to create mock page
 const mockPage = (overrides?: Partial<{
@@ -79,8 +67,7 @@ const mockPage = (overrides?: Partial<{
   position: 0,
   createdAt: new Date(),
   updatedAt: new Date(),
-  isTrashed: false,
-});
+  isTrashed: false });
 
 describe('GET /api/pages/[pageId]/export/docx', () => {
   const mockUserId = 'user_123';
@@ -88,24 +75,23 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   const createRequest = () => {
     return new Request(`https://example.com/api/pages/${mockPageId}/export/docx`, {
-      method: 'GET',
-    });
+      method: 'GET' });
   };
 
   const mockParams = Promise.resolve({ pageId: mockPageId });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (canUserViewPage as Mock).mockResolvedValue(true);
-    (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage());
-    (generateDOCX as Mock).mockResolvedValue(Buffer.from('mock docx content'));
-    (sanitizeFilename as Mock).mockReturnValue('Test_Document');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage());
+    vi.mocked(generateDOCX).mockResolvedValue(Buffer.from('mock docx content'));
+    vi.mocked(sanitizeFilename).mockReturnValue('Test_Document');
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -115,7 +101,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks view permission', async () => {
-      (canUserViewPage as Mock).mockResolvedValue(false);
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -125,7 +111,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   describe('page validation', () => {
     it('returns 404 when page does not exist', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -133,7 +119,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 400 when page is not a DOCUMENT type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'FOLDER' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'FOLDER' }));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -143,7 +129,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 400 for AI_CHAT page type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'AI_CHAT' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'AI_CHAT' }));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -153,7 +139,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 400 for SHEET page type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'SHEET' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'SHEET' }));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -166,7 +152,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
   describe('DOCX generation', () => {
     it('generates DOCX file successfully', async () => {
       const docxBuffer = Buffer.from('mock docx content');
-      (generateDOCX as Mock).mockResolvedValue(docxBuffer);
+      vi.mocked(generateDOCX).mockResolvedValue(docxBuffer);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -190,7 +176,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('uses default content when page has no content', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ content: '' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ content: '' }));
 
       await GET(createRequest(), { params: mockParams });
 
@@ -198,7 +184,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('uses fallback filename when title cannot be sanitized', async () => {
-      (sanitizeFilename as Mock).mockReturnValue('');
+      vi.mocked(sanitizeFilename).mockReturnValue('');
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -216,15 +202,14 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
         mockPageId,
         expect.objectContaining({
           exportFormat: 'docx',
-          pageTitle: 'Test Document',
-        })
+          pageTitle: 'Test Document' })
       );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when DOCX generation fails', async () => {
-      (generateDOCX as Mock).mockRejectedValue(new Error('Generation failed'));
+      vi.mocked(generateDOCX).mockRejectedValue(new Error('Generation failed'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -234,7 +219,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      (db.query.pages.findFirst as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

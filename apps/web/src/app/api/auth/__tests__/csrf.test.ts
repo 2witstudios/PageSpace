@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../csrf/route';
 
 /**
@@ -23,9 +23,7 @@ import { GET } from '../csrf/route';
 vi.mock('@pagespace/lib/auth', () => ({
   generateCSRFToken: vi.fn().mockReturnValue('generated-csrf-token'),
   sessionService: {
-    validateSession: vi.fn(),
-  },
-}));
+    validateSession: vi.fn() } }));
 
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
@@ -33,14 +31,10 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
-}));
+      debug: vi.fn() } } }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
-  getSessionFromCookies: vi.fn(),
-}));
+  getSessionFromCookies: vi.fn() }));
 
 import { generateCSRFToken, sessionService } from '@pagespace/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
@@ -49,15 +43,14 @@ describe('/api/auth/csrf', () => {
   const mockSessionClaims = {
     userId: 'test-user-id',
     sessionId: 'test-session-id',
-    userRole: 'user' as const,
-  };
+    userRole: 'user' as const };
 
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Default: valid session
-    (getSessionFromCookies as unknown as Mock).mockReturnValue('valid-session-token');
-    (sessionService.validateSession as unknown as Mock).mockResolvedValue(mockSessionClaims);
+    vi.mocked(getSessionFromCookies as unknown).mockReturnValue('valid-session-token');
+    vi.mocked(sessionService.validateSession as unknown).mockResolvedValue(mockSessionClaims);
   });
 
   describe('successful CSRF token generation', () => {
@@ -66,9 +59,7 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token',
-        },
-      });
+          Cookie: 'session=valid-session-token' } });
 
       // Act
       const response = await GET(request);
@@ -84,9 +75,7 @@ describe('/api/auth/csrf', () => {
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token',
-        },
-      });
+          Cookie: 'session=valid-session-token' } });
 
       // Act
       await GET(request);
@@ -100,11 +89,10 @@ describe('/api/auth/csrf', () => {
   describe('authentication errors (401)', () => {
     it('GET_withNoSessionCookie_returns401', async () => {
       // Arrange: No session cookie
-      (getSessionFromCookies as unknown as Mock).mockReturnValue(null);
+      vi.mocked(getSessionFromCookies as unknown).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
-        method: 'GET',
-      });
+        method: 'GET' });
 
       // Act
       const response = await GET(request);
@@ -117,14 +105,12 @@ describe('/api/auth/csrf', () => {
 
     it('GET_withInvalidSession_returns401', async () => {
       // Arrange: Session validation fails
-      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession as unknown).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=invalid-session-token',
-        },
-      });
+          Cookie: 'session=invalid-session-token' } });
 
       // Act
       const response = await GET(request);
@@ -137,14 +123,12 @@ describe('/api/auth/csrf', () => {
 
     it('GET_withExpiredSession_returns401', async () => {
       // Arrange: Session has expired
-      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession as unknown).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=expired-session-token',
-        },
-      });
+          Cookie: 'session=expired-session-token' } });
 
       // Act
       const response = await GET(request);
@@ -159,16 +143,14 @@ describe('/api/auth/csrf', () => {
   describe('error handling (500)', () => {
     it('GET_whenTokenGenerationThrows_returns500WithGenericError', async () => {
       // Arrange: Token generation throws an error
-      (generateCSRFToken as unknown as Mock).mockImplementation(() => {
+      vi.mocked(generateCSRFToken as unknown).mockImplementation(() => {
         throw new Error('CSRF_SECRET not configured');
       });
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token',
-        },
-      });
+          Cookie: 'session=valid-session-token' } });
 
       // Act
       const response = await GET(request);
@@ -181,16 +163,14 @@ describe('/api/auth/csrf', () => {
 
     it('GET_whenSessionValidationThrows_returns500', async () => {
       // Arrange: Session validation throws an error
-      (sessionService.validateSession as unknown as Mock).mockRejectedValue(
+      vi.mocked(sessionService.validateSession as unknown).mockRejectedValue(
         new Error('Database connection failed')
       );
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
         headers: {
-          Cookie: 'session=valid-session-token',
-        },
-      });
+          Cookie: 'session=valid-session-token' } });
 
       // Act
       const response = await GET(request);

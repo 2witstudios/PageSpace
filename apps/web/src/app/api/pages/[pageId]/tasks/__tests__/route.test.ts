@@ -1,39 +1,32 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
-}));
+  isAuthError: vi.fn((result) => 'error' in result) }));
 
 vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
-  canUserEditPage: vi.fn(),
-}));
+  canUserEditPage: vi.fn() }));
 
 vi.mock('@pagespace/lib', () => ({
   PageType: {
     DOCUMENT: 'DOCUMENT',
     FOLDER: 'FOLDER',
-    TASK_LIST: 'TASK_LIST',
-  },
+    TASK_LIST: 'TASK_LIST' },
   getDefaultContent: vi.fn(() => '{}'),
   logger: {
     child: vi.fn(() => ({
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
-      debug: vi.fn(),
-    })),
-  },
-}));
+      debug: vi.fn() })) } }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@test.com' }),
-  logPageActivity: vi.fn(),
-}));
+  logPageActivity: vi.fn() }));
 
 // Track mock values for transaction
 let transactionPageResult = [{ id: 'mock-page-id', title: 'Mock Page' }];
@@ -42,27 +35,20 @@ let transactionTaskResult = [{ id: 'mock-task-id', title: 'Mock Task' }];
 vi.mock('@pagespace/db', () => {
   const mockInsert = vi.fn(() => ({
     values: vi.fn(() => ({
-      returning: vi.fn(),
-    })),
-  }));
+      returning: vi.fn() })) }));
 
   return {
     db: {
       query: {
         taskLists: {
-          findFirst: vi.fn(),
-        },
+          findFirst: vi.fn() },
         taskItems: {
           findFirst: vi.fn(),
-          findMany: vi.fn(),
-        },
+          findMany: vi.fn() },
         taskStatusConfigs: {
-          findMany: vi.fn().mockResolvedValue([]),
-        },
+          findMany: vi.fn().mockResolvedValue([]) },
         pages: {
-          findFirst: vi.fn(),
-        },
-      },
+          findFirst: vi.fn() } },
       insert: mockInsert,
       transaction: vi.fn(async (callback) => {
         let insertCallCount = 0;
@@ -74,13 +60,9 @@ vi.mock('@pagespace/db', () => {
                 insertCallCount++;
                 // First insert is for pages, second is for taskItems
                 return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
-              }),
-            })),
-          })),
-        };
+              }) })) })) };
         return callback(tx);
-      }),
-    },
+      }) },
     taskLists: {},
     taskItems: {},
     taskStatusConfigs: {},
@@ -95,15 +77,13 @@ vi.mock('@pagespace/db', () => {
     eq: vi.fn((field, value) => ({ field, value })),
     and: vi.fn((...conditions) => conditions),
     asc: vi.fn((col) => ({ type: 'asc', col })),
-    desc: vi.fn((col) => ({ type: 'desc', col })),
-  };
+    desc: vi.fn((col) => ({ type: 'desc', col })) };
 });
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn(),
   broadcastPageEvent: vi.fn(),
-  createPageEventPayload: vi.fn(() => ({})),
-}));
+  createPageEventPayload: vi.fn(() => ({})) }));
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
@@ -118,21 +98,20 @@ describe('Task API Routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset default mock for taskStatusConfigs.findMany
-    (db.query.taskStatusConfigs.findMany as Mock).mockResolvedValue([]);
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([]);
   });
 
   describe('GET /api/pages/[pageId]/tasks', () => {
     const createRequest = (searchParams = '') => {
       return new Request(`https://example.com/api/pages/${mockPageId}/tasks${searchParams}`, {
-        method: 'GET',
-      });
+        method: 'GET' });
     };
 
     const mockParams = Promise.resolve({ pageId: mockPageId });
 
     it('returns 401 when user is not authenticated', async () => {
       const mockAuthError = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ error: mockAuthError });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockAuthError });
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -140,8 +119,8 @@ describe('Task API Routes', () => {
     });
 
     it('returns 403 when user lacks view permission', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserViewPage as Mock).mockResolvedValue(false);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -157,10 +136,10 @@ describe('Task API Routes', () => {
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserViewPage as Mock).mockResolvedValue(true);
-      (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
-      (db.query.taskItems.findMany as Mock).mockResolvedValue(mockTasks);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -173,22 +152,19 @@ describe('Task API Routes', () => {
     it('creates task list if it does not exist', async () => {
       const mockInsertedTaskList = { id: 'new-tasklist', title: 'Task List', status: 'pending', updatedAt: new Date() };
 
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserViewPage as Mock).mockResolvedValue(true);
-      (db.query.taskLists.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null);
       // When task list doesn't exist, getOrCreateTaskListForPage uses db.transaction
       // The transaction mock creates it and returns the result
-      (db.transaction as Mock).mockImplementationOnce(async (callback) => {
+      vi.mocked(db.transaction).mockImplementationOnce(async (callback) => {
         const tx = {
           insert: vi.fn(() => ({
             values: vi.fn(() => ({
-              returning: vi.fn().mockResolvedValue([mockInsertedTaskList]),
-            })),
-          })),
-        };
+              returning: vi.fn().mockResolvedValue([mockInsertedTaskList]) })) })) };
         return callback(tx);
       });
-      (db.query.taskItems.findMany as Mock).mockResolvedValue([]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([]);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -203,10 +179,10 @@ describe('Task API Routes', () => {
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserViewPage as Mock).mockResolvedValue(true);
-      (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
-      (db.query.taskItems.findMany as Mock).mockResolvedValue(mockTasks);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks);
 
       const response = await GET(createRequest('?search=groceries'), { params: mockParams });
       const body = await response.json();
@@ -222,15 +198,14 @@ describe('Task API Routes', () => {
       return new Request(`https://example.com/api/pages/${mockPageId}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+        body: JSON.stringify(body) });
     };
 
     const mockParams = Promise.resolve({ pageId: mockPageId });
 
     it('returns 401 when user is not authenticated', async () => {
       const mockAuthError = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ error: mockAuthError });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockAuthError });
 
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
 
@@ -238,8 +213,8 @@ describe('Task API Routes', () => {
     });
 
     it('returns 403 when user lacks edit permission', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserEditPage as Mock).mockResolvedValue(false);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserEditPage).mockResolvedValue(false);
 
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
       const body = await response.json();
@@ -249,8 +224,8 @@ describe('Task API Routes', () => {
     });
 
     it('returns 400 when title is missing', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserEditPage as Mock).mockResolvedValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
 
       const response = await POST(createRequest({}), { params: mockParams });
       const body = await response.json();
@@ -260,8 +235,8 @@ describe('Task API Routes', () => {
     });
 
     it('returns 400 when title is empty', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserEditPage as Mock).mockResolvedValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
 
       const response = await POST(createRequest({ title: '   ' }), { params: mockParams });
       const body = await response.json();
@@ -277,32 +252,30 @@ describe('Task API Routes', () => {
         title: 'New Task',
         status: 'pending',
         priority: 'medium',
-        position: 0,
-      };
+        position: 0 };
       const mockNewPage = {
         id: 'new-page',
         title: 'New Task',
-        type: 'DOCUMENT',
-      };
+        type: 'DOCUMENT' };
 
       // Configure transaction to return expected values
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
 
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserEditPage as Mock).mockResolvedValue(true);
-      (db.query.pages.findFirst as Mock).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
-      (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
       // taskStatusConfigs.findMany returns empty (no status validation needed for default 'pending')
-      (db.query.taskStatusConfigs.findMany as Mock).mockResolvedValue([]);
-      (db.query.taskItems.findFirst as Mock)
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([]);
+      vi.mocked(db.query.taskItems.findFirst)
         .mockResolvedValueOnce(null) // For position calculation (lastTask)
         .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] }); // For returning with relations
 
       // pages.findFirst is also called for lastChildPage via Promise.all - set up correct mock chain
       // First call: taskListPage lookup, Second call: (from query) finding task with relations
       // Actually pages.findFirst is called once for taskListPage, then db.query.pages.findFirst for lastChildPage
-      (db.query.pages.findFirst as Mock)
+      vi.mocked(db.query.pages.findFirst)
         .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' }) // taskListPage
         .mockResolvedValueOnce(null); // lastChildPage (no existing children)
 
@@ -312,8 +285,7 @@ describe('Task API Routes', () => {
       expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
         type: 'task_added',
         taskId: 'new-task',
-        pageId: mockPageId,
-      }));
+        pageId: mockPageId }));
     });
 
     it('creates task with all optional fields', async () => {
@@ -326,31 +298,29 @@ describe('Task API Routes', () => {
         priority: 'high',
         position: 1,
         dueDate: '2024-12-31',
-        assigneeId: 'user-456',
-      };
+        assigneeId: 'user-456' };
       const mockNewPage = {
         id: 'new-page',
         title: 'Complete Task',
-        type: 'DOCUMENT',
-      };
+        type: 'DOCUMENT' };
 
       // Configure transaction to return expected values
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
 
-      (authenticateRequestWithOptions as Mock).mockResolvedValue({ userId: mockUserId });
-      (canUserEditPage as Mock).mockResolvedValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
       // Status validation: return configs with in_progress as valid
-      (db.query.taskStatusConfigs.findMany as Mock).mockResolvedValue([
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
         { slug: 'pending' },
         { slug: 'in_progress' },
         { slug: 'completed' },
       ]);
-      (db.query.pages.findFirst as Mock)
+      vi.mocked(db.query.pages.findFirst)
         .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' }) // taskListPage
         .mockResolvedValueOnce(null); // lastChildPage
-      (db.query.taskLists.findFirst as Mock).mockResolvedValue(mockTaskList);
-      (db.query.taskItems.findFirst as Mock)
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
+      vi.mocked(db.query.taskItems.findFirst)
         .mockResolvedValueOnce({ position: 0 }) // lastTask for position calculation
         .mockResolvedValueOnce({ ...mockNewTask, assignee: { id: 'user-456', name: 'Assignee' }, user: null, assignees: [] });
 
@@ -360,8 +330,7 @@ describe('Task API Routes', () => {
         status: 'in_progress',
         priority: 'high',
         dueDate: '2024-12-31',
-        assigneeId: 'user-456',
-      }), { params: mockParams });
+        assigneeId: 'user-456' }), { params: mockParams });
 
       expect(response.status).toBe(201);
     });

@@ -10,22 +10,19 @@
  * - Security (no password exposure, role-based responses)
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../me/route';
 import type { User } from '@/lib/repositories/auth-repository';
 
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserById: vi.fn(),
-  },
-}));
+    findUserById: vi.fn() } }));
 
 // Mock auth helpers (boundary)
 vi.mock('@/lib/auth/auth-helpers', () => ({
   requireAuth: vi.fn(),
-  isAuthError: vi.fn(),
-}));
+  isAuthError: vi.fn() }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
@@ -59,24 +56,20 @@ const mockUser: User = {
   suspendedReason: null,
   timezone: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
-  updatedAt: new Date('2024-01-01T00:00:00Z'),
-};
+  updatedAt: new Date('2024-01-01T00:00:00Z') };
 
 const mockAuthSuccess = {
   userId: 'test-user-id',
   role: 'user',
   tokenVersion: 0,
   tokenType: 'session',
-  sessionId: 'test-session-id',
-};
+  sessionId: 'test-session-id' };
 
 const createRequest = () => {
   return new Request('http://localhost/api/auth/me', {
     method: 'GET',
     headers: {
-      Cookie: 'ps_session=valid-token',
-    },
-  });
+      Cookie: 'ps_session=valid-token' } });
 };
 
 describe('GET /api/auth/me', () => {
@@ -84,8 +77,8 @@ describe('GET /api/auth/me', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (requireAuth as unknown as Mock).mockResolvedValue(mockAuthSuccess);
-    (isAuthError as unknown as Mock).mockReturnValue(false);
+    vi.mocked(requireAuth as unknown).mockResolvedValue(mockAuthSuccess);
+    vi.mocked(isAuthError as unknown).mockReturnValue(false);
     vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser);
   });
 
@@ -116,12 +109,10 @@ describe('GET /api/auth/me', () => {
     it('returns admin role for admin users', async () => {
       vi.mocked(authRepository.findUserById).mockResolvedValue({
         ...mockUser,
-        role: 'admin',
-      });
-      (requireAuth as unknown as Mock).mockResolvedValue({
+        role: 'admin' });
+      vi.mocked(requireAuth as unknown).mockResolvedValue({
         ...mockAuthSuccess,
-        role: 'admin',
-      });
+        role: 'admin' });
 
       const response = await GET(createRequest());
       const body = await response.json();
@@ -133,8 +124,8 @@ describe('GET /api/auth/me', () => {
   describe('authentication', () => {
     it('returns 401 when not authenticated', async () => {
       const mockResponse = new Response('Unauthorized', { status: 401 });
-      (requireAuth as unknown as Mock).mockResolvedValue(mockResponse);
-      (isAuthError as unknown as Mock).mockReturnValue(true);
+      vi.mocked(requireAuth as unknown).mockResolvedValue(mockResponse);
+      vi.mocked(isAuthError as unknown).mockReturnValue(true);
 
       const response = await GET(createRequest());
 
@@ -166,8 +157,7 @@ describe('GET /api/auth/me', () => {
       const oauthUser: User = {
         ...mockUser,
         provider: 'google',
-        googleId: 'google-123',
-      };
+        googleId: 'google-123' };
       vi.mocked(authRepository.findUserById).mockResolvedValue(oauthUser);
 
       const response = await GET(createRequest());

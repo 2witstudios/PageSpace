@@ -13,23 +13,19 @@
  * - Account lockout (lock check, record failed attempts, reset on success)
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../login/route';
 import type { User } from '@/lib/repositories/auth-repository';
 
 // Mock the repository seam (boundary) - NOT the ORM chains
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByEmail: vi.fn(),
-  },
-}));
+    findUserByEmail: vi.fn() } }));
 
 // Mock bcrypt (external boundary)
 vi.mock('bcryptjs', () => ({
   default: {
-    compare: vi.fn(),
-  },
-}));
+    compare: vi.fn() } }));
 
 // Mock session service, CSRF generation, and account lockout from @pagespace/lib/auth
 vi.mock('@pagespace/lib/auth', () => ({
@@ -42,24 +38,20 @@ vi.mock('@pagespace/lib/auth', () => ({
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    }),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
-    revokeSession: vi.fn().mockResolvedValue(undefined),
-  },
+    revokeSession: vi.fn().mockResolvedValue(undefined) },
   generateCSRFToken: vi.fn().mockReturnValue('mock-csrf-token'),
   SESSION_DURATION_MS: 7 * 24 * 60 * 60 * 1000,
   isAccountLockedByEmail: vi.fn().mockResolvedValue({ isLocked: false, lockedUntil: null }),
   recordFailedLoginAttemptByEmail: vi.fn().mockResolvedValue({ success: true }),
-  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
-}));
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined) }));
 
 // Mock cookie utilities
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
-  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token'),
-}));
+  getSessionFromCookies: vi.fn().mockReturnValue('ps_sess_mock_session_token') }));
 
 // Mock server utilities
 vi.mock('@pagespace/lib/server', () => ({
@@ -68,51 +60,40 @@ vi.mock('@pagespace/lib/server', () => ({
       error: vi.fn(),
       info: vi.fn(),
       warn: vi.fn(),
-      debug: vi.fn(),
-    },
-  },
+      debug: vi.fn() } },
   logAuthEvent: vi.fn(),
-  logSecurityEvent: vi.fn(),
-}));
+  logSecurityEvent: vi.fn() }));
 
 // Mock distributed rate limiting (P1-T5)
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
     allowed: true,
     attemptsRemaining: 4,
-    retryAfter: undefined,
-  }),
+    retryAfter: undefined }),
   resetDistributedRateLimit: vi.fn().mockResolvedValue(undefined),
   DISTRIBUTED_RATE_LIMITS: {
     LOGIN: { maxAttempts: 5, windowMs: 900000, progressiveDelay: true },
     SIGNUP: { maxAttempts: 3, windowMs: 3600000, progressiveDelay: false },
-    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false },
-  },
-}));
+    REFRESH: { maxAttempts: 10, windowMs: 300000, progressiveDelay: false } } }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({
-  trackAuthEvent: vi.fn(),
-}));
+  trackAuthEvent: vi.fn() }));
 
 vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
-  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
-}));
+  parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })) }));
 
 // Mock login CSRF validation
 vi.mock('@/lib/auth/login-csrf-utils', () => ({
-  validateLoginCSRFToken: vi.fn(() => true),
-}));
+  validateLoginCSRFToken: vi.fn(() => true) }));
 
 // Mock client IP extraction
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(() => true),
-  getClientIP: vi.fn().mockReturnValue('unknown'),
-}));
+  getClientIP: vi.fn().mockReturnValue('unknown') }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
-}));
+  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null) }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
@@ -121,8 +102,7 @@ import {
   generateCSRFToken,
   isAccountLockedByEmail,
   recordFailedLoginAttemptByEmail,
-  resetFailedLoginAttempts,
-} from '@pagespace/lib/auth';
+  resetFailedLoginAttempts } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -130,8 +110,7 @@ import { getClientIP } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
-  DISTRIBUTED_RATE_LIMITS,
-} from '@pagespace/lib/security';
+  DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 
 // Test fixtures
 const mockUser: User = {
@@ -161,13 +140,11 @@ const mockUser: User = {
   suspendedReason: null,
   timezone: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
-  updatedAt: new Date('2024-01-01T00:00:00Z'),
-};
+  updatedAt: new Date('2024-01-01T00:00:00Z') };
 
 const validLoginPayload = {
   email: 'test@example.com',
-  password: 'validPassword123',
-};
+  password: 'validPassword123' };
 
 // Helper function to create requests with CSRF headers
 const createLoginRequest = (
@@ -180,10 +157,8 @@ const createLoginRequest = (
       'Content-Type': 'application/json',
       'X-Login-CSRF-Token': 'valid-csrf-token',
       'Cookie': 'login_csrf=valid-csrf-token',
-      ...additionalHeaders,
-    },
-    body: JSON.stringify(payload),
-  });
+      ...additionalHeaders },
+    body: JSON.stringify(payload) });
 };
 
 describe('POST /api/auth/login', () => {
@@ -192,9 +167,9 @@ describe('POST /api/auth/login', () => {
 
     // Default mocks for successful login
     vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockUser);
-    (bcrypt.compare as Mock).mockResolvedValue(true);
+    vi.mocked(bcrypt.compare).mockResolvedValue(true);
     // Reset client IP mock
-    (getClientIP as Mock).mockReturnValue('unknown');
+    vi.mocked(getClientIP).mockReturnValue('unknown');
   });
 
   describe('successful login', () => {
@@ -219,8 +194,7 @@ describe('POST /api/auth/login', () => {
         expect.objectContaining({
           userId: mockUser.id,
           type: 'user',
-          scopes: ['*'],
-        })
+          scopes: ['*'] })
       );
 
       // Verify session cookie is set
@@ -244,11 +218,10 @@ describe('POST /api/auth/login', () => {
     });
 
     it('resets rate limits on successful login', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        'x-forwarded-for': '192.168.1.1' });
 
       await POST(request);
 
@@ -257,11 +230,10 @@ describe('POST /api/auth/login', () => {
     });
 
     it('logs successful login event', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        'x-forwarded-for': '192.168.1.1' });
 
       await POST(request);
 
@@ -276,8 +248,7 @@ describe('POST /api/auth/login', () => {
         'login',
         expect.objectContaining({
           email: mockUser.email,
-          ip: '192.168.1.1',
-        })
+          ip: '192.168.1.1' })
       );
     });
   });
@@ -285,12 +256,11 @@ describe('POST /api/auth/login', () => {
   describe('invalid credentials', () => {
     it('returns 401 for non-existent email', async () => {
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false);
 
       const request = createLoginRequest({
         email: 'nonexistent@example.com',
-        password: 'anypassword',
-      });
+        password: 'anypassword' });
       const response = await POST(request);
       const body = await response.json();
 
@@ -299,12 +269,11 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 401 for incorrect password', async () => {
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false);
 
       const request = createLoginRequest({
         email: 'test@example.com',
-        password: 'wrongpassword',
-      });
+        password: 'wrongpassword' });
       const response = await POST(request);
       const body = await response.json();
 
@@ -319,12 +288,11 @@ describe('POST /api/auth/login', () => {
 
       const request = createLoginRequest({
         email: 'nonexistent@example.com',
-        password: 'anypassword',
-      });
+        password: 'anypassword' });
       await POST(request);
 
       expect(bcrypt.compare).toHaveBeenCalled();
-      const [password, hash] = (bcrypt.compare as Mock).mock.calls[0];
+      const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
       expect(password).toBe('anypassword');
       // Verify a valid bcrypt hash was used (not null/undefined/empty)
       expect(hash).toBeTruthy();
@@ -333,15 +301,13 @@ describe('POST /api/auth/login', () => {
     });
 
     it('logs failed login attempt', async () => {
-      (bcrypt.compare as Mock).mockResolvedValue(false);
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest({
         email: 'test@example.com',
-        password: 'wrongpassword',
-      }, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        password: 'wrongpassword' }, {
+        'x-forwarded-for': '192.168.1.1' });
 
       await POST(request);
 
@@ -409,14 +375,13 @@ describe('POST /api/auth/login', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        'x-forwarded-for': '192.168.1.1' });
 
       const response = await POST(request);
       const body = await response.json();
@@ -427,7 +392,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
 
@@ -440,7 +405,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('checks rate limits before database query', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
 
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
@@ -452,11 +417,10 @@ describe('POST /api/auth/login', () => {
 
   describe('IP extraction', () => {
     it('extracts IP from x-forwarded-for header', async () => {
-      (getClientIP as Mock).mockReturnValue('203.0.113.195');
+      vi.mocked(getClientIP).mockReturnValue('203.0.113.195');
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '203.0.113.195, 70.41.3.18, 150.172.238.178',
-      });
+        'x-forwarded-for': '203.0.113.195, 70.41.3.18, 150.172.238.178' });
 
       await POST(request);
 
@@ -467,11 +431,10 @@ describe('POST /api/auth/login', () => {
     });
 
     it('extracts IP from x-real-ip header when x-forwarded-for is missing', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.100');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.100');
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-real-ip': '192.168.1.100',
-      });
+        'x-real-ip': '192.168.1.100' });
 
       await POST(request);
 
@@ -482,7 +445,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('uses "unknown" as fallback IP when headers are missing', async () => {
-      (getClientIP as Mock).mockReturnValue('unknown');
+      vi.mocked(getClientIP).mockReturnValue('unknown');
 
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
@@ -494,11 +457,10 @@ describe('POST /api/auth/login', () => {
   describe('error handling', () => {
     beforeEach(() => {
       // Reset rate limiting mock to allow requests
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: true,
         attemptsRemaining: 4,
-        retryAfter: undefined,
-      });
+        retryAfter: undefined });
     });
 
     it('returns 500 on unexpected errors', async () => {
@@ -531,18 +493,16 @@ describe('POST /api/auth/login', () => {
   describe('case sensitivity', () => {
     beforeEach(() => {
       // Reset rate limiting mock to allow requests
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: true,
         attemptsRemaining: 4,
-        retryAfter: undefined,
-      });
+        retryAfter: undefined });
     });
 
     it('normalizes email to lowercase for rate limiting', async () => {
       const request = createLoginRequest({
         email: 'TEST@EXAMPLE.COM',
-        password: 'validPassword123',
-      });
+        password: 'validPassword123' });
 
       await POST(request);
 
@@ -559,16 +519,14 @@ describe('POST /api/auth/login', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: true,
         attemptsRemaining: 4,
-        retryAfter: undefined,
-      });
+        retryAfter: undefined });
     });
 
     it('calls checkDistributedRateLimit for IP', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        'x-forwarded-for': '192.168.1.1' });
 
       await POST(request);
 
@@ -590,22 +548,19 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 429 with X-RateLimit headers when IP rate limit exceeded', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
       vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({
           allowed: false,
           attemptsRemaining: 0,
-          retryAfter: 900,
-        })
+          retryAfter: 900 })
         .mockResolvedValue({
           allowed: true,
           attemptsRemaining: 4,
-          retryAfter: undefined,
-        });
+          retryAfter: undefined });
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        'x-forwarded-for': '192.168.1.1' });
 
       const response = await POST(request);
 
@@ -620,13 +575,11 @@ describe('POST /api/auth/login', () => {
         .mockResolvedValueOnce({
           allowed: true,
           attemptsRemaining: 4,
-          retryAfter: undefined,
-        })
+          retryAfter: undefined })
         .mockResolvedValueOnce({
           allowed: false,
           attemptsRemaining: 0,
-          retryAfter: 900,
-        });
+          retryAfter: 900 });
 
       const request = createLoginRequest(validLoginPayload);
 
@@ -637,11 +590,10 @@ describe('POST /api/auth/login', () => {
     });
 
     it('calls resetDistributedRateLimit on successful login', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest(validLoginPayload, {
-        'x-forwarded-for': '192.168.1.1',
-      });
+        'x-forwarded-for': '192.168.1.1' });
 
       await POST(request);
 
@@ -670,8 +622,7 @@ describe('POST /api/auth/login', () => {
       const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
       vi.mocked(isAccountLockedByEmail).mockResolvedValueOnce({
         isLocked: true,
-        lockedUntil,
-      });
+        lockedUntil });
 
       const request = createLoginRequest(validLoginPayload);
       const response = await POST(request);
@@ -685,8 +636,7 @@ describe('POST /api/auth/login', () => {
     it('does not attempt password validation when account is locked', async () => {
       vi.mocked(isAccountLockedByEmail).mockResolvedValueOnce({
         isLocked: true,
-        lockedUntil: new Date(Date.now() + 15 * 60 * 1000),
-      });
+        lockedUntil: new Date(Date.now() + 15 * 60 * 1000) });
 
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
@@ -696,12 +646,11 @@ describe('POST /api/auth/login', () => {
     });
 
     it('records failed login attempt on invalid credentials', async () => {
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false);
 
       const request = createLoginRequest({
         email: 'test@example.com',
-        password: 'wrongpassword',
-      });
+        password: 'wrongpassword' });
       await POST(request);
 
       expect(recordFailedLoginAttemptByEmail).toHaveBeenCalledWith('test@example.com');
@@ -716,12 +665,11 @@ describe('POST /api/auth/login', () => {
 
     it('does not record failed attempt for non-existent email', async () => {
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false);
 
       const request = createLoginRequest({
         email: 'nonexistent@example.com',
-        password: 'anypassword',
-      });
+        password: 'anypassword' });
       await POST(request);
 
       expect(recordFailedLoginAttemptByEmail).not.toHaveBeenCalled();
@@ -731,8 +679,7 @@ describe('POST /api/auth/login', () => {
       vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         attemptsRemaining: 0,
-        retryAfter: 900,
-      });
+        retryAfter: 900 });
 
       const request = createLoginRequest(validLoginPayload);
       await POST(request);
