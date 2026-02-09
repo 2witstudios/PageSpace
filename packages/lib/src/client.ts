@@ -1,5 +1,4 @@
 // Client-safe exports only (no Node.js modules)
-export * from './content/page-content-parser';
 export * from './permissions';
 export * from './content/tree-utils';
 export * from './utils/utils';
