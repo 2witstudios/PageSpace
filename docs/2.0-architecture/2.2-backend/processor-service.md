@@ -150,8 +150,8 @@ All uploads are queued as a single `ingest-file` job. The processor classifies t
 
 **Job Contract**
 - `type`: `ingest-file`
-- `data`: `{ pageId, contentHash, mimeType, originalName, priority?, traceId? }`
-- Idempotency: keyed by `contentHash` (+ `pageId`); checks cache before work.
+- `data`: `{ fileId, contentHash, mimeType, originalName }` (see `IngestFileJobData`)
+- Idempotency: keyed by `contentHash` (+ `fileId`); checks cache before work.
 
 **Behavior**
 - Images → mark `processingStatus=visual`, `extractionMethod=visual`; queue `image-optimize` for `ai-chat` and `thumbnail`; optionally queue `ocr-process` if OCR enabled.
