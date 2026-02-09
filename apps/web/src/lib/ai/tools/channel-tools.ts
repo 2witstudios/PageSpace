@@ -237,6 +237,7 @@ export const channelTools = {
           channelTitle: channel.title,
           senderName: senderIdentity.senderName,
           senderType: senderIdentity.senderType,
+          messagePreview: content.trim(),
           message: `Successfully sent message to channel "${channel.title}"`,
           summary: `Posted to #${channel.title} as ${senderIdentity.senderName} (${senderIdentity.senderType === 'global_assistant' ? 'global assistant' : 'agent'})`,
         };

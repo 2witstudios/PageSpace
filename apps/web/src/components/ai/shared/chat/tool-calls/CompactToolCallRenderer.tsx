@@ -16,7 +16,8 @@ import {
   AlertCircle,
   Loader2,
   Clock,
-  Bot
+  Bot,
+  MessageSquare
 } from 'lucide-react';
 
 import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
@@ -66,6 +67,53 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
+const buildChannelTranscript = (channelMessages: unknown): string | null => {
+  if (!Array.isArray(channelMessages) || channelMessages.length === 0) {
+    return null;
+  }
+
+  const lines = channelMessages.flatMap((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      return [];
+    }
+
+    const message = entry as Record<string, unknown>;
+    const lineNumber = typeof message.lineNumber === 'number' ? message.lineNumber : index + 1;
+    const createdAt = typeof message.createdAt === 'string' ? message.createdAt : '';
+    const senderName = typeof message.senderName === 'string' ? message.senderName : 'Unknown';
+    const senderType = typeof message.senderType === 'string' ? message.senderType : 'user';
+    const content = typeof message.content === 'string' ? message.content : '';
+
+    const senderPrefix = senderType === 'agent'
+      ? '[agent]'
+      : senderType === 'global_assistant'
+        ? '[assistant]'
+        : '[user]';
+
+    const timestamp = createdAt ? ` (${createdAt})` : '';
+    return [`${lineNumber}→${senderPrefix} ${senderName}${timestamp}: ${content}`];
+  });
+
+  return lines.length > 0 ? lines.join('\n') : null;
+};
+
+const getSendChannelMessagePreview = (
+  parsedInput: Record<string, unknown> | null,
+  parsedOutput: Record<string, unknown>
+): string | null => {
+  const outputPreview = parsedOutput.messagePreview;
+  if (typeof outputPreview === 'string' && outputPreview.trim().length > 0) {
+    return outputPreview.trim();
+  }
+
+  const inputContent = parsedInput?.content;
+  if (typeof inputContent === 'string' && inputContent.trim().length > 0) {
+    return inputContent.trim();
+  }
+
+  return null;
+};
+
 // Tool name mapping (moved outside component to avoid recreation)
 const TOOL_NAME_MAP: Record<string, string> = {
   'ask_agent': 'Ask Agent',
@@ -75,6 +123,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'replace_lines': 'Replace',
   'create_page': 'Create',
   'rename_page': 'Rename',
+  'send_channel_message': 'Send Message',
   'trash': 'Trash',
   'restore': 'Restore',
   'move_page': 'Move',
@@ -108,6 +157,8 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
         return <FolderOpen className={iconClass} />;
       case 'read_page':
         return <Eye className={iconClass} />;
+      case 'send_channel_message':
+        return <MessageSquare className={iconClass} />;
       case 'replace_lines':
         return <Edit className={iconClass} />;
       case 'create_page':
@@ -227,6 +278,13 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
         return title.length > 20 ? title.substring(0, 17) + '...' : title;
       }
 
+      if (toolName === 'send_channel_message') {
+        const preview = getSendChannelMessagePreview(parsedInput, result);
+        if (preview) {
+          return preview.length > 30 ? preview.substring(0, 27) + '...' : preview;
+        }
+      }
+
       if (result.message) {
         const msg = result.message as string;
         return msg.length > 30 ? msg.substring(0, 27) + '...' : msg;
@@ -245,7 +303,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     }
 
     return 'Pending';
-  }, [error, state, parsedOutput, toolName]);
+  }, [error, state, parsedInput, parsedOutput, toolName]);
 
   // Memoize rich content for expanded view
   const richContent = useMemo((): React.ReactNode | null => {
@@ -314,16 +372,26 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       );
     }
 
-    if (toolName === 'read_page' && (result.rawContent != null || result.content != null)) {
-      return (
-        <RichContentRenderer
-          title={(result.title as string) || 'Document'}
-          content={(result.rawContent ?? result.content) as string}
-          pageId={result.pageId as string | undefined}
-          pageType={result.type as string | undefined}
-          maxHeight={200}
-        />
-      );
+    if (toolName === 'read_page') {
+      const directContentValue = result.rawContent ?? result.content;
+      const directContent = typeof directContentValue === 'string' && directContentValue.length > 0
+        ? directContentValue
+        : undefined;
+      const channelTranscript = buildChannelTranscript(result.channelMessages);
+      const hasChannelMessagesArray = Array.isArray(result.channelMessages);
+      const content = directContent ?? channelTranscript ?? (hasChannelMessagesArray ? 'Channel has no messages yet.' : undefined);
+
+      if (content !== undefined) {
+        return (
+          <RichContentRenderer
+            title={(result.title as string) || 'Document'}
+            content={content}
+            pageId={result.pageId as string | undefined}
+            pageType={result.type as string | undefined}
+            maxHeight={200}
+          />
+        );
+      }
     }
 
     if (toolName === 'list_conversations' && result.conversations != null) {
@@ -478,6 +546,38 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
           message={(result.summary as string | undefined) || `${(result.updatedCount as number | undefined) || 0} cells updated`}
           errorMessage={result.error as string | undefined}
         />
+      );
+    }
+
+    // === CHANNEL TOOLS ===
+    if (toolName === 'send_channel_message') {
+      const messagePreview = getSendChannelMessagePreview(parsedInput, result);
+      const channelTitle = result.channelTitle;
+      const previewTitle = typeof channelTitle === 'string' && channelTitle.length > 0
+        ? `Message Preview · #${channelTitle}`
+        : 'Message Preview';
+
+      return (
+        <div>
+          <ActionResultRenderer
+            actionType="update"
+            success={result.success !== false}
+            title={channelTitle as string | undefined}
+            pageId={result.channelId as string | undefined}
+            pageType="CHANNEL"
+            message={(result.summary || result.message) as string | undefined}
+            errorMessage={result.error as string | undefined}
+          />
+          {messagePreview && (
+            <RichContentRenderer
+              title={previewTitle}
+              content={messagePreview}
+              pageId={result.channelId as string | undefined}
+              pageType="CHANNEL"
+              maxHeight={160}
+            />
+          )}
+        </div>
       );
     }
 
