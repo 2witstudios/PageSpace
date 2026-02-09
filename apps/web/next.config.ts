@@ -21,7 +21,10 @@ const nextConfig: NextConfig = {
       config.plugins.push(
         new MonacoWebpackPlugin({
           languages: ["javascript", "typescript", "html", "css", "json"],
-          filename: "static/[name].worker.js",
+          // Monaco worker entry names already include ".worker"
+          // (e.g. "editor.worker"), so appending ".worker.js" here produces
+          // doubled names like "editor.worker.worker.js".
+          filename: "static/[name].js",
         }),
         new CopyPlugin({
           patterns: [{

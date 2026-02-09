@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { useMonacoTheme } from '@/hooks/useMonacoTheme';
@@ -12,24 +12,54 @@ interface MonacoEditorProps {
   className?: string;
 }
 
+type MonacoWindow = Window & {
+  __NEXT_DATA__?: {
+    assetPrefix?: string;
+  };
+};
+
+let isMonacoEnvironmentConfigured = false;
+
+const getMonacoWorkerFileName = (label: string): string => {
+  if (label === 'json') return 'json.worker.js';
+  if (label === 'css') return 'css.worker.js';
+  if (label === 'html') return 'html.worker.js';
+  if (label === 'typescript' || label === 'javascript') return 'ts.worker.js';
+  return 'editor.worker.js';
+};
+
+const getAssetPrefix = (): string => {
+  if (typeof window === 'undefined') return '';
+
+  const nextData = (window as MonacoWindow).__NEXT_DATA__;
+  const rawAssetPrefix = nextData?.assetPrefix ?? '';
+
+  if (!rawAssetPrefix || rawAssetPrefix === '/') return '';
+  return rawAssetPrefix.endsWith('/')
+    ? rawAssetPrefix.slice(0, -1)
+    : rawAssetPrefix;
+};
+
+const configureMonacoEnvironment = (): void => {
+  if (typeof window === 'undefined' || isMonacoEnvironmentConfigured) return;
+
+  const assetPrefix = getAssetPrefix();
+  const workerBasePath = `${assetPrefix}/_next/static`;
+
+  window.MonacoEnvironment = {
+    getWorkerUrl: (_moduleId: string, label: string) =>
+      `${workerBasePath}/${getMonacoWorkerFileName(label)}`,
+  };
+  isMonacoEnvironmentConfigured = true;
+};
+
+configureMonacoEnvironment();
+
 const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', options: optionOverrides, className }: MonacoEditorProps) => {
   const monaco = useMonaco();
   const theme = useMonacoTheme(monaco);
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.MonacoEnvironment = {
-        getWorkerUrl: (_moduleId: string, label: string) => {
-          if (label === 'json') return '/_next/static/json.worker.js';
-          if (label === 'css') return '/_next/static/css.worker.js';
-          if (label === 'html') return '/_next/static/html.worker.js';
-          if (label === 'typescript' || label === 'javascript')
-            return '/_next/static/ts.worker.js';
-          return '/_next/static/editor.worker.js';
-        },
-      };
-    }
-  }, []);
+  configureMonacoEnvironment();
 
   const defaultOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(() => ({
     readOnly,

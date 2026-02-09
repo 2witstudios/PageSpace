@@ -139,6 +139,12 @@ describe('Security Headers', () => {
       expect(csp).toContain('wss:');
     });
 
+    it('allows same-origin and blob web workers', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).toContain("worker-src 'self' blob:");
+    });
+
     it('allows Google accounts domain for One Tap authentication', () => {
       const csp = buildCSPPolicy('test-nonce');
 
