@@ -166,6 +166,7 @@ export const pageRepository = {
         title: data.title,
         type: data.type,
         content: data.content,
+        contentMode: data.contentMode ?? 'html',
         driveId: data.driveId,
         parentId: data.parentId,
         position: data.position,

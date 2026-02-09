@@ -18,9 +18,9 @@ export const useDocumentState = (pageId: string) => {
   
   // Initialize document if it doesn't exist
   const initializeDocument = useCallback(
-    (initialContent?: string) => {
+    (initialContent?: string, contentMode?: 'html' | 'markdown') => {
       if (!document) {
-        createDocument(pageId, initialContent);
+        createDocument(pageId, initialContent, contentMode);
       }
     },
     [document, createDocument, pageId]

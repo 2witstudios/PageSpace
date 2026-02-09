@@ -654,6 +654,7 @@ export const pageWriteTools = {
           id: newPage.id,
           title: newPage.title,
           type: newPage.type,
+          contentMode: isDocumentPage(type as PageType) && contentMode ? contentMode : 'html',
           parentId: parentId || 'root',
           message: `Successfully created ${type.toLowerCase()} page "${title}"`,
           summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,

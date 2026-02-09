@@ -124,7 +124,7 @@ export function EditorToggles() {
       {isDocumentPage(pageType) && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={isConverting}>
+            <Button variant="ghost" size="sm" disabled={isConverting} aria-label="Convert content mode">
               <ArrowRightLeft className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
