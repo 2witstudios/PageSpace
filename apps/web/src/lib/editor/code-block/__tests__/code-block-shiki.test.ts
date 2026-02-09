@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { assert } from './riteway';
 import { CodeBlockShiki } from '../CodeBlockShikiExtension';
 
 function createEditor(content?: string) {
@@ -15,13 +16,18 @@ function createEditor(content?: string) {
 
 describe('CodeBlockShiki Extension', () => {
   it('has name codeBlock', () => {
-    expect(CodeBlockShiki.name).toBe('codeBlock');
+    assert({
+      given: 'the CodeBlockShiki extension',
+      should: 'have name "codeBlock"',
+      actual: CodeBlockShiki.name,
+      expected: 'codeBlock',
+    });
   });
 
   it('preserves language attribute in schema', () => {
     const editor = createEditor();
     const attrs = editor.schema.nodes.codeBlock.spec.attrs;
-    expect(attrs).toHaveProperty('language');
+    expect(attrs, 'Given schema attrs, should have language property').toHaveProperty('language');
     editor.destroy();
   });
 
@@ -32,17 +38,32 @@ describe('CodeBlockShiki Extension', () => {
     const codeBlock = json.content?.find(
       (n: { type: string }) => n.type === 'codeBlock'
     );
-    expect(codeBlock).toBeDefined();
-    expect(codeBlock?.attrs?.language).toBe('sudolang');
+    expect(codeBlock, 'Given setCodeBlock command, should create a codeBlock node').toBeDefined();
+    assert({
+      given: 'setCodeBlock with language sudolang',
+      should: 'set the language attribute to sudolang',
+      actual: codeBlock?.attrs?.language,
+      expected: 'sudolang',
+    });
     editor.destroy();
   });
 
   it('toggleCodeBlock command works', () => {
     const editor = createEditor('<p>hello</p>');
     editor.commands.toggleCodeBlock();
-    expect(editor.isActive('codeBlock')).toBe(true);
+    assert({
+      given: 'toggleCodeBlock on a paragraph',
+      should: 'activate codeBlock',
+      actual: editor.isActive('codeBlock'),
+      expected: true,
+    });
     editor.commands.toggleCodeBlock();
-    expect(editor.isActive('codeBlock')).toBe(false);
+    assert({
+      given: 'toggleCodeBlock on a codeBlock',
+      should: 'deactivate codeBlock',
+      actual: editor.isActive('codeBlock'),
+      expected: false,
+    });
     editor.destroy();
   });
 
@@ -59,9 +80,9 @@ describe('CodeBlockShiki Extension', () => {
       ],
     });
     const html = editor.getHTML();
-    expect(html).toContain('language-sudolang');
-    expect(html).toContain('<pre');
-    expect(html).toContain('<code');
+    expect(html, 'Given sudolang codeBlock, should contain language-sudolang class').toContain('language-sudolang');
+    expect(html, 'Given codeBlock, should contain <pre tag').toContain('<pre');
+    expect(html, 'Given codeBlock, should contain <code tag').toContain('<code');
     editor.destroy();
   });
 
@@ -73,7 +94,12 @@ describe('CodeBlockShiki Extension', () => {
     const codeBlock = json.content?.find(
       (n: { type: string }) => n.type === 'codeBlock'
     );
-    expect(codeBlock?.attrs?.language).toBe('javascript');
+    assert({
+      given: 'HTML with language-javascript class',
+      should: 'parse language attribute as javascript',
+      actual: codeBlock?.attrs?.language,
+      expected: 'javascript',
+    });
     editor.destroy();
   });
 });

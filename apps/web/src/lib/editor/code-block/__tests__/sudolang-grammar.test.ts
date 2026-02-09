@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createHighlighter, type Highlighter, type BundledLanguage } from 'shiki';
+import { assert } from './riteway';
 import { sudolangGrammar } from '../sudolang-grammar';
 
 let highlighter: Highlighter;
@@ -35,67 +36,82 @@ beforeAll(async () => {
 describe('SudoLang TextMate Grammar', () => {
   it('tokenizes line comments', () => {
     const scopes = getAllScopes('// comment');
-    expect(scopes).toContain('comment.line.double-slash.sudolang');
+    expect(scopes, 'Given a line comment, should contain comment scope').toContain('comment.line.double-slash.sudolang');
   });
 
   it('tokenizes block comments', () => {
     const scopes = getAllScopes('/* block */');
-    expect(scopes.some((s) => s.includes('comment.block.sudolang'))).toBe(true);
+    assert({
+      given: 'a block comment',
+      should: 'include block comment scope',
+      actual: scopes.some((s) => s.includes('comment.block.sudolang')),
+      expected: true,
+    });
   });
 
   it('tokenizes double-quoted strings', () => {
     const scopes = getAllScopes('"hello"');
-    expect(scopes.some((s) => s.includes('string.quoted.double.sudolang'))).toBe(true);
+    assert({
+      given: 'a double-quoted string',
+      should: 'include double-quoted string scope',
+      actual: scopes.some((s) => s.includes('string.quoted.double.sudolang')),
+      expected: true,
+    });
   });
 
   it('tokenizes single-quoted strings', () => {
     const scopes = getAllScopes("'hello'");
-    expect(scopes.some((s) => s.includes('string.quoted.single.sudolang'))).toBe(true);
+    assert({
+      given: 'a single-quoted string',
+      should: 'include single-quoted string scope',
+      actual: scopes.some((s) => s.includes('string.quoted.single.sudolang')),
+      expected: true,
+    });
   });
 
   it('tokenizes type definitions', () => {
     const scopes = getAllScopes('TodoItem {');
-    expect(scopes).toContain('entity.name.type.sudolang');
+    expect(scopes, 'Given a type definition, should contain type scope').toContain('entity.name.type.sudolang');
   });
 
   it('tokenizes function definitions', () => {
     const scopes = getAllScopes('createTodo(');
-    expect(scopes).toContain('entity.name.function.sudolang');
+    expect(scopes, 'Given a function definition, should contain function scope').toContain('entity.name.function.sudolang');
   });
 
   it('tokenizes constraint keywords', () => {
     const scopes = getAllScopes('Constraints');
-    expect(scopes).toContain('keyword.control.sudolang');
+    expect(scopes, 'Given Constraints keyword, should contain keyword scope').toContain('keyword.control.sudolang');
   });
 
   it('tokenizes pipe operator', () => {
     const scopes = getAllScopes('x |> y');
-    expect(scopes).toContain('keyword.operator.pipe.sudolang');
+    expect(scopes, 'Given pipe operator, should contain pipe scope').toContain('keyword.operator.pipe.sudolang');
   });
 
   it('tokenizes arrow operator', () => {
     const scopes = getAllScopes('x => y');
-    expect(scopes).toContain('keyword.operator.arrow.sudolang');
+    expect(scopes, 'Given arrow operator, should contain arrow scope').toContain('keyword.operator.arrow.sudolang');
   });
 
   it('tokenizes slash commands', () => {
     const scopes = getAllScopes('/help');
-    expect(scopes).toContain('entity.name.tag.sudolang');
+    expect(scopes, 'Given slash command, should contain tag scope').toContain('entity.name.tag.sudolang');
   });
 
   it('tokenizes headings', () => {
     const scopes = getAllScopes('# Heading');
-    expect(scopes).toContain('markup.heading.sudolang');
+    expect(scopes, 'Given heading, should contain heading scope').toContain('markup.heading.sudolang');
   });
 
   it('tokenizes numbers', () => {
     const scopes = getAllScopes('42');
-    expect(scopes).toContain('constant.numeric.sudolang');
+    expect(scopes, 'Given a number, should contain numeric scope').toContain('constant.numeric.sudolang');
   });
 
   it('tokenizes language constants', () => {
     const scopes = getAllScopes('true');
-    expect(scopes).toContain('constant.language.sudolang');
+    expect(scopes, 'Given true, should contain language constant scope').toContain('constant.language.sudolang');
   });
 
   it('handles a full SudoLang snippet', () => {
@@ -113,11 +129,11 @@ Constraints {
 }`;
     const allScopes = getAllScopes(snippet);
 
-    expect(allScopes).toContain('comment.line.double-slash.sudolang');
-    expect(allScopes).toContain('entity.name.type.sudolang');
-    expect(allScopes).toContain('entity.name.function.sudolang');
-    expect(allScopes).toContain('keyword.control.sudolang');
-    expect(allScopes).toContain('keyword.operator.pipe.sudolang');
-    expect(allScopes).toContain('keyword.operator.arrow.sudolang');
+    expect(allScopes, 'Given full snippet, should contain comment scope').toContain('comment.line.double-slash.sudolang');
+    expect(allScopes, 'Given full snippet, should contain type scope').toContain('entity.name.type.sudolang');
+    expect(allScopes, 'Given full snippet, should contain function scope').toContain('entity.name.function.sudolang');
+    expect(allScopes, 'Given full snippet, should contain keyword scope').toContain('keyword.control.sudolang');
+    expect(allScopes, 'Given full snippet, should contain pipe scope').toContain('keyword.operator.pipe.sudolang');
+    expect(allScopes, 'Given full snippet, should contain arrow scope').toContain('keyword.operator.arrow.sudolang');
   });
 });

@@ -849,6 +849,12 @@ io.on('connection', (socket: AuthSocket) => {
     });
   });
 
+  socket.on('document_update', (payload: unknown) => {
+    const data = payload as { pageId?: string; content?: unknown };
+    if (!socket.data.user?.id || !data?.pageId) return;
+    socket.to(data.pageId).emit('document_update', data);
+  });
+
   socket.on('disconnect', (reason) => {
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);

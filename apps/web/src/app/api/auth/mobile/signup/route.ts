@@ -12,7 +12,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
 import { generateCSRFToken } from '@pagespace/lib/server';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService, BCRYPT_COST } from '@pagespace/lib/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
@@ -118,7 +118,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'User with this email already exists' }, { status: 409 });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
 
     const user = await db.insert(users).values({
       id: createId(),

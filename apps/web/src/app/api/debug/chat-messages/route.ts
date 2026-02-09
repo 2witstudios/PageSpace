@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, chatMessages, eq, and, desc } from '@pagespace/db';
+import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
+import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -13,6 +15,10 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  */
 
 export async function GET(request: Request) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
   try {
     loggers.api.debug('🔍 Debug: GET /api/debug/chat-messages', {});
 
@@ -24,13 +30,13 @@ export async function GET(request: Request) {
     const action = searchParams.get('action') || 'list';
 
     if (action === 'test-db') {
-      // Test basic database connectivity
+      // Intentionally no page-level auth — only tests DB connectivity, exposes no page data
       loggers.api.debug('🔗 Debug: Testing database connectivity...', {});
-      
+
       try {
         const result = await db.select().from(chatMessages).limit(1);
         loggers.api.debug('✅ Debug: Database connection successful', {});
-        
+
         return NextResponse.json({
           success: true,
           message: 'Database connectivity test passed',
@@ -47,9 +53,13 @@ export async function GET(request: Request) {
     }
 
     if (!pageId) {
-      return NextResponse.json({ 
-        error: 'pageId is required for listing messages' 
+      return NextResponse.json({
+        error: 'pageId is required for listing messages'
       }, { status: 400 });
+    }
+
+    if (!await canUserViewPage(auth.userId, pageId)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     loggers.api.debug('📋 Debug: Listing messages for pageId:', { pageId });
@@ -92,13 +102,13 @@ export async function GET(request: Request) {
         role: msg.role,
         contentLength: msg.content?.length || 0,
         createdAt: msg.createdAt,
-        content: msg.content?.substring(0, 100) + (msg.content?.length > 100 ? '...' : '')
+        content: (msg.content ?? '').substring(0, 100) + ((msg.content ?? '').length > 100 ? '...' : '')
       }))
     });
 
   } catch (error) {
     loggers.api.error('❌ Debug: Error in debug endpoint:', error as Error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Debug endpoint failed',
       details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
@@ -113,6 +123,10 @@ interface TestMessage {
 }
 
 export async function POST(request: Request) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
   try {
     loggers.api.debug('🧪 Debug: POST /api/debug/chat-messages - Manual save test', {});
 
@@ -122,21 +136,25 @@ export async function POST(request: Request) {
     const { pageId, testMessages }: { pageId: string; testMessages?: TestMessage[] } = await request.json();
 
     if (!pageId) {
-      return NextResponse.json({ 
-        error: 'pageId is required' 
+      return NextResponse.json({
+        error: 'pageId is required'
       }, { status: 400 });
+    }
+
+    if (!await canUserEditPage(auth.userId, pageId)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     // Create test messages if none provided
     const messagesToSave = testMessages || [
       {
-        id: 'test-user-' + Date.now(),
+        id: createId(),
         role: 'user',
         parts: [{ type: 'text', text: 'Test user message from debug endpoint' }],
         createdAt: new Date()
       },
       {
-        id: 'test-assistant-' + Date.now(),
+        id: createId(),
         role: 'assistant',
         parts: [{ type: 'text', text: 'Test assistant response from debug endpoint' }],
         createdAt: new Date()
@@ -149,7 +167,7 @@ export async function POST(request: Request) {
     const messageRecords = messagesToSave.map((msg: TestMessage) => ({
       id: msg.id,
       pageId,
-      userId: 'debug-user',
+      userId: auth.userId,
       role: msg.role,
       content: msg.parts?.find(p => p.type === 'text')?.text || '',
       toolCalls: null,
@@ -186,7 +204,7 @@ export async function POST(request: Request) {
 
   } catch (error) {
     loggers.api.error('❌ Debug: Error in manual save test:', error as Error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Manual save test failed',
       details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });

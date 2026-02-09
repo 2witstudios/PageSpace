@@ -2,6 +2,7 @@ import { users, deviceTokens, db, eq, and, isNull } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { BCRYPT_COST } from '@pagespace/lib/auth';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
     }
 
     // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_COST);
 
     // Update password and increment token version to invalidate existing sessions
     await db
