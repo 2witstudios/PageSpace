@@ -65,6 +65,8 @@ function getLanguageFromFileName(fileName: string | undefined): string {
     'sql': 'sql',
     'graphql': 'graphql',
     'gql': 'graphql',
+    'sudo': 'sudolang',
+    'sudolang': 'sudolang',
     'vue': 'vue',
     'svelte': 'svelte',
   };

@@ -29,6 +29,7 @@ const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), 
 
 const LANGUAGES = [
   { value: 'plaintext', label: 'Plain Text' },
+  { value: 'sudolang', label: 'SudoLang' },
   { value: 'javascript', label: 'JavaScript' },
   { value: 'typescript', label: 'TypeScript' },
   { value: 'python', label: 'Python' },
@@ -84,6 +85,8 @@ const EXTENSION_MAP: Record<string, string> = {
   'sql': 'sql',
   'graphql': 'graphql',
   'gql': 'graphql',
+  'sudo': 'sudolang',
+  'sudolang': 'sudolang',
 };
 
 function detectLanguageFromTitle(title: string): string {

@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react';
-import Editor, { useMonaco } from '@monaco-editor/react';
+import { useEffect, useMemo, useCallback } from 'react';
+import Editor, { useMonaco, type Monaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { useMonacoTheme } from '@/hooks/useMonacoTheme';
+import { registerSudolangLanguage } from '@/lib/editor/monaco/sudolang-language';
 
 interface MonacoEditorProps {
   value: string;
@@ -15,6 +16,15 @@ interface MonacoEditorProps {
 const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', options: optionOverrides, className }: MonacoEditorProps) => {
   const monaco = useMonaco();
   const theme = useMonacoTheme(monaco);
+
+  const handleBeforeMount = useCallback((monacoInstance: Monaco) => {
+    registerSudolangLanguage(monacoInstance);
+  }, []);
+
+  useEffect(() => {
+    if (!monaco) return;
+    registerSudolangLanguage(monaco);
+  }, [monaco]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -63,6 +73,7 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', option
   return (
     <div className={className} style={{ height: '100%' }}>
       <Editor
+        beforeMount={handleBeforeMount}
         height="100%"
         language={language}
         theme={theme}
