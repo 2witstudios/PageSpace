@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable @typescript-eslint/no-require-imports */
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -9,21 +7,25 @@ import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // Dynamically import react-pdf to avoid SSR issues
-let Document: any;
-let Page: any;
-let pdfjs: any;
+type ReactPdfModule = typeof import('react-pdf');
+let Document: ReactPdfModule['Document'] | null = null;
+let Page: ReactPdfModule['Page'] | null = null;
+let pdfjs: ReactPdfModule['pdfjs'] | null = null;
 
 if (typeof window !== 'undefined') {
-  const reactPdf = require('react-pdf');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const reactPdf = require('react-pdf') as ReactPdfModule;
   Document = reactPdf.Document;
   Page = reactPdf.Page;
   pdfjs = reactPdf.pdfjs;
-  
+
   // Set up the worker for PDF.js (bundled locally for air-gapped deployments)
   pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-  
+
   // Import styles
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('react-pdf/dist/Page/AnnotationLayer.css');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('react-pdf/dist/Page/TextLayer.css');
 }
 
