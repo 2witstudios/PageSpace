@@ -46,6 +46,7 @@ const {
   mockAuthStore,
   mockLoadSession,
   mockGetSessionDuration,
+  mockShouldLoadSession,
   mockInitializeEventListeners,
 } = vi.hoisted(() => {
   const store: MockAuthStoreState = {
@@ -88,6 +89,7 @@ const {
     mockAuthStore: store,
     mockLoadSession: vi.fn(),
     mockGetSessionDuration: vi.fn(() => 0),
+    mockShouldLoadSession: vi.fn(() => false),
     mockInitializeEventListeners: vi.fn(),
   };
 });
@@ -136,6 +138,7 @@ vi.mock('@/stores/useAuthStore', () => {
     authStoreHelpers: {
       loadSession: mockLoadSession,
       getSessionDuration: mockGetSessionDuration,
+      shouldLoadSession: mockShouldLoadSession,
       initializeEventListeners: mockInitializeEventListeners,
     },
   };
@@ -177,6 +180,7 @@ describe('useAuth', () => {
     mockAuthStore.isRefreshing = false;
     mockAuthStore.hasHydrated = true;
     mockAuthStore.authFailedPermanently = false;
+    mockShouldLoadSession.mockReturnValue(false);
 
     global.fetch = vi.fn();
   });
@@ -427,11 +431,9 @@ describe('useAuth', () => {
 
     it('given already loading, should skip redundant auth check', async () => {
       mockAuthStore.isLoading = true;
+      mockLoadSession.mockClear();
 
       const { result } = renderHook(() => useAuth());
-
-      // Clear calls from the initial mount effect (loadSession always runs on mount)
-      mockLoadSession.mockClear();
 
       await act(async () => {
         await result.current.actions.checkAuth();

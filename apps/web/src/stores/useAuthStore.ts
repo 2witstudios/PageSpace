@@ -628,6 +628,34 @@ export const authStoreHelpers = {
     return state.failedAuthAttempts >= maxAttempts;
   },
 
+  // Check if auth check is needed (considering server initialization)
+  shouldLoadSession: (): boolean => {
+    const state = useAuthStore.getState();
+
+    // Skip if circuit breaker is active
+    if (authStoreHelpers.shouldSkipAuthCheck()) {
+      return false;
+    }
+
+    // Skip if already loading
+    if (state._authPromise) {
+      return false;
+    }
+
+    // Always load if not hydrated yet
+    if (!state.hasHydrated) {
+      return true;
+    }
+
+    // If server session was initialized, only reload if stale
+    if (state._serverSessionInitialized) {
+      return authStoreHelpers.needsAuthCheck();
+    }
+
+    // No server data and no recent check - load session
+    return !state.lastAuthCheck || authStoreHelpers.needsAuthCheck();
+  },
+
   // Initialize store from server session (called during app startup)
   initializeFromServer: (initialUser: User | null): void => {
     useAuthStore.getState().initializeFromServer(initialUser);

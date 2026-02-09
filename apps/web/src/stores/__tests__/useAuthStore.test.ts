@@ -814,6 +814,43 @@ describe('authStoreHelpers', () => {
     });
   });
 
+  describe('shouldLoadSession', () => {
+    it('given not hydrated, should return true', () => {
+      useAuthStore.setState({ hasHydrated: false });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
+    it('given circuit breaker active, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        failedAuthAttempts: 5, // MAX_FAILED_AUTH_ATTEMPTS (web threshold)
+        lastFailedAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given already loading, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _authPromise: Promise.resolve(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given server initialized and stale check, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        lastAuthCheck: Date.now() - 16 * 60 * 1000, // Stale
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+  });
+
   describe('trackActivity', () => {
     it('should call updateActivity on the store', () => {
       useAuthStore.setState({

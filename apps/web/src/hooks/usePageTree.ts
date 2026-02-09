@@ -137,6 +137,11 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   }, [swrKey, cache, mutate]);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {
+    // Avoid optimistic mutation before the first tree snapshot exists.
+    // A no-op mutate on undefined data can stamp SWR mutation state and drop
+    // the in-flight initial fetch result, leaving the tree in a stuck skeleton state.
+    if (!data) return;
+
     mutate((currentData) => {
       if (!currentData) return currentData;
 
@@ -165,7 +170,7 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
       const newTree = update(currentData);
       return found ? newTree : currentData;
     }, { revalidate: false });
-  }, [mutate]);
+  }, [data, mutate]);
 
   // User-initiated retry: bypasses the editing guard (unlike invalidateTree)
   // because the user explicitly chose to retry, so we should always honor it.
