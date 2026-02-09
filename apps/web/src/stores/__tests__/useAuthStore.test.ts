@@ -471,6 +471,18 @@ describe('useAuthStore', () => {
       expect(state.isLoading).toBe(false);
     });
 
+    it('given first loadSession call, should mark server session initialized', async () => {
+      const user = createMockUser();
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+
+      await useAuthStore.getState().loadSession();
+
+      expect(useAuthStore.getState()._serverSessionInitialized).toBe(true);
+    });
+
     it('given 401 response, should clear user state', async () => {
       useAuthStore.setState({ user: createMockUser(), isAuthenticated: true });
       vi.mocked(global.fetch).mockResolvedValue({
@@ -786,7 +798,29 @@ describe('authStoreHelpers', () => {
 
   describe('needsAuthCheck', () => {
     it('given no lastAuthCheck, should return true', () => {
-      useAuthStore.setState({ lastAuthCheck: null });
+      useAuthStore.setState({ lastAuthCheck: null, _serverSessionInitialized: false });
+
+      expect(authStoreHelpers.needsAuthCheck()).toBe(true);
+    });
+
+    it('given initialized unauthenticated state without lastAuthCheck, should return false', () => {
+      useAuthStore.setState({
+        lastAuthCheck: null,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+      });
+
+      expect(authStoreHelpers.needsAuthCheck()).toBe(false);
+    });
+
+    it('given initialized unauthenticated state with failed attempt, should return true', () => {
+      useAuthStore.setState({
+        lastAuthCheck: null,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastFailedAuthCheck: Date.now(),
+        authFailedPermanently: false,
+      });
 
       expect(authStoreHelpers.needsAuthCheck()).toBe(true);
     });
@@ -907,6 +941,29 @@ describe('authStoreHelpers', () => {
       });
 
       expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+    it('given server initialized and unauthenticated with no check timestamp, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastAuthCheck: null,
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given server initialized unauthenticated with failed attempt, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastAuthCheck: null,
+        lastFailedAuthCheck: Date.now(),
+        authFailedPermanently: false,
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
     });
   });
 
