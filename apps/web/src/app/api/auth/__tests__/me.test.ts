@@ -84,8 +84,8 @@ describe('GET /api/auth/me', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(requireAuth as unknown).mockResolvedValue(mockAuthSuccess);
-    vi.mocked(isAuthError as unknown).mockReturnValue(false);
+    vi.mocked(requireAuth).mockResolvedValue(mockAuthSuccess);
+    vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser);
   });
 
@@ -118,7 +118,7 @@ describe('GET /api/auth/me', () => {
         ...mockUser,
         role: 'admin',
       });
-      vi.mocked(requireAuth as unknown).mockResolvedValue({
+      vi.mocked(requireAuth).mockResolvedValue({
         ...mockAuthSuccess,
         role: 'admin',
       });
@@ -133,8 +133,8 @@ describe('GET /api/auth/me', () => {
   describe('authentication', () => {
     it('returns 401 when not authenticated', async () => {
       const mockResponse = new Response('Unauthorized', { status: 401 });
-      vi.mocked(requireAuth as unknown).mockResolvedValue(mockResponse);
-      vi.mocked(isAuthError as unknown).mockReturnValue(true);
+      vi.mocked(requireAuth).mockResolvedValue(mockResponse);
+      vi.mocked(isAuthError).mockReturnValue(true);
 
       const response = await GET(createRequest());
 

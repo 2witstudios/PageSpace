@@ -192,7 +192,7 @@ describe('POST /api/auth/login', () => {
 
     // Default mocks for successful login
     vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockUser);
-    vi.mocked(bcrypt.compare).mockResolvedValue(true);
+    vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
     // Reset client IP mock
     vi.mocked(getClientIP).mockReturnValue('unknown');
   });
@@ -284,8 +284,8 @@ describe('POST /api/auth/login', () => {
 
   describe('invalid credentials', () => {
     it('returns 401 for non-existent email', async () => {
-      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = createLoginRequest({
         email: 'nonexistent@example.com',
@@ -299,7 +299,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 401 for incorrect password', async () => {
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = createLoginRequest({
         email: 'test@example.com',
@@ -315,7 +315,7 @@ describe('POST /api/auth/login', () => {
     it('performs timing-safe comparison even for non-existent users', async () => {
       // Security property: bcrypt.compare must be called even for non-existent users
       // This prevents timing attacks that could reveal user existence
-      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
 
       const request = createLoginRequest({
         email: 'nonexistent@example.com',
@@ -333,7 +333,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('logs failed login attempt', async () => {
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createLoginRequest({
@@ -696,7 +696,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('records failed login attempt on invalid credentials', async () => {
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = createLoginRequest({
         email: 'test@example.com',
@@ -715,8 +715,8 @@ describe('POST /api/auth/login', () => {
     });
 
     it('does not record failed attempt for non-existent email', async () => {
-      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null as never);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = createLoginRequest({
         email: 'nonexistent@example.com',

@@ -195,19 +195,19 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
     // Default to existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
 
     vi.mocked(db.insert).mockImplementation(() => ({
       values: vi.fn(() => ({
         returning: vi.fn(() => Promise.resolve([mockExistingUser])),
       })),
-    }));
+    } as never));
 
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   afterEach(() => {

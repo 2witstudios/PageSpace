@@ -118,7 +118,7 @@ describe('Task API Routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset default mock for taskStatusConfigs.findMany
-    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([]);
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
   });
 
   describe('GET /api/pages/[pageId]/tasks', () => {
@@ -132,7 +132,7 @@ describe('Task API Routes', () => {
 
     it('returns 401 when user is not authenticated', async () => {
       const mockAuthError = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockAuthError });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockAuthError } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -140,7 +140,7 @@ describe('Task API Routes', () => {
     });
 
     it('returns 403 when user lacks view permission', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
@@ -157,10 +157,10 @@ describe('Task API Routes', () => {
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -173,9 +173,9 @@ describe('Task API Routes', () => {
     it('creates task list if it does not exist', async () => {
       const mockInsertedTaskList = { id: 'new-tasklist', title: 'Task List', status: 'pending', updatedAt: new Date() };
 
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
       // When task list doesn't exist, getOrCreateTaskListForPage uses db.transaction
       // The transaction mock creates it and returns the result
       vi.mocked(db.transaction).mockImplementationOnce(async (callback) => {
@@ -186,9 +186,9 @@ describe('Task API Routes', () => {
             })),
           })),
         };
-        return callback(tx);
+        return callback(tx as never);
       });
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -203,10 +203,10 @@ describe('Task API Routes', () => {
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
 
       const response = await GET(createRequest('?search=groceries'), { params: mockParams });
       const body = await response.json();
@@ -230,7 +230,7 @@ describe('Task API Routes', () => {
 
     it('returns 401 when user is not authenticated', async () => {
       const mockAuthError = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockAuthError });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockAuthError } as never);
 
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
 
@@ -238,7 +238,7 @@ describe('Task API Routes', () => {
     });
 
     it('returns 403 when user lacks edit permission', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(false);
 
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
@@ -249,7 +249,7 @@ describe('Task API Routes', () => {
     });
 
     it('returns 400 when title is missing', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
 
       const response = await POST(createRequest({}), { params: mockParams });
@@ -260,7 +260,7 @@ describe('Task API Routes', () => {
     });
 
     it('returns 400 when title is empty', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
 
       const response = await POST(createRequest({ title: '   ' }), { params: mockParams });
@@ -289,22 +289,22 @@ describe('Task API Routes', () => {
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
 
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' });
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: mockPageId, driveId: 'drive-123' } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
       // taskStatusConfigs.findMany returns empty (no status validation needed for default 'pending')
-      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([]);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
       vi.mocked(db.query.taskItems.findFirst)
-        .mockResolvedValueOnce(null) // For position calculation (lastTask)
-        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] }); // For returning with relations
+        .mockResolvedValueOnce(null as never) // For position calculation (lastTask)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never); // For returning with relations
 
       // pages.findFirst is also called for lastChildPage via Promise.all - set up correct mock chain
       // First call: taskListPage lookup, Second call: (from query) finding task with relations
       // Actually pages.findFirst is called once for taskListPage, then db.query.pages.findFirst for lastChildPage
       vi.mocked(db.query.pages.findFirst)
-        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' }) // taskListPage
-        .mockResolvedValueOnce(null); // lastChildPage (no existing children)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce(null as never); // lastChildPage (no existing children)
 
       const response = await POST(createRequest({ title: 'New Task' }), { params: mockParams });
 
@@ -338,21 +338,21 @@ describe('Task API Routes', () => {
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
 
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId });
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
       // Status validation: return configs with in_progress as valid
       vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
         { slug: 'pending' },
         { slug: 'in_progress' },
         { slug: 'completed' },
-      ]);
+      ] as never);
       vi.mocked(db.query.pages.findFirst)
-        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' }) // taskListPage
-        .mockResolvedValueOnce(null); // lastChildPage
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList);
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce(null as never); // lastChildPage
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
       vi.mocked(db.query.taskItems.findFirst)
-        .mockResolvedValueOnce({ position: 0 }) // lastTask for position calculation
-        .mockResolvedValueOnce({ ...mockNewTask, assignee: { id: 'user-456', name: 'Assignee' }, user: null, assignees: [] });
+        .mockResolvedValueOnce({ position: 0 } as never) // lastTask for position calculation
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: { id: 'user-456', name: 'Assignee' }, user: null, assignees: [] } as never);
 
       const response = await POST(createRequest({
         title: 'Complete Task',

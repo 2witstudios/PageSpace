@@ -107,8 +107,8 @@ describe('/api/auth/mobile/login', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful login
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
-    vi.mocked(bcrypt.compare).mockResolvedValue(true);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
   });
 
   describe('successful mobile login', () => {
@@ -292,8 +292,8 @@ describe('/api/auth/mobile/login', () => {
   describe('invalid credentials', () => {
     it('returns 401 for non-existent email', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -315,7 +315,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('returns 401 for incorrect password', async () => {
       // Arrange
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -337,7 +337,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('performs timing-safe comparison even for non-existent users', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -366,7 +366,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('logs failed login attempt', async () => {
       // Arrange
-      vi.mocked(bcrypt.compare).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',

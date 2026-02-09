@@ -124,11 +124,11 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage());
-    vi.mocked(parseSheetContent).mockReturnValue(mockSheetData);
-    vi.mocked(sanitizeSheetData).mockReturnValue(mockSheetData);
-    vi.mocked(evaluateSheet).mockReturnValue(mockEvaluation);
-    vi.mocked(generateExcel).mockReturnValue(Buffer.from('mock excel content'));
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage() as never);
+    vi.mocked(parseSheetContent).mockReturnValue(mockSheetData as never);
+    vi.mocked(sanitizeSheetData).mockReturnValue(mockSheetData as never);
+    vi.mocked(evaluateSheet).mockReturnValue(mockEvaluation as never);
+    vi.mocked(generateExcel).mockReturnValue(Buffer.from('mock excel content') as never);
     vi.mocked(sanitizeFilename).mockReturnValue('Test_Sheet');
   });
 
@@ -154,7 +154,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
 
   describe('page validation', () => {
     it('returns 404 when page does not exist', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -162,7 +162,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     });
 
     it('returns 400 when page is not a SHEET type', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'DOCUMENT' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'DOCUMENT' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -172,7 +172,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     });
 
     it('returns 400 for FOLDER page type', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'FOLDER' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'FOLDER' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -182,7 +182,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     });
 
     it('returns 400 for AI_CHAT page type', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'AI_CHAT' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'AI_CHAT' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -192,7 +192,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     });
 
     it('returns 400 for CANVAS page type', async () => {
-      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'CANVAS' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'CANVAS' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -253,7 +253,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
 
     it('includes content length header', async () => {
       const excelBuffer = Buffer.from('mock excel content');
-      vi.mocked(generateExcel).mockReturnValue(excelBuffer);
+      vi.mocked(generateExcel).mockReturnValue(excelBuffer as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -323,12 +323,12 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         },
         columnWidths: {},
       };
-      vi.mocked(parseSheetContent).mockReturnValue(formulaData);
-      vi.mocked(sanitizeSheetData).mockReturnValue(formulaData);
+      vi.mocked(parseSheetContent).mockReturnValue(formulaData as never);
+      vi.mocked(sanitizeSheetData).mockReturnValue(formulaData as never);
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [['10', '20', '30']],
         errors: {},
-      });
+      } as never);
 
       await GET(createRequest(), { params: mockParams });
 
@@ -344,12 +344,12 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
         cells: {},
         columnWidths: {},
       };
-      vi.mocked(parseSheetContent).mockReturnValue(emptyData);
-      vi.mocked(sanitizeSheetData).mockReturnValue(emptyData);
+      vi.mocked(parseSheetContent).mockReturnValue(emptyData as never);
+      vi.mocked(sanitizeSheetData).mockReturnValue(emptyData as never);
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [],
         errors: {},
-      });
+      } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -369,8 +369,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: largeDisplay,
         errors: {},
-      });
-      vi.mocked(generateExcel).mockReturnValue(Buffer.alloc(100000));
+      } as never);
+      vi.mocked(generateExcel).mockReturnValue(Buffer.alloc(100000) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 

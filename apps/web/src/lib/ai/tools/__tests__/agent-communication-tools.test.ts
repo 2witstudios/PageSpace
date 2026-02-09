@@ -86,12 +86,12 @@ const mockDb = vi.mocked(db);
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 
 interface MockDb {
-  select: Mock;
-  from: Mock;
-  where: Mock;
-  orderBy: Mock;
+  select: ReturnType<typeof vi.fn>;
+  from: ReturnType<typeof vi.fn>;
+  where: ReturnType<typeof vi.fn>;
+  orderBy: ReturnType<typeof vi.fn>;
   query: {
-    pages: { findFirst: Mock };
+    pages: { findFirst: ReturnType<typeof vi.fn> };
   };
 }
 
@@ -282,7 +282,7 @@ describe('agent-communication-tools', () => {
               orderBy: vi.fn().mockResolvedValue([]),
             }),
           }),
-        });
+        } as never);
         vi.mocked(createAIProvider).mockResolvedValue({
           model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
         } as Awaited<ReturnType<typeof createAIProvider>>);
@@ -521,7 +521,7 @@ describe('agent-communication-tools', () => {
               orderBy: vi.fn().mockResolvedValue([]),
             }),
           }),
-        });
+        } as never);
         vi.mocked(createAIProvider).mockResolvedValue({
           model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
         } as Awaited<ReturnType<typeof createAIProvider>>);

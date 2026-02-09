@@ -72,8 +72,8 @@ describe('GET /api/settings/hotkey-preferences', () => {
     mockFrom.mockReturnValue({ where: mockWhere });
     mockWhere.mockResolvedValue([]);
 
-    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockSessionAuth('user-1'));
-    vi.mocked(isAuthError as unknown).mockReturnValue(false);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
+    vi.mocked(isAuthError).mockReturnValue(false);
   });
 
   it('given authenticated user with no preferences, should return empty array', async () => {
@@ -103,8 +103,8 @@ describe('GET /api/settings/hotkey-preferences', () => {
   });
 
   it('given unauthenticated request, should return 401', async () => {
-    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockAuthError(401));
-    vi.mocked(isAuthError as unknown).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+    vi.mocked(isAuthError).mockReturnValue(true);
 
     const request = new Request('https://example.com/api/settings/hotkey-preferences');
     const response = await GET(request);
@@ -122,8 +122,8 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     mockSet.mockReturnValue({ where: mockWhere });
     mockWhere.mockReturnValue({ returning: mockReturning });
 
-    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockSessionAuth('user-1'));
-    vi.mocked(isAuthError as unknown).mockReturnValue(false);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
+    vi.mocked(isAuthError).mockReturnValue(false);
   });
 
   it('given valid hotkeyId and binding, should create new preference', async () => {

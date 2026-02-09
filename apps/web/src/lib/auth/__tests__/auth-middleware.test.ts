@@ -71,7 +71,7 @@ describe('Auth Middleware', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(sessionService.validateSession).mockResolvedValue(null);
-    vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
     vi.mocked(validateCSRF).mockResolvedValue(null);
     vi.mocked(validateOrigin).mockReturnValue(null);
     vi.mocked(getSessionFromCookies).mockReturnValue(null);
@@ -141,7 +141,7 @@ describe('Auth Middleware', () => {
 
     it('returns null when token not found in database', async () => {
       // Arrange
-      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
 
       // Act
       const result = await validateMCPToken('mcp_valid-token');
@@ -163,7 +163,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       // Act
       const result = await validateMCPToken('mcp_valid-token');
@@ -192,7 +192,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       // Capture the values passed to set()
       let capturedSetValues: Record<string, unknown> | undefined;
@@ -202,7 +202,7 @@ describe('Auth Middleware', () => {
           where: vi.fn().mockResolvedValue(undefined),
         };
       });
-      vi.mocked(db.update).mockReturnValue({ set: mockSet });
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       // Act
       await validateMCPToken('mcp_valid-token');
@@ -343,7 +343,7 @@ describe('Auth Middleware', () => {
 
     it('returns error for invalid MCP token', async () => {
       // Arrange
-      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -376,7 +376,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -453,7 +453,7 @@ describe('Auth Middleware', () => {
           },
           driveScopes: [],
         };
-        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
         const request = new Request('http://localhost/api/test', {
           method: 'GET',
@@ -502,7 +502,7 @@ describe('Auth Middleware', () => {
         vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
         vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
         vi.mocked(validateCSRF).mockResolvedValue(
-          Response.json({ error: 'Invalid CSRF token' }, { status: 403 })
+          Response.json({ error: 'Invalid CSRF token' }, { status: 403 }) as never
         );
 
         const request = new Request('http://localhost/api/test', {
@@ -612,7 +612,7 @@ describe('Auth Middleware', () => {
           Response.json(
             { error: 'Origin not allowed', code: 'ORIGIN_INVALID' },
             { status: 403 }
-          )
+          ) as never
         );
 
         const request = new Request('http://localhost/api/test', {
@@ -689,7 +689,7 @@ describe('Auth Middleware', () => {
           },
           driveScopes: [],
         };
-        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -773,7 +773,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',

@@ -137,16 +137,16 @@ describe('/api/auth/signup redirect', () => {
     vi.clearAllMocks();
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 3 });
-    vi.mocked(bcrypt.hash).mockResolvedValue('hashed-password');
+    vi.mocked(bcrypt.hash).mockResolvedValue('hashed-password' as never);
 
-    vi.mocked(createVerificationToken).mockResolvedValue('verification-token');
-    vi.mocked(createNotification).mockResolvedValue(undefined);
+    vi.mocked(createVerificationToken).mockResolvedValue('verification-token' as never);
+    vi.mocked(createNotification).mockResolvedValue(undefined as never);
 
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
     });
 
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
     // Match table by identity to return appropriate mock responses
     vi.mocked(db.insert).mockImplementation((table: unknown) => {
@@ -165,18 +165,18 @@ describe('/api/auth/signup redirect', () => {
               ])
             ),
           })),
-        };
+        } as never;
       }
 
       if (table === userAiSettings) {
         return {
           values: vi.fn(() => Promise.resolve(undefined)),
-        };
+        } as never;
       }
 
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
   });
 

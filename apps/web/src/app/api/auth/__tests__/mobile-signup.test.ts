@@ -165,12 +165,12 @@ describe('/api/auth/mobile/signup', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful signup
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null); // No existing user
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never); // No existing user
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: vi.fn().mockResolvedValue([mockNewUser]),
       }),
-    });
+    } as never);
   });
 
   describe('successful mobile signup', () => {
@@ -187,7 +187,7 @@ describe('/api/auth/mobile/signup', () => {
             return Promise.resolve([mockDrive]);
           }),
         }),
-      }));
+      }) as never);
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -575,7 +575,7 @@ describe('/api/auth/mobile/signup', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -594,7 +594,7 @@ describe('/api/auth/mobile/signup', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',

@@ -263,11 +263,11 @@ describe('GET /api/pages/[pageId]/history', () => {
 
       // Should have called with a startDate approximately 7 days ago
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
-      const options = call[2];
+      const options = call[2]!;
 
       expect(options.startDate).toBeDefined();
       const daysDiff = Math.floor(
-        (Date.now() - options.startDate.getTime()) / (1000 * 60 * 60 * 24)
+        (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );
       expect(daysDiff).toBeLessThanOrEqual(7);
     });
@@ -278,11 +278,11 @@ describe('GET /api/pages/[pageId]/history', () => {
       await GET(createRequest(), { params: mockParams });
 
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
-      const options = call[2];
+      const options = call[2]!;
 
       expect(options.startDate).toBeDefined();
       const daysDiff = Math.floor(
-        (Date.now() - options.startDate.getTime()) / (1000 * 60 * 60 * 24)
+        (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );
       expect(daysDiff).toBeLessThanOrEqual(30);
     });
@@ -293,7 +293,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       await GET(createRequest(), { params: mockParams });
 
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
-      const options = call[2];
+      const options = call[2]!;
 
       // Should not have an effective start date when unlimited
       expect(options.startDate).toBeUndefined();
@@ -312,11 +312,11 @@ describe('GET /api/pages/[pageId]/history', () => {
       );
 
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
-      const options = call[2];
+      const options = call[2]!;
 
       // Should use user-provided date since it's within retention
       const daysDiff = Math.floor(
-        (Date.now() - options.startDate.getTime()) / (1000 * 60 * 60 * 24)
+        (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );
       expect(daysDiff).toBeGreaterThanOrEqual(9);
       expect(daysDiff).toBeLessThanOrEqual(11);
@@ -335,11 +335,11 @@ describe('GET /api/pages/[pageId]/history', () => {
       );
 
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];
-      const options = call[2];
+      const options = call[2]!;
 
       // Should clamp to retention limit
       const daysDiff = Math.floor(
-        (Date.now() - options.startDate.getTime()) / (1000 * 60 * 60 * 24)
+        (Date.now() - options.startDate!.getTime()) / (1000 * 60 * 60 * 24)
       );
       expect(daysDiff).toBeLessThanOrEqual(7);
     });
@@ -372,7 +372,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: mockActivities,
         total: 2,
-      });
+      } as never);
 
       vi.mocked(isActivityEligibleForRollback)
         .mockReturnValueOnce(true)
@@ -390,7 +390,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [createMockActivity()],
         total: 100,
-      });
+      } as never);
 
       const response = await GET(createRequest({ limit: '10', offset: '20' }), { params: mockParams });
       const body = await response.json();
@@ -407,7 +407,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       vi.mocked(getPageVersionHistory).mockResolvedValue({
         activities: [createMockActivity()],
         total: 21,
-      });
+      } as never);
 
       const response = await GET(createRequest({ limit: '10', offset: '20' }), { params: mockParams });
       const body = await response.json();

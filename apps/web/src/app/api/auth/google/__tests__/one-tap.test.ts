@@ -178,7 +178,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
     vi.mocked(db.insert).mockImplementation((table: unknown) => {
       if (table === users) {
@@ -186,19 +186,19 @@ describe('POST /api/auth/google/one-tap', () => {
           values: vi.fn(() => ({
             returning: vi.fn(() => Promise.resolve([mockNewUser])),
           })),
-        };
+        } as never;
       }
 
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
 
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   afterEach(() => {
@@ -218,7 +218,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('given valid credential for existing user, should return success with user data', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -238,7 +238,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('given existing user, should check for drive provisioning', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -345,7 +345,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
   describe('desktop platform handling', () => {
     it('given desktop platform without deviceId, should return 400', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
       const request = createOneTapRequest({
@@ -360,12 +360,12 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('given desktop platform with deviceId, should return device token', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
       vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
         deviceToken: 'desktop-device-token',
         deviceTokenRecordId: 'device-record-id',
-      });
+      } as never);
 
       const request = createOneTapRequest({
         credential: 'valid-token',

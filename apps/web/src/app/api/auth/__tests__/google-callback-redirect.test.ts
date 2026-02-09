@@ -134,7 +134,7 @@ describe('/api/auth/google/callback redirect', () => {
       driveId: 'drive-123',
     });
 
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
     vi.mocked(db.insert).mockImplementation((table: unknown) => {
       if (table === users) {
@@ -153,19 +153,19 @@ describe('/api/auth/google/callback redirect', () => {
               ])
             ),
           })),
-        };
+        } as never;
       }
 
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
 
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   test('given new user, should redirect to Getting Started drive', async () => {
@@ -192,7 +192,7 @@ describe('/api/auth/google/callback redirect', () => {
       googleId: 'google-id',
       tokenVersion: 0,
       role: 'user',
-    });
+    } as never);
 
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',

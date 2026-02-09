@@ -202,7 +202,7 @@ describe('/api/auth/signup', () => {
     vi.clearAllMocks();
 
     // Default: no existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
     // Reset client IP mock
     vi.mocked(getClientIP).mockReturnValue('unknown');
   });
@@ -263,7 +263,7 @@ describe('/api/auth/signup', () => {
           ]),
         };
       });
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues });
+      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
 
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
@@ -380,7 +380,7 @@ describe('/api/auth/signup', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
-      });
+      } as never);
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -395,7 +395,7 @@ describe('/api/auth/signup', () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
-      });
+      } as never);
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',

@@ -130,8 +130,8 @@ describe('/api/auth/mobile/refresh', () => {
       retryAfter: undefined,
     });
     vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
-    vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
+    vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
     vi.mocked(updateDeviceTokenActivity).mockResolvedValue(undefined);
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_refreshed-token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
@@ -142,7 +142,7 @@ describe('/api/auth/mobile/refresh', () => {
       type: 'user',
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-    });
+    } as never);
     vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
       success: true,
       newToken: 'new-device-token',
@@ -220,7 +220,7 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
       };
-      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -241,7 +241,7 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // 60 days from now
       };
-      vi.mocked(validateDeviceToken).mockResolvedValue(freshDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(freshDeviceRecord as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -259,11 +259,11 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
       };
-      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord as never);
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: false,
         error: 'Token already rotated',
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -283,12 +283,12 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000), // 2 days from now
       };
-      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord as never);
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: true,
         gracePeriodRetry: true,
         deviceTokenId: 'replacement-token-id',
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -340,7 +340,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('returns 401 when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',

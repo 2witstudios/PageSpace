@@ -83,7 +83,7 @@ import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Helper to create a mock transaction that executes callback with a mock tx
 const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
-  vi.mocked(db.transaction as unknown).mockImplementation(async (callback) => {
+  vi.mocked(db.transaction).mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<unknown>) => {
     const tx = { insert: insertMock };
     return callback(tx);
   });
@@ -94,14 +94,14 @@ describe('/api/auth/mcp-tokens', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue({
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'session',
       sessionId: 'test-session-id',
     });
-    vi.mocked(isAuthError as unknown).mockReturnValue(false);
+    vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default transaction mock that returns a basic token
     const defaultInsertMock = vi.fn().mockReturnValue({
@@ -317,8 +317,8 @@ describe('/api/auth/mcp-tokens', () => {
         const mockError = {
           error: Response.json({ error: 'Unauthorized' }, { status: 401 }),
         };
-        vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockError);
-        vi.mocked(isAuthError as unknown).mockReturnValue(true);
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockError);
+        vi.mocked(isAuthError).mockReturnValue(true);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -363,7 +363,7 @@ describe('/api/auth/mcp-tokens', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     beforeEach(() => {
-      vi.mocked(db.query.mcpTokens.findMany as unknown).mockResolvedValue([
+      vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([
         {
           id: 'token-1',
           name: 'Token 1',
@@ -539,7 +539,7 @@ describe('/api/auth/mcp-tokens', () => {
             }),
           };
         });
-        vi.mocked(db.update as unknown).mockReturnValue({ set: mockSet });
+        vi.mocked(db.update).mockReturnValue({ set: mockSet });
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',

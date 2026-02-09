@@ -102,9 +102,9 @@ describe('/api/feedback', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user, rate limit allowed
-    vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockWebAuth('user-123'));
-    vi.mocked(isAuthError as unknown).mockReturnValue(false);
-    vi.mocked(checkDistributedRateLimit as unknown).mockResolvedValue({ allowed: true });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('user-123'));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
   });
 
   describe('successful feedback submission', () => {
@@ -185,8 +185,8 @@ describe('/api/feedback', () => {
 
   describe('authentication errors (401)', () => {
     it('POST_withNoSession_returns401', async () => {
-      vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockAuthError(401));
-      vi.mocked(isAuthError as unknown).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+      vi.mocked(isAuthError).mockReturnValue(true);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -195,8 +195,8 @@ describe('/api/feedback', () => {
     });
 
     it('POST_withInvalidSession_returns401', async () => {
-      vi.mocked(authenticateRequestWithOptions as unknown).mockResolvedValue(mockAuthError(401));
-      vi.mocked(isAuthError as unknown).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+      vi.mocked(isAuthError).mockReturnValue(true);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -207,7 +207,7 @@ describe('/api/feedback', () => {
 
   describe('rate limiting (429)', () => {
     it('POST_whenRateLimitExceeded_returns429', async () => {
-      vi.mocked(checkDistributedRateLimit as unknown).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 1800,
       });
@@ -222,7 +222,7 @@ describe('/api/feedback', () => {
     });
 
     it('POST_whenRateLimitExceeded_logsWarning', async () => {
-      vi.mocked(checkDistributedRateLimit as unknown).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 3600,
       });

@@ -140,7 +140,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         success: true,
         message: 'OK',
         warnings: [],
-      });
+      } as never);
 
       // Verify auth was called with CSRF requirement
       await POST(createRequest({ context: 'page' }), { params: mockParams });
@@ -197,7 +197,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
           success: true,
           message: 'Rollback successful',
           warnings: [],
-        });
+        } as never);
 
         const response = await POST(createRequest({ context }), { params: mockParams });
 
@@ -272,7 +272,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         restoredValues: { title: 'Previous Title' },
         message: 'Change undone',
         warnings: [],
-      });
+      } as never);
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -288,7 +288,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         success: false,
         message: 'You need edit permission to rollback changes to this page',
         warnings: [],
-      });
+      } as never);
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -303,7 +303,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         message: 'Rollback completed',
         warnings: ['Resource has been modified since this change'],
         restoredValues: {},
-      });
+      } as never);
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -317,7 +317,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         success: true,
         message: 'OK',
         warnings: [],
-      });
+      } as never);
 
       await POST(createRequest({ context: 'drive' }), { params: mockParams });
 

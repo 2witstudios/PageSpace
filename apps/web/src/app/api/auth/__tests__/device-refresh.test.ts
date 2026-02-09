@@ -122,8 +122,8 @@ describe('/api/auth/device/refresh', () => {
     vi.clearAllMocks();
 
     // Default: valid device token flow
-    vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser);
+    vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
     // Default: no rotation (token not near expiration)
     vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({ success: false });
   });
@@ -152,7 +152,7 @@ describe('/api/auth/device/refresh', () => {
     it('returns session cookie for web platform (not JSON tokens)', async () => {
       // Web platform now uses sessions, sets cookie instead of returning JWT
       const webDeviceRecord = { ...mockDeviceRecord, platform: 'web' };
-      vi.mocked(validateDeviceToken).mockResolvedValue(webDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(webDeviceRecord as never);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
@@ -254,7 +254,7 @@ describe('/api/auth/device/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       };
-      vi.mocked(validateDeviceToken).mockResolvedValue(nearExpiryRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(nearExpiryRecord as never);
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: true,
         newToken: 'ps_dev_rotated_token', // Opaque format
@@ -282,7 +282,7 @@ describe('/api/auth/device/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
       };
-      vi.mocked(validateDeviceToken).mockResolvedValue(farExpiryRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(farExpiryRecord as never);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
@@ -341,7 +341,7 @@ describe('/api/auth/device/refresh', () => {
     it('allows deviceId correction for legacy OAuth devices with "unknown" deviceId', async () => {
       // Arrange - legacy device from OAuth migration
       const legacyDeviceRecord = { ...mockDeviceRecord, deviceId: 'unknown' };
-      vi.mocked(validateDeviceToken).mockResolvedValue(legacyDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(legacyDeviceRecord as never);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',
@@ -427,7 +427,7 @@ describe('/api/auth/device/refresh', () => {
   describe('user not found', () => {
     it('returns 404 when user is deleted but device token exists', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',

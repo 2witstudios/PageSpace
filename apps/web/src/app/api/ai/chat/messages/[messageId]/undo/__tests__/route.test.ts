@@ -158,7 +158,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
     mockAuth.mockResolvedValue(mockWebAuth(mockUserId));
     mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
     mockCanUserEditPage.mockResolvedValue(true);
-    mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' });
+    mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' } as never);
   });
 
   // ============================================
@@ -255,7 +255,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
     mockAuth.mockResolvedValue(mockWebAuth(mockUserId));
     mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
     mockCanUserEditPage.mockResolvedValue(true);
-    mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' });
+    mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' } as never);
   });
 
   // ============================================

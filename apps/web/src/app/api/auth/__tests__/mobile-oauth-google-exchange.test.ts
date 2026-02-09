@@ -129,11 +129,11 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     vi.mocked(verifyOAuthIdToken).mockResolvedValue({
       success: true,
       userInfo: mockUserInfo,
-    });
-    vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser);
+    } as never);
+    vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser as never);
     vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
-    });
+    } as never);
     vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_oauth-token');
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'sfh0haxfpzowht3oi213oas1',
@@ -143,7 +143,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       type: 'user',
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-    });
+    } as never);
   });
 
   describe('successful OAuth exchange', () => {
@@ -599,7 +599,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('returns 500 when session validation fails', async () => {
-      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',

@@ -209,7 +209,7 @@ describe('POST /api/auth/google/native', () => {
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-    });
+    } as never);
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
@@ -217,7 +217,7 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
       deviceTokenRecordId: 'device-record-id',
-    });
+    } as never);
 
     // Default provisioning mock
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123' });
@@ -226,7 +226,7 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
 
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
     vi.mocked(db.insert).mockImplementation((table: unknown) => {
       if (table === users) {
@@ -234,18 +234,18 @@ describe('POST /api/auth/google/native', () => {
           values: vi.fn(() => ({
             returning: vi.fn(() => Promise.resolve([mockNewUser])),
           })),
-        };
+        } as never;
       }
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
 
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   afterEach(() => {
@@ -267,7 +267,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given valid idToken for existing user, should return tokens without creating user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -288,7 +288,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given existing user, should not provision Getting Started drive', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -629,8 +629,8 @@ describe('POST /api/auth/google/native', () => {
     it('given existing user without googleId, should update with googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
       vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutGoogleId)
-        .mockResolvedValueOnce(mockExistingUser);
+        .mockResolvedValueOnce(userWithoutGoogleId as never)
+        .mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -641,8 +641,8 @@ describe('POST /api/auth/google/native', () => {
     it('given existing user with password, should set provider to both', async () => {
       const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
       vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' });
+        .mockResolvedValueOnce(userWithPassword as never)
+        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);

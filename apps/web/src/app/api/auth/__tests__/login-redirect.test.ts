@@ -110,7 +110,7 @@ describe('/api/auth/login redirect', () => {
     vi.clearAllMocks();
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    vi.mocked(bcrypt.compare).mockResolvedValue(true);
+    vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
     });

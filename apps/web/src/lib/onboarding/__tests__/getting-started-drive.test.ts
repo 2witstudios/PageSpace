@@ -47,7 +47,7 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       insert: vi.fn(),
     };
 
-    vi.mocked(db.transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     const result = await provisionGettingStartedDriveIfNeeded('user-123');
 
@@ -75,7 +75,7 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
     };
 
     vi.mocked(populateUserDrive).mockResolvedValue(undefined);
-    vi.mocked(db.transaction).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     const result = await provisionGettingStartedDriveIfNeeded('user-123');
 
