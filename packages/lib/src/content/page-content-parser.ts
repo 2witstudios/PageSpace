@@ -145,6 +145,13 @@ export function getPageContentForAI(page: Page & { channelMessages?: any[], chil
                 contentString += "No canvas content available.\n";
             }
             break;
+        case PageType.CODE:
+            if (page.content !== null && page.content !== undefined) {
+                contentString += page.content;
+            } else {
+                contentString += "No code content available.\n";
+            }
+            break;
         default:
             contentString += `Content extraction not implemented for page type: ${page.type}.\n`;
     }

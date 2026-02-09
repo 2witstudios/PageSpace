@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, FolderOpen, Hash, MessageSquare, HardDrive, User, Sparkles, Table } from 'lucide-react';
+import { FileText, FolderOpen, Hash, MessageSquare, HardDrive, User, Sparkles, Table, Code } from 'lucide-react';
 import {
   CommandDialog,
   CommandEmpty,
@@ -44,6 +44,8 @@ const getPageIcon = (pageType?: string) => {
       return <Sparkles className="h-4 w-4" />;
     case 'SHEET':
       return <Table className="h-4 w-4" />;
+    case 'CODE':
+      return <Code className="h-4 w-4" />;
     default:
       return <FileText className="h-4 w-4" />;
   }

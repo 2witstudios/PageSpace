@@ -6,7 +6,7 @@ import { pages, db, drives, sql } from '@pagespace/db';
 interface BreadcrumbPage {
   id: string;
   title: string;
-  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
+  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
   parentId: string | null;
   driveId: string;
   drive: { id: string; slug: string; name: string } | null;
@@ -15,7 +15,7 @@ interface BreadcrumbPage {
 type QueryResultRow = {
   id: string;
   title: string;
-  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
+  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
   driveId: string;
   parentId: string | null;
   drive_id: string | null;

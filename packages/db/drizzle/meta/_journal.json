@@ -561,6 +561,13 @@
       "when": 1770580207498,
       "tag": "0079_sturdy_the_enforcers",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1770580010117,
+      "tag": "0080_tired_sentry",
+      "breakpoints": true
     }
   ]
 }
