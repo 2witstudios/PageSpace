@@ -15,6 +15,7 @@ import {
 } from './inline-instructions';
 import {
   extractToolSchemas,
+  type ToolDefinitionForExtraction,
   type ToolSchemaInfo,
   type JsonSchema,
 } from './schema-introspection';
@@ -157,17 +158,11 @@ export function buildCompleteRequest(
   const toolsSummary = getToolsSummary(isReadOnly);
 
   // Convert tools to the format we display
-  const toolsForExtraction: Record<
-    string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    { description?: string; parameters?: any }
-  > = {};
+  const toolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
   for (const [name, tool] of Object.entries(filteredTools)) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const toolAny = tool as any;
     toolsForExtraction[name] = {
-      description: toolAny.description,
-      parameters: toolAny.inputSchema,  // AI SDK v5 uses inputSchema, not parameters
+      description: tool.description,
+      parameters: tool.inputSchema,
     };
   }
   const toolSchemas = extractToolSchemas(toolsForExtraction);

@@ -369,7 +369,7 @@ export const pageService = {
       }),
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: true },
+        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
       })
     ]);
@@ -381,7 +381,7 @@ export const pageService = {
         ...pageData,
         content: sanitizeEmptyContent(pageData.content || ''),
         children: children.map(toPageData),
-        messages: messages as unknown as MessageWithUser[],
+        messages,
       },
       driveId: page.driveId,
     };
@@ -474,7 +474,7 @@ export const pageService = {
       }),
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: true },
+        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
       })
     ]);
@@ -489,7 +489,7 @@ export const pageService = {
       page: {
         ...pageData,
         children: children.map(toPageData),
-        messages: messages as unknown as MessageWithUser[],
+        messages,
       },
       driveId: updatedPage.driveId,
       updatedFields,

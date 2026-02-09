@@ -4,6 +4,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { isEmailVerified } from '@pagespace/lib';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { toISOTimestamp } from '@/lib/utils/timestamp';
+import type { ConversationRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -25,7 +27,7 @@ export async function GET(request: Request) {
     const direction = searchParams.get('direction') || 'after'; // 'before' or 'after'
 
     // Single optimized query using CTE to eliminate N+1 problem
-    const conversationDetails = await db.execute(sql`
+    const conversationDetails = await db.execute<ConversationRow>(sql`
       WITH conversation_data AS (
         SELECT
           c.id,
@@ -88,62 +90,27 @@ export async function GET(request: Request) {
       ORDER BY cd."lastMessageAt" DESC NULLS LAST
     `);
 
-    // Transform the raw results to match the expected format
-    interface ConversationRow {
-      id: string;
-      participant1Id: string;
-      participant2Id: string;
-      lastMessageAt: string | null;
-      lastMessagePreview: string | null;
-      participant1LastRead: string | null;
-      participant2LastRead: string | null;
-      createdAt: string;
-      last_read: string | null;
-      other_user_id: string;
-      other_user_name: string;
-      other_user_email: string;
-      other_user_image: string | null;
-      other_user_username: string | null;
-      other_user_display_name: string | null;
-      other_user_avatar_url: string | null;
-      unread_count: string;
-    }
-
-    // Helper to convert raw PostgreSQL timestamp strings to ISO format
-    // Raw SQL returns timestamps without timezone info (e.g., "2026-02-02 15:30:00")
-    // which JavaScript incorrectly interprets as local time instead of UTC
-    const toISOTimestamp = (timestamp: string | null): string | null => {
-      if (!timestamp) return null;
-      // If it's already an ISO string with timezone, return as-is
-      if (timestamp.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(timestamp)) {
-        return timestamp;
-      }
-      // PostgreSQL timestamp without timezone - append Z to indicate UTC
-      return new Date(timestamp + 'Z').toISOString();
-    };
-
     const conversations = conversationDetails.rows.map((row) => {
-      const typedRow = row as unknown as ConversationRow;
       return {
-        id: typedRow.id,
-        participant1Id: typedRow.participant1Id,
-        participant2Id: typedRow.participant2Id,
-        lastMessageAt: toISOTimestamp(typedRow.lastMessageAt),
-        lastMessagePreview: typedRow.lastMessagePreview,
-        participant1LastRead: toISOTimestamp(typedRow.participant1LastRead),
-        participant2LastRead: toISOTimestamp(typedRow.participant2LastRead),
-        createdAt: toISOTimestamp(typedRow.createdAt),
-        lastRead: toISOTimestamp(typedRow.last_read),
+        id: row.id,
+        participant1Id: row.participant1Id,
+        participant2Id: row.participant2Id,
+        lastMessageAt: toISOTimestamp(row.lastMessageAt),
+        lastMessagePreview: row.lastMessagePreview,
+        participant1LastRead: toISOTimestamp(row.participant1LastRead),
+        participant2LastRead: toISOTimestamp(row.participant2LastRead),
+        createdAt: toISOTimestamp(row.createdAt),
+        lastRead: toISOTimestamp(row.last_read),
         otherUser: {
-          id: typedRow.other_user_id,
-          name: typedRow.other_user_name,
-          email: typedRow.other_user_email,
-          image: typedRow.other_user_image,
-          username: typedRow.other_user_username,
-          displayName: typedRow.other_user_display_name,
-          avatarUrl: typedRow.other_user_avatar_url,
+          id: row.other_user_id,
+          name: row.other_user_name,
+          email: row.other_user_email,
+          image: row.other_user_image,
+          username: row.other_user_username,
+          displayName: row.other_user_display_name,
+          avatarUrl: row.other_user_avatar_url,
         },
-        unreadCount: parseInt(typedRow.unread_count) || 0,
+        unreadCount: parseInt(row.unread_count) || 0,
       };
     });
 
