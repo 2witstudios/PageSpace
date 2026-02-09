@@ -135,33 +135,37 @@ export class ContentStore {
     await fs.mkdir(this.storagePath, { recursive: true });
   }
 
-  private normalizeOriginalMetadata(data: any): OriginalFileMetadata {
+  private normalizeOriginalMetadata(raw: unknown): OriginalFileMetadata {
+    const data = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
     const metadata: OriginalFileMetadata = {
-      originalName: typeof data?.originalName === 'string' ? data.originalName : 'file',
-      contentHash: typeof data?.contentHash === 'string' ? data.contentHash : '',
-      size: typeof data?.size === 'number' ? data.size : 0,
-      savedAt: typeof data?.savedAt === 'string' ? data.savedAt : new Date().toISOString(),
-      tenants: Array.isArray(data?.tenants)
+      originalName: typeof data.originalName === 'string' ? data.originalName : 'file',
+      contentHash: typeof data.contentHash === 'string' ? data.contentHash : '',
+      size: typeof data.size === 'number' ? data.size : 0,
+      savedAt: typeof data.savedAt === 'string' ? data.savedAt : new Date().toISOString(),
+      tenants: Array.isArray(data.tenants)
         ? Array.from(new Set(data.tenants.filter((item: unknown) => typeof item === 'string')))
         : undefined,
-      drives: Array.isArray(data?.drives)
+      drives: Array.isArray(data.drives)
         ? Array.from(new Set(data.drives.filter((item: unknown) => typeof item === 'string')))
         : undefined,
-      uploads: Array.isArray(data?.uploads)
+      uploads: Array.isArray(data.uploads)
         ? data.uploads
-            .map((entry: any) => ({
-              tenantId: typeof entry?.tenantId === 'string' ? entry.tenantId : undefined,
-              userId: typeof entry?.userId === 'string' ? entry.userId : undefined,
-              driveId: typeof entry?.driveId === 'string' ? entry.driveId : undefined,
-              service: typeof entry?.service === 'string' ? entry.service : undefined,
-              uploadedAt:
-                typeof entry?.uploadedAt === 'string'
-                  ? entry.uploadedAt
-                  : new Date().toISOString()
-            }))
+            .map((entry: unknown) => {
+              const e = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
+              return {
+                tenantId: typeof e.tenantId === 'string' ? e.tenantId : undefined,
+                userId: typeof e.userId === 'string' ? e.userId : undefined,
+                driveId: typeof e.driveId === 'string' ? e.driveId : undefined,
+                service: typeof e.service === 'string' ? e.service : undefined,
+                uploadedAt:
+                  typeof e.uploadedAt === 'string'
+                    ? e.uploadedAt
+                    : new Date().toISOString()
+              };
+            })
         : undefined,
       lastAccessedAt:
-        typeof data?.lastAccessedAt === 'string' ? data.lastAccessedAt : undefined
+        typeof data.lastAccessedAt === 'string' ? data.lastAccessedAt : undefined
     };
 
     if (!metadata.contentHash) {
@@ -343,7 +347,7 @@ export class ContentStore {
       const metadataPath = this.getCacheMetadataPath(this.normalizeContentHash(contentHash));
       try {
         const rawParsed = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
-        const metadata: Record<string, any> = Object.create(null);
+        const metadata: Record<string, Record<string, unknown>> = Object.create(null);
         for (const key of Object.keys(rawParsed)) {
           if (isSafePropertyKey(key) && isValidPreset(key)) {
             metadata[key] = rawParsed[key];
@@ -482,7 +486,7 @@ export class ContentStore {
       }
 
       const entries: Record<string, CacheEntry> = {};
-      for (const [preset, value] of Object.entries(data as Record<string, any>)) {
+      for (const [preset, value] of Object.entries(data as Record<string, unknown>)) {
         if (!value || typeof value !== 'object') {
           continue;
         }
@@ -490,20 +494,21 @@ export class ContentStore {
           continue;
         }
 
+        const entry = value as Record<string, unknown>;
         entries[preset] = {
           contentHash: normalizedHash,
           preset,
-          path: typeof value.path === 'string' ? value.path : this.getCacheFilePath(normalizedHash, preset),
-          size: typeof value.size === 'number' ? value.size : 0,
-          mimeType: typeof value.mimeType === 'string' ? value.mimeType : 'application/octet-stream',
-          createdAt: value.createdAt ? new Date(value.createdAt) : new Date(0),
-          lastAccessed: value.lastAccessed ? new Date(value.lastAccessed) : new Date(0)
+          path: typeof entry.path === 'string' ? entry.path : this.getCacheFilePath(normalizedHash, preset),
+          size: typeof entry.size === 'number' ? entry.size : 0,
+          mimeType: typeof entry.mimeType === 'string' ? entry.mimeType : 'application/octet-stream',
+          createdAt: entry.createdAt ? new Date(entry.createdAt as string) : new Date(0),
+          lastAccessed: entry.lastAccessed ? new Date(entry.lastAccessed as string) : new Date(0)
         };
       }
 
       return entries;
-    } catch (error: any) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
         return {};
       }
       throw error;

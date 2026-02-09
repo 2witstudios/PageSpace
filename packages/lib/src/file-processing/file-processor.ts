@@ -5,6 +5,31 @@ import { db, pages, eq } from '@pagespace/db';
 import mammoth from 'mammoth';
 import type { ExtractionResult, ProcessingStatus, ExtractionMethod } from '../types';
 
+interface PdfExtractionMetadata {
+  method: 'pdf-parse';
+  pageCount?: number;
+  info?: Record<string, unknown>;
+  error?: string;
+}
+
+interface VisionExtractionMetadata {
+  method: 'ai-vision';
+  provider?: string;
+  model?: string;
+  status?: string;
+  error?: string;
+}
+
+type ExtractionContentMetadata = PdfExtractionMetadata | VisionExtractionMetadata | Record<string, unknown>;
+
+interface OpenAIVisionResponse {
+  choices: Array<{ message: { content: string } }>;
+}
+
+interface AnthropicVisionResponse {
+  content: Array<{ text: string }>;
+}
+
 /**
  * File processor for extracting text content from various file types
  * - PDF: pdf-parse library
@@ -142,12 +167,12 @@ export class FileProcessor {
     content: string;
     processingStatus: ProcessingStatus;
     extractionMethod: ExtractionMethod;
-    metadata: any;
+    metadata: ExtractionContentMetadata;
   }> {
     try {
       let content = '';
       let extractionMethod: ExtractionMethod = 'text';
-      let metadata: any = {};
+      let metadata: Record<string, unknown> = {};
       
       // Handle different file types
       switch (mimeType) {
@@ -273,10 +298,9 @@ export class FileProcessor {
   /**
    * Extract text from PDF files
    */
-  private async extractPDF(buffer: Buffer): Promise<{ content: string; metadata: any }> {
+  private async extractPDF(buffer: Buffer): Promise<{ content: string; metadata: PdfExtractionMetadata }> {
     try {
       // Dynamic import to avoid build issues
-      // @ts-ignore - pdf-parse doesn't have types
       const pdfParse = (await import('pdf-parse-debugging-disabled')).default;
       const data = await pdfParse(buffer);
       
@@ -330,7 +354,7 @@ export class FileProcessor {
   ): Promise<{
     success: boolean;
     content: string;
-    metadata: any;
+    metadata: VisionExtractionMetadata;
     error?: string;
   }> {
     try {
@@ -390,7 +414,7 @@ export class FileProcessor {
           });
           
           if (response.ok) {
-            const data: any = await response.json();
+            const data = await response.json() as OpenAIVisionResponse;
             const extractedText = data.choices[0]?.message?.content || '';
             
             if (extractedText && extractedText !== 'NO_TEXT_FOUND') {
@@ -447,7 +471,7 @@ export class FileProcessor {
           });
           
           if (response.ok) {
-            const data: any = await response.json();
+            const data = await response.json() as AnthropicVisionResponse;
             const extractedText = data.content[0]?.text || '';
             
             if (extractedText && extractedText !== 'NO_TEXT_FOUND') {
