@@ -6,10 +6,9 @@ import { Loader2 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-// Dynamically import Monaco to avoid SSR issues
 const MonacoEditor = dynamic(
-  () => import('@monaco-editor/react'),
-  { 
+  () => import('@/components/editors/MonacoEditor'),
+  {
     ssr: false,
     loading: () => (
       <div className="flex items-center justify-center h-full">
@@ -26,7 +25,7 @@ interface CodeViewerProps {
 // Map file extensions to Monaco language IDs
 function getLanguageFromFileName(fileName: string | undefined): string {
   if (!fileName) return 'plaintext';
-  
+
   const ext = fileName.toLowerCase().split('.').pop();
   const languageMap: Record<string, string> = {
     'js': 'javascript',
@@ -69,7 +68,7 @@ function getLanguageFromFileName(fileName: string | undefined): string {
     'vue': 'vue',
     'svelte': 'svelte',
   };
-  
+
   return languageMap[ext || ''] || 'plaintext';
 }
 
@@ -121,17 +120,12 @@ export default function CodeViewer({ page }: CodeViewerProps) {
     <div className="h-full">
       <MonacoEditor
         value={code}
+        readOnly
         language={language}
-        theme="vs-dark"
         options={{
-          readOnly: true,
           minimap: { enabled: false },
-          scrollBeyondLastLine: false,
           fontSize: 14,
-          wordWrap: 'on',
-          lineNumbers: 'on',
           renderWhitespace: 'selection',
-          cursorStyle: 'line',
           automaticLayout: true,
         }}
       />

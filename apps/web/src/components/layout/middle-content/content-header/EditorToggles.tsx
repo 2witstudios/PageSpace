@@ -1,13 +1,24 @@
 "use client";
 
+import { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDocumentStore } from '@/stores/useDocumentStore';
+import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useParams } from 'next/navigation';
 import useSWR from 'swr';
 import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-safe';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
+import { useDocumentSaving } from '@/hooks/useDocument';
+import { toast } from 'sonner';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { ArrowRightLeft } from 'lucide-react';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -24,16 +35,81 @@ export function EditorToggles() {
   const pageId = params.pageId as string;
   const isMobile = useMobile();
   const { preferences } = useDisplayPreferences();
+  const [isConverting, setIsConverting] = useState(false);
+  const { saveDocument } = useDocumentSaving(pageId);
 
   // Fetch page data to determine type
-  const { data: pageData } = useSWR(
+  const { data: pageData, mutate } = useSWR(
     pageId ? `/api/pages/${pageId}` : null,
     fetcher,
     {
-      revalidateOnFocus: false, // Don't revalidate on tab focus (prevents interruptions)
-      refreshInterval: 300000, // 5 minutes (prevents unnecessary polling)
+      revalidateOnFocus: false,
+      refreshInterval: 300000,
     }
   );
+
+  const contentMode = pageData?.contentMode || 'html';
+  const isMarkdown = contentMode === 'markdown';
+
+  const handleConvert = useCallback(async () => {
+    const targetMode = isMarkdown ? 'html' : 'markdown';
+    const confirmMessage = isMarkdown
+      ? 'Convert this page from Markdown to Rich Text (HTML)?'
+      : 'Convert this page from Rich Text (HTML) to Markdown?';
+
+    if (!confirm(confirmMessage)) return;
+
+    setIsConverting(true);
+    try {
+      // Force-save pending edits before converting to ensure conversion uses latest content
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      if (doc?.isDirty) {
+        // Clear any pending debounced save
+        if (doc.saveTimeout) {
+          clearTimeout(doc.saveTimeout);
+        }
+        const saveResult = await saveDocument(doc.content);
+        if (!saveResult) {
+          toast.error('Please save your changes before converting');
+          setIsConverting(false);
+          return;
+        }
+      }
+
+      const response = await fetchWithAuth(`/api/pages/${pageId}/convert-content-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetMode }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Conversion failed');
+      }
+
+      const result = await response.json();
+
+      // Update local document store with converted content
+      const store = useDocumentManagerStore.getState();
+      store.updateDocument(pageId, {
+        content: result.content,
+        contentMode: result.contentMode,
+        revision: result.revision,
+        isDirty: false,
+        lastSaved: Date.now(),
+        lastUpdateTime: Date.now(),
+      });
+
+      // Revalidate SWR cache
+      await mutate();
+
+      toast.success(`Converted to ${targetMode === 'markdown' ? 'Markdown' : 'Rich Text'}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Conversion failed');
+    } finally {
+      setIsConverting(false);
+    }
+  }, [pageId, isMarkdown, mutate, saveDocument]);
 
   // Only show editor toggles if preference is enabled, for document/canvas pages, and not on mobile
   const pageType = pageData?.type as PageType;
@@ -43,6 +119,8 @@ export function EditorToggles() {
   if (!shouldShowToggles || isMobile) {
     return null;
   }
+
+  const codeLabel = isMarkdown ? 'Markdown' : 'HTML';
 
   return (
     <div className="flex items-center gap-2">
@@ -58,8 +136,26 @@ export function EditorToggles() {
         size="sm"
         onClick={() => setActiveView('code')}
       >
-        Code
+        {codeLabel}
       </Button>
+      {isDocumentPage(pageType) && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" disabled={isConverting} aria-label="Convert content mode">
+              <ArrowRightLeft className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleConvert} disabled={isConverting}>
+              {isConverting
+                ? 'Converting...'
+                : isMarkdown
+                  ? 'Convert to Rich Text (HTML)'
+                  : 'Convert to Markdown'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }

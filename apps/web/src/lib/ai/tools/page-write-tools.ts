@@ -433,8 +433,11 @@ export const pageWriteTools = {
         }
 
         // Format content for AI line-based editing, then split into lines
-        // addLineBreaksForAI adds newlines between block tags without removing any content
-        const formattedContent = addLineBreaksForAI(page.content || '');
+        // Markdown pages already have natural line structure; HTML pages need addLineBreaksForAI
+        const isMarkdown = page.contentMode === 'markdown';
+        const formattedContent = isMarkdown
+          ? (page.content || '')
+          : addLineBreaksForAI(page.content || '');
         const lines = formattedContent.split('\n');
         
         // Validate line numbers
@@ -482,6 +485,7 @@ export const pageWriteTools = {
           pageId: page.id,
           title: page.title,
           type: page.type,
+          contentMode: page.contentMode || 'html',
           oldContent: page.content,
           newContent,
           linesReplaced: endLine - startLine + 1,
@@ -523,8 +527,9 @@ export const pageWriteTools = {
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
       type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']).describe('The type of page to create'),
+      contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
     }),
-    execute: async ({ driveId, parentId, title, type }, { experimental_context: context }) => {
+    execute: async ({ driveId, parentId, title, type, contentMode }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -582,6 +587,7 @@ export const pageWriteTools = {
           title,
           type,
           content: initialContent,
+          contentMode: type === 'DOCUMENT' && contentMode ? contentMode : 'html',
           position: nextPosition,
           driveId: drive.id,
           parentId: parentId || null,
@@ -648,6 +654,7 @@ export const pageWriteTools = {
           id: newPage.id,
           title: newPage.title,
           type: newPage.type,
+          contentMode: isDocumentPage(type as PageType) && contentMode ? contentMode : 'html',
           parentId: parentId || 'root',
           message: `Successfully created ${type.toLowerCase()} page "${title}"`,
           summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,

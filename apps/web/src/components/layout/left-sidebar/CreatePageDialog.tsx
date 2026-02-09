@@ -18,6 +18,7 @@ import { PageType, Page, getDefaultContent } from '@pagespace/lib/client-safe';
 import { toast } from 'sonner';
 import { Upload } from 'lucide-react';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 interface CreatePageDialogProps {
   parentId: string | null;
@@ -34,6 +35,7 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { preferences } = useDisplayPreferences();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,12 +93,17 @@ export default function CreatePageDialog({ parentId, isOpen, setIsOpen, onPageCr
       // Use centralized default content
       const content = getDefaultContent(type);
 
+      // Apply user's markdown preference for new document pages
+      const contentMode = (type === PageType.DOCUMENT && preferences.defaultMarkdownMode)
+        ? 'markdown' : undefined;
+
       const newPage = await post<Page>('/api/pages', {
         title,
         type,
         parentId: parentId,
         driveId: driveId,
-        content
+        content,
+        ...(contentMode && { contentMode }),
       });
 
       onPageCreated(newPage);

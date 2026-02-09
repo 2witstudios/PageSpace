@@ -28,6 +28,7 @@ export const pages = pgTable('pages', {
   title: text('title').notNull(),
   type: pageType('type').notNull(),
   content: text('content').default('').notNull(),
+  contentMode: text('contentMode', { enum: ['html', 'markdown'] }).default('html').notNull(),
   isPaginated: boolean('isPaginated').default(false).notNull(),
   position: real('position').notNull(),
   isTrashed: boolean('isTrashed').default(false).notNull(),

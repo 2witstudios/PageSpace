@@ -92,6 +92,7 @@ const mockPage: PageData = {
   title: 'New Page',
   type: 'DOCUMENT',
   content: '<p></p>',
+  contentMode: 'html',
   parentId: null,
   driveId: mockDriveId,
   position: 1,

@@ -18,9 +18,9 @@ export const useDocumentState = (pageId: string) => {
   
   // Initialize document if it doesn't exist
   const initializeDocument = useCallback(
-    (initialContent?: string) => {
+    (initialContent?: string, contentMode?: 'html' | 'markdown') => {
       if (!document) {
-        createDocument(pageId, initialContent);
+        createDocument(pageId, initialContent, contentMode);
       }
     },
     [document, createDocument, pageId]
@@ -207,7 +207,7 @@ export const useDocument = (pageId: string, initialContent?: string) => {
       if (response.ok) {
         const page = await response.json();
         const store = useDocumentManagerStore.getState();
-        store.createDocument(pageId, page.content || '');
+        store.createDocument(pageId, page.content || '', page.contentMode || 'html');
         if (page.revision !== undefined) {
           store.updateDocument(pageId, { revision: page.revision });
         }

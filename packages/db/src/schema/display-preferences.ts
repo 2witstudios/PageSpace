@@ -6,6 +6,7 @@ import { createId } from '@paralleldrive/cuid2';
 export const displayPreferenceType = pgEnum('display_preference_type', [
   'SHOW_TOKEN_COUNTS',
   'SHOW_CODE_TOGGLE',
+  'DEFAULT_MARKDOWN_MODE',
 ]);
 
 export const displayPreferences = pgTable('display_preferences', {

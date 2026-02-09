@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
@@ -72,6 +73,11 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
       if (response.ok) {
         const updatedPage = await response.json();
         updateContentFromServer(updatedPage.content, updatedPage.revision);
+        if (updatedPage.contentMode) {
+          useDocumentManagerStore.getState().updateDocument(pageId, {
+            contentMode: updatedPage.contentMode,
+          });
+        }
       }
     } catch (error) {
       console.error('Failed to refresh document:', error);
@@ -164,8 +170,22 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
 
             // Only update if content actually changed and we're not currently editing
             // Note: This uses closure over documentState, which is acceptable here
-            if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-              updateContentFromServer(updatedPage.content, updatedPage.revision);
+            // IMPORTANT: contentMode must be updated atomically with content to prevent
+            // mode/content mismatch when another user converts while we have unsaved edits
+            if (!documentState?.isDirty) {
+              const contentChanged = updatedPage.content !== documentState?.content;
+              const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
+
+              if (contentChanged || modeChanged) {
+                useDocumentManagerStore.getState().updateDocument(pageId, {
+                  content: updatedPage.content,
+                  contentMode: updatedPage.contentMode,
+                  revision: updatedPage.revision,
+                  isDirty: false,
+                  lastSaved: Date.now(),
+                  lastUpdateTime: Date.now(),
+                });
+              }
             }
           }
         } catch (error) {
@@ -180,7 +200,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, pageId, documentState, updateContentFromServer]);
+  }, [socket, pageId, documentState]);
 
 
   // Handle content changes
@@ -190,7 +210,15 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
       return;
     }
 
-    const content = newContent || '';
+    let content = newContent || '';
+
+    // Normalize code blocks when HTML content comes from code editor
+    // to prevent TipTap misparse on re-entry to rich view
+    if (documentState?.contentMode !== 'markdown' && activeView === 'code') {
+      content = content
+        .replace(/<pre>\s*<code/g, '<pre><code')
+        .replace(/<\/code>\s*<\/pre>/g, '</code></pre>');
+    }
 
     // Update content (sets isDirty flag)
     updateContent(content);
@@ -198,7 +226,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     // Save timer - CRITICAL for data persistence (1000ms)
     // Triggered every time content changes
     saveWithDebounce(content);
-  }, [updateContent, saveWithDebounce, isReadOnly]);
+  }, [updateContent, saveWithDebounce, isReadOnly, documentState?.contentMode, activeView]);
 
   // Track isDirty in ref without causing effect recreation
   useEffect(() => {
@@ -313,7 +341,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                     <MonacoEditor
                       value={documentState?.content || ''}
                       onChange={handleContentChange}
-                      language="html"
+                      language={documentState?.contentMode === 'markdown' ? 'markdown' : 'html'}
                       readOnly={isReadOnly}
                     />
                   </div>
@@ -334,6 +362,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
                       onEditorChange={setEditor}
                       readOnly={isReadOnly}
                       isPaginated={false}
+                      contentMode={documentState?.contentMode || 'html'}
                     />
                   </div>
                 </motion.div>

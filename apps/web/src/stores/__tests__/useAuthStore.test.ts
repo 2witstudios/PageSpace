@@ -930,7 +930,6 @@ describe('authStoreHelpers', () => {
 
       expect(authStoreHelpers.shouldLoadSession()).toBe(false);
     });
-
     it('given server initialized and unauthenticated with no check timestamp, should return false', () => {
       useAuthStore.setState({
         hasHydrated: true,
