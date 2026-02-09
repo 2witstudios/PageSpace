@@ -185,7 +185,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         });
       }
     }
-  }, [value, editor]);
+  }, [value, editor, contentMode]);
 
   useEffect(() => {
     onEditorChange(editor);
