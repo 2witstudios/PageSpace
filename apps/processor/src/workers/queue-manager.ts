@@ -32,9 +32,12 @@ export function mapJobState(state: string): ProcessingJob['status'] {
   }
 }
 
+const EMPTY_STATS: QueueStats = { active: 0, pending: 0, completed: 0, failed: 0 };
+
 export class QueueManager {
   private boss: PgBoss | null = null;
   private connectionString: string;
+  private cachedStates: PgBoss.MonitorStates | null = null;
 
   constructor() {
     const connectionString = process.env.DATABASE_URL;
@@ -56,6 +59,10 @@ export class QueueManager {
     });
 
     await this.boss.start();
+
+    this.boss.on('monitor-states', (states: PgBoss.MonitorStates) => {
+      this.cachedStates = states;
+    });
 
     // Define queue configurations
     await this.setupQueues();
@@ -88,9 +95,7 @@ export class QueueManager {
 
     // Unified ingestion worker
     await this.boss.work('ingest-file',
-      { batchSize: 2 },
-      async (jobs) => {
-        const job = Array.isArray(jobs) ? jobs[0] : jobs;
+      async ([job]) => {
         console.log(`Processing ingest-file job: ${job.id}`);
         const data = job.data as IngestFileJobData;
         const { contentHash, fileId, mimeType, originalName } = data;
@@ -159,31 +164,25 @@ export class QueueManager {
       }
     );
 
-    // Image optimization worker (high concurrency)
+    // Image optimization worker
     await this.boss.work('image-optimize',
-      { batchSize: 5 },
-      async (jobs) => {
-        const job = Array.isArray(jobs) ? jobs[0] : jobs;
+      async ([job]) => {
         console.log(`Processing image job: ${job.id}`);
         return await processImage(job.data as ImageOptimizeJobData);
       }
     );
 
-    // Text extraction worker (medium concurrency)
+    // Text extraction worker
     await this.boss.work('text-extract',
-      { batchSize: 3 },
-      async (jobs) => {
-        const job = Array.isArray(jobs) ? jobs[0] : jobs;
+      async ([job]) => {
         console.log(`Processing text extraction job: ${job.id}`);
         return await extractText(job.data as TextExtractJobData);
       }
     );
 
-    // OCR worker (low concurrency due to API rate limits)
+    // OCR worker
     await this.boss.work('ocr-process',
-      { batchSize: 1 },
-      async (jobs) => {
-        const job = Array.isArray(jobs) ? jobs[0] : jobs;
+      async ([job]) => {
         console.log(`Processing OCR job: ${job.id}`);
         return await processOCR(job.data as OCRJobData);
       }
@@ -240,25 +239,21 @@ export class QueueManager {
     };
   }
 
-  async getQueueStatus(): Promise<Record<QueueName, QueueStats>> {
-    if (!this.boss) throw new Error('Queue manager not initialized');
-
+  getQueueStatus(): Record<QueueName, QueueStats> {
     const queues: QueueName[] = ['ingest-file', 'image-optimize', 'text-extract', 'ocr-process'];
+    const perQueue = this.cachedStates?.queues ?? {};
+
     const status = {} as Record<QueueName, QueueStats>;
-
     for (const queue of queues) {
-      // PgBoss v10 uses different method signature
-      const created = await this.boss.getQueueSize(queue, { before: 'active' });
-      const active = await this.boss.getQueueSize(queue, { before: 'completed' });
-      const completed = await this.boss.getQueueSize(queue, { before: 'failed' });
-      const failed = await this.boss.getQueueSize(queue, { before: 'cancelled' });
-
-      status[queue] = {
-        active: active || 0,
-        pending: created || 0,
-        completed: completed || 0,
-        failed: failed || 0
-      };
+      const q = perQueue[queue];
+      status[queue] = q
+        ? {
+            pending: q.created + q.retry,
+            active: q.active,
+            completed: q.completed,
+            failed: q.cancelled + q.failed,
+          }
+        : EMPTY_STATS;
     }
 
     return status;
