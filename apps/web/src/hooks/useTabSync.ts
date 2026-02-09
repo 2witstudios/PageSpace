@@ -16,9 +16,9 @@ export function useTabSync() {
   const pathname = usePathname();
   const router = useRouter();
   const lastSyncedPath = useRef<string | null>(null);
-  const didAttemptDesktopRestore = useRef(false);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
+  const setDesktopRestoreAttempted = useTabsStore((state) => state.setDesktopRestoreAttempted);
 
   useEffect(() => {
     // Wait for store to rehydrate from localStorage
@@ -34,17 +34,21 @@ export function useTabSync() {
 
     // Desktop bootstrap: app starts at /dashboard, so restore the active tab route once
     // to ensure page hooks mount immediately without requiring user interaction.
-    // Mark the attempt on first hydrated pass so it cannot trigger mid-session.
+    // Mark the attempt on first hydrated pass so it cannot trigger mid-session,
+    // including across layout remounts (e.g. route-group transitions).
     const isDesktop = !!window.electron?.isDesktop;
-    if (isDesktop && !didAttemptDesktopRestore.current) {
-      didAttemptDesktopRestore.current = true;
+    const desktopRestoreAttempted = useTabsStore.getState().desktopRestoreAttempted;
+    if (isDesktop && !desktopRestoreAttempted) {
+      setDesktopRestoreAttempted(true);
 
       if (pathname === '/dashboard' && hasTabs) {
         const activeTab = selectActiveTab(useTabsStore.getState());
         const restorePath = activeTab?.path;
 
         if (restorePath && restorePath !== '/dashboard') {
-          lastSyncedPath.current = restorePath;
+          // Guard against immediate re-runs (e.g. strict mode) before replace updates pathname.
+          // Keep '/dashboard' marked as already handled so we don't sync it into tab history.
+          lastSyncedPath.current = pathname;
           router.replace(restorePath);
           return;
         }
@@ -76,5 +80,5 @@ export function useTabSync() {
     // Navigate within the active tab
     currentState.navigateInActiveTab(pathname);
     lastSyncedPath.current = pathname;
-  }, [pathname, rehydrated, router]);
+  }, [pathname, rehydrated, router, setDesktopRestoreAttempted]);
 }
