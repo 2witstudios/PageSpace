@@ -1,7 +1,10 @@
+import path from 'path';
+import fs from 'fs/promises';
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 import { contentStore } from '../server';
 import type { TextExtractJobData, TextExtractResult } from '../types';
+import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';
 
 export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
   const { contentHash, mimeType, originalName } = data;
@@ -52,12 +55,10 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     // Clean extracted text - remove null bytes and other invalid UTF-8 characters
     extractedText = extractedText.replace(/\0/g, '').trim();
 
-    // Save extracted text to cache
-    const textCachePath = `${contentHash}/extracted-text.txt`;
-    const cacheDir = require('path').dirname(await contentStore.getCachePath(contentHash, 'text'));
-    await require('fs').promises.mkdir(cacheDir, { recursive: true });
-    await require('fs').promises.writeFile(
-      require('path').join(cacheDir, 'extracted-text.txt'),
+    const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'text'));
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, 'extracted-text.txt'),
       extractedText
     );
 
@@ -79,7 +80,9 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
 
 async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata: Record<string, unknown> }> {
   const uint8Array = new Uint8Array(buffer);
-  const loadingTask = (pdfjsLib as any).getDocument({ data: uint8Array, disableWorker: true });
+  const getDocument = pdfjsLib.getDocument as unknown as
+    (params: { data: Uint8Array; disableWorker: boolean }) => PDFLoadingTask;
+  const loadingTask = getDocument({ data: uint8Array, disableWorker: true });
   const pdf = await loadingTask.promise;
 
   const metadata = await pdf.getMetadata();
@@ -89,16 +92,16 @@ async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata:
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
-    
+
     const pageText = textContent.items
-      .map((item: any) => item.str)
+      .map((item: PDFTextItem) => item.str)
       .join(' ');
-    
+
     textParts.push(pageText);
   }
 
-  const info = metadata.info as any;
-  
+  const info: PDFInfo | null = metadata.info;
+
   return {
     text: textParts.join('\n\n'),
     metadata: {

@@ -1,6 +1,6 @@
 // Minimal pg Pool interface to keep processor build self-contained without @types/pg
 interface PgPoolClient {
-  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }>;
+  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
   release(): void;
 }
 
@@ -90,7 +90,7 @@ export async function getPageForIngestion(pageId: string): Promise<{
       'SELECT id, "filePath" as "contentHash", "mimeType", "originalFileName" FROM pages WHERE id = $1 LIMIT 1',
       [pageId]
     );
-    if (result.rowCount === 0) return null;
+    if (!result.rows.length) return null;
     return result.rows[0] as {
       id: string;
       contentHash: string;

@@ -14,6 +14,24 @@ import type {
 import { setPageCompleted, setPageFailed, setPageProcessing, setPageVisual } from '../db';
 import { needsTextExtraction } from './text-extractor';
 
+export function mapJobState(state: string): ProcessingJob['status'] {
+  switch (state) {
+    case 'created':
+    case 'retry':
+      return 'pending';
+    case 'active':
+      return 'processing';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+    case 'expired':
+    case 'cancelled':
+      return 'failed';
+    default:
+      return 'pending';
+  }
+}
+
 export class QueueManager {
   private boss: PgBoss | null = null;
   private connectionString: string;
@@ -192,9 +210,12 @@ export class QueueManager {
     };
     
     const jobId = await this.boss.send(queue, data, jobOptions);
+    if (!jobId) {
+      throw new Error(`Failed to queue job on ${queue} (duplicate or rejected)`);
+    }
     console.log(`Queued job ${jobId} on ${queue}`);
 
-    return jobId as string;
+    return jobId;
   }
 
   async getJob(jobId: string): Promise<ProcessingJob | null> {
@@ -211,30 +232,12 @@ export class QueueManager {
       type: job.name as QueueName,
       fileId: (data?.fileId as string) ?? '',
       contentHash: (data?.contentHash as string) ?? '',
-      status: this.mapJobState(job.state),
+      status: mapJobState(job.state),
       result: output as ProcessingJob['result'],
       error: (output?.error as string) ?? undefined,
       createdAt: job.createdOn,
       completedAt: job.completedOn || undefined
     };
-  }
-
-  private mapJobState(state: string): ProcessingJob['status'] {
-    switch (state) {
-      case 'created':
-      case 'retry':
-        return 'pending';
-      case 'active':
-        return 'processing';
-      case 'completed':
-        return 'completed';
-      case 'failed':
-      case 'expired':
-      case 'cancelled':
-        return 'failed';
-      default:
-        return 'pending';
-    }
   }
 
   async getQueueStatus(): Promise<Record<QueueName, QueueStats>> {
