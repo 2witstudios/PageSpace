@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock next/server - create a mock class so instanceof checks work
 vi.mock('next/server', () => {
@@ -153,12 +153,14 @@ const mockGetUserLMStudioSettings = vi.mocked(getUserLMStudioSettings);
 const mockGetUserGLMSettings = vi.mocked(getUserGLMSettings);
 const mockGetUserMiniMaxSettings = vi.mocked(getUserMiniMaxSettings);
 
+type MockFn = ReturnType<typeof vi.fn>;
+
 interface MockDb {
-  select: Mock;
-  from: Mock;
-  where: Mock;
-  update: Mock;
-  set: Mock;
+  select: MockFn;
+  from: MockFn;
+  where: MockFn;
+  update: MockFn;
+  set: MockFn;
 }
 
 describe('provider-factory', () => {

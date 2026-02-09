@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -96,16 +96,16 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (canUserViewPage as Mock).mockResolvedValue(true);
-    (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage());
-    (generateDOCX as Mock).mockResolvedValue(Buffer.from('mock docx content'));
-    (sanitizeFilename as Mock).mockReturnValue('Test_Document');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage() as never);
+    vi.mocked(generateDOCX).mockResolvedValue(Buffer.from('mock docx content'));
+    vi.mocked(sanitizeFilename).mockReturnValue('Test_Document');
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -115,7 +115,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks view permission', async () => {
-      (canUserViewPage as Mock).mockResolvedValue(false);
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -125,7 +125,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   describe('page validation', () => {
     it('returns 404 when page does not exist', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -133,7 +133,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 400 when page is not a DOCUMENT type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'FOLDER' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'FOLDER' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -143,7 +143,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 400 for AI_CHAT page type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'AI_CHAT' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'AI_CHAT' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -153,7 +153,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 400 for SHEET page type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'SHEET' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'SHEET' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -166,7 +166,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
   describe('DOCX generation', () => {
     it('generates DOCX file successfully', async () => {
       const docxBuffer = Buffer.from('mock docx content');
-      (generateDOCX as Mock).mockResolvedValue(docxBuffer);
+      vi.mocked(generateDOCX).mockResolvedValue(docxBuffer);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -190,7 +190,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('uses default content when page has no content', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ content: '' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ content: '' }) as never);
 
       await GET(createRequest(), { params: mockParams });
 
@@ -198,7 +198,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('uses fallback filename when title cannot be sanitized', async () => {
-      (sanitizeFilename as Mock).mockReturnValue('');
+      vi.mocked(sanitizeFilename).mockReturnValue('');
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -224,7 +224,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
   describe('error handling', () => {
     it('returns 500 when DOCX generation fails', async () => {
-      (generateDOCX as Mock).mockRejectedValue(new Error('Generation failed'));
+      vi.mocked(generateDOCX).mockRejectedValue(new Error('Generation failed'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -234,7 +234,7 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      (db.query.pages.findFirst as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

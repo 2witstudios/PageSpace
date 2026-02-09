@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   authenticateSessionRequest,
   authenticateMCPRequest,
@@ -70,11 +70,11 @@ describe('Auth Middleware', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (sessionService.validateSession as Mock).mockResolvedValue(null);
-    (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(null);
-    (validateCSRF as Mock).mockResolvedValue(null);
-    (validateOrigin as Mock).mockReturnValue(null);
-    (getSessionFromCookies as Mock).mockReturnValue(null);
+    vi.mocked(sessionService.validateSession).mockResolvedValue(null);
+    vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
+    vi.mocked(validateCSRF).mockResolvedValue(null);
+    vi.mocked(validateOrigin).mockReturnValue(null);
+    vi.mocked(getSessionFromCookies).mockReturnValue(null);
   });
 
   describe('validateSessionToken', () => {
@@ -88,7 +88,7 @@ describe('Auth Middleware', () => {
 
     it('returns null when session validation fails', async () => {
       // Arrange
-      (sessionService.validateSession as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       // Act
       const result = await validateSessionToken('ps_sess_invalid');
@@ -99,7 +99,7 @@ describe('Auth Middleware', () => {
 
     it('returns session claims for valid token', async () => {
       // Arrange
-      (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
       // Act
       const result = await validateSessionToken('ps_sess_valid');
@@ -110,7 +110,7 @@ describe('Auth Middleware', () => {
 
     it('returns null when sessionService throws error', async () => {
       // Arrange
-      (sessionService.validateSession as Mock).mockRejectedValue(
+      vi.mocked(sessionService.validateSession).mockRejectedValue(
         new Error('Session service unavailable')
       );
 
@@ -141,7 +141,7 @@ describe('Auth Middleware', () => {
 
     it('returns null when token not found in database', async () => {
       // Arrange
-      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
 
       // Act
       const result = await validateMCPToken('mcp_valid-token');
@@ -163,7 +163,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       // Act
       const result = await validateMCPToken('mcp_valid-token');
@@ -192,7 +192,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       // Capture the values passed to set()
       let capturedSetValues: Record<string, unknown> | undefined;
@@ -202,7 +202,7 @@ describe('Auth Middleware', () => {
           where: vi.fn().mockResolvedValue(undefined),
         };
       });
-      (db.update as Mock).mockReturnValue({ set: mockSet });
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       // Act
       await validateMCPToken('mcp_valid-token');
@@ -218,7 +218,7 @@ describe('Auth Middleware', () => {
   describe('authenticateSessionRequest', () => {
     it('returns error when no session cookie', async () => {
       // Arrange
-      (getSessionFromCookies as Mock).mockReturnValue(null);
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -257,8 +257,8 @@ describe('Auth Middleware', () => {
 
     it('authenticates with valid session cookie', async () => {
       // Arrange
-      (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-      (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+      vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+      vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -281,8 +281,8 @@ describe('Auth Middleware', () => {
 
     it('returns error for invalid session', async () => {
       // Arrange
-      (getSessionFromCookies as Mock).mockReturnValue('ps_sess_invalid');
-      (sessionService.validateSession as Mock).mockResolvedValue(null);
+      vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_invalid');
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -343,7 +343,7 @@ describe('Auth Middleware', () => {
 
     it('returns error for invalid MCP token', async () => {
       // Arrange
-      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -376,7 +376,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -453,7 +453,7 @@ describe('Auth Middleware', () => {
           },
           driveScopes: [],
         };
-        (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
         const request = new Request('http://localhost/api/test', {
           method: 'GET',
@@ -476,8 +476,8 @@ describe('Auth Middleware', () => {
     describe('CSRF validation', () => {
       it('validates CSRF for session auth when required', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -499,10 +499,10 @@ describe('Auth Middleware', () => {
 
       it('returns CSRF error when validation fails', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
-        (validateCSRF as Mock).mockResolvedValue(
-          Response.json({ error: 'Invalid CSRF token' }, { status: 403 })
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
+        vi.mocked(validateCSRF).mockResolvedValue(
+          Response.json({ error: 'Invalid CSRF token' }, { status: 403 }) as never
         );
 
         const request = new Request('http://localhost/api/test', {
@@ -527,7 +527,7 @@ describe('Auth Middleware', () => {
 
       it('skips CSRF validation for Bearer token auth (not vulnerable to CSRF)', async () => {
         // Arrange - Bearer token session auth (desktop/mobile)
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -558,8 +558,8 @@ describe('Auth Middleware', () => {
     describe('Origin validation (defense-in-depth)', () => {
       it('validates origin when requireCSRF is true for session auth', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -582,8 +582,8 @@ describe('Auth Middleware', () => {
 
       it('validates origin when requireOriginValidation is explicitly true', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -605,14 +605,14 @@ describe('Auth Middleware', () => {
 
       it('returns 403 when origin validation fails before CSRF check', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
         // Origin validation fails
-        (validateOrigin as Mock).mockReturnValue(
+        vi.mocked(validateOrigin).mockReturnValue(
           Response.json(
             { error: 'Origin not allowed', code: 'ORIGIN_INVALID' },
             { status: 403 }
-          )
+          ) as never
         );
 
         const request = new Request('http://localhost/api/test', {
@@ -644,10 +644,10 @@ describe('Auth Middleware', () => {
 
       it('passes authentication with valid origin and valid CSRF', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
-        (validateOrigin as Mock).mockReturnValue(null);
-        (validateCSRF as Mock).mockResolvedValue(null);
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
+        vi.mocked(validateOrigin).mockReturnValue(null);
+        vi.mocked(validateCSRF).mockResolvedValue(null);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -689,7 +689,7 @@ describe('Auth Middleware', () => {
           },
           driveScopes: [],
         };
-        (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -711,8 +711,8 @@ describe('Auth Middleware', () => {
 
       it('allows disabling origin validation even when requireCSRF is true', async () => {
         // Arrange
-        (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-        (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+        vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+        vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
         const request = new Request('http://localhost/api/test', {
           method: 'POST',
@@ -740,8 +740,8 @@ describe('Auth Middleware', () => {
   describe('authenticateHybridRequest', () => {
     it('accepts session tokens', async () => {
       // Arrange
-      (getSessionFromCookies as Mock).mockReturnValue('ps_sess_valid');
-      (sessionService.validateSession as Mock).mockResolvedValue(mockSessionClaims);
+      vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_valid');
+      vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',
@@ -773,7 +773,7 @@ describe('Auth Middleware', () => {
         },
         driveScopes: [],
       };
-      (db.query.mcpTokens.findFirst as Mock).mockResolvedValue(mockMCPToken);
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
 
       const request = new Request('http://localhost/api/test', {
         method: 'GET',

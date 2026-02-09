@@ -7,7 +7,7 @@
  * - Response mapping → service results mapped to HTTP responses
  * - Side effects → broadcasts/cache with correct payload essentials
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -134,13 +134,13 @@ describe('GET /api/pages/[pageId]', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.getPage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.getPage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -151,7 +151,7 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks view permission', async () => {
-      (pageService.getPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.getPage).mockResolvedValue({
         success: false,
         error: 'You do not have permission to view this page',
         status: 403,
@@ -165,7 +165,7 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('page retrieval', () => {
     it('returns 404 when page does not exist', async () => {
-      (pageService.getPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.getPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
         status: 404,
@@ -195,7 +195,7 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.getPage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.getPage).mockRejectedValue(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -227,13 +227,13 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.updatePage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
@@ -244,7 +244,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks edit permission', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'You need edit permission to modify this page',
         status: 403,
@@ -260,7 +260,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('validation', () => {
     it('returns 400 when parent change creates circular reference', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'Cannot move page into its own descendant',
         status: 400,
@@ -322,7 +322,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('broadcasts content update event with correct payload', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         ...successResult,
         updatedFields: ['content'],
       });
@@ -345,7 +345,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('invalidates agent cache when AI_CHAT title changes', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         ...successResult,
         isAIChatPage: true,
       });
@@ -356,7 +356,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('does NOT broadcast or invalidate cache on service failure', async () => {
-      (pageService.updatePage as Mock).mockResolvedValue({
+      vi.mocked(pageService.updatePage).mockResolvedValue({
         success: false,
         error: 'Not found',
         status: 404,
@@ -371,7 +371,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.updatePage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.updatePage).mockRejectedValue(new Error('Database error'));
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
       const body = await response.json();
@@ -404,13 +404,13 @@ describe('DELETE /api/pages/[pageId]', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (pageService.trashPage as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await DELETE(createRequest({}), { params: mockParams });
 
@@ -421,7 +421,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks delete permission', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'You need delete permission to remove this page',
         status: 403,
@@ -467,7 +467,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('returns 404 when page not found', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
         status: 404,
@@ -501,7 +501,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('invalidates agent cache when AI_CHAT page is trashed', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         ...successResult,
         isAIChatPage: true,
       });
@@ -512,7 +512,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('does NOT broadcast or invalidate cache on service failure', async () => {
-      (pageService.trashPage as Mock).mockResolvedValue({
+      vi.mocked(pageService.trashPage).mockResolvedValue({
         success: false,
         error: 'Page not found',
         status: 404,
@@ -527,7 +527,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (pageService.trashPage as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.trashPage).mockRejectedValue(new Error('Database error'));
 
       const response = await DELETE(createRequest({}), { params: mockParams });
       const body = await response.json();

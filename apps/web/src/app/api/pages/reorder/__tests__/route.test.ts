@@ -7,7 +7,7 @@
  * - Response mapping → service results mapped to HTTP responses
  * - Side effects → broadcast events with correct payload essentials
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -108,16 +108,16 @@ describe('PATCH /api/pages/reorder', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: authenticated user
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     // Default: validation passes
-    (pageReorderService.validateMove as Mock).mockResolvedValue({ valid: true });
+    vi.mocked(pageReorderService.validateMove).mockResolvedValue({ valid: true });
     // Default: reorder succeeds
-    (pageReorderService.reorderPage as Mock).mockResolvedValue(successResult);
+    vi.mocked(pageReorderService.reorderPage).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
@@ -201,7 +201,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('returns 400 when circular reference is detected', async () => {
-      (pageReorderService.validateMove as Mock).mockResolvedValue({
+      vi.mocked(pageReorderService.validateMove).mockResolvedValue({
         valid: false,
         error: 'Cannot move page into its own descendant',
       });
@@ -238,7 +238,7 @@ describe('PATCH /api/pages/reorder', () => {
 
   describe('error responses from service', () => {
     it('returns 403 when user lacks authorization', async () => {
-      (pageReorderService.reorderPage as Mock).mockResolvedValue({
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Only drive owners and admins can reorder pages.',
         status: 403,
@@ -259,7 +259,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('returns 404 when page is not found', async () => {
-      (pageReorderService.reorderPage as Mock).mockResolvedValue({
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Page not found.',
         status: 404,
@@ -276,7 +276,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('returns 404 when parent page is not found', async () => {
-      (pageReorderService.reorderPage as Mock).mockResolvedValue({
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Parent page not found.',
         status: 404,
@@ -292,7 +292,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('returns 400 when moving between different drives', async () => {
-      (pageReorderService.reorderPage as Mock).mockResolvedValue({
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Cannot move pages between different drives.',
         status: 400,
@@ -310,7 +310,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('returns 500 when service throws unexpected error', async () => {
-      (pageReorderService.reorderPage as Mock).mockRejectedValue(new Error('Database connection failed'));
+      vi.mocked(pageReorderService.reorderPage).mockRejectedValue(new Error('Database connection failed'));
 
       const response = await PATCH(createRequest({
         pageId: mockPageId,
@@ -397,7 +397,7 @@ describe('PATCH /api/pages/reorder', () => {
     });
 
     it('does NOT broadcast or invalidate cache on service failure', async () => {
-      (pageReorderService.reorderPage as Mock).mockResolvedValue({
+      vi.mocked(pageReorderService.reorderPage).mockResolvedValue({
         success: false,
         error: 'Page not found.',
         status: 404,

@@ -250,12 +250,12 @@ describe('page-write-tools', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           pageId: 'page-1',
+          operation: 'update',
           updates: { content: 'Line 1\nNew Line 2\nLine 3' },
           updatedFields: ['content'],
+          context: expect.objectContaining({ userId: 'user-123', isAiGenerated: true }),
         })
       );
-
-      // Activity logging is handled by mutation logging.
     });
   });
 
@@ -404,12 +404,12 @@ describe('page-write-tools', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           pageId: 'page-1',
+          operation: 'update',
           updates: { title: 'New Title' },
           updatedFields: ['title'],
+          context: expect.objectContaining({ userId: 'user-123', isAiGenerated: true }),
         })
       );
-
-      // Activity logging is handled by mutation logging.
     });
   });
 

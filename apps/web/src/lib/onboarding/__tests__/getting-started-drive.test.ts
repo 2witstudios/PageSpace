@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 
 vi.mock('@pagespace/db', () => ({
   drives: { ownerId: 'ownerId', isTrashed: 'isTrashed' },
@@ -33,7 +33,7 @@ import {
 describe('provisionGettingStartedDriveIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (slugify as Mock).mockReturnValue('getting-started');
+    vi.mocked(slugify).mockReturnValue('getting-started');
   });
 
   test('given user already owns a drive, should return null', async () => {
@@ -47,7 +47,7 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       insert: vi.fn(),
     };
 
-    (db.transaction as Mock).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     const result = await provisionGettingStartedDriveIfNeeded('user-123');
 
@@ -74,8 +74,8 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
       insert,
     };
 
-    (populateUserDrive as Mock).mockResolvedValue(undefined);
-    (db.transaction as Mock).mockImplementation(async (cb: (t: typeof tx) => unknown) => cb(tx));
+    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     const result = await provisionGettingStartedDriveIfNeeded('user-123');
 

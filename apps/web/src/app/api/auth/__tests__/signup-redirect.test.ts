@@ -2,7 +2,7 @@
  * Tests for signup redirect functionality to Getting Started drive
  */
 
-import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { POST } from '../signup/route';
 
 vi.mock('@pagespace/db', () => ({
@@ -136,20 +136,20 @@ describe('/api/auth/signup redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 3 });
-    (bcrypt.hash as Mock).mockResolvedValue('hashed-password');
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 3 });
+    vi.mocked(bcrypt.hash).mockResolvedValue('hashed-password' as never);
 
-    (createVerificationToken as Mock).mockResolvedValue('verification-token');
-    (createNotification as Mock).mockResolvedValue(undefined);
+    vi.mocked(createVerificationToken).mockResolvedValue('verification-token' as never);
+    vi.mocked(createNotification).mockResolvedValue(undefined as never);
 
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
     });
 
-    (db.query.users.findFirst as Mock).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
     // Match table by identity to return appropriate mock responses
-    (db.insert as Mock).mockImplementation((table: unknown) => {
+    vi.mocked(db.insert).mockImplementation((table: unknown) => {
       if (table === users) {
         return {
           values: vi.fn(() => ({
@@ -165,18 +165,18 @@ describe('/api/auth/signup redirect', () => {
               ])
             ),
           })),
-        };
+        } as never;
       }
 
       if (table === userAiSettings) {
         return {
           values: vi.fn(() => Promise.resolve(undefined)),
-        };
+        } as never;
       }
 
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
   });
 
@@ -207,7 +207,7 @@ describe('/api/auth/signup redirect', () => {
   });
 
   test('given signup when provisioning returns null, should redirect to default dashboard', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
     const request = new Request('http://localhost/api/auth/signup', {
       method: 'POST',
@@ -233,7 +233,7 @@ describe('/api/auth/signup redirect', () => {
   });
 
   test('given signup when provisioning throws, should still redirect to dashboard', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
       new Error('Provisioning failed')
     );
 

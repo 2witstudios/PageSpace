@@ -5,7 +5,7 @@
  * Uses session-based auth with opaque tokens for web platform.
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { GET } from '../callback/route';
 
 vi.mock('google-auth-library', () => ({
@@ -191,23 +191,23 @@ describe('GET /api/auth/google/callback', () => {
     process.env.NEXTAUTH_URL = 'http://localhost';
 
     // Default mocks for successful flow
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
     // Default to existing user
-    (db.query.users.findFirst as Mock).mockResolvedValue(mockExistingUser);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
 
-    (db.insert as Mock).mockImplementation(() => ({
+    vi.mocked(db.insert).mockImplementation(() => ({
       values: vi.fn(() => ({
         returning: vi.fn(() => Promise.resolve([mockExistingUser])),
       })),
-    }));
+    } as never));
 
-    (db.update as Mock).mockReturnValue({
+    vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   afterEach(() => {
@@ -269,7 +269,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('given provisioned drive, should redirect to that drive', async () => {
-      (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive-123',
       });
 
@@ -325,7 +325,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('given rate limited IP, should redirect to signin with error', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         attemptsRemaining: 0,
         retryAfter: 900,

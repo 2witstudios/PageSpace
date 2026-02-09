@@ -11,7 +11,7 @@
  * - Session management (session-based auth with opaque tokens)
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../signup/route';
 
 // Mock all external dependencies
@@ -202,9 +202,9 @@ describe('/api/auth/signup', () => {
     vi.clearAllMocks();
 
     // Default: no existing user
-    (db.query.users.findFirst as Mock).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
     // Reset client IP mock
-    (getClientIP as Mock).mockReturnValue('unknown');
+    vi.mocked(getClientIP).mockReturnValue('unknown');
   });
 
   describe('with valid input', () => {
@@ -263,7 +263,7 @@ describe('/api/auth/signup', () => {
           ]),
         };
       });
-      (db.insert as Mock).mockReturnValue({ values: mockValues });
+      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
 
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
@@ -309,7 +309,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('logs successful signup event', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -334,7 +334,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('resets rate limits on successful signup', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -347,7 +347,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('continues signup even if verification email fails', async () => {
-      (sendEmail as Mock).mockRejectedValue(new Error('SMTP error'));
+      vi.mocked(sendEmail).mockRejectedValue(new Error('SMTP error'));
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -357,7 +357,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('continues signup even if drive provisioning fails', async () => {
-      (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -377,10 +377,10 @@ describe('/api/auth/signup', () => {
 
   describe('with duplicate email', () => {
     it('returns 409 when email already exists', async () => {
-      (db.query.users.findFirst as Mock).mockResolvedValue({
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
-      });
+      } as never);
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -391,11 +391,11 @@ describe('/api/auth/signup', () => {
     });
 
     it('logs failed signup for duplicate email', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
-      (db.query.users.findFirst as Mock).mockResolvedValue({
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user-id',
         email: 'new@example.com',
-      });
+      } as never);
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -525,8 +525,8 @@ describe('/api/auth/signup', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
 
@@ -543,7 +543,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
 
@@ -556,8 +556,8 @@ describe('/api/auth/signup', () => {
     });
 
     it('logs rate limit failure', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
-      (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.1',
@@ -577,7 +577,7 @@ describe('/api/auth/signup', () => {
 
   describe('distributed rate limiting', () => {
     it('calls checkDistributedRateLimit for IP and email', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.100');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.100');
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.100',
@@ -596,7 +596,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('returns 429 with X-RateLimit headers when distributed IP limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
 
@@ -612,7 +612,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('returns 429 with X-RateLimit headers when distributed email limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
 
@@ -627,7 +627,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('resets distributed rate limits on successful signup', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.100');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.100');
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '192.168.1.100',
@@ -640,7 +640,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('uses correct rate limit key format (signup:ip and signup:email)', async () => {
-      (getClientIP as Mock).mockReturnValue('10.0.0.1');
+      vi.mocked(getClientIP).mockReturnValue('10.0.0.1');
 
       const request = createSignupRequest(validSignupPayload, {
         'x-forwarded-for': '10.0.0.1',
@@ -661,7 +661,7 @@ describe('/api/auth/signup', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      (db.insert as Mock).mockImplementation(() => {
+      vi.mocked(db.insert).mockImplementation(() => {
         throw new Error('Database connection failed');
       });
 

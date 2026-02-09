@@ -10,7 +10,7 @@
  * - Device ID verification
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/refresh/route';
 
 // Mock dependencies
@@ -124,17 +124,17 @@ describe('/api/auth/mobile/refresh', () => {
     vi.clearAllMocks();
 
     // Reset all mocks to their default implementations
-    (checkDistributedRateLimit as Mock).mockResolvedValue({
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({
       allowed: true,
       attemptsRemaining: 9,
       retryAfter: undefined,
     });
-    (resetDistributedRateLimit as Mock).mockResolvedValue(undefined);
-    (validateDeviceToken as Mock).mockResolvedValue(mockDeviceRecord);
-    (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-    (updateDeviceTokenActivity as Mock).mockResolvedValue(undefined);
-    (sessionService.createSession as Mock).mockResolvedValue('ps_sess_refreshed-token');
-    (sessionService.validateSession as Mock).mockResolvedValue({
+    vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
+    vi.mocked(validateDeviceToken).mockResolvedValue(mockDeviceRecord as never);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(updateDeviceTokenActivity).mockResolvedValue(undefined);
+    vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_refreshed-token');
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'nfh0haxfpzowht3oi213ses2',
       userId: 'rfh0haxfpzowht3oi213ref1',
       userRole: 'user',
@@ -142,13 +142,13 @@ describe('/api/auth/mobile/refresh', () => {
       type: 'user',
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-    });
-    (atomicDeviceTokenRotation as Mock).mockResolvedValue({
+    } as never);
+    vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
       success: true,
       newToken: 'new-device-token',
       deviceTokenId: 'dfh0haxfpzowht3oi213dtk1',
     });
-    (getClientIP as Mock).mockReturnValue('192.168.1.1');
+    vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
   });
 
   describe('successful mobile refresh', () => {
@@ -220,7 +220,7 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
       };
-      (validateDeviceToken as Mock).mockResolvedValue(expiringDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -241,7 +241,7 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // 60 days from now
       };
-      (validateDeviceToken as Mock).mockResolvedValue(freshDeviceRecord);
+      vi.mocked(validateDeviceToken).mockResolvedValue(freshDeviceRecord as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -259,11 +259,11 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
       };
-      (validateDeviceToken as Mock).mockResolvedValue(expiringDeviceRecord);
-      (atomicDeviceTokenRotation as Mock).mockResolvedValue({
+      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord as never);
+      vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: false,
         error: 'Token already rotated',
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -283,12 +283,12 @@ describe('/api/auth/mobile/refresh', () => {
         ...mockDeviceRecord,
         expiresAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000), // 2 days from now
       };
-      (validateDeviceToken as Mock).mockResolvedValue(expiringDeviceRecord);
-      (atomicDeviceTokenRotation as Mock).mockResolvedValue({
+      vi.mocked(validateDeviceToken).mockResolvedValue(expiringDeviceRecord as never);
+      vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: true,
         gracePeriodRetry: true,
         deviceTokenId: 'replacement-token-id',
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -307,7 +307,7 @@ describe('/api/auth/mobile/refresh', () => {
 
   describe('device token validation', () => {
     it('returns 401 for invalid device token', async () => {
-      (validateDeviceToken as Mock).mockResolvedValue(null);
+      vi.mocked(validateDeviceToken).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -340,7 +340,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('returns 401 when user not found', async () => {
-      (db.query.users.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -429,7 +429,7 @@ describe('/api/auth/mobile/refresh', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 300,
         attemptsRemaining: 0,
@@ -450,7 +450,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('includes X-RateLimit headers on 429 response', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 300,
         attemptsRemaining: 0,
@@ -505,7 +505,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('returns 500 when session validation fails', async () => {
-      (sessionService.validateSession as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -523,7 +523,7 @@ describe('/api/auth/mobile/refresh', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      (validateDeviceToken as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -562,7 +562,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('handles rate limit reset failure gracefully', async () => {
-      (resetDistributedRateLimit as Mock).mockRejectedValue(
+      vi.mocked(resetDistributedRateLimit).mockRejectedValue(
         new Error('Redis error')
       );
 
@@ -631,7 +631,7 @@ describe('/api/auth/mobile/refresh', () => {
   describe('IP address handling', () => {
     it('normalizes unknown IP to undefined for activity tracking', async () => {
       const { getClientIP } = await import('@/lib/auth');
-      (getClientIP as Mock).mockReturnValue('unknown');
+      vi.mocked(getClientIP).mockReturnValue('unknown');
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',

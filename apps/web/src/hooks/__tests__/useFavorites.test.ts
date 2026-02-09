@@ -3,7 +3,7 @@
  * Tests for favorites state management with database sync
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useFavorites } from '../useFavorites';
 import type { FavoriteItem } from '@/app/api/user/favorites/route';
 
@@ -82,10 +82,10 @@ describe('useFavorites', () => {
         createMockFavorite({ id: 'fav-2', itemType: 'drive', page: undefined, drive: { id: 'drive-1', name: 'Test Drive' } }),
       ];
 
-      (fetchWithAuth as Mock).mockResolvedValue({
+      vi.mocked(fetchWithAuth).mockResolvedValue({
         ok: true,
         json: async () => ({ favorites: mockFavorites }),
-      });
+      } as never);
 
       await useFavorites.getState().fetchFavorites();
 
@@ -97,7 +97,7 @@ describe('useFavorites', () => {
     });
 
     it('given API fails, should handle error gracefully', async () => {
-      (fetchWithAuth as Mock).mockRejectedValue(new Error('Network error'));
+      vi.mocked(fetchWithAuth).mockRejectedValue(new Error('Network error'));
 
       await useFavorites.getState().fetchFavorites();
 
@@ -146,11 +146,11 @@ describe('useFavorites', () => {
 
   describe('addFavorite', () => {
     it('given a page ID, should optimistically add and call API', async () => {
-      (post as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockResolvedValue({
+      vi.mocked(post).mockResolvedValue({} as never);
+      vi.mocked(fetchWithAuth).mockResolvedValue({
         ok: true,
         json: async () => ({ favorites: [createMockFavorite()] }),
-      });
+      } as never);
 
       await useFavorites.getState().addFavorite('page-123', 'page');
 
@@ -159,11 +159,11 @@ describe('useFavorites', () => {
     });
 
     it('given a drive ID, should add to driveIds', async () => {
-      (post as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockResolvedValue({
+      vi.mocked(post).mockResolvedValue({} as never);
+      vi.mocked(fetchWithAuth).mockResolvedValue({
         ok: true,
         json: async () => ({ favorites: [] }),
-      });
+      } as never);
 
       const addPromise = useFavorites.getState().addFavorite('drive-1', 'drive');
 
@@ -174,7 +174,7 @@ describe('useFavorites', () => {
     });
 
     it('given API fails, should rollback optimistic update', async () => {
-      (post as Mock).mockRejectedValue(new Error('API error'));
+      vi.mocked(post).mockRejectedValue(new Error('API error'));
 
       await expect(useFavorites.getState().addFavorite('page-123', 'page')).rejects.toThrow();
 
@@ -191,7 +191,7 @@ describe('useFavorites', () => {
         driveIds: new Set(),
       });
 
-      (del as Mock).mockResolvedValue({});
+      vi.mocked(del).mockResolvedValue({} as never);
 
       const removePromise = useFavorites.getState().removeFavorite('page-123', 'page');
 
@@ -226,7 +226,7 @@ describe('useFavorites', () => {
         driveIds: new Set(),
       });
 
-      (del as Mock).mockResolvedValue({});
+      vi.mocked(del).mockResolvedValue({} as never);
 
       await useFavorites.getState().removeFavoriteById('fav-1');
 
@@ -273,7 +273,7 @@ describe('useFavorites', () => {
       const addedFavorites: FavoriteItem[] = [];
 
       // Setup mocks
-      (post as Mock).mockImplementation(async (_url: string, body: { itemType: string; itemId: string }) => {
+      vi.mocked(post).mockImplementation((async (_url: string, body: { itemType: string; itemId: string }) => {
         // Simulate API adding the favorite
         const newFav = createMockFavorite({
           id: `fav-${body.itemId}`,
@@ -283,12 +283,12 @@ describe('useFavorites', () => {
         });
         addedFavorites.push(newFav);
         return {};
-      });
-      (del as Mock).mockResolvedValue({});
-      (fetchWithAuth as Mock).mockImplementation(async () => ({
+      }) as never);
+      vi.mocked(del).mockResolvedValue({} as never);
+      vi.mocked(fetchWithAuth).mockImplementation((async () => ({
         ok: true,
         json: async () => ({ favorites: [...addedFavorites] }),
-      }));
+      })) as never);
 
       // User favorites a page
       await useFavorites.getState().addFavorite('page-1', 'page');

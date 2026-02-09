@@ -11,7 +11,7 @@
  * - Drive creation
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/signup/route';
 
 // Mock dependencies
@@ -165,19 +165,19 @@ describe('/api/auth/mobile/signup', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful signup
-    (db.query.users.findFirst as Mock).mockResolvedValue(null); // No existing user
-    (db.insert as Mock).mockReturnValue({
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never); // No existing user
+    vi.mocked(db.insert).mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: vi.fn().mockResolvedValue([mockNewUser]),
       }),
-    });
+    } as never);
   });
 
   describe('successful mobile signup', () => {
     it('returns 201 with user data and tokens', async () => {
       // Setup for drive creation - alternate between user and drive results
       let insertCallCount = 0;
-      (db.insert as Mock).mockImplementation(() => ({
+      vi.mocked(db.insert).mockImplementation(() => ({
         values: vi.fn().mockReturnValue({
           returning: vi.fn().mockImplementation(() => {
             insertCallCount++;
@@ -187,7 +187,7 @@ describe('/api/auth/mobile/signup', () => {
             return Promise.resolve([mockDrive]);
           }),
         }),
-      }));
+      }) as never);
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -572,10 +572,10 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('existing user', () => {
     it('returns 409 when email already exists', async () => {
-      (db.query.users.findFirst as Mock).mockResolvedValue({
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -591,10 +591,10 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('logs failed signup for existing email', async () => {
-      (db.query.users.findFirst as Mock).mockResolvedValue({
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'existing-user',
         email: validSignupPayload.email,
-      });
+      } as never);
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -616,7 +616,7 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
 
@@ -635,7 +635,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 2 })
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 });
 
@@ -653,7 +653,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('includes X-RateLimit headers on rate limit response', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 3600, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
 
@@ -672,7 +672,7 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('error handling', () => {
     it('returns 500 on database error', async () => {
-      (db.query.users.findFirst as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -688,7 +688,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('continues signup if email sending fails', async () => {
-      (sendEmail as Mock).mockRejectedValue(new Error('Email service down'));
+      vi.mocked(sendEmail).mockRejectedValue(new Error('Email service down'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -703,7 +703,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('continues signup if drive population fails', async () => {
-      (populateUserDrive as Mock).mockRejectedValue(new Error('Population failed'));
+      vi.mocked(populateUserDrive).mockRejectedValue(new Error('Population failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',

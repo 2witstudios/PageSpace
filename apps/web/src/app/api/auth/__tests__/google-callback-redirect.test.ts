@@ -2,7 +2,7 @@
  * Tests for Google OAuth callback redirect to Getting Started drive
  */
 
-import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { GET } from '../google/callback/route';
 
 vi.mock('google-auth-library', () => ({
@@ -129,14 +129,14 @@ describe('/api/auth/google/callback redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
     });
 
-    (db.query.users.findFirst as Mock).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
-    (db.insert as Mock).mockImplementation((table: unknown) => {
+    vi.mocked(db.insert).mockImplementation((table: unknown) => {
       if (table === users) {
         return {
           values: vi.fn(() => ({
@@ -153,19 +153,19 @@ describe('/api/auth/google/callback redirect', () => {
               ])
             ),
           })),
-        };
+        } as never;
       }
 
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
 
-    (db.update as Mock).mockReturnValue({
+    vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   test('given new user, should redirect to Getting Started drive', async () => {
@@ -184,15 +184,15 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given existing user with drives, should redirect to default dashboard', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
-    (db.query.users.findFirst as Mock).mockResolvedValue({
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
       id: 'user-123',
       name: 'Existing User',
       email: 'test@example.com',
       googleId: 'google-id',
       tokenVersion: 0,
       role: 'user',
-    });
+    } as never);
 
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',
@@ -206,7 +206,7 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
 
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',
