@@ -33,6 +33,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-di
 
 # Now copy source code AFTER dependencies are installed
 COPY tsconfig.json ./
+COPY types ./types
 COPY packages ./packages
 COPY apps/processor ./apps/processor
 

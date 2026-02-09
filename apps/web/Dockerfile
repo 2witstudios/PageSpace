@@ -20,6 +20,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-di
 COPY packages ./packages
 COPY apps ./apps
 COPY tsconfig.json ./
+COPY types ./types
 
 # Rebuild the source code only when needed
 FROM node:22.17.0-alpine AS builder
