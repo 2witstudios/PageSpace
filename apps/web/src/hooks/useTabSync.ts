@@ -18,7 +18,6 @@ export function useTabSync() {
   const lastSyncedPath = useRef<string | null>(null);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
-  const desktopRestoreAttempted = useTabsStore((state) => state.desktopRestoreAttempted);
   const setDesktopRestoreAttempted = useTabsStore((state) => state.setDesktopRestoreAttempted);
 
   useEffect(() => {
@@ -38,6 +37,7 @@ export function useTabSync() {
     // Mark the attempt on first hydrated pass so it cannot trigger mid-session,
     // including across layout remounts (e.g. route-group transitions).
     const isDesktop = !!window.electron?.isDesktop;
+    const desktopRestoreAttempted = useTabsStore.getState().desktopRestoreAttempted;
     if (isDesktop && !desktopRestoreAttempted) {
       setDesktopRestoreAttempted(true);
 
@@ -46,7 +46,9 @@ export function useTabSync() {
         const restorePath = activeTab?.path;
 
         if (restorePath && restorePath !== '/dashboard') {
-          lastSyncedPath.current = restorePath;
+          // Guard against immediate re-runs (e.g. strict mode) before replace updates pathname.
+          // Keep '/dashboard' marked as already handled so we don't sync it into tab history.
+          lastSyncedPath.current = pathname;
           router.replace(restorePath);
           return;
         }
@@ -78,5 +80,5 @@ export function useTabSync() {
     // Navigate within the active tab
     currentState.navigateInActiveTab(pathname);
     lastSyncedPath.current = pathname;
-  }, [pathname, rehydrated, router, desktopRestoreAttempted, setDesktopRestoreAttempted]);
+  }, [pathname, rehydrated, router, setDesktopRestoreAttempted]);
 }

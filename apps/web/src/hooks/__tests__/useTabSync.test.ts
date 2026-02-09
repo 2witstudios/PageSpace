@@ -121,10 +121,9 @@ describe('useTabSync', () => {
 
       await waitFor(() => {
         expect(mockRouterReplace).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
+        const state = useTabsStore.getState();
+        expect(state.tabs[0].path).toBe('/dashboard/drive-1/page-1');
       });
-
-      const state = useTabsStore.getState();
-      expect(state.tabs[0].path).toBe('/dashboard/drive-1/page-1');
     });
 
     it('given desktop restore already attempted, should not restore again on re-render', async () => {
