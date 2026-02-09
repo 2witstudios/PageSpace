@@ -57,6 +57,7 @@
     "@stripe/stripe-js": "^8.5.3",
     "@tanstack/react-virtual": "^3.13.18",
     "@tiptap/core": "^3.7.2",
+    "@tiptap/extension-code-block": "^3.6.1",
     "@tiptap/extension-mention": "^3.0.7",
     "@tiptap/extension-table": "^3.0.7",
     "@tiptap/extension-text-style": "^3.0.7",

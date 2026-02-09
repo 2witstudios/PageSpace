@@ -68,6 +68,30 @@ Any white-label or on-premise deployment conversation should start by
 identifying which cloud features the customer actually needs, because the
 compliant path is often "don't include them" rather than "make them compliant."
 
+### AI Provider Consent System (Removed)
+
+**What was removed**: A per-provider consent dialog that appeared before first use
+of any cloud AI provider. This included an `aiProviderConsents` database table
+tracking which providers each user had acknowledged, a `requiresConsent()` check
+in the provider factory, and a frontend consent dialog component.
+
+**Why it was removed**: The consent gate added friction to onboarding without
+providing meaningful legal protection — users already bring their own API keys,
+which is itself an affirmative opt-in to that provider's terms. The system was
+removed to streamline the AI provider setup flow.
+
+**Compliance implication**: For deployments where a centrally-managed API key is
+shared across users (e.g., a PageSpace-hosted instance using a single OpenRouter
+key), there is no longer an explicit record of each user's acknowledgment that
+their data will be sent to a third-party AI provider. This is a gap for
+high-compliance deployments (GDPR, HIPAA) where per-user consent records may
+be required.
+
+**Restoration path**: If needed for a regulated deployment, the consent system
+can be restored from git history (search for `aiProviderConsents`,
+`requiresConsent`, and `ai-consent-repository`). The schema migration for the
+consents table would need to be regenerated.
+
 ---
 
 ## 1. Hard Incompatibilities
