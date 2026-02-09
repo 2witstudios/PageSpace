@@ -39,6 +39,7 @@ describe('useTabSync', () => {
       tabs: [],
       activeTabId: null,
       rehydrated: true,
+      desktopRestoreAttempted: false,
     });
     mockLocalStorage.clear();
     mockPathname.mockReturnValue('/dashboard');
@@ -143,6 +144,27 @@ describe('useTabSync', () => {
       rerender();
 
       expect(mockRouterReplace).toHaveBeenCalledTimes(1);
+    });
+
+    it('given settings->dashboard layout remount, should not restore back to settings', async () => {
+      window.electron = { isDesktop: true } as unknown as ElectronAPI;
+
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/settings/account' });
+      mockPathname.mockReturnValue('/settings/account');
+
+      const firstMount = renderHook(() => useTabSync());
+      firstMount.unmount();
+
+      mockPathname.mockReturnValue('/dashboard');
+      renderHook(() => useTabSync());
+
+      await waitFor(() => {
+        expect(mockRouterReplace).not.toHaveBeenCalled();
+      });
+
+      const state = useTabsStore.getState();
+      expect(state.tabs[0].path).toBe('/dashboard');
     });
 
     it('given desktop first run with no tabs, later navigating to /dashboard should not bounce', async () => {
