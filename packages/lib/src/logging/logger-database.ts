@@ -60,7 +60,7 @@ function convertToDbFormat(entry: LogEntry): DatabaseLogEntry {
     dbEntry.method = entry.context.method as DatabaseLogEntry['method'];
     dbEntry.ip = entry.context.ip;
     dbEntry.userAgent = entry.context.userAgent;
-    dbEntry.category = entry.context.category;
+    dbEntry.category = entry.context.category as string | undefined;
     
     // Remove duplicates from metadata
     const { 

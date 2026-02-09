@@ -686,6 +686,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      copy-webpack-plugin:
+        specifier: ^12.0.2
+        version: 12.0.2(webpack@5.101.3(esbuild@0.19.12))
       eslint:
         specifier: ^9
         version: 9.36.0(jiti@2.6.0)
@@ -3769,6 +3772,10 @@ packages:
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
     engines: {node: '>=10'}
 
+  '@sindresorhus/merge-streams@2.3.0':
+    resolution: {integrity: sha512-LtoMMhxAlorcGhmFYI+LhPgbPZCkgP6ra1YL604EeF6U98pLlQ3iWIGMdWSC+vWmPBWBNgmDBAhnAobLROJmwg==}
+    engines: {node: '>=18'}
+
   '@socket.io/component-emitter@3.1.2':
     resolution: {integrity: sha512-9BCxFwvbGg/RsZK9tjXd8s4UcwR0MWeFQ1XEKIQVVvAGJyINdrqKMcTRyLoK8Rse1GjzLV9cwjWV1olXRWEXVA==}
 
@@ -5407,6 +5414,12 @@ packages:
     resolution: {integrity: sha512-9Kr/j4O16ISv8zBBhJoi4bXOYNTkFLOqSL3UDB0njXxCXNezjeyVrJyGOWtgfs/q2km1gwBcfH8q1yEGoMYunA==}
     engines: {node: '>=18'}
 
+  copy-webpack-plugin@12.0.2:
+    resolution: {integrity: sha512-SNwdBeHyII+rWvee/bTnAYyO8vfVdcSTud4EIb6jcZ8inLeWucJE0DnxXQBjlQ5zlteuuvooGQy3LIyGxhvlOA==}
+    engines: {node: '>= 18.12.0'}
+    peerDependencies:
+      webpack: ^5.1.0
+
   core-util-is@1.0.2:
     resolution: {integrity: sha512-3lqz5YjWTYnW6dlDa5TLaTCcShfar1e40rmcJVwCBJC6mWlFuj0eCHIElmG1g5kyuJ/GD+8Wn4FFCcz4gJPfaQ==}
 
@@ -6656,6 +6669,10 @@ packages:
   globalthis@1.0.4:
     resolution: {integrity: sha512-DpLKbNU4WylpxJykQujfCcwYWiV/Jhm50Goo0wrVILAv5jOr9d+H+UR3PhSCD2rCCEIg0uc+G+muBTwD54JhDQ==}
     engines: {node: '>= 0.4'}
+
+  globby@14.1.0:
+    resolution: {integrity: sha512-0Ia46fDOaT7k4og1PDW4YbodWWr3scS2vAr2lTbsplOt2WkKp0vQbkI9wKis/T5LV/dqPjO3bpS/z6GTJB82LA==}
+    engines: {node: '>=18'}
 
   google-auth-library@10.3.0:
     resolution: {integrity: sha512-ylSE3RlCRZfZB56PFJSfUCuiuPq83Fx8hqu1KPWGK8FVdSaxlp/qkeMMX/DT/18xkwXIHvXEXkZsljRwfrdEfQ==}
@@ -8358,6 +8375,10 @@ packages:
   path-to-regexp@8.3.0:
     resolution: {integrity: sha512-7jdwVIRtsP8MYpdXSwOS0YdD0Du+qOoF/AEPIt88PcCFrZCzx41oxku1jD88hZBwbNUIEfpqvuhjFaMAqMTWnA==}
 
+  path-type@6.0.0:
+    resolution: {integrity: sha512-Vj7sf++t5pBD637NSfkxpHSMfWaeig5+DKWLhcqIYx6mWQz5hdJTGDVMQiJcw1ZYkhs7AazKDGpRVji1LJCZUQ==}
+    engines: {node: '>=18'}
+
   pathe@1.1.2:
     resolution: {integrity: sha512-whLdWMYL2TwI08hn8/ZqAbrVemu0LNaNNJZX73O6qaIdCTfXutsLhMkjdENX0qhsQ9uIimo4/aQOmXkoon2nDQ==}
 
@@ -9170,6 +9191,10 @@ packages:
     resolution: {integrity: sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q==}
     engines: {node: '>=8'}
 
+  slash@5.1.0:
+    resolution: {integrity: sha512-ZA6oR3T/pEyuqwMgAKT0/hAv8oAXckzbkmR0UkUosQ+Mc4RxGoJkRmwHgHufaenlyAgE1Mxgpdcrf75y6XcnDg==}
+    engines: {node: '>=14.16'}
+
   slice-ansi@3.0.0:
     resolution: {integrity: sha512-pSyv7bSTC7ig9Dcgbw9AuRNUb5k5V6oDudjZoMBSr13qpLBG7tB+zgCkARjq7xIUgdz5P1Qe8u+rSGdouOOIyQ==}
     engines: {node: '>=8'}
@@ -9771,6 +9796,10 @@ packages:
   undici@7.16.0:
     resolution: {integrity: sha512-QEg3HPMll0o3t2ourKwOeUAZ159Kn9mx5pnzHRQO8+Wixmh88YdZRiIwat0iNzNNXn0yoEtXJqFpyW7eM8BV7g==}
     engines: {node: '>=20.18.1'}
+
+  unicorn-magic@0.3.0:
+    resolution: {integrity: sha512-+QBBXBCvifc56fsbuxZQ6Sic3wqqc3WWaqxs58gvJrcOuN83HGTCwz3oS5phzU9LthRNE9VrJCFCLUgHeeFnfA==}
+    engines: {node: '>=18'}
 
   unified@11.0.5:
     resolution: {integrity: sha512-xKvGhPWw3k84Qjh8bI3ZeJjqnyadK+GEFtazSfZv/rKeTkTjOJho6mFqh2SM96iIcZokxiOpg78GazTSg8+KHA==}
@@ -12897,6 +12926,8 @@ snapshots:
 
   '@sindresorhus/is@4.6.0': {}
 
+  '@sindresorhus/merge-streams@2.3.0': {}
+
   '@socket.io/component-emitter@3.1.2': {}
 
   '@standard-schema/spec@1.0.0': {}
@@ -14767,6 +14798,16 @@ snapshots:
 
   cookie@1.0.2: {}
 
+  copy-webpack-plugin@12.0.2(webpack@5.101.3(esbuild@0.19.12)):
+    dependencies:
+      fast-glob: 3.3.3
+      glob-parent: 6.0.2
+      globby: 14.1.0
+      normalize-path: 3.0.0
+      schema-utils: 4.3.2
+      serialize-javascript: 6.0.2
+      webpack: 5.101.3(esbuild@0.19.12)
+
   core-util-is@1.0.2:
     optional: true
 
@@ -16347,6 +16388,15 @@ snapshots:
     dependencies:
       define-properties: 1.2.1
       gopd: 1.2.0
+
+  globby@14.1.0:
+    dependencies:
+      '@sindresorhus/merge-streams': 2.3.0
+      fast-glob: 3.3.3
+      ignore: 7.0.5
+      path-type: 6.0.0
+      slash: 5.1.0
+      unicorn-magic: 0.3.0
 
   google-auth-library@10.3.0:
     dependencies:
@@ -18496,6 +18546,8 @@ snapshots:
 
   path-to-regexp@8.3.0: {}
 
+  path-type@6.0.0: {}
+
   pathe@1.1.2: {}
 
   pathe@2.0.3: {}
@@ -19527,6 +19579,8 @@ snapshots:
 
   slash@3.0.0: {}
 
+  slash@5.1.0: {}
+
   slice-ansi@3.0.0:
     dependencies:
       ansi-styles: 4.3.0
@@ -20205,6 +20259,8 @@ snapshots:
   undici-types@7.12.0: {}
 
   undici@7.16.0: {}
+
+  unicorn-magic@0.3.0: {}
 
   unified@11.0.5:
     dependencies:

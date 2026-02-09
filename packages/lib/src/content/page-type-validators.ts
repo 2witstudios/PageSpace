@@ -116,7 +116,7 @@ export function validatePageCreation(
 
     case PageType.SHEET:
       if (data.content) {
-        if (!isValidSheetContent(data.content)) {
+        if (typeof data.content !== 'string' || !isValidSheetContent(data.content)) {
           errors.push('Invalid sheet content');
         }
       }

@@ -243,7 +243,7 @@ export class WSClient {
 
         case 'tool_execute':
           await this.handleToolExecutionRequest(
-            message as ToolExecutionRequest
+            message as unknown as ToolExecutionRequest
           );
           break;
 

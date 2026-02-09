@@ -192,7 +192,7 @@ export function getDefaultContent(type: PageType): string {
   if (type === PageType.FOLDER || type === PageType.CHANNEL || type === PageType.AI_CHAT) {
     return JSON.stringify(content);
   }
-  return content;
+  return typeof content === 'string' ? content : JSON.stringify(content);
 }
 
 export function getPageTypeComponent(type: PageType): string {

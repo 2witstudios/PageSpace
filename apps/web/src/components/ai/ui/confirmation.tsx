@@ -3,7 +3,6 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/index";
-import type { ToolUIPart } from "ai";
 import type { ExtendedToolState } from "@/types/ai-sdk-extensions";
 import {
   type ComponentProps,

@@ -10,6 +10,7 @@ interface PdfExtractionMetadata {
   pageCount?: number;
   info?: Record<string, unknown>;
   error?: string;
+  [key: string]: unknown;
 }
 
 interface VisionExtractionMetadata {
@@ -18,6 +19,7 @@ interface VisionExtractionMetadata {
   model?: string;
   status?: string;
   error?: string;
+  [key: string]: unknown;
 }
 
 type ExtractionContentMetadata = PdfExtractionMetadata | VisionExtractionMetadata | Record<string, unknown>;
@@ -309,7 +311,7 @@ export class FileProcessor {
         metadata: {
           method: 'pdf-parse',
           pageCount: data.numpages,
-          info: data.info
+          info: { ...data.info }
         }
       };
     } catch (error) {

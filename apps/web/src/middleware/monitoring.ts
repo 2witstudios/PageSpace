@@ -111,7 +111,7 @@ class MetricsCollector {
       // If database write fails, fall back to logging only
       loggers.performance.error('Failed to write metrics to database', error as Error);
       const summary = this.summarizeMetrics(metricsToFlush);
-      loggers.performance.info('Metrics flush (fallback to logs only)', summary);
+      loggers.performance.info('Metrics flush (fallback to logs only)', { ...summary });
     }
   }
 
