@@ -19,8 +19,8 @@ if (typeof window !== 'undefined') {
   Page = reactPdf.Page;
   pdfjs = reactPdf.pdfjs;
   
-  // Set up the worker for PDF.js
-  pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  // Set up the worker for PDF.js (bundled locally for air-gapped deployments)
+  pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
   
   // Import styles
   require('react-pdf/dist/Page/AnnotationLayer.css');
