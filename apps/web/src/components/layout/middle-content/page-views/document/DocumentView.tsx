@@ -170,14 +170,22 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
 
             // Only update if content actually changed and we're not currently editing
             // Note: This uses closure over documentState, which is acceptable here
-            if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-              updateContentFromServer(updatedPage.content, updatedPage.revision);
-            }
-            // Update contentMode if it changed (e.g., after conversion)
-            if (updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode) {
-              useDocumentManagerStore.getState().updateDocument(pageId, {
-                contentMode: updatedPage.contentMode,
-              });
+            // IMPORTANT: contentMode must be updated atomically with content to prevent
+            // mode/content mismatch when another user converts while we have unsaved edits
+            if (!documentState?.isDirty) {
+              const contentChanged = updatedPage.content !== documentState?.content;
+              const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
+
+              if (contentChanged || modeChanged) {
+                useDocumentManagerStore.getState().updateDocument(pageId, {
+                  content: updatedPage.content,
+                  contentMode: updatedPage.contentMode,
+                  revision: updatedPage.revision,
+                  isDirty: false,
+                  lastSaved: Date.now(),
+                  lastUpdateTime: Date.now(),
+                });
+              }
             }
           }
         } catch (error) {
@@ -192,7 +200,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [socket, pageId, documentState, updateContentFromServer]);
+  }, [socket, pageId, documentState]);
 
 
   // Handle content changes

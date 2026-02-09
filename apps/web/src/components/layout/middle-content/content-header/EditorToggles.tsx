@@ -10,6 +10,7 @@ import { PageType, isDocumentPage, isCanvasPage } from '@pagespace/lib/client-sa
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
+import { useDocumentSaving } from '@/hooks/useDocument';
 import { toast } from 'sonner';
 import {
   DropdownMenu,
@@ -35,6 +36,7 @@ export function EditorToggles() {
   const isMobile = useMobile();
   const { preferences } = useDisplayPreferences();
   const [isConverting, setIsConverting] = useState(false);
+  const { saveDocument } = useDocumentSaving(pageId);
 
   // Fetch page data to determine type
   const { data: pageData, mutate } = useSWR(
@@ -59,6 +61,21 @@ export function EditorToggles() {
 
     setIsConverting(true);
     try {
+      // Force-save pending edits before converting to ensure conversion uses latest content
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      if (doc?.isDirty) {
+        // Clear any pending debounced save
+        if (doc.saveTimeout) {
+          clearTimeout(doc.saveTimeout);
+        }
+        const saveResult = await saveDocument(doc.content);
+        if (!saveResult) {
+          toast.error('Please save your changes before converting');
+          setIsConverting(false);
+          return;
+        }
+      }
+
       const response = await fetchWithAuth(`/api/pages/${pageId}/convert-content-mode`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -92,7 +109,7 @@ export function EditorToggles() {
     } finally {
       setIsConverting(false);
     }
-  }, [pageId, isMarkdown, mutate]);
+  }, [pageId, isMarkdown, mutate, saveDocument]);
 
   // Only show editor toggles if preference is enabled, for document/canvas pages, and not on mobile
   const pageType = pageData?.type as PageType;
