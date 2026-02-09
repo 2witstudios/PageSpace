@@ -813,6 +813,18 @@ describe('authStoreHelpers', () => {
       expect(authStoreHelpers.needsAuthCheck()).toBe(false);
     });
 
+    it('given initialized unauthenticated state with failed attempt, should return true', () => {
+      useAuthStore.setState({
+        lastAuthCheck: null,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastFailedAuthCheck: Date.now(),
+        authFailedPermanently: false,
+      });
+
+      expect(authStoreHelpers.needsAuthCheck()).toBe(true);
+    });
+
     it('given recent auth check, should return false', () => {
       useAuthStore.setState({ lastAuthCheck: Date.now() - 1000 }); // 1 second ago
 
@@ -939,6 +951,19 @@ describe('authStoreHelpers', () => {
       });
 
       expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given server initialized unauthenticated with failed attempt, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastAuthCheck: null,
+        lastFailedAuthCheck: Date.now(),
+        authFailedPermanently: false,
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
     });
   });
 

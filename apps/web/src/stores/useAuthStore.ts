@@ -598,6 +598,10 @@ export const authStoreHelpers = {
       // After this boot has already performed an auth load and determined no active session,
       // avoid re-checking on every component mount.
       if (state._serverSessionInitialized && !state.isAuthenticated) {
+        // If the last attempt failed transiently, allow another retry on subsequent mounts.
+        if (state.lastFailedAuthCheck && !state.authFailedPermanently) {
+          return true;
+        }
         return false;
       }
       return true;
