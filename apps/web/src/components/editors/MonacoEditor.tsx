@@ -1,14 +1,21 @@
 import React, { useEffect } from 'react';
-import Editor from '@monaco-editor/react';
+import Editor, { useMonaco } from '@monaco-editor/react';
+import type { editor } from 'monaco-editor';
+import { useMonacoTheme } from '@/hooks/useMonacoTheme';
 
 interface MonacoEditorProps {
   value: string;
-  onChange: (value: string | undefined) => void;
+  onChange?: (value: string | undefined) => void;
   readOnly?: boolean;
   language?: string;
+  options?: editor.IStandaloneEditorConstructionOptions;
+  className?: string;
 }
 
-const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown' }: MonacoEditorProps) => {
+const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', options: optionOverrides, className }: MonacoEditorProps) => {
+  const monaco = useMonaco();
+  const theme = useMonacoTheme(monaco);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.MonacoEnvironment = {
@@ -24,39 +31,46 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown' }: Mona
     }
   }, []);
 
+  const defaultOptions: editor.IStandaloneEditorConstructionOptions = {
+    readOnly,
+    domReadOnly: readOnly,
+    cursorWidth: readOnly ? 0 : undefined,
+    contextmenu: true,
+    columnSelection: true,
+    dragAndDrop: !readOnly,
+    hover: readOnly ? { enabled: true } : undefined,
+    readOnlyMessage: readOnly ? { value: "" } : undefined,
+    selectOnLineNumbers: true,
+    copyWithSyntaxHighlighting: true,
+    minimap: { enabled: true },
+    wordWrap: 'on',
+    scrollBeyondLastLine: false,
+    fontSize: 16,
+    lineNumbers: 'on',
+    glyphMargin: true,
+    folding: true,
+    lineDecorationsWidth: 10,
+    lineNumbersMinChars: 3,
+    renderLineHighlight: readOnly ? 'none' : 'line',
+    scrollbar: {
+      vertical: 'auto',
+      horizontal: 'auto'
+    },
+  };
+
+  const mergedOptions = { ...defaultOptions, ...optionOverrides };
+
   return (
-    <Editor
-      height="100%"
-      language={language}
-      value={value}
-      onChange={onChange}
-      options={{
-        readOnly,
-        domReadOnly: readOnly,
-        cursorWidth: readOnly ? 0 : undefined,
-        contextmenu: true, // Allow context menu even in read-only for copying
-        columnSelection: true, // Allow column selection for copying
-        dragAndDrop: !readOnly,
-        hover: readOnly ? { enabled: true } : undefined, // Keep hover for tooltips
-        readOnlyMessage: readOnly ? { value: "" } : undefined,
-        selectOnLineNumbers: true, // Allow line selection
-        copyWithSyntaxHighlighting: true, // Better copy experience
-        minimap: { enabled: true },
-        wordWrap: 'on',
-        scrollBeyondLastLine: false,
-        fontSize: 16,
-        lineNumbers: 'on',
-        glyphMargin: true,
-        folding: true,
-        lineDecorationsWidth: 10,
-        lineNumbersMinChars: 3,
-        renderLineHighlight: readOnly ? 'none' : 'line',
-        scrollbar: {
-          vertical: 'auto',
-          horizontal: 'auto'
-        },
-      }}
-    />
+    <div className={className} style={{ height: '100%' }}>
+      <Editor
+        height="100%"
+        language={language}
+        theme={theme}
+        value={value}
+        onChange={onChange}
+        options={mergedOptions}
+      />
+    </div>
   );
 };
 
