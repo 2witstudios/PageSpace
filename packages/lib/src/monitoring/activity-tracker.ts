@@ -5,6 +5,7 @@
 
 import { writeUserActivity } from '../logging/logger-database';
 import { loggers } from '../logging/logger-config';
+import type { LogInput } from '../logging/logger-types';
 import { sessionService } from '../auth/session-service';
 
 /**
@@ -21,7 +22,7 @@ export async function trackActivity(
     sessionId?: string;
     ip?: string;
     userAgent?: string;
-    metadata?: any;
+    metadata?: LogInput;
   }
 ): Promise<void> {
   // Don't track if no user
@@ -52,7 +53,7 @@ export function trackPageOperation(
   userId: string | undefined,
   operation: 'create' | 'read' | 'update' | 'delete' | 'share' | 'restore' | 'trash',
   pageId: string,
-  metadata?: any
+  metadata?: LogInput
 ): void {
   trackActivity(userId, `page_${operation}`, {
     resource: 'page',
@@ -69,7 +70,7 @@ export function trackDriveOperation(
   userId: string | undefined,
   operation: 'create' | 'access' | 'update' | 'delete' | 'invite_member' | 'remove_member',
   driveId: string,
-  metadata?: any
+  metadata?: LogInput
 ): void {
   trackActivity(userId, `drive_${operation}`, {
     resource: 'drive',
@@ -85,7 +86,7 @@ export function trackDriveOperation(
 export function trackFeature(
   userId: string | undefined,
   feature: string,
-  metadata?: any
+  metadata?: LogInput
 ): void {
   trackActivity(userId, `feature_${feature}`, {
     resource: 'feature',
@@ -100,7 +101,7 @@ export function trackFeature(
 export function trackAuthEvent(
   userId: string | undefined,
   event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed_login' | 'failed_oauth' | 'email_verified',
-  metadata?: any
+  metadata?: LogInput
 ): void {
   trackActivity(userId || 'anonymous', `auth_${event}`, {
     resource: 'auth',
@@ -115,7 +116,7 @@ export function trackError(
   userId: string | undefined,
   errorType: string,
   errorMessage: string,
-  context?: any
+  context?: LogInput
 ): void {
   trackActivity(userId, 'error', {
     resource: 'error',

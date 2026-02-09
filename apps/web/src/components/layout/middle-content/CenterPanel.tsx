@@ -14,6 +14,7 @@ import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
+import CodePageView from './page-views/code/CodePageView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/client-safe';
@@ -147,6 +148,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     FileViewer,
     SheetView,
     TaskListView,
+    CodePageView,
   };
 
   const componentName = getPageTypeComponent(page.type);
@@ -164,6 +166,9 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   } else if (componentName === 'DocumentView') {
     // DocumentView accepts only pageId (new pattern)
     pageComponent = <DocumentView pageId={page.id} />;
+  } else if (componentName === 'CodePageView') {
+    // CodePageView accepts only pageId (new pattern)
+    pageComponent = <CodePageView pageId={page.id} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here

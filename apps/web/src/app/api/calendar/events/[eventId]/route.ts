@@ -9,7 +9,7 @@ import {
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isUserDriveMember } from '@pagespace/lib';
+import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 
@@ -71,9 +71,9 @@ async function canAccessEvent(userId: string, event: typeof calendarEvents.$infe
  * Check if user can edit an event (only creator or drive admin)
  */
 async function canEditEvent(userId: string, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  // Only creator can edit for now
-  // TODO: Add drive admin check
-  return event.createdById === userId;
+  if (event.createdById === userId) return true;
+  if (event.driveId) return isDriveOwnerOrAdmin(userId, event.driveId);
+  return false;
 }
 
 /**
@@ -173,7 +173,7 @@ export async function PATCH(
     const canEdit = await canEditEvent(userId, event);
     if (!canEdit) {
       return NextResponse.json(
-        { error: 'Only the event creator can edit this event' },
+        { error: 'You do not have permission to edit this event' },
         { status: 403 }
       );
     }
@@ -306,7 +306,7 @@ export async function DELETE(
     const canEdit = await canEditEvent(userId, event);
     if (!canEdit) {
       return NextResponse.json(
-        { error: 'Only the event creator can delete this event' },
+        { error: 'You do not have permission to delete this event' },
         { status: 403 }
       );
     }

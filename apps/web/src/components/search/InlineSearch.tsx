@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, X, FileText, FolderOpen, Hash, MessageSquare, HardDrive, User, Sparkles, Loader2, Table } from 'lucide-react';
+import { Search, X, FileText, FolderOpen, Hash, MessageSquare, HardDrive, User, Sparkles, Loader2, Table, Code } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useDebouncedCallback } from 'use-debounce';
@@ -35,6 +35,8 @@ const getPageIcon = (pageType?: string) => {
       return <Sparkles className="h-4 w-4" />;
     case 'SHEET':
       return <Table className="h-4 w-4" />;
+    case 'CODE':
+      return <Code className="h-4 w-4" />;
     default:
       return <FileText className="h-4 w-4" />;
   }

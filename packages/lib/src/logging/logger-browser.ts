@@ -5,6 +5,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
+import type { LogInput } from './logger-types';
 
 export enum LogLevel {
   TRACE = 0,
@@ -27,7 +28,7 @@ export interface LogContext {
   ip?: string;
   userAgent?: string;
   duration?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface LogEntry {
@@ -47,7 +48,7 @@ export interface LogEntry {
       total: number;
     };
   };
-  metadata?: Record<string, any>;
+  metadata?: LogInput;
   hostname?: string;
   pid?: number;
   version?: string;
@@ -118,7 +119,7 @@ export class BrowserSafeLogger {
     return undefined;
   }
 
-  private sanitizeData(data: any, depth = 0): any {
+  private sanitizeData(data: unknown, depth = 0): unknown {
     if (depth > this.config.maxObjectDepth) {
       return '[Object: max depth exceeded]';
     }
@@ -150,7 +151,7 @@ export class BrowserSafeLogger {
     }
 
     if (typeof data === 'object') {
-      const sanitized: Record<string, any> = {};
+      const sanitized: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(data)) {
         sanitized[key] = this.sanitizeData(value, depth + 1);
       }
@@ -167,7 +168,7 @@ export class BrowserSafeLogger {
   private createLogEntry(
     level: LogLevel,
     message: string,
-    metadata?: Record<string, any>,
+    metadata?: LogInput,
     error?: Error
   ): LogEntry {
     const entry: LogEntry = {
@@ -186,11 +187,11 @@ export class BrowserSafeLogger {
     if (this.config.version) entry.version = this.config.version;
 
     if (this.config.enableContext && Object.keys(this.context).length > 0) {
-      entry.context = this.sanitizeData({ ...this.context });
+      entry.context = this.sanitizeData({ ...this.context }) as LogContext;
     }
 
     if (metadata) {
-      entry.metadata = this.sanitizeData(metadata);
+      entry.metadata = this.sanitizeData(metadata) as LogInput;
     }
 
     if (error) {
@@ -276,35 +277,35 @@ export class BrowserSafeLogger {
     return childLogger;
   }
 
-  public trace(message: string, metadata?: Record<string, any>): void {
+  public trace(message: string, metadata?: LogInput): void {
     if (!this.shouldLog(LogLevel.TRACE)) return;
     const entry = this.createLogEntry(LogLevel.TRACE, message, metadata);
     this.output(entry);
   }
 
-  public debug(message: string, metadata?: Record<string, any>): void {
+  public debug(message: string, metadata?: LogInput): void {
     if (!this.shouldLog(LogLevel.DEBUG)) return;
     const entry = this.createLogEntry(LogLevel.DEBUG, message, metadata);
     this.output(entry);
   }
 
-  public info(message: string, metadata?: Record<string, any>): void {
+  public info(message: string, metadata?: LogInput): void {
     if (!this.shouldLog(LogLevel.INFO)) return;
     const entry = this.createLogEntry(LogLevel.INFO, message, metadata);
     this.output(entry);
   }
 
-  public warn(message: string, metadata?: Record<string, any>): void {
+  public warn(message: string, metadata?: LogInput): void {
     if (!this.shouldLog(LogLevel.WARN)) return;
     const entry = this.createLogEntry(LogLevel.WARN, message, metadata);
     this.output(entry);
   }
 
-  public error(message: string, errorOrMetadata?: Error | Record<string, any>, metadata?: Record<string, any>): void {
+  public error(message: string, errorOrMetadata?: Error | LogInput, metadata?: LogInput): void {
     if (!this.shouldLog(LogLevel.ERROR)) return;
 
     let error: Error | undefined;
-    let meta: Record<string, any> | undefined;
+    let meta: LogInput | undefined;
 
     if (errorOrMetadata instanceof Error) {
       error = errorOrMetadata;
@@ -318,11 +319,11 @@ export class BrowserSafeLogger {
     this.output(entry);
   }
 
-  public fatal(message: string, errorOrMetadata?: Error | Record<string, any>, metadata?: Record<string, any>): void {
+  public fatal(message: string, errorOrMetadata?: Error | LogInput, metadata?: LogInput): void {
     if (!this.shouldLog(LogLevel.FATAL)) return;
 
     let error: Error | undefined;
-    let meta: Record<string, any> | undefined;
+    let meta: LogInput | undefined;
 
     if (errorOrMetadata instanceof Error) {
       error = errorOrMetadata;
@@ -336,7 +337,7 @@ export class BrowserSafeLogger {
     this.output(entry);
   }
 
-  public log(level: LogLevel, message: string, metadata?: Record<string, any>, error?: Error): void {
+  public log(level: LogLevel, message: string, metadata?: LogInput, error?: Error): void {
     if (!this.shouldLog(level)) return;
     const entry = this.createLogEntry(level, message, metadata, error);
     this.output(entry);

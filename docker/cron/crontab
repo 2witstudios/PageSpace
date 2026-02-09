@@ -18,16 +18,15 @@
 # Calendar sync - Every 5 minutes
 # Syncs Google Calendar connections that are due based on their sync frequency
 */5 * * * * cron-curl GET http://web:3000/api/cron/calendar-sync >> /var/log/cron/calendar-sync.log 2>&1
-0 * * * * curl -s -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
-
-# AI usage log purge - Daily at 3am UTC
-# Anonymizes prompt/completion text >30 days, purges rows >90 days
-0 3 * * * curl -s -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
-
-# Deleted message purge - Daily at 4am UTC
-# Hard-deletes soft-deleted messages and conversations older than 30 days
-0 4 * * * curl -s -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1
 
 # Security audit chain verification - Daily at 2am UTC
 # Verifies hash chain integrity of security audit log
-0 2 * * * curl -s -H "Authorization: Bearer ${CRON_SECRET}" http://web:3000/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
+0 2 * * * cron-curl GET http://web:3000/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
+
+# AI usage log purge - Daily at 3am UTC
+# Anonymizes prompt/completion text >30 days, purges rows >90 days
+0 3 * * * cron-curl POST http://web:3000/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
+
+# Deleted message purge - Daily at 4am UTC
+# Hard-deletes soft-deleted messages and conversations older than 30 days
+0 4 * * * cron-curl POST http://web:3000/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1

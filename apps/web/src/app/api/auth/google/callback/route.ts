@@ -46,7 +46,7 @@ export async function GET(req: Request) {
 
     const validation = googleCallbackSchema.safeParse({ code, state });
     if (!validation.success) {
-      loggers.auth.warn('Invalid OAuth callback parameters', validation.error);
+      loggers.auth.warn('Invalid OAuth callback parameters', { errors: validation.error.flatten().fieldErrors });
       const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
       return NextResponse.redirect(new URL('/auth/signin?error=invalid_request', baseUrl));
     }

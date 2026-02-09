@@ -20,6 +20,9 @@
 # production
 /build
 
+# build artifacts copied to public/
+/public/pdf.worker.min.mjs
+
 # misc
 .DS_Store
 *.pem

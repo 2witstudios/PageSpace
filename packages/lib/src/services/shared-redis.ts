@@ -71,7 +71,7 @@ async function initializeRedis(): Promise<Redis | null> {
 
     redis.on('error', (error: Error) => {
       redisAvailable = false;
-      loggers.api.warn('Shared Redis connection error, caches falling back to memory', error);
+      loggers.api.warn('Shared Redis connection error, caches falling back to memory', { error: error.message });
     });
 
     redis.on('close', () => {

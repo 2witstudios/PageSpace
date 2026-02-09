@@ -1,5 +1,9 @@
 import { PageType, PermissionAction } from './utils/enums';
 
+// JSON-compatible value types for structured data (logging, metadata, etc.)
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
 // Presence types for real-time "who is viewing this page" indicators
 export interface PresenceViewer {
   userId: string;
@@ -41,7 +45,7 @@ export interface Page {
   id: string;
   title: string;
   type: PageType;
-  content: any;
+  content: string | null;
   position: number;
   isTrashed: boolean;
   createdAt: string; // ISO8601 date string from API
@@ -59,7 +63,7 @@ export interface Page {
   mimeType?: string;
   originalFileName?: string;
   filePath?: string;
-  fileMetadata?: Record<string, any>;
+  fileMetadata?: Record<string, JsonValue>;
   // Processing status fields
   processingStatus?: ProcessingStatus;
   processingError?: string;
@@ -80,6 +84,7 @@ export interface Drive {
   updatedAt: string; // ISO8601 date string from API
   isOwned: boolean;
   role?: 'OWNER' | 'ADMIN' | 'MEMBER';
+  lastAccessedAt?: string | null; // ISO8601 date string from API
 }
 
 // Inbox types for unified DM/Channel inbox

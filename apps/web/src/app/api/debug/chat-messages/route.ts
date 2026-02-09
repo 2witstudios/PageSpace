@@ -108,7 +108,7 @@ export async function GET(request: Request) {
 
   } catch (error) {
     loggers.api.error('❌ Debug: Error in debug endpoint:', error as Error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Debug endpoint failed',
       details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
@@ -141,7 +141,7 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
-    if (!await canUserEditPage(auth.userId, pageId)) {
+    if (!await canUserEditPage(auth.userId, pageId, { bypassCache: true })) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -204,7 +204,7 @@ export async function POST(request: Request) {
 
   } catch (error) {
     loggers.api.error('❌ Debug: Error in manual save test:', error as Error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'Manual save test failed',
       details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });

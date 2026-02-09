@@ -43,11 +43,9 @@ export async function GET(
     }
 
     // Get available tools for the UI
-    const availableTools = Object.keys(pageSpaceTools).map(toolName => ({
+    const availableTools = Object.entries(pageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      description: (pageSpaceTools as any)[toolName].description || `${toolName} tool`,
-      // You could add more metadata here like categories, etc.
+      description: tool.description || `${toolName} tool`,
     }));
 
     // Fetch the drive's prompt for reference in UI
@@ -115,7 +113,7 @@ export async function PATCH(
     } = body;
 
     // Check if user has permission to edit this page
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },

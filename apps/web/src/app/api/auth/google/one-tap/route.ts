@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     const validation = oneTapSchema.safeParse(body);
 
     if (!validation.success) {
-      loggers.auth.warn('Invalid One Tap request', validation.error);
+      loggers.auth.warn('Invalid One Tap request', { errors: validation.error.flatten().fieldErrors });
       return NextResponse.json(
         { error: 'Invalid request', details: validation.error.flatten().fieldErrors },
         { status: 400 }

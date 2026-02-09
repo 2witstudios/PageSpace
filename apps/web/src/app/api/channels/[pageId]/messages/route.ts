@@ -74,9 +74,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const userId = auth.userId;
 
   // Check if user has edit permission to post messages in this channel
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
   if (!canEdit) {
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'You need edit permission to send messages in this channel',
       details: 'Only channel members with edit access can send messages'
     }, { status: 403 });

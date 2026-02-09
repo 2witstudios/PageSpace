@@ -75,6 +75,7 @@ Local MCP Servers is PageSpace Desktop's first desktop-only feature, allowing us
   > "MCP servers execute commands on your computer. Only use servers from trusted sources."
 - Trust-based security model (matches Claude Desktop)
 - No hard restrictions on commands (user responsibility)
+- For full security analysis, see [Desktop MCP Trust Model](../security/desktop-mcp-trust-model.md)
 
 **Getting Started Guide**
 - What are MCP Servers
