@@ -1,6 +1,32 @@
-import { UIMessage } from 'ai';
+import {
+  type UIMessage,
+  type TextUIPart,
+  type FileUIPart,
+  type DynamicToolUIPart,
+} from 'ai';
 import { db, chatMessages, messages } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+
+/** Narrow a UIMessage part to TextUIPart */
+function isTextPart(part: { type: string }): part is TextUIPart {
+  return part.type === 'text';
+}
+
+/** Narrow a UIMessage part to FileUIPart */
+function isFilePart(part: { type: string }): part is FileUIPart {
+  return part.type === 'file';
+}
+
+/**
+ * Narrow a UIMessage part to a tool invocation shape.
+ * SDK tool parts have type `tool-${name}` and carry toolCallId/toolName/state etc.
+ * We use DynamicToolUIPart as the closest match since our tools aren't statically typed.
+ */
+function isToolInvocationPart(
+  part: { type: string }
+): part is DynamicToolUIPart & { toolName: string; type: string } {
+  return part.type.startsWith('tool-');
+}
 
 /**
  * Assistant utilities for AI tool calling and message handling
@@ -42,11 +68,7 @@ interface ToolResult {
   state: 'output-available' | 'output-error';
 }
 
-interface TextPart {
-  type: 'text';
-  text: string;
-}
-
+/** Local tool part shape for reconstructing parts from database data */
 interface ToolPart {
   type: string; // "tool-{toolName}"
   toolCallId: string;
@@ -56,12 +78,8 @@ interface ToolPart {
   state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
 }
 
-interface FilePart {
-  type: 'file';
-  url: string;
-  mediaType?: string;
-  filename?: string;
-}
+/** Extended UIMessage with extra fields stored in our database */
+type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date };
 
 interface DatabaseMessage {
   id: string;
@@ -92,6 +110,13 @@ interface GlobalAssistantMessage {
   messageType?: 'standard' | 'todo_list';
 }
 
+interface StructuredContentData {
+  textParts: string[];
+  fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>;
+  partsOrder: Array<{ index: number; type: string; toolCallId?: string }>;
+  originalContent?: string;
+}
+
 /**
  * Extract text content from UIMessage parts
  */
@@ -106,28 +131,23 @@ export function extractMessageContent(message: UIMessage): string {
     partTypes: message.parts.map(p => p.type)
   });
 
-  const textParts = message.parts.filter(part => part.type === 'text');
+  const textParts = message.parts.filter(isTextPart);
   debugLogAI('extractMessageContent: Text parts analysis', {
     textPartsFound: textParts.length
   });
 
   // Create safe metadata for each text part
-  const textPartsMetadata = textParts.map((part, index) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const text = (part as any).text || '';
-    return {
-      partIndex: index + 1,
-      ...createContentMetadata(text)
-    };
-  });
+  const textPartsMetadata = textParts.map((part, index) => ({
+    partIndex: index + 1,
+    ...createContentMetadata(part.text || '')
+  }));
 
   debugLogAI('extractMessageContent: Text parts metadata', {
     parts: textPartsMetadata
   });
 
   const textContent = textParts
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .map(part => (part as any).text || '')
+    .map(part => part.text || '')
     .filter(text => text.trim() !== '')
     .join('');
 
@@ -141,19 +161,15 @@ export function extractMessageContent(message: UIMessage): string {
  */
 export function extractToolCalls(message: UIMessage): ToolCall[] {
   if (!message.parts) return [];
-  
+
   return message.parts
-    .filter(part => part.type.startsWith('tool-'))
-    .map(part => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toolPart = part as any;
-      return {
-        toolCallId: toolPart.toolCallId,
-        toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-        input: toolPart.input || {},
-        state: toolPart.state,
-      };
-    });
+    .filter(isToolInvocationPart)
+    .map(toolPart => ({
+      toolCallId: toolPart.toolCallId,
+      toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
+      input: (toolPart.input as Record<string, unknown>) || {},
+      state: toolPart.state,
+    }));
 }
 
 /**
@@ -161,20 +177,45 @@ export function extractToolCalls(message: UIMessage): ToolCall[] {
  */
 export function extractToolResults(message: UIMessage): ToolResult[] {
   if (!message.parts) return [];
-  
+
   return message.parts
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .filter(part => part.type.startsWith('tool-') && (part as any).output !== undefined)
-    .map(part => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toolPart = part as any;
-      return {
-        toolCallId: toolPart.toolCallId,
-        toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
-        output: toolPart.output,
-        state: toolPart.state as 'output-available' | 'output-error',
-      };
-    });
+    .filter(isToolInvocationPart)
+    .filter(toolPart => toolPart.state === 'output-available' || toolPart.state === 'output-error')
+    .map(toolPart => ({
+      toolCallId: toolPart.toolCallId,
+      toolName: toolPart.toolName || toolPart.type.replace('tool-', ''),
+      output: 'output' in toolPart ? toolPart.output : undefined,
+      state: toolPart.state as 'output-available' | 'output-error',
+    }));
+}
+
+/**
+ * Parse JSON-serialised tool calls from a database column.
+ * The column is typed as `string | null` — this helper handles both
+ * the expected JSON-string case and legacy array values defensively.
+ */
+function parseToolCalls(raw: unknown): ToolCall[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as ToolCall[];
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as ToolCall[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseToolResults(raw: unknown): ToolResult[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as ToolResult[];
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as ToolResult[] : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -203,13 +244,11 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
+    parts: [{ type: 'text' as const, text: dbMessage.content || '' }],
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as ExtendedUIMessage;
 }
 
 /**
@@ -217,38 +256,23 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
  */
 function reconstructMessageFromStructuredContent(
   dbMessage: DatabaseMessage,
-  structuredData: { textParts: string[]; fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>; partsOrder: Array<{ index: number; type: string; toolCallId?: string }>; originalContent?: string }
+  structuredData: StructuredContentData
 ): UIMessage {
-  const parts: Array<TextPart | ToolPart | FilePart> = [];
+  const parts: Array<TextUIPart | ToolPart | FileUIPart> = [];
   let textPartIndex = 0;
   let filePartIndex = 0;
-  
+
   // Parse tool calls and results for lookup
   const toolCallsMap = new Map<string, ToolCall>();
   const toolResultsMap = new Map<string, ToolResult>();
-  
-  if (dbMessage.toolCalls) {
-    try {
-      const toolCalls = typeof dbMessage.toolCalls === 'string' 
-        ? JSON.parse(dbMessage.toolCalls) as ToolCall[]
-        : Array.isArray(dbMessage.toolCalls) ? dbMessage.toolCalls as ToolCall[] : [];
-      toolCalls.forEach(tc => toolCallsMap.set(tc.toolCallId, tc));
-    } catch (error) {
-      console.error('Error parsing tool calls:', error);
-    }
+
+  for (const tc of parseToolCalls(dbMessage.toolCalls)) {
+    toolCallsMap.set(tc.toolCallId, tc);
   }
-  
-  if (dbMessage.toolResults) {
-    try {
-      const toolResults = typeof dbMessage.toolResults === 'string'
-        ? JSON.parse(dbMessage.toolResults) as ToolResult[]
-        : Array.isArray(dbMessage.toolResults) ? dbMessage.toolResults as ToolResult[] : [];
-      toolResults.forEach(tr => toolResultsMap.set(tr.toolCallId, tr));
-    } catch (error) {
-      console.error('Error parsing tool results:', error);
-    }
+  for (const tr of parseToolResults(dbMessage.toolResults)) {
+    toolResultsMap.set(tr.toolCallId, tr);
   }
-  
+
   const fileParts = structuredData.fileParts || [];
 
   // Reconstruct parts in original order
@@ -270,7 +294,7 @@ function reconstructMessageFromStructuredContent(
         parts.push({
           type: 'file',
           url: fp.url,
-          mediaType: fp.mediaType,
+          mediaType: fp.mediaType || 'application/octet-stream',
           filename: fp.filename,
         });
         filePartIndex++;
@@ -294,16 +318,48 @@ function reconstructMessageFromStructuredContent(
     }
   });
 
+  const resolvedParts: UIMessage['parts'] = parts.length > 0
+    ? parts as UIMessage['parts']
+    : [{ type: 'text' as const, text: structuredData.originalContent || '' }];
+
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
+    parts: resolvedParts,
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as ExtendedUIMessage;
+}
+
+/**
+ * Extract structured content data from UIMessage parts for database storage
+ */
+function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): string {
+  const textParts = uiParts
+    .filter(isTextPart)
+    .map(p => p.text || '');
+
+  const filePartsData = uiParts
+    .filter(isFilePart)
+    .map(fp => ({
+      url: fp.url,
+      mediaType: fp.mediaType,
+      filename: fp.filename,
+    }));
+
+  const partsOrder = uiParts.map((p, i) => ({
+    index: i,
+    type: p.type,
+    toolCallId: isToolInvocationPart(p) ? p.toolCallId : undefined,
+  }));
+
+  return JSON.stringify({
+    textParts,
+    ...(filePartsData.length > 0 ? { fileParts: filePartsData } : {}),
+    partsOrder,
+    originalContent,
+  });
 }
 
 /**
@@ -335,44 +391,15 @@ export async function saveMessageToDatabase({
 }) {
   try {
     let structuredContent = content;
-    
+
     // If we have the complete UIMessage, store structured content to preserve chronological order
     if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      const textParts = uiMessage.parts
-        .filter(p => p.type === 'text')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map(p => (p as any).text || '');
-
-      const filePartsData = uiMessage.parts
-        .filter(p => p.type === 'file')
-        .map(p => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const fp = p as any;
-          return {
-            url: typeof fp.url === 'string' ? fp.url : '',
-            mediaType: typeof fp.mediaType === 'string' ? fp.mediaType : undefined,
-            filename: typeof fp.filename === 'string' ? fp.filename : undefined,
-          };
-        });
-
-      const partsOrder = uiMessage.parts.map((p, i) => ({
-        index: i,
-        type: p.type,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        toolCallId: p.type.startsWith('tool-') ? (p as any).toolCallId : undefined
-      }));
-
-      structuredContent = JSON.stringify({
-        textParts,
-        ...(filePartsData.length > 0 ? { fileParts: filePartsData } : {}),
-        partsOrder,
-        originalContent: content, // Keep original for backward compatibility
-      });
+      structuredContent = extractStructuredContentFromParts(uiMessage.parts, content);
 
       debugLogAI('Saving structured content', {
-        textPartsCount: textParts.length,
-        filePartsCount: filePartsData.length,
-        totalPartsCount: partsOrder.length
+        textPartsCount: uiMessage.parts.filter(isTextPart).length,
+        filePartsCount: uiMessage.parts.filter(isFilePart).length,
+        totalPartsCount: uiMessage.parts.length
       });
     }
 
@@ -432,13 +459,11 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: [{ type: 'text', text: dbMessage.content || '' }] as any,
+    parts: [{ type: 'text' as const, text: dbMessage.content || '' }],
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as ExtendedUIMessage;
 }
 
 /**
@@ -446,9 +471,9 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
  */
 function reconstructGlobalAssistantMessageFromStructuredContent(
   dbMessage: GlobalAssistantMessage,
-  structuredData: { textParts: string[]; fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>; partsOrder: Array<{ index: number; type: string; toolCallId?: string }>; originalContent?: string }
+  structuredData: StructuredContentData
 ): UIMessage {
-  const parts: Array<TextPart | ToolPart | FilePart> = [];
+  const parts: Array<TextUIPart | ToolPart | FileUIPart> = [];
   let textPartIndex = 0;
   let filePartIndex = 0;
 
@@ -456,26 +481,11 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
   const toolCallsMap = new Map<string, ToolCall>();
   const toolResultsMap = new Map<string, ToolResult>();
 
-  if (dbMessage.toolCalls) {
-    try {
-      const toolCalls = typeof dbMessage.toolCalls === 'string'
-        ? JSON.parse(dbMessage.toolCalls) as ToolCall[]
-        : Array.isArray(dbMessage.toolCalls) ? dbMessage.toolCalls as ToolCall[] : [];
-      toolCalls.forEach(tc => toolCallsMap.set(tc.toolCallId, tc));
-    } catch (error) {
-      console.error('Error parsing global assistant tool calls:', error);
-    }
+  for (const tc of parseToolCalls(dbMessage.toolCalls)) {
+    toolCallsMap.set(tc.toolCallId, tc);
   }
-
-  if (dbMessage.toolResults) {
-    try {
-      const toolResults = typeof dbMessage.toolResults === 'string'
-        ? JSON.parse(dbMessage.toolResults) as ToolResult[]
-        : Array.isArray(dbMessage.toolResults) ? dbMessage.toolResults as ToolResult[] : [];
-      toolResults.forEach(tr => toolResultsMap.set(tr.toolCallId, tr));
-    } catch (error) {
-      console.error('Error parsing global assistant tool results:', error);
-    }
+  for (const tr of parseToolResults(dbMessage.toolResults)) {
+    toolResultsMap.set(tr.toolCallId, tr);
   }
 
   const fileParts = structuredData.fileParts || [];
@@ -499,7 +509,7 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
         parts.push({
           type: 'file',
           url: fp.url,
-          mediaType: fp.mediaType,
+          mediaType: fp.mediaType || 'application/octet-stream',
           filename: fp.filename,
         });
         filePartIndex++;
@@ -523,16 +533,18 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
     }
   });
 
+  const resolvedParts: UIMessage['parts'] = parts.length > 0
+    ? parts as UIMessage['parts']
+    : [{ type: 'text' as const, text: structuredData.originalContent || '' }];
+
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    parts: parts.length > 0 ? (parts as any) : [{ type: 'text', text: structuredData.originalContent || '' }],
+    parts: resolvedParts,
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as ExtendedUIMessage;
 }
 
 
@@ -561,44 +573,15 @@ export async function saveGlobalAssistantMessageToDatabase({
 }) {
   try {
     let structuredContent = content;
-    
+
     // If we have the complete UIMessage, store structured content to preserve chronological order
     if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      const textParts = uiMessage.parts
-        .filter(p => p.type === 'text')
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map(p => (p as any).text || '');
-
-      const filePartsData = uiMessage.parts
-        .filter(p => p.type === 'file')
-        .map(p => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const fp = p as any;
-          return {
-            url: typeof fp.url === 'string' ? fp.url : '',
-            mediaType: typeof fp.mediaType === 'string' ? fp.mediaType : undefined,
-            filename: typeof fp.filename === 'string' ? fp.filename : undefined,
-          };
-        });
-
-      const partsOrder = uiMessage.parts.map((p, i) => ({
-        index: i,
-        type: p.type,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        toolCallId: p.type.startsWith('tool-') ? (p as any).toolCallId : undefined
-      }));
-
-      structuredContent = JSON.stringify({
-        textParts,
-        ...(filePartsData.length > 0 ? { fileParts: filePartsData } : {}),
-        partsOrder,
-        originalContent: content, // Keep original for backward compatibility
-      });
+      structuredContent = extractStructuredContentFromParts(uiMessage.parts, content);
 
       debugLogAI('Global Assistant: Saving structured content', {
-        textPartsCount: textParts.length,
-        filePartsCount: filePartsData.length,
-        totalPartsCount: partsOrder.length
+        textPartsCount: uiMessage.parts.filter(isTextPart).length,
+        filePartsCount: uiMessage.parts.filter(isFilePart).length,
+        totalPartsCount: uiMessage.parts.length
       });
     }
 
@@ -641,7 +624,7 @@ export class PathUtils {
     const parts = path.split('/').filter(Boolean);
     return parts[parts.length - 1];
   }
-  
+
   /**
    * Extract drive ID from a PageSpace path
    */
@@ -649,7 +632,7 @@ export class PathUtils {
     const parts = path.split('/').filter(Boolean);
     return parts[0];
   }
-  
+
   /**
    * Extract parent ID from a PageSpace path (null if root level)
    */
@@ -657,7 +640,7 @@ export class PathUtils {
     const parts = path.split('/').filter(Boolean);
     return parts.length > 2 ? parts[parts.length - 2] : null;
   }
-  
+
   /**
    * Validate path format
    */
@@ -689,11 +672,11 @@ export function validateToolPermissions(accessLevel: string | null, requiredLeve
   if (!accessLevel || accessLevel === 'NONE') {
     throw new ToolError('Access denied', 'permission_check');
   }
-  
+
   const levels = ['VIEW', 'EDIT', 'ADMIN'];
   const userLevelIndex = levels.indexOf(accessLevel);
   const requiredLevelIndex = levels.indexOf(requiredLevel);
-  
+
   if (userLevelIndex < requiredLevelIndex) {
     throw new ToolError(`Insufficient permissions. Required: ${requiredLevel}, Got: ${accessLevel}`, 'permission_check');
   }
@@ -710,25 +693,25 @@ export function validateLineNumbers(
 ): void {
   // For insert operations, allow inserting at the end (totalLines + 1)
   const maxLine = operation === 'insert' ? totalLines + 1 : totalLines;
-  
+
   if (startLine < 1) {
     throw new ToolError('Line numbers must start from 1', 'line_validation');
   }
-  
+
   if (startLine > maxLine) {
     throw new ToolError(
       `Start line ${startLine} exceeds document length (${totalLines} lines)`,
       'line_validation'
     );
   }
-  
+
   if (endLine < startLine) {
     throw new ToolError(
       `End line ${endLine} cannot be before start line ${startLine}`,
       'line_validation'
     );
   }
-  
+
   if (endLine > totalLines && operation !== 'insert') {
     throw new ToolError(
       `End line ${endLine} exceeds document length (${totalLines} lines)`,
@@ -752,8 +735,8 @@ export function sanitizeContent(content: string): string {
  * Sanitize messages before passing to convertToModelMessages
  * Filters out tool parts without results to prevent "input-available" state errors
  */
-export function sanitizeMessagesForModel(messages: UIMessage[]): UIMessage[] {
-  return messages.map(message => ({
+export function sanitizeMessagesForModel(msgs: UIMessage[]): UIMessage[] {
+  return msgs.map(message => ({
     ...message,
     parts: message.parts?.filter(part => {
       // Keep text parts
@@ -763,11 +746,9 @@ export function sanitizeMessagesForModel(messages: UIMessage[]): UIMessage[] {
       if (part.type === 'file') return true;
 
       // For tool parts, only keep those with results
-      if (part.type.startsWith('tool-')) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const toolPart = part as any;
+      if (isToolInvocationPart(part)) {
         // Only include tool parts that have output (completed executions)
-        return toolPart.state === 'output-available' && toolPart.output !== undefined;
+        return part.state === 'output-available' && 'output' in part && part.output !== undefined;
       }
 
       // Keep other part types (step-start, etc.)

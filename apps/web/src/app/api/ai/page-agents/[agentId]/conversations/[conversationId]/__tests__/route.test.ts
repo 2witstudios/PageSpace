@@ -15,6 +15,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getAiAgent: vi.fn(),
     conversationExists: vi.fn(),
+    upsertConversationTitle: vi.fn(),
     getConversationMetadata: vi.fn(),
     softDeleteConversation: vi.fn(),
     logConversationDeletion: vi.fn(),
@@ -102,6 +103,12 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
 
     // Default: conversation exists
     vi.mocked(conversationRepository.conversationExists).mockResolvedValue(true);
+
+    // Default: upsert returns the persisted title
+    vi.mocked(conversationRepository.upsertConversationTitle).mockResolvedValue({
+      id: mockConversationId,
+      title: 'My Custom Title',
+    });
   });
 
   describe('authentication', () => {
@@ -161,8 +168,48 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
     });
   });
 
+  describe('title validation', () => {
+    it('should return 400 when title is missing', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {});
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('Title is required');
+    });
+
+    it('should return 400 when title is empty string', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: '   ' });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('Title is required');
+    });
+
+    it('should return 400 when title exceeds 255 characters', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'a'.repeat(256) });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toContain('255 characters');
+    });
+  });
+
   describe('successful update', () => {
-    it('should return success with title and placeholder message', async () => {
+    it('should persist the title and return the saved result', async () => {
+      vi.mocked(conversationRepository.upsertConversationTitle).mockResolvedValue({
+        id: mockConversationId,
+        title: 'My Custom Title',
+      });
+
       const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {
         title: 'My Custom Title',
       });
@@ -175,10 +222,26 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
       expect(body.success).toBe(true);
       expect(body.conversationId).toBe(mockConversationId);
       expect(body.title).toBe('My Custom Title');
-      expect(body.message).toContain('Custom titles will be supported');
+      expect(body.message).toBeUndefined();
     });
 
-    it('should verify conversation exists before returning success', async () => {
+    it('should call upsertConversationTitle with correct params', async () => {
+      const request = createRequest(mockAgentId, mockConversationId, 'PATCH', {
+        title: 'Updated Title',
+      });
+      const context = createContext(mockAgentId, mockConversationId);
+
+      await PATCH(request, context);
+
+      expect(conversationRepository.upsertConversationTitle).toHaveBeenCalledWith(
+        mockConversationId,
+        mockUserId,
+        mockAgentId,
+        'Updated Title'
+      );
+    });
+
+    it('should verify conversation exists before persisting', async () => {
       const request = createRequest(mockAgentId, mockConversationId, 'PATCH', { title: 'Test' });
       const context = createContext(mockAgentId, mockConversationId);
 

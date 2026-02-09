@@ -19,13 +19,13 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare';
+  iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare' | 'Code';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code';
 }
 
 export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
@@ -168,6 +168,23 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'TaskListView',
     layoutViewType: 'document',
   },
+  [PageType.CODE]: {
+    type: PageType.CODE,
+    displayName: 'Code',
+    description: 'Code editor with syntax highlighting',
+    iconName: 'Code',
+    emoji: '💻',
+    capabilities: {
+      canAcceptUploads: false,
+      canBeConverted: false,
+      supportsRealtime: true,
+      supportsVersioning: true,
+      supportsAI: false,
+    },
+    defaultContent: () => '',
+    uiComponent: 'CodePageView',
+    layoutViewType: 'code',
+  },
 };
 
 // Helper functions
@@ -257,4 +274,8 @@ export function isAIChatPage(type: PageType): boolean {
 
 export function isTaskListPage(type: PageType): boolean {
   return type === PageType.TASK_LIST;
+}
+
+export function isCodePage(type: PageType): boolean {
+  return type === PageType.CODE;
 }

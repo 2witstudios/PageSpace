@@ -22,7 +22,7 @@ export interface DriveSearchInfo {
 }
 
 export interface GlobSearchOptions {
-  includeTypes?: Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET'>;
+  includeTypes?: Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET' | 'CODE'>;
   maxResults?: number;
 }
 

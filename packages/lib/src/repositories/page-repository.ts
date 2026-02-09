@@ -16,7 +16,8 @@ export type PageTypeValue =
   | 'CANVAS'
   | 'FILE'
   | 'SHEET'
-  | 'TASK_LIST';
+  | 'TASK_LIST'
+  | 'CODE';
 
 // Types for repository operations
 export interface PageRecord {

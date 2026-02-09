@@ -114,6 +114,10 @@ export function validatePageCreation(
       // Canvas pages can start empty
       break;
 
+    case PageType.CODE:
+      // Code pages can start empty
+      break;
+
     case PageType.SHEET:
       if (data.content) {
         if (typeof data.content !== 'string' || !isValidSheetContent(data.content)) {
@@ -172,8 +176,9 @@ export function validatePageUpdate(
     switch (type) {
       case PageType.DOCUMENT:
       case PageType.CANVAS:
+      case PageType.CODE:
         if (typeof data.content !== 'string') {
-          errors.push('Content must be a string for document/canvas pages');
+          errors.push('Content must be a string for document/canvas/code pages');
         }
         break;
       

@@ -84,6 +84,7 @@ export interface Drive {
   updatedAt: string; // ISO8601 date string from API
   isOwned: boolean;
   role?: 'OWNER' | 'ADMIN' | 'MEMBER';
+  lastAccessedAt?: string | null; // ISO8601 date string from API
 }
 
 // Inbox types for unified DM/Channel inbox

@@ -284,29 +284,6 @@ The database is organized into the following schema files:
 - `drive_members_user_id_idx` on `userId`
 - `drive_members_role_idx` on `role`
 
-### Table: `drive_invitations`
-
-**Purpose:** Manages pending drive invitations.
-
-**Columns:**
-- `id`: `text` (Primary Key) - Unique identifier for the invitation
-- `driveId`: `text` (Foreign Key to `drives.id`) - The drive ID
-- `email`: `text` - Email address of the invitee
-- `userId`: `text` (Foreign Key to `users.id`) - User ID if they have an account
-- `invitedBy`: `text` (Foreign Key to `users.id`) - Who sent the invitation
-- `status`: `invitationStatus` ENUM (Default: 'PENDING') - Status: 'PENDING', 'ACCEPTED', 'REJECTED', 'EXPIRED'
-- `token`: `text` (Unique) - Unique invitation token
-- `message`: `text` - Optional message from the inviter
-- `expiresAt`: `timestamp` - When the invitation expires
-- `createdAt`: `timestamp` - When the invitation was created
-- `respondedAt`: `timestamp` - When the invitation was responded to
-
-**Indexes:**
-- `drive_invitations_drive_id_idx` on `driveId`
-- `drive_invitations_email_idx` on `email`
-- `drive_invitations_status_idx` on `status`
-- `drive_invitations_token_idx` on `token`
-
 ### Table: `page_permissions`
 
 **Purpose:** Enhanced boolean-based permissions system for pages.

@@ -111,7 +111,7 @@ function sanitizeEmptyContent(content: string): string {
 /**
  * Page types
  */
-export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST';
+export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST' | 'CODE';
 
 /**
  * Message with user info for page details
@@ -369,7 +369,7 @@ export const pageService = {
       }),
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: true },
+        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
       })
     ]);
@@ -381,7 +381,7 @@ export const pageService = {
         ...pageData,
         content: sanitizeEmptyContent(pageData.content || ''),
         children: children.map(toPageData),
-        messages: messages as unknown as MessageWithUser[],
+        messages,
       },
       driveId: page.driveId,
     };
@@ -397,7 +397,7 @@ export const pageService = {
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
     // Check authorization
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
     if (!canEdit) {
       return { success: false, error: 'You need edit permission to modify this page', status: 403 };
     }
@@ -474,7 +474,7 @@ export const pageService = {
       }),
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: true },
+        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
       })
     ]);
@@ -489,7 +489,7 @@ export const pageService = {
       page: {
         ...pageData,
         children: children.map(toPageData),
-        messages: messages as unknown as MessageWithUser[],
+        messages,
       },
       driveId: updatedPage.driveId,
       updatedFields,
@@ -502,7 +502,7 @@ export const pageService = {
    */
   async trashPage(pageId: string, userId: string, options: { trashChildren: boolean; metadata?: Record<string, unknown> }): Promise<TrashPageResult> {
     // Check authorization
-    const canDelete = await canUserDeletePage(userId, pageId);
+    const canDelete = await canUserDeletePage(userId, pageId, { bypassCache: true });
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
     }

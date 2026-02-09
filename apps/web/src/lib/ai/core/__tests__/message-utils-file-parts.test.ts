@@ -131,7 +131,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     const filePart = result.parts[0] as { type: string; url: string; mediaType?: string; filename?: string };
     expect(filePart.type).toBe('file');
     expect(filePart.url).toBe('data:image/webp;base64,webpdata');
-    expect(filePart.mediaType).toBeUndefined();
+    expect(filePart.mediaType).toBe('application/octet-stream');
     expect(filePart.filename).toBeUndefined();
   });
 

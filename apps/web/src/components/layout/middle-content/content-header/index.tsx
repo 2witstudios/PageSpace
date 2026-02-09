@@ -12,7 +12,7 @@ import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage } from '@pagespace/lib/client-safe';
 import { ExportDropdown } from './ExportDropdown';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
@@ -72,7 +72,8 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   const pageIsDocument = page ? isDocumentPage(page.type) : false;
   const pageIsSheet = page ? isSheetPage(page.type) : false;
   const pageIsFile = page ? isFilePage(page.type) : false;
-  const showSaveStatus = (pageIsDocument || pageIsSheet) && !isMobile;
+  const pageIsCode = page ? isCodePage(page.type) : false;
+  const showSaveStatus = (pageIsDocument || pageIsSheet || pageIsCode) && !isMobile;
 
   // Track and display presence (who else is viewing this page)
   usePagePresence(pageId);

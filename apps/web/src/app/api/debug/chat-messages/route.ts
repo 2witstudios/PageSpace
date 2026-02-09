@@ -141,7 +141,7 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
-    if (!await canUserEditPage(auth.userId, pageId)) {
+    if (!await canUserEditPage(auth.userId, pageId, { bypassCache: true })) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

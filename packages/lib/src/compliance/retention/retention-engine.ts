@@ -8,9 +8,9 @@ import {
   pageVersions,
   driveBackups,
   aiUsageLogs,
+  pagePermissions,
+  pulseSummaries,
 } from '@pagespace/db';
-import { driveInvitations, pagePermissions } from '@pagespace/db';
-import { pulseSummaries } from '@pagespace/db';
 
 export interface CleanupResult {
   table: string;
@@ -92,20 +92,6 @@ export async function cleanupExpiredDriveBackups(database: DB): Promise<CleanupR
   return { table: 'drive_backups', deleted: result.length };
 }
 
-export async function cleanupExpiredDriveInvitations(database: DB): Promise<CleanupResult> {
-  const now = new Date();
-  const result = await database
-    .delete(driveInvitations)
-    .where(
-      and(
-        lt(driveInvitations.expiresAt, now),
-        eq(driveInvitations.status, 'PENDING')
-      )
-    )
-    .returning({ id: driveInvitations.id });
-  return { table: 'drive_invitations', deleted: result.length };
-}
-
 export async function cleanupExpiredPagePermissions(database: DB): Promise<CleanupResult> {
   const now = new Date();
   const result = await database
@@ -143,7 +129,6 @@ export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]
     cleanupExpiredPulseSummaries(database),
     cleanupExpiredPageVersions(database),
     cleanupExpiredDriveBackups(database),
-    cleanupExpiredDriveInvitations(database),
     cleanupExpiredPagePermissions(database),
     cleanupExpiredAiUsageLogs(database),
   ]);
