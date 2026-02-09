@@ -59,7 +59,7 @@ function isValidSheetContent(content: string): boolean {
  */
 export function validatePageCreation(
   type: PageType,
-  data: any
+  data: Record<string, unknown>
 ): ValidationResult {
   const config = getPageTypeConfig(type);
   const errors: string[] = [];
@@ -158,7 +158,7 @@ export function canConvertToType(fromType: PageType, toType: PageType): boolean 
  */
 export function validatePageUpdate(
   type: PageType,
-  data: any
+  data: Record<string, unknown>
 ): ValidationResult {
   const errors: string[] = [];
 

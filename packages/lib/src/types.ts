@@ -45,7 +45,7 @@ export interface Page {
   id: string;
   title: string;
   type: PageType;
-  content: any;
+  content: string | null;
   position: number;
   isTrashed: boolean;
   createdAt: string; // ISO8601 date string from API
@@ -63,7 +63,7 @@ export interface Page {
   mimeType?: string;
   originalFileName?: string;
   filePath?: string;
-  fileMetadata?: Record<string, any>;
+  fileMetadata?: Record<string, JsonValue>;
   // Processing status fields
   processingStatus?: ProcessingStatus;
   processingError?: string;
