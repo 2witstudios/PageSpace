@@ -69,7 +69,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 
 // Type for page lookup mock (matches Drizzle schema)
-type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
+type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
 type PageTreeScope = 'children' | 'drive';
 type ProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
