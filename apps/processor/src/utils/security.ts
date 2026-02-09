@@ -112,5 +112,5 @@ export const DANGEROUS_MIME_TYPES = [
 export function isDangerousMimeType(mimeType: string | null | undefined): boolean {
   if (!mimeType) return false;
   const normalized = mimeType.toLowerCase().split(';')[0].trim();
-  return DANGEROUS_MIME_TYPES.includes(normalized as any);
+  return (DANGEROUS_MIME_TYPES as readonly string[]).includes(normalized);
 }

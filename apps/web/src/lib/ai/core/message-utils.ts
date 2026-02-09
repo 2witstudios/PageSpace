@@ -39,7 +39,7 @@ function isToolInvocationPart(
  */
 const isAIDebugEnabled = process.env.AI_DEBUG_LOGGING === 'true';
 
-function createContentMetadata(content: string): object {
+function createContentMetadata(content: string): Record<string, unknown> {
   return {
     length: content.length,
     hasContent: content.length > 0,
@@ -48,7 +48,7 @@ function createContentMetadata(content: string): object {
   };
 }
 
-function debugLogAI(message: string, data?: object): void {
+function debugLogAI(message: string, data?: Record<string, unknown>): void {
   if (isAIDebugEnabled) {
     loggers.ai.debug(message, data);
   }

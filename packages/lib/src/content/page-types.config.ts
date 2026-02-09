@@ -12,7 +12,7 @@ export interface PageTypeCapabilities {
 export interface PageTypeApiValidation {
   requiredFields?: string[];
   optionalFields?: string[];
-  customValidation?: (data: any) => { valid: boolean; error?: string };
+  customValidation?: (data: Record<string, unknown>) => { valid: boolean; error?: string };
 }
 
 export interface PageTypeConfig {
@@ -22,7 +22,7 @@ export interface PageTypeConfig {
   iconName: 'Folder' | 'FileText' | 'MessageSquare' | 'Sparkles' | 'Palette' | 'FileIcon' | 'Table' | 'CheckSquare' | 'Code';
   emoji: string;
   capabilities: PageTypeCapabilities;
-  defaultContent: () => any;
+  defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
   layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code';
@@ -209,7 +209,7 @@ export function getDefaultContent(type: PageType): string {
   if (type === PageType.FOLDER || type === PageType.CHANNEL || type === PageType.AI_CHAT) {
     return JSON.stringify(content);
   }
-  return content;
+  return typeof content === 'string' ? content : JSON.stringify(content);
 }
 
 export function getPageTypeComponent(type: PageType): string {

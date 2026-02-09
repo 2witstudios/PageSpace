@@ -5,6 +5,7 @@
 
 import { db, systemLogs, apiMetrics, aiUsageLogs, errorLogs, userActivities } from '@pagespace/db';
 import type { LogEntry, LogContext } from './logger';
+import type { LogInput, HttpMethod } from './logger-types';
 import { createId } from '@paralleldrive/cuid2';
 
 interface DatabaseLogEntry {
@@ -19,7 +20,7 @@ interface DatabaseLogEntry {
   driveId?: string;
   pageId?: string;
   endpoint?: string;
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
+  method?: HttpMethod;
   ip?: string;
   userAgent?: string;
   errorName?: string;
@@ -28,7 +29,7 @@ interface DatabaseLogEntry {
   duration?: number;
   memoryUsed?: number;
   memoryTotal?: number;
-  metadata?: any;
+  metadata?: LogInput;
   hostname?: string;
   pid?: number;
   version?: string;
@@ -59,7 +60,7 @@ function convertToDbFormat(entry: LogEntry): DatabaseLogEntry {
     dbEntry.method = entry.context.method as DatabaseLogEntry['method'];
     dbEntry.ip = entry.context.ip;
     dbEntry.userAgent = entry.context.userAgent;
-    dbEntry.category = entry.context.category;
+    dbEntry.category = entry.context.category as string | undefined;
     
     // Remove duplicates from metadata
     const { 
@@ -138,7 +139,7 @@ export async function writeApiMetrics(metrics: {
       id: createId(),
       timestamp: metrics.timestamp ?? new Date(),
       endpoint: metrics.endpoint,
-      method: metrics.method as any,
+      method: metrics.method as HttpMethod,
       statusCode: metrics.statusCode,
       duration: metrics.duration,
       requestSize: metrics.requestSize,
@@ -175,7 +176,7 @@ export async function writeAiUsage(usage: {
   driveId?: string;
   success?: boolean;
   error?: string;
-  metadata?: any;
+  metadata?: LogInput;
 
   // Context tracking
   contextMessages?: string[];
@@ -235,7 +236,7 @@ export async function writeUserActivity(activity: {
   sessionId?: string;
   ip?: string;
   userAgent?: string;
-  metadata?: any;
+  metadata?: LogInput;
 }): Promise<void> {
   try {
     await db.insert(userActivities).values({
@@ -274,7 +275,7 @@ export async function writeError(error: {
   column?: number;
   ip?: string;
   userAgent?: string;
-  metadata?: any;
+  metadata?: LogInput;
 }): Promise<void> {
   try {
     await db.insert(errorLogs).values({
@@ -287,7 +288,7 @@ export async function writeError(error: {
       sessionId: error.sessionId,
       requestId: error.requestId,
       endpoint: error.endpoint,
-      method: error.method as any,
+      method: error.method as HttpMethod,
       file: error.file,
       line: error.line,
       column: error.column,

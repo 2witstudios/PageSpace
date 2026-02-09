@@ -183,9 +183,9 @@ export async function updateStorageUsage(
     driveId?: string;
     eventType?: 'upload' | 'delete' | 'update' | 'reconcile';
   },
-  existingTx?: any // Transaction object from Drizzle
+  existingTx?: Parameters<Parameters<typeof db.transaction>[0]>[0]
 ): Promise<void> {
-  const executeUpdate = async (tx: any) => {
+  const executeUpdate = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
     // Lock user row and update storage
     const [updatedUser] = await tx
       .update(users)

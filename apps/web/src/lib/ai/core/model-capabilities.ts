@@ -75,7 +75,7 @@ async function fetchOpenRouterToolCapabilities(): Promise<Map<string, boolean>> 
     });
     return openRouterModelsCache;
   } catch (error) {
-    capabilityLogger.warn('Failed to fetch OpenRouter model capabilities', error instanceof Error ? error : undefined);
+    capabilityLogger.warn('Failed to fetch OpenRouter model capabilities', { error: error instanceof Error ? error.message : String(error) });
     // Return empty map on error, fallback to runtime discovery
     return new Map();
   }
@@ -110,7 +110,7 @@ export async function hasToolCapability(model: string, provider: string): Promis
       toolCapabilityCache.set(cacheKey, hasTools);
       return hasTools;
     } catch (error) {
-      capabilityLogger.warn(`Failed to check OpenRouter capability for ${model}`, error instanceof Error ? error : undefined);
+      capabilityLogger.warn(`Failed to check OpenRouter capability for ${model}`, { error: error instanceof Error ? error.message : String(error) });
       // Fall through to default behavior
     }
   }

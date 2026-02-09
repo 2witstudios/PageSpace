@@ -5,6 +5,7 @@
 
 // Export logger core (types, enums, logger instance)
 export * from './logger';
+export * from './logger-types';
 
 // Export browser logger (only unique exports, not duplicated types)
 export {

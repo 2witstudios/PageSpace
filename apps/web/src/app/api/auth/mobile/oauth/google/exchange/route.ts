@@ -83,7 +83,7 @@ export async function POST(req: Request) {
     const validation = oauthExchangeSchema.safeParse(body);
 
     if (!validation.success) {
-      loggers.auth.warn('Invalid mobile OAuth request', validation.error);
+      loggers.auth.warn('Invalid mobile OAuth request', { errors: validation.error.flatten().fieldErrors });
       return Response.json(
         { errors: validation.error.flatten().fieldErrors },
         { status: 400 }

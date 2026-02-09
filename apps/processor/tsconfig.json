@@ -27,6 +27,6 @@
     "noEmit": true,
     "jsx": "react"
   },
-  "include": ["src/**/*", "../../packages/**/*"],
+  "include": ["src/**/*", "../../packages/**/*", "../../types/**/*"],
   "exclude": ["node_modules", "dist"]
 }
