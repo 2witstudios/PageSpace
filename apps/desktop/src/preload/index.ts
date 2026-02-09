@@ -69,7 +69,7 @@ contextBridge.exposeInMainWorld('electron', {
     restartServer: (name: string) => ipcRenderer.invoke('mcp:restart-server', name),
     getServerStatuses: () => ipcRenderer.invoke('mcp:get-server-statuses'),
     onStatusChange: (callback: (statuses: Record<string, MCPServerStatusInfo>) => void) => {
-      const subscription = (_event: any, statuses: Record<string, MCPServerStatusInfo>) => callback(statuses);
+      const subscription = (_event: Electron.IpcRendererEvent, statuses: Record<string, MCPServerStatusInfo>) => callback(statuses);
       ipcRenderer.on('mcp:status-changed', subscription);
       return () => ipcRenderer.removeListener('mcp:status-changed', subscription);
     },

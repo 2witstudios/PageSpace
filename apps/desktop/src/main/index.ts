@@ -8,6 +8,7 @@ import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
 import type { MCPConfig } from '../shared/mcp-types';
 import { logger } from './logger';
 import { loadAuthSession, saveAuthSession, clearAuthSession, type StoredAuthSession } from './auth-storage';
+import { getErrorMessage } from './error-utils';
 import nodeMachineId from 'node-machine-id';
 const { machineIdSync } = nodeMachineId;
 import * as os from 'node:os';
@@ -643,10 +644,11 @@ ipcMain.handle('mcp:update-config', async (_event, config: MCPConfig) => {
     await mcpManager.updateConfig(config);
     logger.info('Config updated successfully', {});
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('Failed to update config', { error });
-    logger.error('Error message', { errorMessage: error.message });
-    return { success: false, error: error.message };
+    const message = getErrorMessage(error);
+    logger.error('Error message', { errorMessage: message });
+    return { success: false, error: message };
   }
 });
 
@@ -655,8 +657,8 @@ ipcMain.handle('mcp:start-server', async (_event, name: string) => {
   try {
     await mcpManager.startServer(name);
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -665,8 +667,8 @@ ipcMain.handle('mcp:stop-server', async (_event, name: string) => {
   try {
     await mcpManager.stopServer(name);
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -675,8 +677,8 @@ ipcMain.handle('mcp:restart-server', async (_event, name: string) => {
   try {
     await mcpManager.restartServer(name);
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
