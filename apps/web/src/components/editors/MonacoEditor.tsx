@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { useMonacoTheme } from '@/hooks/useMonacoTheme';

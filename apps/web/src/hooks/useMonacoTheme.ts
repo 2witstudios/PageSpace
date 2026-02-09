@@ -17,6 +17,19 @@ function resolveColor(cssValue: string): string {
   return ctx.fillStyle;
 }
 
+function withAlpha(color: string, alpha: number): string {
+  const resolved = resolveColor(color);
+  if (resolved.startsWith('#')) {
+    const hex = Math.round(alpha * 255).toString(16).padStart(2, '0');
+    return resolved + hex;
+  }
+  const match = resolved.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (match) {
+    return `rgba(${match[1]}, ${match[2]}, ${match[3]}, ${alpha})`;
+  }
+  return resolved;
+}
+
 function getCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -48,11 +61,9 @@ export function useMonacoTheme(monaco: Monaco | null): string {
         'editor.lineHighlightBackground': muted,
         'editorLineNumber.foreground': resolveColor(getCssVar('--muted-foreground')),
         'editorGutter.background': bg,
-        // ctx.fillStyle normalizes to 6-digit hex (#rrggbb), so appending
-        // '40'/'33' produces valid 8-digit hex with alpha
         'editor.selectionBackground': isDark
-          ? resolveColor(getCssVar('--primary')) + '40'   // 25% opacity
-          : resolveColor(getCssVar('--primary')) + '33',  // 20% opacity
+          ? withAlpha(getCssVar('--primary'), 0.25)
+          : withAlpha(getCssVar('--primary'), 0.20),
         'editorWidget.background': resolveColor(getCssVar('--card')),
         'editorWidget.border': border,
         'input.background': resolveColor(getCssVar('--input')),
