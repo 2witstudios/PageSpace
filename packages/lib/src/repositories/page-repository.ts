@@ -5,19 +5,9 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, pages, eq, and, desc, isNull, inArray } from '@pagespace/db';
+import { db, pages, eq, and, desc, isNull, inArray, type PageTypeEnum } from '@pagespace/db';
 
-// Page type enum values that match the database schema
-export type PageTypeValue =
-  | 'FOLDER'
-  | 'DOCUMENT'
-  | 'CHANNEL'
-  | 'AI_CHAT'
-  | 'CANVAS'
-  | 'FILE'
-  | 'SHEET'
-  | 'TASK_LIST'
-  | 'CODE';
+export type PageTypeValue = PageTypeEnum;
 
 // Types for repository operations
 export interface PageRecord {

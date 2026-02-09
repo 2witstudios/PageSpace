@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import Layout from "@/components/layout/Layout";
+import { PushNotificationManager } from "@/components/PushNotificationManager";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 
 // Routes that render full-page content instead of CenterPanel
@@ -27,11 +28,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     pathname?.startsWith(route)
   ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|inbox|tasks|trash|settings|members)/);
 
-  if (isFullPageRoute) {
-    return <Layout>{children}</Layout>;
-  }
-
-  // Default: Let CenterPanel handle content rendering
-  return <Layout />;
+  return (
+    <>
+      <PushNotificationManager />
+      {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
+    </>
+  );
 }
 

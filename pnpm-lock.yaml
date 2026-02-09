@@ -385,6 +385,9 @@ importers:
       '@capacitor/keyboard':
         specifier: ^7.0.4
         version: 7.0.4(@capacitor/core@7.4.5)
+      '@capacitor/push-notifications':
+        specifier: ^7.0.4
+        version: 7.0.4(@capacitor/core@7.4.5)
       '@dnd-kit/core':
         specifier: ^6.3.1
         version: 6.3.1(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -5449,6 +5452,7 @@ packages:
 
   cookiejar@2.1.4:
     resolution: {integrity: sha512-LDx6oHrK+PhzLKJU9j5S7/Y3jM/mUHvD/DeI1WQmJn652iPC5Y4TBzC9l+5OMOXlyTTA+SmVUPm0HQUwpD5Jqw==}
+
   copy-webpack-plugin@12.0.2:
     resolution: {integrity: sha512-SNwdBeHyII+rWvee/bTnAYyO8vfVdcSTud4EIb6jcZ8inLeWucJE0DnxXQBjlQ5zlteuuvooGQy3LIyGxhvlOA==}
     engines: {node: '>= 18.12.0'}
@@ -14889,6 +14893,7 @@ snapshots:
   cookie@1.0.2: {}
 
   cookiejar@2.1.4: {}
+
   copy-webpack-plugin@12.0.2(webpack@5.101.3(esbuild@0.19.12)):
     dependencies:
       fast-glob: 3.3.3

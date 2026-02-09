@@ -5,7 +5,7 @@
  * Route handlers should call these service functions rather than accessing the database directly.
  */
 
-import { db, pages, drives, eq, and, inArray, sql } from '@pagespace/db';
+import { db, pages, drives, eq, and, inArray, sql, type PageTypeEnum } from '@pagespace/db';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
 
 // ============================================================================
@@ -22,7 +22,7 @@ export interface DriveSearchInfo {
 }
 
 export interface GlobSearchOptions {
-  includeTypes?: Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET' | 'CODE'>;
+  includeTypes?: PageTypeEnum[];
   maxResults?: number;
 }
 
@@ -229,15 +229,15 @@ export async function globSearchPages(
     nextSteps:
       results.length > 0
         ? [
-            'Use read_page with the pageId to examine content',
-            'Use the semantic paths to understand the structure',
-            'Consider using regex_search for content-based searching',
-          ]
+          'Use read_page with the pageId to examine content',
+          'Use the semantic paths to understand the structure',
+          'Consider using regex_search for content-based searching',
+        ]
         : [
-            'Try a broader pattern (e.g., "**/*" for all pages)',
-            'Check if your pattern syntax is correct',
-            'Verify the pages exist with list_pages',
-          ],
+          'Try a broader pattern (e.g., "**/*" for all pages)',
+          'Check if your pattern syntax is correct',
+          'Verify the pages exist with list_pages',
+        ],
   };
 }
 
@@ -390,13 +390,13 @@ export async function regexSearchPages(
     nextSteps:
       results.length > 0
         ? [
-            'Use read_page with the pageId to examine full content',
-            'Use edit tools to modify matching pages',
-            'Refine your regex pattern for more specific results',
-          ]
+          'Use read_page with the pageId to examine full content',
+          'Use edit tools to modify matching pages',
+          'Refine your regex pattern for more specific results',
+        ]
         : [
-            'Try a different pattern or search in a different location',
-            'Check if the pattern syntax is correct for PostgreSQL regex',
-          ],
+          'Try a different pattern or search in a different location',
+          'Check if the pattern syntax is correct for PostgreSQL regex',
+        ],
   };
 }
