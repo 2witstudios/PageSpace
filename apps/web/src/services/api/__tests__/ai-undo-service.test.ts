@@ -88,8 +88,20 @@ import { executeRollback, previewRollback } from '../rollback-service';
 import { logConversationUndo } from '@pagespace/lib/monitoring';
 import { loggers } from '@pagespace/lib/server';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- scaffold: ORM chain mocks don't satisfy Drizzle's deep generics
-const mockDb = db as any;
+/** Matches the mock shape defined in vi.mock('@pagespace/db') above */
+type MockFn = ReturnType<typeof vi.fn>;
+interface MockDb {
+  query: {
+    chatMessages: { findFirst: MockFn };
+    messages: { findFirst: MockFn };
+    pages: { findFirst: MockFn };
+  };
+  select: MockFn;
+  update: MockFn;
+  transaction: MockFn;
+}
+
+const mockDb = vi.mocked(db) as unknown as MockDb;
 const mockPreviewRollback = vi.mocked(previewRollback);
 const mockExecuteRollback = vi.mocked(executeRollback);
 const mockLoggers = vi.mocked(loggers);
@@ -330,7 +342,7 @@ describe('ai-undo-service', () => {
       }));
 
       // Mock transaction
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -370,7 +382,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -420,7 +432,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -480,7 +492,7 @@ describe('ai-undo-service', () => {
       mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
       mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -529,7 +541,7 @@ describe('ai-undo-service', () => {
         .mockResolvedValueOnce(createMockRollbackResult({ success: false, status: 'failed', message: 'Rollback failed' }));
 
       // Transaction should abort on failure
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -581,7 +593,7 @@ describe('ai-undo-service', () => {
         })
       );
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {};
         try {
           await callback(tx);
@@ -625,7 +637,7 @@ describe('ai-undo-service', () => {
       );
       mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -670,7 +682,7 @@ describe('ai-undo-service', () => {
         createMockPreview({ canExecute: false, requiresForce: false, reason: "Cannot rollback 'create'" })
       );
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         try {
           await callback({});
         } catch (e) {
@@ -709,7 +721,7 @@ describe('ai-undo-service', () => {
       mockPreviewRollback.mockResolvedValue(createMockPreview({ canExecute: true }));
       mockExecuteRollback.mockResolvedValue(createMockRollbackResult());
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({
@@ -815,7 +827,7 @@ describe('ai-undo-service', () => {
         }),
       }));
 
-      mockDb.transaction.mockImplementation(async (callback: any) => {
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
         const tx = {
           update: vi.fn().mockReturnValue({
             set: vi.fn().mockReturnValue({

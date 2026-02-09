@@ -128,8 +128,17 @@ import { db } from '@pagespace/db';
 import { canUserRollback, isRollbackableOperation } from '@pagespace/lib/permissions';
 import { logRollbackActivity } from '@pagespace/lib/monitoring';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- scaffold: ORM chain mocks don't satisfy Drizzle's deep generics
-const mockDb = db as any;
+/** Matches the mock shape defined in vi.mock('@pagespace/db') above */
+type MockFn = ReturnType<typeof vi.fn>;
+interface MockDb {
+  select: MockFn;
+  update: MockFn;
+  insert: MockFn;
+  delete: MockFn;
+  transaction: MockFn;
+}
+
+const mockDb = vi.mocked(db) as unknown as MockDb;
 const mockCanUserRollback = vi.mocked(canUserRollback);
 const mockIsRollbackableOperation = vi.mocked(isRollbackableOperation);
 
