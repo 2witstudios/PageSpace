@@ -15,6 +15,7 @@ export interface PageRecord {
   title: string;
   type: PageTypeValue;
   content: string;
+  contentMode: 'html' | 'markdown';
   driveId: string;
   parentId: string | null;
   position: number;
@@ -39,6 +40,7 @@ export interface CreatePageInput {
   title: string;
   type: PageTypeValue;
   content: string;
+  contentMode?: 'html' | 'markdown';
   driveId: string;
   parentId: string | null;
   position: number;

@@ -31,6 +31,7 @@ function toPageData(dbPage: {
   title: string | null;
   type: string;
   content: string | null;
+  contentMode: string;
   parentId: string | null;
   driveId: string;
   position: number;
@@ -51,6 +52,7 @@ function toPageData(dbPage: {
     title: dbPage.title,
     type: dbPage.type as PageType,
     content: dbPage.content,
+    contentMode: (dbPage.contentMode as 'html' | 'markdown') || 'html',
     parentId: dbPage.parentId,
     driveId: dbPage.driveId,
     position: dbPage.position,
@@ -136,6 +138,7 @@ export interface PageData {
   title: string | null;
   type: PageType;
   content: string | null;
+  contentMode: 'html' | 'markdown';
   parentId: string | null;
   driveId: string;
   position: number;
@@ -236,6 +239,7 @@ export interface CreatePageParams {
   driveId: string;
   parentId?: string | null;
   content?: string;
+  contentMode?: 'html' | 'markdown';
   systemPrompt?: string;
   enabledTools?: string[];
   aiProvider?: string;
@@ -674,6 +678,7 @@ export const pageService = {
         parentId: string | null;
         driveId: string;
         content: string;
+        contentMode: 'html' | 'markdown';
         position: number;
         updatedAt: Date;
         revision: number;
@@ -691,6 +696,7 @@ export const pageService = {
         parentId: params.parentId ?? null,
         driveId: drive.id,
         content: params.content || getDefaultContent(params.type as PageTypeEnum),
+        contentMode: params.contentMode || 'html',
         position: newPosition,
         updatedAt: new Date(),
         revision: 0,

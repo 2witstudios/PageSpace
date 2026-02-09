@@ -13,10 +13,10 @@ import { toast } from 'sonner';
 import { Eye, Loader2, ArrowLeft, Info } from 'lucide-react';
 
 interface DisplaySetting {
-  id: 'SHOW_TOKEN_COUNTS' | 'SHOW_CODE_TOGGLE';
+  id: 'SHOW_TOKEN_COUNTS' | 'SHOW_CODE_TOGGLE' | 'DEFAULT_MARKDOWN_MODE';
   label: string;
   description: string;
-  preferenceKey: 'showTokenCounts' | 'showCodeToggle';
+  preferenceKey: 'showTokenCounts' | 'showCodeToggle' | 'defaultMarkdownMode';
 }
 
 const DISPLAY_SETTINGS: DisplaySetting[] = [
@@ -31,6 +31,12 @@ const DISPLAY_SETTINGS: DisplaySetting[] = [
     label: 'Show code editor toggle',
     description: 'Display Rich/Code toggle buttons for document and canvas pages',
     preferenceKey: 'showCodeToggle',
+  },
+  {
+    id: 'DEFAULT_MARKDOWN_MODE',
+    label: 'Default to Markdown for new documents',
+    description: 'New document pages will store content as markdown instead of HTML',
+    preferenceKey: 'defaultMarkdownMode',
   },
 ];
 

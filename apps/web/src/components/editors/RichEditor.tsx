@@ -21,9 +21,10 @@ interface RichEditorProps {
   onEditorChange: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
+  contentMode?: 'html' | 'markdown';
 }
 
-const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPaginated = false }: RichEditorProps) => {
+const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPaginated = false, contentMode = 'html' }: RichEditorProps) => {
   const router = useRouter();
 
   // Subscribe to navigation events from TipTap mentions
@@ -85,8 +86,12 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
-        const html = editor.getHTML();
-        onChange(html);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const storage = editor.storage as Record<string, any>;
+        const serialized = contentMode === 'markdown'
+          ? storage.markdown.getMarkdown()
+          : editor.getHTML();
+        onChange(serialized);
       }
     },
     editorProps: {
@@ -100,25 +105,31 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       scrollThreshold: 80,
       scrollMargin: 80,
     },
-  }, [isPaginated]); // Recreate editor when pagination changes
+  }, [isPaginated, contentMode]); // Recreate editor when pagination or content mode changes
 
   useEffect(() => {
     if (editor) {
-      const currentHTML = editor.getHTML();
-      // Check if value is empty and current HTML is just the default empty paragraph
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const storage = editor.storage as Record<string, any>;
+      const currentSerialized = contentMode === 'markdown'
+        ? storage.markdown.getMarkdown()
+        : editor.getHTML();
+      // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
-      const isDefaultEmptyHTML = currentHTML === '<p></p>' || 
-                                 currentHTML === '<p><br></p>' || 
-                                 currentHTML === '<p><br/></p>' ||
-                                 currentHTML === '<p><br /></p>';
-      
+      const isDefaultEmpty = contentMode === 'markdown'
+        ? (!currentSerialized || currentSerialized.trim() === '')
+        : (currentSerialized === '<p></p>' ||
+           currentSerialized === '<p><br></p>' ||
+           currentSerialized === '<p><br/></p>' ||
+           currentSerialized === '<p><br /></p>');
+
       // Only update if there's a meaningful difference
-      if (isEmptyValue && isDefaultEmptyHTML) {
+      if (isEmptyValue && isDefaultEmpty) {
         // Both are effectively empty, no need to update
         return;
       }
-      
-      if (value !== currentHTML) {
+
+      if (value !== currentSerialized) {
         // Save current view state before updating content
         const { from, to } = editor.state.selection;
         // Get current selection position

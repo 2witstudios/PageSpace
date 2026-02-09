@@ -109,6 +109,7 @@ type PageLookupResult = {
   contentHash: string | null;
   trashedAt: Date | null;
   originalParentId: string | null;
+  contentMode: 'html' | 'markdown';
 };
 
 const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupResult => ({
@@ -147,6 +148,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   contentHash: null,
   trashedAt: null,
   originalParentId: null,
+  contentMode: 'html',
   ...overrides,
 });
 

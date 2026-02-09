@@ -207,7 +207,7 @@ export const useDocument = (pageId: string, initialContent?: string) => {
       if (response.ok) {
         const page = await response.json();
         const store = useDocumentManagerStore.getState();
-        store.createDocument(pageId, page.content || '');
+        store.createDocument(pageId, page.content || '', page.contentMode || 'html');
         if (page.revision !== undefined) {
           store.updateDocument(pageId, { revision: page.revision });
         }
