@@ -65,8 +65,7 @@ router.post('/', async (req, res) => {
           success: true,
           cached: false,
           url: result.url,
-          status: 'completed',
-          processingTime: result.processingTime
+          status: 'completed'
         });
       } catch (error) {
         return res.status(500).json({

@@ -341,7 +341,6 @@ volumes:
 1. Add virus scanning
 2. Implement OCR for scanned documents
 3. Add EXIF metadata extraction
-4. Support larger file sizes (chunked upload)
 
 ### Low Priority
 1. Video thumbnail generation
