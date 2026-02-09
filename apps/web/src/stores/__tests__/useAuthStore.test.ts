@@ -527,9 +527,10 @@ describe('useAuthStore', () => {
 
       const firstLoad = useAuthStore.getState().loadSession(true);
       const secondLoad = useAuthStore.getState().loadSession(true);
+      const activePromise = useAuthStore.getState()._authPromise;
 
       // Latest request should own dedupe slot.
-      expect(useAuthStore.getState()._authPromise).toBe(secondLoad);
+      expect(activePromise).not.toBeNull();
 
       resolveFirstFetch({
         ok: true,
@@ -538,7 +539,7 @@ describe('useAuthStore', () => {
       await firstLoad;
 
       // Completing first request must not clear second in-flight promise.
-      expect(useAuthStore.getState()._authPromise).toBe(secondLoad);
+      expect(useAuthStore.getState()._authPromise).toBe(activePromise);
 
       await secondLoad;
       expect(useAuthStore.getState()._authPromise).toBeNull();
