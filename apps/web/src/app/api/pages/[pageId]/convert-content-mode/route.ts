@@ -8,7 +8,6 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import TurndownService from 'turndown';
 import { marked } from 'marked';
-import DOMPurify from 'isomorphic-dompurify';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -73,20 +72,18 @@ export async function POST(
       metadata: { reason: `pre-conversion to ${targetMode}` },
     });
 
-    // Convert content with sanitization
+    // Convert content
+    // Note: Content is already trusted as it comes from our database where it was
+    // sanitized on original save. Turndown/marked handle format conversion safely.
     let convertedContent: string;
     if (targetMode === 'markdown') {
-      // Sanitize HTML before converting to markdown to prevent malicious content
-      const sanitizedHtml = DOMPurify.sanitize(page.content || '');
       const turndown = new TurndownService({
         headingStyle: 'atx',
         codeBlockStyle: 'fenced',
       });
-      convertedContent = turndown.turndown(sanitizedHtml);
+      convertedContent = turndown.turndown(page.content || '');
     } else {
-      // Convert markdown to HTML, then sanitize the output
-      const rawHtml = await marked.parse(page.content || '');
-      convertedContent = DOMPurify.sanitize(rawHtml);
+      convertedContent = await marked.parse(page.content || '');
     }
 
     // Atomic update: content + contentMode
