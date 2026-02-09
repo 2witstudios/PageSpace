@@ -201,13 +201,13 @@ The core logic for the permissions system is located in `packages/lib/src/permis
 **Dependencies:** Drizzle ORM
 **Last Updated:** 2025-08-21
 
-### grantPagePermissions(pageId: string, userId: string, permissions: object, grantedBy: string): Promise<void>
+### grantPagePermission(pageId: string, userId: string, permissions: object, grantedBy: string): Promise<void>
 **Purpose:** Grant or update permissions for a user on a specific page.
 **Location:** [`packages/lib/src/permissions.ts:180`](packages/lib/src/permissions.ts:180)
 **Dependencies:** Drizzle ORM
 **Last Updated:** 2025-08-21
 
-### revokePagePermissions(pageId: string, userId: string): Promise<void>
+### revokePagePermission(pageId: string, userId: string): Promise<void>
 **Purpose:** Remove all permissions for a user on a specific page.
 **Location:** [`packages/lib/src/permissions.ts:230`](packages/lib/src/permissions.ts:230)
 **Dependencies:** Drizzle ORM

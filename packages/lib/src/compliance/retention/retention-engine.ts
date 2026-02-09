@@ -8,9 +8,9 @@ import {
   pageVersions,
   driveBackups,
   aiUsageLogs,
+  pagePermissions,
+  pulseSummaries,
 } from '@pagespace/db';
-import { pagePermissions } from '@pagespace/db';
-import { pulseSummaries } from '@pagespace/db';
 
 export interface CleanupResult {
   table: string;

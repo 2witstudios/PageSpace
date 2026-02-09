@@ -33,7 +33,7 @@ The trust-based model is appropriate for desktop MCP because of three properties
 ### What MCP servers CANNOT do
 
 - Access the Electron main process internals or IPC channels directly -- communication is limited to the JSON-RPC 2.0 protocol over stdio (`stdin`/`stdout`)
-- Modify PageSpace configuration outside of their own tool responses -- the MCP manager controls config read/write
+- Modify PageSpace configuration outside their own tool responses -- the MCP manager controls config read/write
 - Access other MCP servers' processes -- each server is an isolated child process
 - Bypass the MCP protocol -- the `MCPManager` class (`apps/desktop/src/main/mcp-manager.ts`) validates JSON-RPC message format and enforces timeouts
 

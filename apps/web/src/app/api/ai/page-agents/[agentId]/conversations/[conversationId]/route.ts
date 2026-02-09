@@ -46,6 +46,20 @@ export async function PATCH(
     const body = await request.json();
     const { title } = body;
 
+    if (typeof title !== 'string' || title.trim().length === 0) {
+      return NextResponse.json(
+        { error: 'Title is required and must be a non-empty string' },
+        { status: 400 }
+      );
+    }
+
+    if (title.length > 255) {
+      return NextResponse.json(
+        { error: 'Title must be 255 characters or fewer' },
+        { status: 400 }
+      );
+    }
+
     // Validate that the conversation exists (has at least one active message)
     const exists = await conversationRepository.conversationExists(agentId, conversationId);
 

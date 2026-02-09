@@ -1467,9 +1467,9 @@ Desktop MCP servers run as local child processes on the user's machine, spawned 
 
 ### What this means in practice
 
-- MCP servers do **not** use opaque tokens, session validation, or scope-based authorization.
-- MCP servers do **not** go through the centralized session store or RBAC checks.
-- MCP servers **do** have defensive measures (buffer limits, timeouts, crash tracking, config validation) to protect the desktop app from misbehaving processes.
+- Opaque tokens, session validation, and scope-based authorization are **not** applied to MCP servers.
+- The centralized session store and RBAC checks are **bypassed** for local MCP communication.
+- Defensive measures (buffer limits, timeouts, crash tracking, config validation) **do** protect the desktop app from misbehaving processes.
 
 For full details on the desktop MCP security model, capabilities granted, and risk assessment, see [Desktop MCP Trust Model](./desktop-mcp-trust-model.md).
 

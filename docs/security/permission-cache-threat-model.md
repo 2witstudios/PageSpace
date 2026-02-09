@@ -59,7 +59,7 @@ Negligible. Cache poisoning would require direct Redis access, which is equivale
 
 1. **Page existence is already revealed by the API.** The permission check returns 403 (forbidden) vs 404 (not found), but `getPageIfCanShare` in permission mutations deliberately conflates these to prevent information leakage.
 
-2. **Timing differences are sub-millisecond.** L1 cache hits vs database queries differ by ~1-5ms, which is within normal network jitter.
+2. **Timing differences are a few milliseconds.** L1 cache hits vs database queries differ by approximately 1-5 ms, which is within normal network jitter.
 
 ### 3.2. Residual Risk
 

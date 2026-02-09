@@ -34,7 +34,7 @@ export interface DriveWithAccess {
   updatedAt: Date;
   isOwned: boolean;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
-  lastAccessedAt: Date | string | null;
+  lastAccessedAt: Date | null;
 }
 
 export interface ListDrivesOptions {
@@ -313,7 +313,7 @@ export async function getDriveWithAccess(
     isOwned: access.isOwner,
     isMember: access.isMember,
     role: access.role || 'MEMBER',
-    lastAccessedAt: null,
+    lastAccessedAt: null, // Not fetched here — only listAccessibleDrives queries driveMembers for this
   };
 }
 
@@ -381,13 +381,43 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 }
 
 /**
- * Update a user's last accessed timestamp for a drive
+ * Update a user's last accessed timestamp for a drive.
+ * Tries updating an existing driveMembers row first. If no row was affected
+ * (e.g., drive owner without a driveMembers entry), inserts one with OWNER role
+ * only when the user actually owns the drive.
  */
 export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
-  await db.update(driveMembers)
-    .set({ lastAccessedAt: new Date() })
+  const now = new Date();
+
+  // Try updating existing membership row
+  const updated = await db.update(driveMembers)
+    .set({ lastAccessedAt: now })
     .where(and(
       eq(driveMembers.userId, userId),
       eq(driveMembers.driveId, driveId)
-    ));
+    ))
+    .returning({ id: driveMembers.id });
+
+  if (updated.length > 0) return;
+
+  // No membership row — check if user is the drive owner before inserting
+  const [drive] = await db.select({ ownerId: drives.ownerId })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  if (drive?.ownerId === userId) {
+    await db.insert(driveMembers)
+      .values({
+        driveId,
+        userId,
+        role: 'OWNER',
+        lastAccessedAt: now,
+        invitedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [driveMembers.driveId, driveMembers.userId],
+        set: { lastAccessedAt: now },
+      });
+  }
 }

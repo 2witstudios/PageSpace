@@ -107,7 +107,9 @@ export default function DriveSwitcher() {
     router.push(`/dashboard/${drive.id}`);
     setIsOpen(false);
     setSearchQuery("");
-    // Fire-and-forget: track drive access for recent ordering
+    // Optimistically update local state so "Recent" ordering reflects immediately
+    useDriveStore.getState().updateDrive(drive.id, { lastAccessedAt: new Date().toISOString() });
+    // Fire-and-forget: persist drive access for recent ordering
     fetchWithAuth(`/api/drives/${drive.id}/access`, { method: 'POST' }).catch(() => {});
   };
 
