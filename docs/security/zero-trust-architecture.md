@@ -1453,6 +1453,28 @@ JWT_SECRET=<rotate-regularly>
 
 ---
 
+## 11. Desktop MCP Exception
+
+The zero-trust principles described in this document apply to the **cloud and web deployment** of PageSpace. The **desktop application's MCP integration** is an intentional exception that uses a trust-based model instead.
+
+### Why the exception exists
+
+Desktop MCP servers run as local child processes on the user's machine, spawned by the Electron main process. This creates a fundamentally different threat model:
+
+- **No network boundary**: MCP servers communicate with the desktop app over stdio pipes on the same machine, not over a network. There is no untrusted transport to secure.
+- **No privilege escalation path**: MCP servers run with the same OS-level permissions as the desktop app. Applying token-based auth between processes on the same machine with the same privileges would add complexity without security benefit.
+- **User-controlled execution**: Users explicitly configure which MCP servers to run. This is analogous to installing and running any other local application.
+
+### What this means in practice
+
+- MCP servers do **not** use opaque tokens, session validation, or scope-based authorization.
+- MCP servers do **not** go through the centralized session store or RBAC checks.
+- MCP servers **do** have defensive measures (buffer limits, timeouts, crash tracking, config validation) to protect the desktop app from misbehaving processes.
+
+For full details on the desktop MCP security model, capabilities granted, and risk assessment, see [Desktop MCP Trust Model](./desktop-mcp-trust-model.md).
+
+---
+
 ## Appendix: File Structure
 
 ```text

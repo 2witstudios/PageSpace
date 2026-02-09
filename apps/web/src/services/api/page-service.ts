@@ -397,7 +397,7 @@ export const pageService = {
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
     // Check authorization
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
     if (!canEdit) {
       return { success: false, error: 'You need edit permission to modify this page', status: 403 };
     }
@@ -502,7 +502,7 @@ export const pageService = {
    */
   async trashPage(pageId: string, userId: string, options: { trashChildren: boolean; metadata?: Record<string, unknown> }): Promise<TrashPageResult> {
     // Check authorization
-    const canDelete = await canUserDeletePage(userId, pageId);
+    const canDelete = await canUserDeletePage(userId, pageId, { bypassCache: true });
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
     }

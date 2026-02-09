@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { db, users, sessions, socketTokens, verificationTokens, emailUnsubscribeTokens, pageVersions, driveBackups, aiUsageLogs } from '@pagespace/db';
-import { driveInvitations, pagePermissions } from '@pagespace/db';
+import { pagePermissions } from '@pagespace/db';
 import { pulseSummaries } from '@pagespace/db';
 import { drives, pages } from '@pagespace/db';
 import { eq, and, lt } from 'drizzle-orm';
@@ -13,7 +13,6 @@ import {
   cleanupExpiredPulseSummaries,
   cleanupExpiredPageVersions,
   cleanupExpiredDriveBackups,
-  cleanupExpiredDriveInvitations,
   cleanupExpiredPagePermissions,
   cleanupExpiredAiUsageLogs,
   runRetentionCleanup,
@@ -255,23 +254,6 @@ describe('cleanupExpiredDriveBackups', () => {
   });
 });
 
-describe('cleanupExpiredDriveInvitations', () => {
-  it('deletes drive invitations past expiresAt with PENDING status', async () => {
-    await db.insert(driveInvitations).values({
-      id: createId(),
-      driveId: testDriveId,
-      email: 'expired-invite@test.com',
-      invitedBy: testUserId,
-      status: 'PENDING',
-      expiresAt: pastDate,
-    });
-
-    const result = await cleanupExpiredDriveInvitations(db);
-
-    expect(result.deleted).toBeGreaterThanOrEqual(1);
-  });
-});
-
 describe('cleanupExpiredPagePermissions', () => {
   let testPageId: string;
 
@@ -367,7 +349,7 @@ describe('runRetentionCleanup', () => {
     const results = await runRetentionCleanup(db);
 
     expect(Array.isArray(results)).toBe(true);
-    expect(results.length).toBe(10);
+    expect(results.length).toBe(9);
 
     for (const result of results) {
       expect(result).toHaveProperty('table');
@@ -384,7 +366,6 @@ describe('runRetentionCleanup', () => {
     expect(tableNames).toEqual([
       'ai_usage_logs',
       'drive_backups',
-      'drive_invitations',
       'email_unsubscribe_tokens',
       'page_permissions',
       'page_versions',

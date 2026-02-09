@@ -34,6 +34,7 @@ export interface DriveWithAccess {
   updatedAt: Date;
   isOwned: boolean;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  lastAccessedAt: Date | string | null;
 }
 
 export interface ListDrivesOptions {
@@ -79,9 +80,9 @@ export async function listAccessibleDrives(
       : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
   });
 
-  // 2. Get drives where user is a member
+  // 2. Get drives where user is a member (including last access time)
   const memberDrives = await db
-    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role })
+    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(eq(driveMembers.userId, userId));
 
@@ -95,14 +96,16 @@ export async function listAccessibleDrives(
         .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
         .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
 
-  // 4. Build role map (membership role takes precedence)
+  // 4. Build role map and lastAccessedAt map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
+  const driveLastAccessed = new Map<string, Date | null>();
   const allSharedDriveIds = new Set<string>();
 
   for (const d of memberDrives) {
     if (d.driveId) {
       allSharedDriveIds.add(d.driveId);
       driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
+      driveLastAccessed.set(d.driveId, d.lastAccessedAt);
     }
   }
 
@@ -136,11 +139,13 @@ export async function listAccessibleDrives(
       ...drive,
       isOwned: true,
       role: 'OWNER' as const,
+      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
     ...sharedDrives.map((drive) => ({
       ...drive,
       isOwned: false,
       role: driveRoles.get(drive.id) || ('MEMBER' as const),
+      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
   ];
 
@@ -177,6 +182,7 @@ export async function createDrive(
     ...newDrive,
     isOwned: true,
     role: 'OWNER' as const,
+    lastAccessedAt: null,
   };
 }
 
@@ -307,6 +313,7 @@ export async function getDriveWithAccess(
     isOwned: access.isOwner,
     isMember: access.isMember,
     role: access.role || 'MEMBER',
+    lastAccessedAt: null,
   };
 }
 
@@ -371,4 +378,16 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
     .returning();
 
   return updated || null;
+}
+
+/**
+ * Update a user's last accessed timestamp for a drive
+ */
+export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
+  await db.update(driveMembers)
+    .set({ lastAccessedAt: new Date() })
+    .where(and(
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.driveId, driveId)
+    ));
 }
