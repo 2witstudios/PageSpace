@@ -511,6 +511,39 @@ describe('useAuthStore', () => {
       expect(global.fetch).toHaveBeenCalled();
     });
 
+    it('given overlapping force loads, should keep latest auth promise active', async () => {
+      const user = createMockUser();
+      let resolveFirstFetch!: (value: Response) => void;
+      const firstFetch = new Promise<Response>((resolve) => {
+        resolveFirstFetch = resolve;
+      });
+
+      vi.mocked(global.fetch)
+        .mockImplementationOnce(() => firstFetch)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(user),
+        } as Response);
+
+      const firstLoad = useAuthStore.getState().loadSession(true);
+      const secondLoad = useAuthStore.getState().loadSession(true);
+
+      // Latest request should own dedupe slot.
+      expect(useAuthStore.getState()._authPromise).toBe(secondLoad);
+
+      resolveFirstFetch({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+      await firstLoad;
+
+      // Completing first request must not clear second in-flight promise.
+      expect(useAuthStore.getState()._authPromise).toBe(secondLoad);
+
+      await secondLoad;
+      expect(useAuthStore.getState()._authPromise).toBeNull();
+    });
+
     it('given network error, should record failed attempt', async () => {
       vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});

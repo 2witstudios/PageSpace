@@ -296,11 +296,8 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
 
-        // Set loading state to prevent premature redirects (critical for OAuth flow)
-        set({ isLoading: true });
-
-        // Create new auth promise
-        const authPromise = (async () => {
+        // Create and publish promise before async work starts to avoid races.
+        const authPromise = Promise.resolve().then(async () => {
           try {
             const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
             const headers: Record<string, string> = {};
@@ -536,13 +533,19 @@ export const useAuthStore = create<AuthState>()(
               lastFailedAuthCheck: Date.now(),
             });
           } finally {
-            // Clear loading state and promise when done
-            set({ isLoading: false, _authPromise: null });
-          }
-        })();
+            // Clear loading state. Only clear _authPromise if this request is still current.
+            set((currentState) => {
+              if (currentState._authPromise !== authPromise) {
+                return { isLoading: false };
+              }
 
-        // Store promise for deduplication
-        set({ _authPromise: authPromise });
+              return { isLoading: false, _authPromise: null };
+            });
+          }
+        });
+
+        // Set loading and store promise for deduplication.
+        set({ isLoading: true, _authPromise: authPromise });
         return authPromise;
       },
     }),
