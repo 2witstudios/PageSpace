@@ -1,1 +1,0 @@
-ALTER TYPE "PageType" ADD VALUE 'CODE';

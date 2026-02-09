@@ -1,6 +1,6 @@
 {
-  "id": "db04c282-aea1-4b5f-ad06-75d902682320",
-  "prevId": "611c520c-ccaa-4427-b781-faa10c7c7115",
+  "id": "000d5cfa-090d-4bb4-9ce1-4e7b71ca1836",
+  "prevId": "b532409efcc04d38ac2ab71a493d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2644,194 +2644,6 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.drive_invitations": {
-      "name": "drive_invitations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "email": {
-          "name": "email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "invitedBy": {
-          "name": "invitedBy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "InvitationStatus",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "message": {
-          "name": "message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expiresAt": {
-          "name": "expiresAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "respondedAt": {
-          "name": "respondedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "drive_invitations_drive_id_idx": {
-          "name": "drive_invitations_drive_id_idx",
-          "columns": [
-            {
-              "expression": "driveId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_invitations_email_idx": {
-          "name": "drive_invitations_email_idx",
-          "columns": [
-            {
-              "expression": "email",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_invitations_status_idx": {
-          "name": "drive_invitations_status_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "drive_invitations_token_idx": {
-          "name": "drive_invitations_token_idx",
-          "columns": [
-            {
-              "expression": "token",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "drive_invitations_driveId_drives_id_fk": {
-          "name": "drive_invitations_driveId_drives_id_fk",
-          "tableFrom": "drive_invitations",
-          "tableTo": "drives",
-          "columnsFrom": [
-            "driveId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_invitations_userId_users_id_fk": {
-          "name": "drive_invitations_userId_users_id_fk",
-          "tableFrom": "drive_invitations",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "drive_invitations_invitedBy_users_id_fk": {
-          "name": "drive_invitations_invitedBy_users_id_fk",
-          "tableFrom": "drive_invitations",
-          "tableTo": "users",
-          "columnsFrom": [
-            "invitedBy"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "drive_invitations_token_unique": {
-          "name": "drive_invitations_token_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
-        }
-      }
-    },
     "public.drive_members": {
       "name": "drive_members",
       "schema": "",
@@ -3757,6 +3569,70 @@
         }
       },
       "uniqueConstraints": {}
+    },
+    "public.ai_provider_consents": {
+      "name": "ai_provider_consents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consentedAt": {
+          "name": "consentedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ai_provider_consents_userId_users_id_fk": {
+          "name": "ai_provider_consents_userId_users_id_fk",
+          "tableFrom": "ai_provider_consents",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "user_provider_consent_unique": {
+          "name": "user_provider_consent_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "userId",
+            "provider"
+          ]
+        }
+      }
     },
     "public.user_ai_settings": {
       "name": "user_ai_settings",
@@ -5442,6 +5318,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "context_messages": {
           "name": "context_messages",
           "type": "jsonb",
@@ -5612,6 +5494,21 @@
           "columns": [
             {
               "expression": "context_size",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_ai_usage_expires_at": {
+          "name": "idx_ai_usage_expires_at",
+          "columns": [
+            {
+              "expression": "expires_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -11755,16 +11652,6 @@
       "schema": "public",
       "values": [
         "USER"
-      ]
-    },
-    "public.InvitationStatus": {
-      "name": "InvitationStatus",
-      "schema": "public",
-      "values": [
-        "PENDING",
-        "ACCEPTED",
-        "REJECTED",
-        "EXPIRED"
       ]
     },
     "public.MemberRole": {
