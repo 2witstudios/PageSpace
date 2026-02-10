@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 interface ToolbarProps {
   editor: Editor | null;
+  contentMode?: 'html' | 'markdown';
 }
 
 const FONT_FAMILY_OPTIONS = [
@@ -86,7 +87,7 @@ const isFontSizeValue = (value: string): value is FontSizeValue => {
   return FONT_SIZE_OPTIONS.some((option) => option.value === value);
 };
 
-const Toolbar = ({ editor }: ToolbarProps) => {
+const Toolbar = ({ editor, contentMode = 'html' }: ToolbarProps) => {
   const [, setTick] = React.useState(0);
 
   React.useEffect(() => {
@@ -113,6 +114,7 @@ const Toolbar = ({ editor }: ToolbarProps) => {
 
   const selectedFontFamily = getSelectedFontFamily(editor);
   const selectedFontSize = getSelectedFontSize(editor);
+  const showFontControls = contentMode !== 'markdown';
 
   const handleFontFamilyChange = (value: string) => {
     if (!isFontFamilyValue(value)) {
@@ -128,6 +130,7 @@ const Toolbar = ({ editor }: ToolbarProps) => {
       .chain()
       .focus()
       .setMark('textStyle', { fontFamily: option.fontFamily })
+      .removeEmptyTextStyle()
       .run();
   };
 
@@ -145,43 +148,48 @@ const Toolbar = ({ editor }: ToolbarProps) => {
       .chain()
       .focus()
       .setMark('textStyle', { fontSize: option.fontSize })
+      .removeEmptyTextStyle()
       .run();
   };
 
   return (
     <div className="w-full overflow-x-auto scrollbar-thin">
       <div className="flex items-center gap-1 p-2 min-w-max">
-        <Select value={selectedFontFamily} onValueChange={handleFontFamilyChange}>
-          <SelectTrigger className="h-8 w-[130px] text-xs" aria-label="Font family">
-            <SelectValue placeholder="Font" />
-          </SelectTrigger>
-          <SelectContent>
-            {FONT_FAMILY_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                <span style={option.fontFamily ? { fontFamily: option.fontFamily } : undefined}>
-                  {option.label}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {showFontControls && (
+          <>
+            <Select value={selectedFontFamily} onValueChange={handleFontFamilyChange}>
+              <SelectTrigger className="h-8 w-[130px] text-xs" aria-label="Font family">
+                <SelectValue placeholder="Font" />
+              </SelectTrigger>
+              <SelectContent>
+                {FONT_FAMILY_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    <span style={option.fontFamily ? { fontFamily: option.fontFamily } : undefined}>
+                      {option.label}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-        <Select value={selectedFontSize} onValueChange={handleFontSizeChange}>
-          <SelectTrigger className="h-8 w-[96px] text-xs" aria-label="Font size">
-            <SelectValue placeholder="Size" />
-          </SelectTrigger>
-          <SelectContent>
-            {FONT_SIZE_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                <span style={option.fontSize ? { fontSize: option.fontSize } : undefined}>
-                  {option.label}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+            <Select value={selectedFontSize} onValueChange={handleFontSizeChange}>
+              <SelectTrigger className="h-8 w-[96px] text-xs" aria-label="Font size">
+                <SelectValue placeholder="Size" />
+              </SelectTrigger>
+              <SelectContent>
+                {FONT_SIZE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    <span style={option.fontSize ? { fontSize: option.fontSize } : undefined}>
+                      {option.label}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-        <div className="w-[1px] h-6 bg-border mx-1" />
+            <div className="w-[1px] h-6 bg-border mx-1" />
+          </>
+        )}
         <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
         <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
         <button onMouseDown={(e) => e.preventDefault()} onClick={() => editor.chain().focus().toggleStrike().run()} className={`p-2 rounded-md transition-colors ${editor.isActive('strike') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Strikethrough size={16} /></button>
