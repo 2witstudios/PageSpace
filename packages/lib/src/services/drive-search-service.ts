@@ -95,7 +95,7 @@ const MAX_REGEX_PATTERN_LENGTH = 500;
 const MAX_REGEX_RESULTS = 100;
 const MAX_REGEX_LINE_PREVIEWS = 5;
 const MAX_REGEX_LINE_CONTENT_LENGTH = 200;
-const REGEX_QUERY_TIMEOUT_MS = 3000;
+const REGEX_QUERY_TIMEOUT_MS = '3000';
 const POSTGRES_STATEMENT_TIMEOUT_CODE = '57014';
 const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
 
@@ -397,7 +397,7 @@ export async function regexSearchPages(
   try {
     matchingPages = await db.transaction(async (tx) => {
       await tx.execute(
-        sql`SELECT set_config('statement_timeout', ${String(REGEX_QUERY_TIMEOUT_MS)}, true)`
+        sql`SELECT set_config('statement_timeout', ${REGEX_QUERY_TIMEOUT_MS}, true)`
       );
       return tx
         .select({
