@@ -332,6 +332,16 @@ describe('adjustFormulaReferences', () => {
   it('clamps to row/column zero instead of going negative', () => {
     expect(adjustFormulaReferences('=A1', -5, -5)).toBe('=A1');
   });
+
+  it('handles long uppercase runs without regex backtracking', () => {
+    const formula = `=${'A'.repeat(80_000)}!`;
+    const startedAt = Date.now();
+    const adjusted = adjustFormulaReferences(formula, 1, 1);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(adjusted).toBe(formula);
+    expect(elapsedMs).toBeLessThan(1000);
+  });
 });
 
 describe('sheet sanitisation', () => {

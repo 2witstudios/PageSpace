@@ -81,6 +81,14 @@ export interface RegexSearchResponse {
   nextSteps: string[];
 }
 
+const MAX_REGEX_PATTERN_LENGTH = 500;
+const MAX_REGEX_RESULTS = 100;
+const MAX_REGEX_LINE_PREVIEWS = 5;
+const MAX_REGEX_LINE_CONTENT_LENGTH = 200;
+const REGEX_QUERY_TIMEOUT_MS = 3000;
+const POSTGRES_STATEMENT_TIMEOUT_CODE = '57014';
+const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
+
 // ============================================================================
 // Service Functions
 // ============================================================================
@@ -241,6 +249,80 @@ export async function globSearchPages(
   };
 }
 
+function isRegexQueryTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code === POSTGRES_STATEMENT_TIMEOUT_CODE) {
+    return true;
+  }
+
+  return typeof candidate.message === 'string'
+    && candidate.message.toLowerCase().includes('statement timeout');
+}
+
+function isLiteralRegexPattern(pattern: string): boolean {
+  return !REGEX_META_CHARS.test(pattern);
+}
+
+function buildRegexTimeoutResponse(
+  driveSlug: string | null,
+  pattern: string,
+  searchIn: 'content' | 'title' | 'both'
+): RegexSearchResponse {
+  return {
+    driveSlug,
+    pattern,
+    searchIn,
+    results: [],
+    totalResults: 0,
+    summary: 'Regex search timed out. Try a simpler pattern.',
+    stats: {
+      pagesScanned: 0,
+      pagesWithAccess: 0,
+      documentTypes: [],
+    },
+    nextSteps: [
+      'Use a less complex regex pattern',
+      `Keep patterns short (under ${MAX_REGEX_PATTERN_LENGTH} characters)`,
+      'Narrow your search scope with searchIn=title',
+    ],
+  };
+}
+
+function extractLiteralMatchingLines(
+  content: string,
+  literalPattern: string
+): { matchingLines: Array<{ lineNumber: number; content: string }>; totalMatches: number } {
+  if (literalPattern.length === 0) {
+    return { matchingLines: [], totalMatches: 0 };
+  }
+
+  const needle = literalPattern.toLowerCase();
+  const matchingLines: Array<{ lineNumber: number; content: string }> = [];
+  let totalMatches = 0;
+
+  const lines = content.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line.toLowerCase().includes(needle)) {
+      continue;
+    }
+
+    totalMatches += 1;
+    if (matchingLines.length < MAX_REGEX_LINE_PREVIEWS) {
+      matchingLines.push({
+        lineNumber: index + 1,
+        content: line.substring(0, MAX_REGEX_LINE_CONTENT_LENGTH),
+      });
+    }
+  }
+
+  return { matchingLines, totalMatches };
+}
+
 /**
  * Perform regex search on pages in a drive
  */
@@ -252,19 +334,19 @@ export async function regexSearchPages(
   options: RegexSearchOptions = {}
 ): Promise<RegexSearchResponse> {
   const { searchIn = 'content', maxResults = 50 } = options;
-  const effectiveMaxResults = Math.min(maxResults, 100);
+  const effectiveMaxResults = Math.min(maxResults, MAX_REGEX_RESULTS);
 
   // Validate and limit pattern length to prevent ReDoS
-  if (pattern.length > 500) {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
     return {
       driveSlug,
       pattern,
       searchIn,
       results: [],
       totalResults: 0,
-      summary: 'Pattern too long (max 500 characters)',
+      summary: `Pattern too long (max ${MAX_REGEX_PATTERN_LENGTH} characters)`,
       stats: { pagesScanned: 0, pagesWithAccess: 0, documentTypes: [] },
-      nextSteps: ['Shorten your regex pattern to under 500 characters'],
+      nextSteps: [`Shorten your regex pattern to under ${MAX_REGEX_PATTERN_LENGTH} characters`],
     };
   }
 
@@ -293,27 +375,38 @@ export async function regexSearchPages(
     );
   }
 
-  // Build and execute query
-  const matchingPages = await db
-    .select({
-      id: pages.id,
-      title: pages.title,
-      type: pages.type,
-      parentId: pages.parentId,
-      content: pages.content,
-    })
-    .from(pages)
-    .where(whereConditions)
-    .limit(effectiveMaxResults);
+  let matchingPages: Array<{
+    id: string;
+    title: string;
+    type: string;
+    parentId: string | null;
+    content: string;
+  }>;
 
-  // Use original pattern for line-level matching — consistent with PG regex semantics.
-  // Pattern is length-checked (≤500 chars) and applied per-line (not concatenated).
-  let lineRegex: RegExp | null = null;
   try {
-    lineRegex = new RegExp(pattern, 'gi');
-  } catch {
-    // PG regex syntax may differ from JS — skip line extraction
+    matchingPages = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL statement_timeout = ${REGEX_QUERY_TIMEOUT_MS}`);
+      return tx
+        .select({
+          id: pages.id,
+          title: pages.title,
+          type: pages.type,
+          parentId: pages.parentId,
+          content: pages.content,
+        })
+        .from(pages)
+        .where(whereConditions)
+        .limit(effectiveMaxResults);
+    });
+  } catch (error) {
+    if (isRegexQueryTimeoutError(error)) {
+      return buildRegexTimeoutResponse(driveSlug, pattern, searchIn);
+    }
+    throw error;
   }
+
+  // Only perform line previews for literal patterns to avoid user-controlled regex execution.
+  const canExtractLiteralLineMatches = searchIn !== 'title' && isLiteralRegexPattern(pattern);
 
   // Filter by permissions and build results
   const results: RegexSearchResult[] = [];
@@ -350,28 +443,17 @@ export async function regexSearchPages(
     const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
 
     // Extract matching lines if searching content
-    const matchingLines: Array<{ lineNumber: number; content: string }> = [];
-    if (searchIn !== 'title' && lineRegex) {
-      const lines = page.content.split('\n');
-      lines.forEach((line, index) => {
-        // Reset lastIndex for global regex on each line
-        lineRegex!.lastIndex = 0;
-        if (lineRegex!.test(line)) {
-          matchingLines.push({
-            lineNumber: index + 1,
-            content: line.substring(0, 200), // Truncate long lines
-          });
-        }
-      });
-    }
+    const { matchingLines, totalMatches } = canExtractLiteralLineMatches
+      ? extractLiteralMatchingLines(page.content, pattern)
+      : { matchingLines: [], totalMatches: 0 };
 
     results.push({
       pageId: page.id,
       title: page.title,
       type: page.type,
       semanticPath,
-      matchingLines: matchingLines.slice(0, 5), // Limit to first 5 matches
-      totalMatches: matchingLines.length,
+      matchingLines,
+      totalMatches,
     });
   }
 
