@@ -167,13 +167,31 @@ async function uploadAvatarToProcessor(userId: string, file: File): Promise<stri
   formData.append('file', file);
   formData.append('userId', userId);
 
-  const processorResponse = await fetch(`${PROCESSOR_URL}/api/avatar/upload`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    body: formData,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let processorResponse: Response;
+
+  try {
+    processorResponse = await fetch(`${PROCESSOR_URL}/api/avatar/upload`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      loggers.auth.warn('Processor avatar upload timed out', {
+        userId,
+        timeoutMs: FETCH_TIMEOUT_MS,
+      });
+      return null;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!processorResponse.ok) {
     const details = await processorResponse.text().catch(() => 'unknown processor error');
@@ -197,7 +215,20 @@ async function uploadAvatarToProcessor(userId: string, file: File): Promise<stri
     return null;
   }
 
-  const avatarUrl = `/api/avatar/${userId}/${payload.filename}?t=${Date.now()}`;
+  const safeFilename = payload.filename.replace(/[^a-zA-Z0-9._-]/g, '');
+  if (
+    safeFilename !== payload.filename ||
+    safeFilename.length === 0 ||
+    safeFilename.includes('..')
+  ) {
+    loggers.auth.warn('Processor returned suspicious avatar filename', {
+      userId,
+      filename: payload.filename,
+    });
+    return null;
+  }
+
+  const avatarUrl = `/api/avatar/${userId}/${safeFilename}?t=${Date.now()}`;
   loggers.auth.debug('Google avatar uploaded to local storage', {
     userId,
     avatarUrl,
