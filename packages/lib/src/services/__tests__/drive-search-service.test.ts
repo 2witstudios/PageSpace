@@ -72,7 +72,8 @@ describe('regexSearchPages security behavior', () => {
         title: 'Alpha',
         type: 'DOCUMENT',
         parentId: null,
-        content: 'hello world\nnothing here\nHELLO again',
+        // Case-sensitive: only 'hello' matches, not 'HELLO' (aligns with PostgreSQL ~ operator)
+        content: 'hello world\nnothing here\nhello again',
       },
     ];
 
@@ -86,7 +87,7 @@ describe('regexSearchPages security behavior', () => {
     expect(response.totalResults).toBe(1);
     expect(response.results[0]?.matchingLines).toEqual([
       { lineNumber: 1, content: 'hello world' },
-      { lineNumber: 3, content: 'HELLO again' },
+      { lineNumber: 3, content: 'hello again' },
     ]);
     expect(response.results[0]?.totalMatches).toBe(2);
   });

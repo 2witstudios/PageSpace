@@ -81,6 +81,16 @@ export interface RegexSearchResponse {
   nextSteps: string[];
 }
 
+/**
+ * Security constants for regex search to prevent ReDoS attacks.
+ *
+ * MAX_REGEX_PATTERN_LENGTH: Limits user input length to bound worst-case matching time.
+ * REGEX_QUERY_TIMEOUT_MS: PostgreSQL statement timeout to abort runaway regex queries.
+ *   Set to 3 seconds as a balance between allowing complex legitimate searches and
+ *   preventing denial-of-service from pathological patterns.
+ * REGEX_META_CHARS: Identifies patterns containing regex metacharacters; only literal
+ *   patterns are safe for JavaScript-side line extraction.
+ */
 const MAX_REGEX_PATTERN_LENGTH = 500;
 const MAX_REGEX_RESULTS = 100;
 const MAX_REGEX_LINE_PREVIEWS = 5;
@@ -300,6 +310,7 @@ function extractLiteralMatchingLines(
     return { matchingLines: [], totalMatches: 0 };
   }
 
+  // Case-sensitive matching to align with PostgreSQL ~ operator
   const needle = literalPattern;
   const matchingLines: Array<{ lineNumber: number; content: string }> = [];
   let totalMatches = 0;
@@ -371,7 +382,7 @@ export async function regexSearchPages(
     whereConditions = and(
       eq(pages.driveId, driveId),
       eq(pages.isTrashed, false),
-      sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+      sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`
     );
   }
 
@@ -386,7 +397,7 @@ export async function regexSearchPages(
   try {
     matchingPages = await db.transaction(async (tx) => {
       await tx.execute(
-        sql`SELECT set_config('statement_timeout', ${REGEX_QUERY_TIMEOUT_MS}::text, true)`
+        sql`SELECT set_config('statement_timeout', ${String(REGEX_QUERY_TIMEOUT_MS)}, true)`
       );
       return tx
         .select({
@@ -402,6 +413,11 @@ export async function regexSearchPages(
     });
   } catch (error) {
     if (isRegexQueryTimeoutError(error)) {
+      console.warn('[drive-search] Regex query timed out', {
+        driveId,
+        patternLength: pattern.length,
+        searchIn,
+      });
       return buildRegexTimeoutResponse(driveSlug, pattern, searchIn);
     }
     throw error;
