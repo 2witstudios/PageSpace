@@ -24,6 +24,8 @@ interface RichEditorProps {
   contentMode?: 'html' | 'markdown';
 }
 
+const MAX_VIEW_MOUNT_ATTEMPTS = 120;
+
 const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
   if (!editor || editor.isDestroyed) {
     return null;
@@ -34,6 +36,13 @@ const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
   } catch {
     return null;
   }
+};
+
+const serializeEditorContent = (editor: Editor, isMarkdownMode: boolean): string => {
+  const markdownStorage = editor.storage.markdown as { getMarkdown?: () => string } | undefined;
+  return isMarkdownMode
+    ? (markdownStorage?.getMarkdown?.() ?? '')
+    : editor.getHTML();
 };
 
 const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPaginated = false, contentMode = 'html' }: RichEditorProps) => {
@@ -100,10 +109,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
-        const markdownStorage = editor.storage.markdown as { getMarkdown?: () => string } | undefined;
-        const serialized = isMarkdownMode
-          ? (markdownStorage?.getMarkdown?.() ?? '')
-          : editor.getHTML();
+        const serialized = serializeEditorContent(editor, isMarkdownMode);
         onChange(serialized);
       }
     },
@@ -118,7 +124,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
       scrollThreshold: 80,
       scrollMargin: 80,
     },
-  }, [isPaginated, contentMode]); // Recreate editor when pagination or content mode changes
+  }, [isPaginated, contentMode, readOnly]); // Recreate editor when key mode/toggle settings change
 
   useEffect(() => {
     if (!editor || editor.isDestroyed) {
@@ -135,11 +141,17 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     setIsEditorViewMounted(false);
 
     let frameId: number | null = null;
+    let attempts = 0;
 
     const waitForViewMount = () => {
       const mounted = Boolean(getEditorRootElement(editor));
       if (mounted) {
         setIsEditorViewMounted(true);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= MAX_VIEW_MOUNT_ATTEMPTS) {
         return;
       }
 
@@ -157,10 +169,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
 
   useEffect(() => {
     if (editor) {
-      const markdownStorage = editor.storage.markdown as { getMarkdown?: () => string } | undefined;
-      const currentSerialized = isMarkdownMode
-        ? (markdownStorage?.getMarkdown?.() ?? '')
-        : editor.getHTML();
+      const currentSerialized = serializeEditorContent(editor, isMarkdownMode);
       // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
       const isDefaultEmpty = isMarkdownMode
@@ -232,7 +241,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         });
       }
     }
-  }, [value, editor, contentMode, isMarkdownMode]);
+  }, [value, editor, isMarkdownMode]);
 
   useEffect(() => {
     onEditorChange(editor);
