@@ -13,6 +13,7 @@ import { TableKit } from '@tiptap/extension-table';
 import { PageMention } from '@/lib/editor/tiptap-mention-config';
 import { PaginationPlus } from '@/lib/editor/pagination';
 import { CodeBlockShiki } from '@/lib/editor/code-block';
+import { FontFormatting } from '@/lib/editor/font-formatting';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 
 interface RichEditorProps {
@@ -79,6 +80,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         placeholder: 'Start writing...',
       })]),
       TextStyleKit,
+      FontFormatting,
       TableKit,
       CharacterCount,
       PageMention,

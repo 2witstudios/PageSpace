@@ -304,7 +304,7 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
             transition={{ duration: 0.2 }}
             className="sticky top-0 z-10 mx-4 mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden"
           >
-            <Toolbar editor={editor} />
+            <Toolbar editor={editor} contentMode={documentState?.contentMode || 'html'} />
           </motion.div>
         )}
       </AnimatePresence>
