@@ -1,3 +1,5 @@
+'use client';
+
 import { useMemo } from 'react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
@@ -20,24 +22,45 @@ type MonacoWindow = Window & {
 
 let isMonacoEnvironmentConfigured = false;
 
+const WORKER_FILE_BY_LABEL: Record<string, string> = {
+  json: 'json.worker.js',
+  css: 'css.worker.js',
+  html: 'html.worker.js',
+  typescript: 'ts.worker.js',
+  javascript: 'ts.worker.js',
+};
+
+const trimTrailingSlash = (value: string): string =>
+  value.endsWith('/') ? value.slice(0, -1) : value;
+
 const getMonacoWorkerFileName = (label: string): string => {
-  if (label === 'json') return 'json.worker.js';
-  if (label === 'css') return 'css.worker.js';
-  if (label === 'html') return 'html.worker.js';
-  if (label === 'typescript' || label === 'javascript') return 'ts.worker.js';
-  return 'editor.worker.js';
+  return WORKER_FILE_BY_LABEL[label] ?? 'editor.worker.js';
 };
 
 const getAssetPrefix = (): string => {
   if (typeof window === 'undefined') return '';
 
   const nextData = (window as MonacoWindow).__NEXT_DATA__;
-  const rawAssetPrefix = nextData?.assetPrefix ?? '';
+  const rawAssetPrefix = (nextData?.assetPrefix ?? '').trim();
 
   if (!rawAssetPrefix || rawAssetPrefix === '/') return '';
-  return rawAssetPrefix.endsWith('/')
-    ? rawAssetPrefix.slice(0, -1)
-    : rawAssetPrefix;
+
+  if (rawAssetPrefix.startsWith('/')) {
+    return trimTrailingSlash(rawAssetPrefix);
+  }
+
+  try {
+    const assetPrefixUrl = new URL(rawAssetPrefix, window.location.origin);
+
+    // Keep Monaco workers same-origin so they always satisfy worker-src 'self'.
+    if (assetPrefixUrl.origin !== window.location.origin) {
+      return '';
+    }
+
+    return trimTrailingSlash(assetPrefixUrl.pathname || '');
+  } catch {
+    return '';
+  }
 };
 
 const configureMonacoEnvironment = (): void => {
@@ -58,8 +81,6 @@ configureMonacoEnvironment();
 const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', options: optionOverrides, className }: MonacoEditorProps) => {
   const monaco = useMonaco();
   const theme = useMonacoTheme(monaco);
-
-  configureMonacoEnvironment();
 
   const defaultOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(() => ({
     readOnly,
