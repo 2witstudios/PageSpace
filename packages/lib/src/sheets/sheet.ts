@@ -2582,6 +2582,29 @@ export function isValidCellAddress(address: string): boolean {
   return cellRegex.test(normalized);
 }
 
+function isUpperAsciiLetter(charCode: number): boolean {
+  return charCode >= 65 && charCode <= 90;
+}
+
+function isAsciiDigit(charCode: number): boolean {
+  return charCode >= 48 && charCode <= 57;
+}
+
+function splitEncodedCellAddress(address: string): {
+  columnLetters: string;
+  rowNumber: string;
+} {
+  let index = 0;
+  while (index < address.length && isUpperAsciiLetter(address.charCodeAt(index))) {
+    index += 1;
+  }
+
+  return {
+    columnLetters: address.slice(0, index),
+    rowNumber: address.slice(index),
+  };
+}
+
 export function adjustFormulaReferences(
   formula: string,
   rowOffset: number,
@@ -2591,9 +2614,53 @@ export function adjustFormulaReferences(
     return formula;
   }
 
-  const cellRefRegex = /(\$?)([A-Z]+)(\$?)(\d+)/g;
+  let result = '';
+  let index = 0;
 
-  return formula.replace(cellRefRegex, (match, colDollar, colLetters, rowDollar, rowNum) => {
+  while (index < formula.length) {
+    const start = index;
+    let colDollar = '';
+    let rowDollar = '';
+
+    if (formula.charCodeAt(index) === 36) {
+      colDollar = '$';
+      index += 1;
+    }
+
+    const colStart = index;
+    while (index < formula.length && isUpperAsciiLetter(formula.charCodeAt(index))) {
+      index += 1;
+    }
+    const colEnd = index;
+
+    if (colStart === colEnd) {
+      result += formula[start];
+      index = start + 1;
+      continue;
+    }
+
+    if (formula.charCodeAt(index) === 36) {
+      rowDollar = '$';
+      index += 1;
+    }
+
+    const rowStart = index;
+    while (index < formula.length && isAsciiDigit(formula.charCodeAt(index))) {
+      index += 1;
+    }
+    const rowEnd = index;
+
+    if (rowStart === rowEnd) {
+      const consumedEnd = rowDollar === '$' ? rowStart : colEnd;
+      result += formula.slice(start, consumedEnd);
+      index = consumedEnd;
+      continue;
+    }
+
+    const colLetters = formula.slice(colStart, colEnd);
+    const rowNum = formula.slice(rowStart, rowEnd);
+    const originalToken = formula.slice(start, rowEnd);
+
     try {
       const originalRef = `${colLetters}${rowNum}`;
       const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
@@ -2602,14 +2669,14 @@ export function adjustFormulaReferences(
       const newCol = colDollar === '$' ? origCol : Math.max(0, origCol + colOffset);
 
       const adjusted = encodeCellAddress(newRow, newCol);
-      const adjColLetters = adjusted.replace(/\d+/g, '');
-      const adjRowNum = adjusted.replace(/[A-Z]+/g, '');
-
-      return `${colDollar}${adjColLetters}${rowDollar}${adjRowNum}`;
+      const { columnLetters, rowNumber } = splitEncodedCellAddress(adjusted);
+      result += `${colDollar}${columnLetters}${rowDollar}${rowNumber}`;
     } catch {
-      return match;
+      result += originalToken;
     }
-  });
+  }
+
+  return result;
 }
 
 /**
