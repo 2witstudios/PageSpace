@@ -226,7 +226,7 @@ describe('channel-tools', () => {
       expect(result.messagePreview).toBe('Hello from assistant');
     });
 
-    it('sends message as page agent with agent title', async () => {
+    it('sends message as page agent with agent + user display name', async () => {
       mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
         title: 'General',
@@ -260,7 +260,7 @@ describe('channel-tools', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.senderName).toBe('Budget Analyst');
+      expect(result.senderName).toBe('Budget Analyst (Test User)');
       expect(result.senderType).toBe('agent');
     });
 

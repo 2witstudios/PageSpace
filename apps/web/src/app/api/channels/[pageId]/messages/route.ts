@@ -5,6 +5,7 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { triggerMentionedAgentResponses } from '@/lib/channels/agent-mention-responder';
 
 // Type for attachment metadata stored in the database
 interface AttachmentMeta {
@@ -87,6 +88,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
   };
+  const messageContent = typeof content === 'string' ? content : '';
 
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
@@ -105,7 +107,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const [createdMessage] = await db.insert(channelMessages).values({
     pageId: pageId,
     userId: userId,
-    content,
+    content: messageContent,
     fileId: fileId || null,
     attachmentMeta: attachmentMeta || null,
   }).returning();
@@ -180,10 +182,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       columns: { driveId: true, title: true },
       with: {
         drive: {
-          columns: { ownerId: true },
+          columns: { ownerId: true, name: true, slug: true },
         },
       },
     });
+
+    if (messageContent.trim().length > 0) {
+      void triggerMentionedAgentResponses({
+        userId,
+        channelId: pageId,
+        channelTitle: channel?.title || 'Channel',
+        channelType: 'CHANNEL',
+        sourceMessageId: createdMessage.id,
+        content: messageContent,
+        driveId: channel?.driveId || null,
+        driveName: channel?.drive?.name || null,
+        driveSlug: channel?.drive?.slug || null,
+      });
+    }
 
     if (channel?.driveId) {
       // Get all drive members
@@ -200,9 +216,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       }
 
       // Create message preview
-      const messagePreview = content.length > 100
-        ? content.substring(0, 100) + '...'
-        : content;
+      const messagePreview = messageContent.length > 100
+        ? messageContent.substring(0, 100) + '...'
+        : messageContent;
 
       // Filter to members with view permission and broadcast
       // Check permissions in parallel for efficiency
@@ -225,7 +241,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             driveId: channel.driveId,
             lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
             lastMessagePreview: messagePreview,
-            lastMessageSender: newMessage?.user?.name || undefined,
+            lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
           })
         );
 

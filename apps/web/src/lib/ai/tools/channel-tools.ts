@@ -18,26 +18,27 @@ const channelLogger = loggers.ai.child({ module: 'channel-tools' });
  * Resolve sender identity for AI-generated channel messages.
  *
  * Global assistant: uses the user's display name + 'global_assistant' type
- * Page agent: uses the agent page title + 'agent' type
+ * Page agent: uses "agent title (user display name)" + 'agent' type
  */
 const resolveSenderIdentity = async (
   context: ToolExecutionContext
 ): Promise<{ senderType: 'global_assistant' | 'agent'; senderName: string; agentPageId?: string }> => {
   const { chatSource } = context;
+  const actorInfo = await getActorInfo(context.userId);
+  const actorDisplayName = actorInfo.actorDisplayName ?? 'User';
 
   if (chatSource?.type === 'page' && chatSource.agentTitle) {
     return {
       senderType: 'agent',
-      senderName: chatSource.agentTitle,
+      senderName: `${chatSource.agentTitle} (${actorDisplayName})`,
       agentPageId: chatSource.agentPageId,
     };
   }
 
-  // Global assistant or unknown — look up the user's display name
-  const actorInfo = await getActorInfo(context.userId);
+  // Global assistant or unknown — use the user's display name
   return {
     senderType: 'global_assistant',
-    senderName: actorInfo.actorDisplayName ?? 'Assistant',
+    senderName: actorDisplayName,
   };
 };
 
