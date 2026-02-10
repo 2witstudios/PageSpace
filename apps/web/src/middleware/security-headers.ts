@@ -51,12 +51,11 @@ export const buildCSPPolicy = (nonce: string): string => {
       "'strict-dynamic'",
       "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
       'https://accounts.google.com', // Google One Tap authentication
-      'https://cdn.jsdelivr.net', // Monaco editor CDN
     ],
-    'style-src': ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net', 'https://accounts.google.com'],
+    'style-src': ["'self'", "'unsafe-inline'", 'https://accounts.google.com'],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
-    'font-src': ["'self'", 'data:', 'https://cdn.jsdelivr.net'],
+    'font-src': ["'self'", 'data:'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
     'frame-src': ['https://accounts.google.com', 'https://js.stripe.com'], // Google One Tap + Stripe Elements iframes
