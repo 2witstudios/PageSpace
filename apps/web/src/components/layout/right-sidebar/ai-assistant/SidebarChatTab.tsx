@@ -18,7 +18,7 @@ import {
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
@@ -28,8 +28,11 @@ import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { VoiceModeOverlay } from '@/components/ai/voice';
+import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
+import { InputCard } from '@/components/ui/floating-input';
+
+const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -226,6 +229,9 @@ const SidebarChatTab: React.FC = () => {
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
   const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
+  const displayIsStreaming = selectedAgent
+    ? (isStreaming || dashboardIsStreaming)
+    : (isStreaming || contextIsStreaming);
 
   // ============================================
   // Centralized Assistant Settings (from store)
@@ -244,13 +250,15 @@ const SidebarChatTab: React.FC = () => {
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const voiceOwner = useVoiceModeStore((s) => s.owner);
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -447,6 +455,12 @@ const SidebarChatTab: React.FC = () => {
     if (error) setShowError(true);
   }, [error]);
 
+  useEffect(() => {
+    if (!isVoiceModeActive) {
+      setShowVoiceSettings(false);
+    }
+  }, [isVoiceModeActive]);
+
   // Check if OpenAI is configured (required for voice mode)
   useEffect(() => {
     const checkOpenAI = async () => {
@@ -465,17 +479,21 @@ const SidebarChatTab: React.FC = () => {
 
   // Track last AI response for voice mode TTS
   useEffect(() => {
-    if (!isVoiceModeEnabled || isStreaming) return;
+    if (!isVoiceModeActive || displayIsStreaming) return;
 
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
     if (lastAssistantMsg) {
       const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
       const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text && text !== lastAIResponse) {
-        setLastAIResponse(text);
+      if (text.trim()) {
+        setLastAIResponse((current) =>
+          current?.id === lastAssistantMsg.id
+            ? current
+            : { id: lastAssistantMsg.id, text }
+        );
       }
     }
-  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+  }, [messages, displayIsStreaming, isVoiceModeActive]);
 
   // App state recovery - refresh messages when returning from background
   // This catches completed AI responses that finished while the app was backgrounded
@@ -625,12 +643,13 @@ const SidebarChatTab: React.FC = () => {
 
   // Voice mode toggle handler
   const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeEnabled) {
+    if (isVoiceModeActive) {
       disableVoiceMode();
+      setShowVoiceSettings(false);
     } else {
-      enableVoiceMode();
+      enableVoiceMode(VOICE_OWNER);
     }
-  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
+  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   const handleEdit = useCallback(async (messageId: string, newContent: string) => {
     if (!currentConversationId) return;
@@ -775,13 +794,6 @@ const SidebarChatTab: React.FC = () => {
   // The useChat hook with the same ID shares state via SWR, so all components see the same messages.
   const displayMessages = messages;
 
-  // Use streaming state from the appropriate source:
-  // - Agent mode: Check both local useChat and dashboard store (for seamless transfer)
-  // - Global mode: Check both local useChat and context (for seamless transfer)
-  const displayIsStreaming = selectedAgent
-    ? (isStreaming || dashboardIsStreaming)
-    : (isStreaming || contextIsStreaming);
-
   const lastAssistantMessageId = displayMessages
     .filter(m => m.role === 'assistant')
     .slice(-1)[0]?.id;
@@ -808,18 +820,6 @@ const SidebarChatTab: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Voice Mode Overlay */}
-      {isVoiceModeEnabled && (
-        <VoiceModeOverlay
-          onClose={disableVoiceMode}
-          onSend={handleVoiceSend}
-          aiResponse={lastAIResponse}
-          isAIStreaming={displayIsStreaming}
-          showSettings={showVoiceSettings}
-          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-        />
-      )}
-
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <div className="flex items-center justify-between p-2">
@@ -912,30 +912,44 @@ const SidebarChatTab: React.FC = () => {
           />
         </div>
 
-        <ChatInput
-          ref={chatInputRef}
-          value={input}
-          onChange={setInput}
-          onSend={handleSendMessage}
-          onStop={handleStop}
-          isStreaming={displayIsStreaming}
-          placeholder={locationContext
-            ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
-            : 'Ask about your workspace...'}
-          driveId={locationContext?.currentDrive?.id}
-          crossDrive={true}
-          hideModelSelector={true}
-          variant="sidebar"
-          onVoiceModeClick={handleVoiceModeToggle}
-          isVoiceModeActive={isVoiceModeEnabled}
-          isVoiceModeAvailable={isOpenAIConfigured}
-          attachments={attachments}
-          onAddFiles={addFiles}
-          onRemoveFile={removeFile}
-          hasVision={hasVisionCapability(
-            (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
-          )}
-        />
+        {isVoiceModeActive ? (
+          <InputCard>
+            <VoiceModeDock
+              owner={VOICE_OWNER}
+              onSend={handleVoiceSend}
+              aiResponse={lastAIResponse}
+              isAIStreaming={displayIsStreaming}
+              showSettings={showVoiceSettings}
+              onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+              onClose={() => setShowVoiceSettings(false)}
+            />
+          </InputCard>
+        ) : (
+          <ChatInput
+            ref={chatInputRef}
+            value={input}
+            onChange={setInput}
+            onSend={handleSendMessage}
+            onStop={handleStop}
+            isStreaming={displayIsStreaming}
+            placeholder={locationContext
+              ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
+              : 'Ask about your workspace...'}
+            driveId={locationContext?.currentDrive?.id}
+            crossDrive={true}
+            hideModelSelector={true}
+            variant="sidebar"
+            onVoiceModeClick={handleVoiceModeToggle}
+            isVoiceModeActive={isVoiceModeActive}
+            isVoiceModeAvailable={isOpenAIConfigured}
+            attachments={attachments}
+            onAddFiles={addFiles}
+            onRemoveFile={removeFile}
+            hasVision={hasVisionCapability(
+              (selectedAgent ? selectedAgent.aiModel : currentModel) || ''
+            )}
+          />
+        )}
       </div>
 
       <UndoAiChangesDialog

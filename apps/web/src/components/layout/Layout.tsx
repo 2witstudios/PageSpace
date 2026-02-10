@@ -32,6 +32,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { VoiceModeBorder } from "@/components/ai/voice";
 
 interface LayoutProps {
   children?: React.ReactNode;
@@ -288,6 +289,7 @@ function Layout({ children }: LayoutProps) {
             ) : (
               <CenterPanel />
             )}
+            <VoiceModeBorder />
           </main>
 
           {!shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
