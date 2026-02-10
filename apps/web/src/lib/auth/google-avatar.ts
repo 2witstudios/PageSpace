@@ -139,6 +139,11 @@ async function readResponseBodyWithLimit(response: Response, maxBytes: number): 
 
     totalBytes += value.byteLength;
     if (totalBytes > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore cancellation errors and surface the size-limit failure.
+      }
       throw new Error('Avatar file exceeds size limit');
     }
 
@@ -192,7 +197,12 @@ async function uploadAvatarToProcessor(userId: string, file: File): Promise<stri
     return null;
   }
 
-  return `/api/avatar/${userId}/${payload.filename}?t=${Date.now()}`;
+  const avatarUrl = `/api/avatar/${userId}/${payload.filename}?t=${Date.now()}`;
+  loggers.auth.debug('Google avatar uploaded to local storage', {
+    userId,
+    avatarUrl,
+  });
+  return avatarUrl;
 }
 
 export function isExternalHttpUrl(value: string | null | undefined): boolean {
@@ -285,9 +295,9 @@ export async function resolveGoogleAvatarImage({
     }
 
     const filename = `google-avatar.${MIME_EXTENSION_MAP[detectedMimeType]}`;
-    const fileBytes = new Uint8Array(buffer.byteLength);
-    fileBytes.set(buffer);
-    const file = new File([fileBytes], filename, { type: detectedMimeType });
+    const file = new File([buffer as unknown as Uint8Array<ArrayBuffer>], filename, {
+      type: detectedMimeType,
+    });
     return await uploadAvatarToProcessor(userId, file);
   } catch (error) {
     loggers.auth.warn('Google avatar ingestion failed', {

@@ -7,6 +7,7 @@ vi.mock('@pagespace/lib', () => ({
 vi.mock('@pagespace/lib/server', () => ({
   loggers: {
     auth: {
+      debug: vi.fn(),
       warn: vi.fn(),
     },
   },

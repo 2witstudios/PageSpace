@@ -1,8 +1,6 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { authRepository } from '@/lib/repositories/auth-repository';
-
-const isExternalHttpUrl = (value: string | null | undefined): boolean =>
-  typeof value === 'string' && /^https?:\/\//i.test(value);
+import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 
 export async function GET(req: Request) {
   const auth = await requireAuth(req);

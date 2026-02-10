@@ -128,7 +128,12 @@ export async function POST(req: Request) {
       });
 
       // Update existing user with Google ID if not set, or update other profile info
-      if (!user.googleId || !user.name || user.image !== resolvedImage) {
+      if (
+        !user.googleId ||
+        !user.name ||
+        user.image !== resolvedImage ||
+        (email_verified && !user.emailVerified)
+      ) {
         loggers.auth.info('Updating existing user via Google One Tap', { email });
         await db
           .update(users)

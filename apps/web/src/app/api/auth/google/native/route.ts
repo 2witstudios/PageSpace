@@ -105,7 +105,12 @@ export async function POST(req: Request) {
       });
 
       // Update existing user if needed
-      if (!user.googleId || !user.name || user.image !== resolvedImage) {
+      if (
+        !user.googleId ||
+        !user.name ||
+        user.image !== resolvedImage ||
+        (email_verified && !user.emailVerified)
+      ) {
         loggers.auth.info('Updating existing user via native Google OAuth', { email, platform });
         await db.update(users)
           .set({

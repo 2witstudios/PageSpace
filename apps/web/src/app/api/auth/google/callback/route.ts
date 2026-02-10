@@ -153,7 +153,12 @@ export async function GET(req: Request) {
         existingImage: user.image,
       });
 
-      if (!user.googleId || !user.name || user.image !== resolvedImage) {
+      if (
+        !user.googleId ||
+        !user.name ||
+        user.image !== resolvedImage ||
+        (email_verified && !user.emailVerified)
+      ) {
         loggers.auth.info('Updating existing user via Google OAuth', { email });
         await db.update(users)
           .set({
