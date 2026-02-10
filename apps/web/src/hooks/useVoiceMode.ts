@@ -5,6 +5,40 @@ import { useVoiceModeStore, type TTSVoice } from '@/stores/useVoiceModeStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { createId } from '@paralleldrive/cuid2';
 
+function getMicPermissionErrorMessage(err: unknown): string {
+  if (err instanceof DOMException) {
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      return 'Microphone access was blocked. Please allow microphone permissions in your browser settings and try again.';
+    }
+    if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      return 'No microphone was detected. Connect a microphone and try again.';
+    }
+    if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+      return 'Your microphone is busy in another app. Close other apps using the mic and try again.';
+    }
+  }
+
+  if (err instanceof TypeError) {
+    return 'This browser does not support microphone capture for voice mode.';
+  }
+
+  return 'Unable to start voice mode because microphone access failed. Please try again.';
+}
+
+function getTranscriptionErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return `Could not transcribe your speech: ${err.message}`;
+  }
+  return 'Could not transcribe your speech. Please try again.';
+}
+
+function getSynthesisErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return `Could not play AI voice response: ${err.message}`;
+  }
+  return 'Could not play AI voice response. Please try again.';
+}
+
 export interface UseVoiceModeOptions {
   /** Callback when transcript is available */
   onTranscript?: (text: string) => void;
@@ -154,7 +188,7 @@ export function useVoiceMode({
         const result = await response.json();
         return result.text as string;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Transcription failed';
+        const message = getTranscriptionErrorMessage(err);
         setError(message);
         callbacksRef.current.onError?.(message);
         return null;
@@ -307,7 +341,7 @@ export function useVoiceMode({
       // Setup VAD for barge-in mode
       setupVAD(stream);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Microphone access denied';
+      const message = getMicPermissionErrorMessage(err);
       setError(message);
       callbacksRef.current.onError?.(message);
       setVoiceState('idle');
@@ -388,7 +422,7 @@ export function useVoiceMode({
         startSpeakingStore(audioId);
         source.start();
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Speech synthesis failed';
+        const message = getSynthesisErrorMessage(err);
         setError(message);
         callbacksRef.current.onError?.(message);
         stopSpeakingStore();

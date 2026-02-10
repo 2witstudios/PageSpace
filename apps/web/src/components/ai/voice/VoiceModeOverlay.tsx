@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Mic, MicOff, Volume2, Loader2, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -40,6 +40,8 @@ export function VoiceModeOverlay({
   showSettings = false,
   onToggleSettings,
 }: VoiceModeOverlayProps) {
+  const hasStartedOnActivateRef = useRef(false);
+
   const {
     isEnabled,
     isListening,
@@ -58,9 +60,6 @@ export function VoiceModeOverlay({
     onSend: (text) => {
       onSend(text);
     },
-    onError: (err) => {
-      console.error('Voice mode error:', err);
-    },
   });
 
   // Handle AI response for TTS
@@ -69,6 +68,20 @@ export function VoiceModeOverlay({
       speak(aiResponse);
     }
   }, [aiResponse, isAIStreaming, isEnabled, isListening, isProcessing, speak]);
+
+  // Start listening immediately on activation so users get prompt + visual feedback
+  useEffect(() => {
+    if (!isEnabled || hasStartedOnActivateRef.current) return;
+    hasStartedOnActivateRef.current = true;
+    startListening();
+  }, [isEnabled, startListening]);
+
+  // Reset auto-start guard when voice mode is disabled
+  useEffect(() => {
+    if (!isEnabled) {
+      hasStartedOnActivateRef.current = false;
+    }
+  }, [isEnabled]);
 
   // Handle close
   const handleClose = useCallback(() => {

@@ -205,7 +205,6 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     const autoSend = localStorage.getItem(VOICE_AUTO_SEND_KEY);
 
     set({
-      isEnabled: false,
       interactionMode: interactionMode || 'tap-to-speak',
       ttsVoice: ttsVoice || 'nova',
       autoSend: autoSend !== 'false', // Default true
