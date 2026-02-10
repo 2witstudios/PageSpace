@@ -25,6 +25,8 @@ interface RichEditorProps {
 }
 
 const MAX_VIEW_MOUNT_ATTEMPTS = 120;
+type MarkdownStorage = { getMarkdown?: () => string };
+type EditorStorageWithMarkdown = { markdown?: MarkdownStorage };
 
 const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
   if (!editor || editor.isDestroyed) {
@@ -39,7 +41,7 @@ const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
 };
 
 const serializeEditorContent = (editor: Editor, isMarkdownMode: boolean): string => {
-  const markdownStorage = editor.storage.markdown as { getMarkdown?: () => string } | undefined;
+  const markdownStorage = (editor.storage as unknown as EditorStorageWithMarkdown).markdown;
   return isMarkdownMode
     ? (markdownStorage?.getMarkdown?.() ?? '')
     : editor.getHTML();
