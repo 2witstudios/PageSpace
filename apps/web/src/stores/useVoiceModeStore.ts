@@ -33,6 +33,7 @@ interface VoiceModeState {
   // Core state
   isEnabled: boolean;
   voiceState: VoiceState;
+  hasLoadedSettings: boolean;
   interactionMode: VoiceInteractionMode;
 
   // TTS settings
@@ -84,6 +85,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   // Initial state
   isEnabled: false,
   voiceState: 'idle',
+  hasLoadedSettings: false,
   interactionMode: 'tap-to-speak',
   ttsVoice: 'nova',
   ttsSpeed: 1.0,
@@ -197,7 +199,10 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
 
   // Load settings from localStorage
   loadSettings: () => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') {
+      set({ hasLoadedSettings: true });
+      return;
+    }
 
     // Note: We intentionally don't restore isEnabled - user should explicitly enable voice mode each session
     const interactionMode = localStorage.getItem(VOICE_INTERACTION_MODE_KEY) as VoiceInteractionMode | null;
@@ -208,6 +213,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
       interactionMode: interactionMode || 'tap-to-speak',
       ttsVoice: ttsVoice || 'nova',
       autoSend: autoSend !== 'false', // Default true
+      hasLoadedSettings: true,
     });
   },
 }));

@@ -44,6 +44,7 @@ export function VoiceModeOverlay({
 
   const {
     isEnabled,
+    hasLoadedSettings,
     isListening,
     isProcessing,
     isSpeaking,
@@ -71,10 +72,10 @@ export function VoiceModeOverlay({
 
   // Start listening immediately on activation so users get prompt + visual feedback
   useEffect(() => {
-    if (!isEnabled || hasStartedOnActivateRef.current) return;
+    if (!isEnabled || !hasLoadedSettings || hasStartedOnActivateRef.current) return;
     hasStartedOnActivateRef.current = true;
-    startListening();
-  }, [isEnabled, startListening]);
+    void startListening();
+  }, [isEnabled, hasLoadedSettings, startListening]);
 
   // Reset auto-start guard when voice mode is disabled
   useEffect(() => {

@@ -55,6 +55,7 @@ export interface UseVoiceModeOptions {
 export interface UseVoiceModeReturn {
   // State
   isEnabled: boolean;
+  hasLoadedSettings: boolean;
   isListening: boolean;
   isProcessing: boolean;
   isSpeaking: boolean;
@@ -101,6 +102,7 @@ export function useVoiceMode({
   // Store state
   const isEnabled = useVoiceModeStore((s) => s.isEnabled);
   const voiceState = useVoiceModeStore((s) => s.voiceState);
+  const hasLoadedSettings = useVoiceModeStore((s) => s.hasLoadedSettings);
   const interactionMode = useVoiceModeStore((s) => s.interactionMode);
   const ttsVoice = useVoiceModeStore((s) => s.ttsVoice);
   const ttsSpeed = useVoiceModeStore((s) => s.ttsSpeed);
@@ -133,6 +135,7 @@ export function useVoiceMode({
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const isStartingListeningRef = useRef(false);
 
   // Callbacks ref to avoid stale closures
   const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError });
@@ -272,15 +275,19 @@ export function useVoiceMode({
 
   // Start listening
   const startListening = useCallback(async () => {
-    if (!isEnabled) return;
+    if (!isEnabled || !hasLoadedSettings) return;
+    if (isStartingListeningRef.current || isListening || isProcessing) return;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') return;
+
+    isStartingListeningRef.current = true;
 
     // If speaking, barge in first
-    if (voiceState === 'speaking') {
-      stopAudioPlayback();
-      bargeInStore();
-    }
-
     try {
+      if (voiceState === 'speaking') {
+        stopAudioPlayback();
+        bargeInStore();
+      }
+
       setError(null);
       audioChunksRef.current = [];
 
@@ -291,6 +298,11 @@ export function useVoiceMode({
           autoGainControl: true,
         },
       });
+
+      if (!useVoiceModeStore.getState().isEnabled) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       streamRef.current = stream;
 
@@ -345,9 +357,14 @@ export function useVoiceMode({
       setError(message);
       callbacksRef.current.onError?.(message);
       setVoiceState('idle');
+    } finally {
+      isStartingListeningRef.current = false;
     }
   }, [
     isEnabled,
+    hasLoadedSettings,
+    isListening,
+    isProcessing,
     voiceState,
     stopAudioPlayback,
     bargeInStore,
@@ -494,6 +511,7 @@ export function useVoiceMode({
   return {
     // State
     isEnabled,
+    hasLoadedSettings,
     isListening,
     isProcessing,
     isSpeaking,
