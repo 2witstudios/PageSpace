@@ -332,8 +332,6 @@ index, etc.).
 ### 2.7. CDN Dependencies Load External Scripts
 
 **Current state**: The application loads external scripts from:
-- `cdn.jsdelivr.net` (Monaco editor)
-- `unpkg.com` (PDF.js worker)
 - `accounts.google.com` (One Tap)
 - `js.stripe.com` (payment UI)
 
@@ -341,10 +339,16 @@ index, etc.).
 external loads will fail. Some compliance regimes require Subresource Integrity
 (SRI) hashes for all external scripts.
 
-**What's needed**: Self-host Monaco and PDF.js. Add SRI hashes for any remaining
-external scripts.
+**What's needed**: Keep Monaco and PDF.js self-hosted (completed). For remaining
+third-party scripts, note that Stripe.js and Google One Tap do not support SRI
+(their scripts are dynamically generated and versioned). The primary
+compensating control is strict CSP allowlisting, which is already in place:
+`script-src` allows only `accounts.google.com`, and `frame-src` allows
+`accounts.google.com` and `js.stripe.com`. SRI remains applicable only for
+self-hosted assets where we control versioning.
 
-**Effort**: Medium. Bundle Monaco and PDF.js locally.
+**Effort**: Low. CSP allowlisting already configured; no further hardening
+required for Stripe/Google integrations beyond current controls.
 
 ---
 
@@ -438,8 +442,7 @@ Every path where data leaves the PageSpace deployment boundary.
 | 4 | Payment info | Stripe | Subscription purchase | Payment details (handled by Stripe.js) | No alternative configured |
 | 5 | OAuth credentials | Google | Google sign-in | Email, profile info | Optional (email auth available) |
 | 6 | Calendar tokens | Google Calendar API | Calendar sync | Calendar events, attendees | Optional feature |
-| 7 | HTTP requests | cdn.jsdelivr.net, unpkg.com | Page load (Monaco, PDF.js) | IP address, User-Agent only | Can self-host |
-| 8 | HTTP requests | accounts.google.com | Google One Tap render | IP address, cookies | Optional |
+| 7 | HTTP requests | accounts.google.com | Google One Tap render | IP address, cookies | Optional |
 
 ---
 
@@ -466,11 +469,10 @@ Every path where data leaves the PageSpace deployment boundary.
 
 ### P2 — Required for SOC 2 / enterprise sales
 
-8. **Self-host Monaco and PDF.js** — Eliminates external CDN dependency.
-9. **Add audit log integrity verification cron** — Hash chain exists but is never
+8. **Add audit log integrity verification cron** — Hash chain exists but is never
    verified.
-10. **Standardize bcrypt cost factor** — Minor inconsistency (cost 10 vs 12).
-11. **Add AI provider DPA references** — Link to each provider's data processing
+9. **Standardize bcrypt cost factor** — Minor inconsistency (cost 10 vs 12).
+10. **Add AI provider DPA references** — Link to each provider's data processing
     terms.
 
 ### P3 — Required for HIPAA / FedRAMP / air-gapped
@@ -503,7 +505,7 @@ to be stripped or replaced for a compliance-clean on-premise deployment:
 | Google One Tap | Remove | Trivial | UI-only removal |
 | Google Calendar | Remove | Low | Optional integration |
 | Cloud AI providers | Remove from config; Ollama/LM Studio only | Low | Provider factory already supports this |
-| CDN scripts (Monaco, PDF.js) | Bundle locally | Medium | Self-host static assets |
+| CDN scripts (Monaco, PDF.js) | Completed: self-hosted | N/A | No external CDN dependency for Monaco/PDF.js |
 
 ### 7.2. What Stays as-Is for Local White-Label
 
@@ -548,4 +550,4 @@ When entering compliance or white-label conversations, use this framing:
 - Cloud AI provider compliance with data residency laws
 - HIPAA compliance with cloud AI or Resend email
 - FedRAMP authorization (requires authorized infrastructure stack)
-- Air-gapped deployment (external CDN scripts block this today)
+- Air-gapped deployment without removing all remaining external integrations

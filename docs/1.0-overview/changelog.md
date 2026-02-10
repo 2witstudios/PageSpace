@@ -15,6 +15,17 @@ Stabilized voice-mode activation and improved failure feedback so users receive 
 - Users can immediately see when voice mode is active.
 - Users are explicitly told why voice startup failed and what to do next.
 - Intermittent "TTS but no listening indicator" behavior is reduced by keeping state transitions explicit during activation.
+### Monaco Worker Stability + CSP Hardening
+
+Fixed Monaco worker bootstrapping by self-hosting Monaco `vs` runtime assets and removing CDN allowances that were only needed for Monaco loading.
+
+#### Changed ✅
+
+- Monaco loader now resolves to self-hosted assets at `/_next/static/monaco/vs`
+- Webpack build now copies `monaco-editor/min/vs` into `.next/static/monaco/vs`
+- Removed legacy `window.MonacoEnvironment.getWorkerUrl` override that pointed to non-existent worker files
+- Removed `monaco-editor-webpack-plugin` dependency from `apps/web`
+- CSP no longer allows `https://cdn.jsdelivr.net` in `script-src`, `style-src`, or `font-src`
 
 ## 2026-02-05
 

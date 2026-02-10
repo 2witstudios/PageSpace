@@ -219,11 +219,6 @@ export function ChannelInputFooter({
             <TooltipContent side="top">Attach file</TooltipContent>
           </Tooltip>
         )}
-
-        {/* Markdown hint */}
-        <span className="text-xs text-muted-foreground/60 hidden sm:inline">
-          Markdown supported
-        </span>
       </div>
     </div>
   );

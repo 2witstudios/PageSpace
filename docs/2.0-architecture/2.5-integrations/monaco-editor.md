@@ -31,25 +31,18 @@ The Monaco Editor does not manage its own persistent state. It receives the page
 
 ### Web Worker Configuration
 
-A critical piece of the implementation is the `useEffect` hook that configures the paths for Monaco's web workers. Because Next.js bundles dependencies in a specific way, we must explicitly tell Monaco where to find its worker files for different languages (HTML, CSS, JS/TS). This ensures that features like syntax analysis and validation work correctly.
+A critical piece of the implementation is Monaco loader configuration that points the AMD runtime to self-hosted Monaco assets under `/_next/static/monaco/vs`. This ensures worker scripts resolve correctly in production without depending on external CDNs.
 
 ```typescript
-// apps/web/src/components/editors/MonacoEditor.tsx
-useEffect(() => {
-  if (typeof window !== 'undefined') {
-    window.MonacoEnvironment = {
-      getWorkerUrl: (_moduleId: string, label: string) => {
-        if (label === 'json') return '/_next/static/json.worker.js';
-        if (label === 'css') return '/_next/static/css.worker.js';
-        if (label === 'html') return '/_next/static/html.worker.js';
-        if (label === 'typescript' || label === 'javascript')
-          return '/_next/static/ts.worker.js';
-        return '/_next/static/editor.worker.js';
-      },
-    };
-  }
-}, []);
+// apps/web/src/lib/editor/monaco/loader-config.ts
+loader.config({
+  paths: {
+    vs: `${assetPrefix}/_next/static/monaco/vs`,
+  },
+});
 ```
+
+The `vs` assets are copied at build time in `apps/web/next.config.ts` from `monaco-editor/min/vs` to `.next/static/monaco/vs`.
 
 ### Editor Configuration
 
@@ -84,4 +77,4 @@ options={{
 }}
 ```
 
-**Last Updated:** 2025-08-21
+**Last Updated:** 2026-02-10

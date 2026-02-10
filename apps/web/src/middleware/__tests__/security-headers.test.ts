@@ -151,6 +151,12 @@ describe('Security Headers', () => {
       expect(csp).toContain('https://accounts.google.com');
     });
 
+    it('does not allow jsDelivr CDN sources', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).not.toContain('https://cdn.jsdelivr.net');
+    });
+
     it('allows Google accounts and Stripe iframes via frame-src', () => {
       const csp = buildCSPPolicy('test-nonce');
 
