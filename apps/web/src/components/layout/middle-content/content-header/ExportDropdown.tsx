@@ -30,6 +30,18 @@ const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
   markdown: 'Markdown',
 };
 
+const sanitizeDownloadFilenameStem = (filename: string): string => {
+  const sanitized = filename
+    .trim()
+    .replace(/[^a-z0-9\s_-]/gi, '')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .toLowerCase();
+
+  return sanitized || 'download';
+};
+
 interface ExportDropdownProps {
   pageId: string;
   pageTitle: string;
@@ -60,7 +72,7 @@ export function ExportDropdown({ pageId, pageTitle, pageType }: ExportDropdownPr
       const url = window.URL.createObjectURL(blob);
       const a = window.document.createElement('a');
       a.href = url;
-      a.download = `${pageTitle}.${fileExtension}`;
+      a.download = `${sanitizeDownloadFilenameStem(pageTitle)}.${fileExtension}`;
       window.document.body.appendChild(a);
       a.click();
 
