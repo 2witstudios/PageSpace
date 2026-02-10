@@ -69,7 +69,10 @@ export async function GET(request: Request) {
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
           WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
-            AND cm."userId" != ${userId}
+            AND (
+              cm."userId" != ${userId}
+              OR cm."aiMeta"->>'senderType' = 'agent'
+            )
           GROUP BY cm."pageId"
         )
         SELECT
@@ -229,7 +232,10 @@ export async function GET(request: Request) {
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
           WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
-            AND cm."userId" != ${userId}
+            AND (
+              cm."userId" != ${userId}
+              OR cm."aiMeta"->>'senderType' = 'agent'
+            )
           GROUP BY cm."pageId"
         )
         SELECT

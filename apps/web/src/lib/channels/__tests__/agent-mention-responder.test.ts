@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 vi.mock('@pagespace/db', () => ({
   db: {
@@ -52,11 +52,65 @@ import {
   type TriggerMentionedAgentResponsesParams,
 } from '../agent-mention-responder';
 
-const mockPagesFindMany = vi.mocked(db.query.pages.findMany);
-const mockChannelMessagesFindMany = vi.mocked(db.query.channelMessages.findMany);
+const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
+const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
-const mockAskAgentExecute = vi.mocked(agentCommunicationTools.ask_agent.execute);
-const mockSendChannelExecute = vi.mocked(channelTools.send_channel_message.execute);
+
+const askAgentExecute = agentCommunicationTools.ask_agent.execute;
+const sendChannelExecute = channelTools.send_channel_message.execute;
+
+if (!askAgentExecute || !sendChannelExecute) {
+  throw new Error('Agent mention responder tool mocks are unavailable');
+}
+
+const mockAskAgentExecute = vi.mocked(askAgentExecute);
+const mockSendChannelExecute = vi.mocked(sendChannelExecute);
+
+const createAskAgentSuccess = (response: string) => ({
+  success: true,
+  agent: 'Budget Agent',
+  agentPath: '/Budget Agent',
+  question: 'What do you think?',
+  response,
+  context: undefined,
+  conversationId: 'channel:channel-1:agent:agent-1',
+  metadata: {
+    agentId: 'agent-1',
+    processingTime: 42,
+    persistent: true,
+    isNewConversation: false,
+    callDepth: 1,
+    provider: 'PageSpace',
+    model: 'Default (Free)',
+    toolsEnabled: 1,
+    toolCalls: 0,
+    steps: 1,
+  },
+});
+
+const createAskAgentFailure = (error: string) => ({
+  success: false,
+  agent: '/Budget Agent',
+  error,
+  question: 'What do you think?',
+  context: undefined,
+  metadata: {
+    processingTime: 42,
+    callDepth: 1,
+  },
+});
+
+const createSendChannelSuccess = () => ({
+  success: true,
+  messageId: 'msg-agent-1',
+  channelId: 'channel-1',
+  channelTitle: 'General',
+  senderName: 'Budget Agent (Alice)',
+  senderType: 'agent' as const,
+  messagePreview: 'Agent reply',
+  message: 'Successfully sent message to channel "General"',
+  summary: 'Posted to #General as Budget Agent (Alice) (agent)',
+});
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
   userId: 'user-1',
@@ -76,13 +130,8 @@ describe('agent-mention-responder', () => {
     mockPagesFindMany.mockResolvedValue([]);
     mockChannelMessagesFindMany.mockResolvedValue([]);
     mockCanUserViewPage.mockResolvedValue(true);
-    mockAskAgentExecute.mockResolvedValue({
-      success: true,
-      response: 'Agent reply',
-    });
-    mockSendChannelExecute.mockResolvedValue({
-      success: true,
-    });
+    mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Agent reply'));
+    mockSendChannelExecute.mockResolvedValue(createSendChannelSuccess());
   });
 
   it('does nothing when no structured mentions are present', async () => {
@@ -108,10 +157,9 @@ describe('agent-mention-responder', () => {
         user: { name: 'Alice' },
       },
     ]);
-    mockAskAgentExecute.mockResolvedValue({
-      success: true,
-      response: 'I think this conversation is on track.',
-    });
+    mockAskAgentExecute.mockResolvedValue(
+      createAskAgentSuccess('I think this conversation is on track.')
+    );
 
     await triggerMentionedAgentResponses({
       ...baseParams,
@@ -193,10 +241,7 @@ describe('agent-mention-responder', () => {
     mockPagesFindMany.mockResolvedValue([
       { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
     ]);
-    mockAskAgentExecute.mockResolvedValue({
-      success: false,
-      error: 'Agent failed',
-    });
+    mockAskAgentExecute.mockResolvedValue(createAskAgentFailure('Agent failed'));
 
     await triggerMentionedAgentResponses({
       ...baseParams,

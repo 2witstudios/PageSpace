@@ -94,6 +94,7 @@ export const channelTools = {
 
         // Determine sender identity
         const senderIdentity = await resolveSenderIdentity(context as ToolExecutionContext);
+        const treatAsSelfAuthored = senderIdentity.senderType === 'global_assistant';
 
         // Insert the message
         const [createdMessage] = await db
@@ -110,14 +111,17 @@ export const channelTools = {
           })
           .returning();
 
-        // Update sender's read status
-        await db
-          .insert(channelReadStatus)
-          .values({ userId, channelId, lastReadAt: new Date() })
-          .onConflictDoUpdate({
-            target: [channelReadStatus.userId, channelReadStatus.channelId],
-            set: { lastReadAt: new Date() },
-          });
+        // Only mark sender read for self-authored global assistant messages.
+        // Agent messages should behave like third-party messages for unread/inbox semantics.
+        if (treatAsSelfAuthored) {
+          await db
+            .insert(channelReadStatus)
+            .values({ userId, channelId, lastReadAt: new Date() })
+            .onConflictDoUpdate({
+              target: [channelReadStatus.userId, channelReadStatus.channelId],
+              set: { lastReadAt: new Date() },
+            });
+        }
 
         // Log activity for audit trail (fire-and-forget)
         const toolContext = context as ToolExecutionContext;
@@ -204,7 +208,7 @@ export const channelTools = {
 
             const memberPermissions = await Promise.all(
               members
-                .filter(m => m.userId !== userId)
+                .filter(m => !treatAsSelfAuthored || m.userId !== userId)
                 .map(async member => ({
                   userId: member.userId,
                   canView: await canUserViewPage(member.userId, channelId),
