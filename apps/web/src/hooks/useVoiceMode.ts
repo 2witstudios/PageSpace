@@ -97,6 +97,7 @@ interface RecordingRefs {
 interface PlaybackRefs {
   audioContext: AudioContext | null;
   audioSource: AudioBufferSourceNode | null;
+  autoListenTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface VadRefs {
@@ -165,6 +166,7 @@ export function useVoiceMode({
   const playbackRefs = useRef<PlaybackRefs>({
     audioContext: null,
     audioSource: null,
+    autoListenTimer: null,
   });
   const vadRefs = useRef<VadRefs>({
     analyser: null,
@@ -213,7 +215,7 @@ export function useVoiceMode({
     }
 
     if (bargeInRefs.current.stream) {
-      bargeInRefs.current.stream.getTracks().forEach((track) => track.stop());
+      bargeInRefs.current.stream.getTracks().forEach((track) => { track.stop(); });
       bargeInRefs.current.stream = null;
     }
 
@@ -290,7 +292,7 @@ export function useVoiceMode({
         if (!vadRefs.current.analyser) return;
 
         analyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
 
         if (average < SILENCE_THRESHOLD) {
           if (!silenceStart) {
@@ -336,7 +338,7 @@ export function useVoiceMode({
 
     // Stop media stream
     if (recordingRefs.current.stream) {
-      recordingRefs.current.stream.getTracks().forEach((track) => track.stop());
+      recordingRefs.current.stream.getTracks().forEach((track) => { track.stop(); });
       recordingRefs.current.stream = null;
     }
 
@@ -379,7 +381,7 @@ export function useVoiceMode({
       });
 
       if (!useVoiceModeStore.getState().isEnabled) {
-        stream.getTracks().forEach((track) => track.stop());
+        stream.getTracks().forEach((track) => { track.stop(); });
         return;
       }
 
@@ -472,7 +474,7 @@ export function useVoiceMode({
       });
 
       if (voiceStateRef.current !== 'speaking') {
-        stream.getTracks().forEach((track) => track.stop());
+        stream.getTracks().forEach((track) => { track.stop(); });
         return;
       }
 
@@ -595,7 +597,8 @@ export function useVoiceMode({
 
             // In barge-in mode, start listening after speaking
             if (interactionMode === 'barge-in' && isEnabled) {
-              setTimeout(() => {
+              playbackRefs.current.autoListenTimer = setTimeout(() => {
+                playbackRefs.current.autoListenTimer = null;
                 startListening();
               }, 300);
             }
@@ -662,9 +665,13 @@ export function useVoiceMode({
         recording.mediaRecorder.stop();
       }
       if (recording.stream) {
-        recording.stream.getTracks().forEach((track) => track.stop());
+        recording.stream.getTracks().forEach((track) => { track.stop(); });
       }
       // Stop playback
+      if (playback.autoListenTimer) {
+        clearTimeout(playback.autoListenTimer);
+        playback.autoListenTimer = null;
+      }
       if (playback.audioSource) {
         try {
           playback.audioSource.stop();

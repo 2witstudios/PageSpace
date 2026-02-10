@@ -17,7 +17,7 @@ We use a controlled component wrapper around `@monaco-editor/react`.
 **Props Interface:**
 *   `value`: The content string (HTML or Markdown).
 *   `onChange`: Callback when content changes.
-*   `language`: `"html"` (default) or `"markdown"`.
+*   `language`: Any Monaco language identifier (default: `"markdown"`). Common values: `"markdown"`, `"html"`, `"javascript"`, etc.
 *   `readOnly`: optimized read-only mode.
 
 ### Editor Configuration
@@ -39,4 +39,4 @@ We configure Monaco for a distraction-free but powerful experience:
 
 ### Web Worker Configuration
 
-To avoid dependency on external CDNs, we self-host the Monaco worker assets. The loader is configured in `apps/web/src/lib/editor/monaco/loader-config.ts` to resolve paths to `/_next/static/monaco/vs`, ensuring the editor works strictly offline/local-first.
+To avoid dependency on external CDNs, we self-host the Monaco worker assets. The loader is configured in `apps/web/src/lib/editor/monaco/loader-config.ts` to resolve paths to `/_next/static/monaco/vs`. This removes external CDN dependencies but does not provide full offline functionality on its own—that would require additional service worker caching and offline data sync.
