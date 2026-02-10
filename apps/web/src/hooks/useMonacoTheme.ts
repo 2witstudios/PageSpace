@@ -174,14 +174,14 @@ export function useMonacoTheme(monaco: Monaco | null): string {
 
     const fallbackPalette = isDark
       ? {
-          background: '#000000',
+          background: '#222222',
           foreground: '#f0f0f0',
-          border: '#404040',
-          muted: '#111111',
-          mutedForeground: '#8f8f8f',
+          border: '#373737',
+          muted: '#353535',
+          mutedForeground: '#737373',
           primary: '#5b8cff',
-          card: '#0a0a0a',
-          input: '#303030',
+          card: '#2b2b2b',
+          input: '#373737',
         }
       : {
           background: '#ffffff',
@@ -194,9 +194,7 @@ export function useMonacoTheme(monaco: Monaco | null): string {
           input: '#f8f8f8',
         };
 
-    const bg = isDark
-      ? '#000000'
-      : resolveColor(getCssVar('--background'), fallbackPalette.background);
+    const bg = resolveColor(getCssVar('--background'), fallbackPalette.background);
     const fg = resolveColor(getCssVar('--foreground'), fallbackPalette.foreground);
     const border = resolveColor(getCssVar('--border'), fallbackPalette.border);
     const muted = resolveColor(getCssVar('--muted'), fallbackPalette.muted);
