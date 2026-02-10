@@ -56,6 +56,11 @@ interface MessageWithUser {
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
   file?: FileRelation | null;
+  aiMeta?: {
+    senderType: 'global_assistant' | 'agent';
+    senderName: string;
+    agentPageId?: string;
+  } | null;
 }
 
 interface Page {
@@ -394,15 +399,34 @@ export default function InboxChannelPage() {
       <PullToRefresh direction="top" onRefresh={handleRefresh}>
         <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
           <div className="p-4 space-y-4 max-w-4xl mx-auto">
-            {messages.map((m) => (
+            {messages.map((m) => {
+              const isAi = !!m.aiMeta;
+              const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;
+              const aiLabel = isAi
+                ? m.aiMeta!.senderType === 'global_assistant'
+                  ? 'global assistant'
+                  : 'agent'
+                : null;
+              const avatarFallback = isAi
+                ? m.aiMeta!.senderType === 'agent'
+                  ? 'A'
+                  : m.aiMeta!.senderName?.[0]
+                : m.user?.name?.[0];
+
+              return (
               <div key={m.id} className="group flex items-start gap-4">
                 <Avatar className="shrink-0">
-                  <AvatarImage src={m.user?.image || ''} />
-                  <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
+                  {!isAi && <AvatarImage src={m.user?.image || ''} />}
+                  <AvatarFallback>{avatarFallback}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm">{m.user?.name}</span>
+                    <span className="font-semibold text-sm">{displayName}</span>
+                    {aiLabel && (
+                      <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">
+                        {aiLabel}
+                      </span>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       {new Date(m.createdAt).toLocaleTimeString()}
                     </span>
@@ -471,7 +495,8 @@ export default function InboxChannelPage() {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </ScrollArea>
       </PullToRefresh>

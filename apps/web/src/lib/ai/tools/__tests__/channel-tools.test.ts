@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 /**
  * Channel Tools Tests
@@ -14,6 +14,7 @@ vi.mock('@pagespace/db', () => ({
     query: {
       channelMessages: { findFirst: vi.fn() },
       pages: { findFirst: vi.fn() },
+      driveMembers: { findMany: vi.fn() },
     },
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
@@ -24,6 +25,7 @@ vi.mock('@pagespace/db', () => ({
   },
   channelMessages: {},
   channelReadStatus: { userId: 'userId', channelId: 'channelId' },
+  driveMembers: { driveId: 'driveId' },
   pages: { id: 'id', isTrashed: 'isTrashed' },
   eq: vi.fn(),
   and: vi.fn(),
@@ -71,15 +73,20 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { channelTools } from '../channel-tools';
-import { canUserEditPage } from '@pagespace/lib/permissions';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions';
 import { getActorInfo } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
+import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../../core';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockGetActorInfo = vi.mocked(getActorInfo);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockPagesFindFirst = db.query.pages.findFirst as any;
+const mockBroadcastInboxEvent = vi.mocked(broadcastInboxEvent);
+const mockDbInsert = db.insert as unknown as Mock;
+const mockPagesFindFirst = db.query.pages.findFirst as unknown as Mock;
+const mockChannelMessagesFindFirst = db.query.channelMessages.findFirst as unknown as Mock;
+const mockDriveMembersFindMany = db.query.driveMembers.findMany as unknown as Mock;
 
 // Helper to safely extract result from tool execution (handles AsyncIterable union)
 type ToolResult = Record<string, unknown>;
@@ -92,6 +99,20 @@ const executeToolAs = async (
 describe('channel-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetActorInfo.mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
+    mockCanUserViewPage.mockResolvedValue(true);
+    mockChannelMessagesFindFirst.mockResolvedValue({
+      id: 'msg-1',
+      createdAt: new Date('2026-02-10T12:00:00.000Z'),
+      user: { id: 'user-123', name: 'Alice', image: null },
+      file: null,
+      reactions: [],
+    });
+    mockDriveMembersFindMany.mockResolvedValue([]);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   describe('send_channel_message', () => {
@@ -226,7 +247,7 @@ describe('channel-tools', () => {
       expect(result.messagePreview).toBe('Hello from assistant');
     });
 
-    it('sends message as page agent with agent title', async () => {
+    it('sends message as page agent with agent + user display name', async () => {
       mockPagesFindFirst.mockResolvedValue({
         id: 'ch-1',
         title: 'General',
@@ -260,8 +281,91 @@ describe('channel-tools', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.senderName).toBe('Budget Analyst');
+      expect(result.senderName).toBe('Budget Analyst (Test User)');
       expect(result.senderType).toBe('agent');
+    });
+
+    it('marks global assistant messages as read and skips sender inbox broadcast', async () => {
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1',
+        title: 'General',
+        type: 'CHANNEL',
+        driveId: 'drive-1',
+        drive: { ownerId: 'user-456' },
+      });
+      mockDriveMembersFindMany.mockResolvedValue([
+        { userId: 'user-123' },
+        { userId: 'user-456' },
+      ]);
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockGetActorInfo.mockResolvedValue({
+        actorEmail: 'alice@example.com',
+        actorDisplayName: 'Alice',
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          chatSource: { type: 'global' },
+        } as ToolExecutionContext,
+      };
+
+      const result = await executeToolAs(
+        { channelId: 'ch-1', content: 'Global update' },
+        context
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockDbInsert).toHaveBeenCalledTimes(2);
+      expect(mockBroadcastInboxEvent).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
+        'user-456',
+        expect.objectContaining({
+          operation: 'channel_updated',
+          id: 'ch-1',
+        })
+      );
+    });
+
+    it('keeps agent messages unread for requester and includes requester in inbox broadcast', async () => {
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1',
+        title: 'General',
+        type: 'CHANNEL',
+        driveId: 'drive-1',
+        drive: { ownerId: 'user-456' },
+      });
+      mockDriveMembersFindMany.mockResolvedValue([
+        { userId: 'user-123' },
+        { userId: 'user-456' },
+      ]);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          chatSource: {
+            type: 'page',
+            agentPageId: 'agent-1',
+            agentTitle: 'Budget Analyst',
+          },
+        } as ToolExecutionContext,
+      };
+
+      const result = await executeToolAs(
+        { channelId: 'ch-1', content: 'Agent follow-up' },
+        context
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockDbInsert).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastInboxEvent).toHaveBeenCalledTimes(2);
+
+      const recipients = mockBroadcastInboxEvent.mock.calls.map(([recipient]) => recipient);
+      expect(recipients).toContain('user-123');
+      expect(recipients).toContain('user-456');
     });
 
     it('defaults to global_assistant when chatSource is not provided', async () => {
