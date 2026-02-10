@@ -33,8 +33,8 @@ We configure Monaco for a distraction-free but powerful experience:
 
 ### Language Support
 
-*   **HTML:** Default mode. Provides tag matching, auto-completion, and syntax coloring.
-*   **Markdown:** Used when page `contentMode` is markdown.
+*   **Markdown:** Default mode. Used when page `contentMode` is markdown.
+*   **HTML:** Supported mode. Provides tag matching, auto-completion, and syntax coloring.
 *   **Sudolang:** We register a custom `sudolang` language definition (via `registerSudolangLanguage`) for specialized AI prompting files, ensuring they have proper syntax highlighting.
 
 ### Web Worker Configuration
