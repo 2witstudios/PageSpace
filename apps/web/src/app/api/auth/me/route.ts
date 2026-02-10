@@ -1,6 +1,9 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { authRepository } from '@/lib/repositories/auth-repository';
 
+const isExternalHttpUrl = (value: string | null | undefined): boolean =>
+  typeof value === 'string' && /^https?:\/\//i.test(value);
+
 export async function GET(req: Request) {
   const auth = await requireAuth(req);
   if (isAuthError(auth)) return auth;
@@ -17,11 +20,13 @@ export async function GET(req: Request) {
     console.log(`[AUTH] User profile loaded: ${user.email} (provider: ${user.provider}, id: ${user.id})`);
   }
 
+  const safeImage = isExternalHttpUrl(user.image) ? null : user.image;
+
   return Response.json({
     id: user.id,
     name: user.name,
     email: user.email,
-    image: user.image,
+    image: safeImage,
     role: user.role,
     emailVerified: user.emailVerified,
   });

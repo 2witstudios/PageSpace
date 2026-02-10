@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const googleCallbackSchema = z.object({
   code: z.string().min(1, 'Authorization code is required'),
@@ -146,14 +147,20 @@ export async function GET(req: Request) {
     });
 
     if (user) {
-      if (!user.googleId || !user.name || user.image !== picture) {
+      const resolvedImage = await resolveGoogleAvatarImage({
+        userId: user.id,
+        pictureUrl: picture,
+        existingImage: user.image,
+      });
+
+      if (!user.googleId || !user.name || user.image !== resolvedImage) {
         loggers.auth.info('Updating existing user via Google OAuth', { email });
         await db.update(users)
           .set({
             googleId: googleId || user.googleId,
             provider: user.password ? 'both' : 'google',
             name: user.name || userName,
-            image: picture || user.image,
+            image: resolvedImage,
             emailVerified: email_verified ? new Date() : user.emailVerified,
           })
           .where(eq(users.id, user.id));
@@ -170,7 +177,7 @@ export async function GET(req: Request) {
         name: userName,
         email,
         emailVerified: email_verified ? new Date() : null,
-        image: picture || null,
+        image: null,
         googleId,
         provider: 'google',
         tokenVersion: 0,
@@ -180,6 +187,20 @@ export async function GET(req: Request) {
       }).returning();
 
       user = newUser;
+
+      const resolvedImage = await resolveGoogleAvatarImage({
+        userId: user.id,
+        pictureUrl: picture,
+        existingImage: user.image,
+      });
+
+      if (resolvedImage !== (user.image ?? null)) {
+        await db.update(users)
+          .set({ image: resolvedImage })
+          .where(eq(users.id, user.id));
+        user = { ...user, image: resolvedImage };
+      }
+
       loggers.auth.info('New user created via Google OAuth', { userId: user.id, name: user.name });
     }
 

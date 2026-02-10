@@ -98,7 +98,7 @@ describe('GET /api/auth/me', () => {
       expect(body.id).toBe(mockUser.id);
       expect(body.name).toBe(mockUser.name);
       expect(body.email).toBe(mockUser.email);
-      expect(body.image).toBe(mockUser.image);
+      expect(body.image).toBeNull();
       expect(body.role).toBe(mockUser.role);
       // Date is serialized to ISO string in JSON response
       expect(body.emailVerified).toBe(mockVerifiedDate.toISOString());
