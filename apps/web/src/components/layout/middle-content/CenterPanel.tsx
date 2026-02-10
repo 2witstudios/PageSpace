@@ -165,10 +165,16 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     );
   } else if (componentName === 'DocumentView') {
     // DocumentView accepts only pageId (new pattern)
-    pageComponent = <DocumentView pageId={page.id} />;
+    pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'CodePageView') {
     // CodePageView accepts only pageId (new pattern)
-    pageComponent = <CodePageView pageId={page.id} />;
+    pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
+  } else if (componentName === 'CanvasPageView') {
+    // CanvasPageView should remount per page to isolate edit/undo state
+    pageComponent = <CanvasPageView key={`canvas-${page.id}`} page={page} />;
+  } else if (componentName === 'SheetView') {
+    // SheetView should remount per page to isolate undo/redo history
+    pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here
