@@ -67,12 +67,51 @@ if (!askAgentExecute || !sendChannelExecute) {
 const mockAskAgentExecute = vi.mocked(askAgentExecute);
 const mockSendChannelExecute = vi.mocked(sendChannelExecute);
 
-type AskAgentExecutionResult = Awaited<ReturnType<typeof askAgentExecute>>;
-type AskAgentSuccessResult = Extract<AskAgentExecutionResult, { success: true }>;
-type AskAgentFailureResult = Extract<AskAgentExecutionResult, { success: false }>;
+interface AskAgentSuccessResult {
+  success: true;
+  agent: string;
+  agentPath: string;
+  question: string;
+  response: string;
+  context: string | undefined;
+  conversationId: string;
+  metadata: {
+    agentId: string;
+    processingTime: number;
+    persistent: boolean;
+    isNewConversation: boolean;
+    callDepth: number;
+    provider: string;
+    model: string;
+    toolsEnabled: number;
+    toolCalls: number;
+    steps: number;
+  };
+}
 
-type SendChannelExecutionResult = Awaited<ReturnType<typeof sendChannelExecute>>;
-type SendChannelSuccessResult = Extract<SendChannelExecutionResult, { success: true }>;
+interface AskAgentFailureResult {
+  success: false;
+  agent: string;
+  error: string;
+  question: string;
+  context: string | undefined;
+  metadata: {
+    processingTime: number;
+    callDepth: number;
+  };
+}
+
+interface SendChannelSuccessResult {
+  success: true;
+  messageId: string;
+  channelId: string;
+  channelTitle: string;
+  senderName: string;
+  senderType: 'global_assistant' | 'agent';
+  messagePreview: string;
+  message: string;
+  summary: string;
+}
 
 const createAskAgentSuccess = (response: string): AskAgentSuccessResult => ({
   success: true,
