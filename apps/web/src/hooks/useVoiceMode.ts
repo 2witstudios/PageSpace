@@ -5,6 +5,40 @@ import { useVoiceModeStore, type TTSVoice } from '@/stores/useVoiceModeStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { createId } from '@paralleldrive/cuid2';
 
+function getMicPermissionErrorMessage(err: unknown): string {
+  if (err instanceof DOMException) {
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      return 'Microphone access was blocked. Please allow microphone permissions in your browser settings and try again.';
+    }
+    if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      return 'No microphone was detected. Connect a microphone and try again.';
+    }
+    if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+      return 'Your microphone is busy in another app. Close other apps using the mic and try again.';
+    }
+  }
+
+  if (err instanceof TypeError) {
+    return 'This browser does not support microphone capture for voice mode.';
+  }
+
+  return 'Unable to start voice mode because microphone access failed. Please try again.';
+}
+
+function getTranscriptionErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return `Could not transcribe your speech: ${err.message}`;
+  }
+  return 'Could not transcribe your speech. Please try again.';
+}
+
+function getSynthesisErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return `Could not play AI voice response: ${err.message}`;
+  }
+  return 'Could not play AI voice response. Please try again.';
+}
+
 export interface UseVoiceModeOptions {
   /** Callback when transcript is available */
   onTranscript?: (text: string) => void;
@@ -21,6 +55,7 @@ export interface UseVoiceModeOptions {
 export interface UseVoiceModeReturn {
   // State
   isEnabled: boolean;
+  hasLoadedSettings: boolean;
   isListening: boolean;
   isProcessing: boolean;
   isSpeaking: boolean;
@@ -67,6 +102,7 @@ export function useVoiceMode({
   // Store state
   const isEnabled = useVoiceModeStore((s) => s.isEnabled);
   const voiceState = useVoiceModeStore((s) => s.voiceState);
+  const hasLoadedSettings = useVoiceModeStore((s) => s.hasLoadedSettings);
   const interactionMode = useVoiceModeStore((s) => s.interactionMode);
   const ttsVoice = useVoiceModeStore((s) => s.ttsVoice);
   const ttsSpeed = useVoiceModeStore((s) => s.ttsSpeed);
@@ -99,6 +135,7 @@ export function useVoiceMode({
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const isStartingListeningRef = useRef(false);
 
   // Callbacks ref to avoid stale closures
   const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError });
@@ -154,7 +191,7 @@ export function useVoiceMode({
         const result = await response.json();
         return result.text as string;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Transcription failed';
+        const message = getTranscriptionErrorMessage(err);
         setError(message);
         callbacksRef.current.onError?.(message);
         return null;
@@ -238,15 +275,19 @@ export function useVoiceMode({
 
   // Start listening
   const startListening = useCallback(async () => {
-    if (!isEnabled) return;
+    if (!isEnabled || !hasLoadedSettings) return;
+    if (isStartingListeningRef.current || isListening || isProcessing) return;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') return;
+
+    isStartingListeningRef.current = true;
 
     // If speaking, barge in first
-    if (voiceState === 'speaking') {
-      stopAudioPlayback();
-      bargeInStore();
-    }
-
     try {
+      if (voiceState === 'speaking') {
+        stopAudioPlayback();
+        bargeInStore();
+      }
+
       setError(null);
       audioChunksRef.current = [];
 
@@ -257,6 +298,11 @@ export function useVoiceMode({
           autoGainControl: true,
         },
       });
+
+      if (!useVoiceModeStore.getState().isEnabled) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       streamRef.current = stream;
 
@@ -307,13 +353,18 @@ export function useVoiceMode({
       // Setup VAD for barge-in mode
       setupVAD(stream);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Microphone access denied';
+      const message = getMicPermissionErrorMessage(err);
       setError(message);
       callbacksRef.current.onError?.(message);
       setVoiceState('idle');
+    } finally {
+      isStartingListeningRef.current = false;
     }
   }, [
     isEnabled,
+    hasLoadedSettings,
+    isListening,
+    isProcessing,
     voiceState,
     stopAudioPlayback,
     bargeInStore,
@@ -388,7 +439,7 @@ export function useVoiceMode({
         startSpeakingStore(audioId);
         source.start();
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Speech synthesis failed';
+        const message = getSynthesisErrorMessage(err);
         setError(message);
         callbacksRef.current.onError?.(message);
         stopSpeakingStore();
@@ -460,6 +511,7 @@ export function useVoiceMode({
   return {
     // State
     isEnabled,
+    hasLoadedSettings,
     isListening,
     isProcessing,
     isSpeaking,

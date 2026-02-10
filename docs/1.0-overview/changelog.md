@@ -1,5 +1,20 @@
 ## 2026-02-10
 
+### Voice Mode Reliability & User-Facing Error Feedback
+
+Stabilized voice-mode activation and improved failure feedback so users receive immediate, descriptive in-app guidance when microphone/STT/TTS steps fail.
+
+#### Fixed ✅
+
+- **Activation race removed**: voice settings hydration no longer force-disables `isEnabled`, preventing voice overlay from being silently reset during activation.
+- **Mic prompt reliability**: voice mode now auto-starts listening once on overlay activation, ensuring the browser permission prompt and listening indicator appear consistently.
+- **Visible failure messages**: microphone permission/device conflicts, transcription failures, and synthesis failures now present user-friendly error messages in the overlay rather than console-only logs.
+
+#### UX Outcome
+
+- Users can immediately see when voice mode is active.
+- Users are explicitly told why voice startup failed and what to do next.
+- Intermittent "TTS but no listening indicator" behavior is reduced by keeping state transitions explicit during activation.
 ### Monaco Worker Stability + CSP Hardening
 
 Fixed Monaco worker bootstrapping by self-hosting Monaco `vs` runtime assets and removing CDN allowances that were only needed for Monaco loading.
