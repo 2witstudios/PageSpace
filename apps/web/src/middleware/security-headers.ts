@@ -57,6 +57,8 @@ export const buildCSPPolicy = (nonce: string): string => {
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
     'font-src': ["'self'", 'data:', 'https://cdn.jsdelivr.net'],
+    // Monaco and other browser tooling may initialize workers from blob URLs.
+    'worker-src': ["'self'", 'blob:'],
     'frame-src': ['https://accounts.google.com', 'https://js.stripe.com'], // Google One Tap + Stripe Elements iframes
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
