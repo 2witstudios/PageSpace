@@ -10,8 +10,6 @@ import {
 import { canUserViewPage, loggers } from '@pagespace/lib/server';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import type { ToolExecutionContext } from '@/lib/ai/core';
-import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
-import { channelTools } from '@/lib/ai/tools/channel-tools';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -171,6 +169,11 @@ export async function triggerMentionedAgentResponses(
     if (!params.content || !params.content.trim()) {
       return;
     }
+
+    const [{ agentCommunicationTools }, { channelTools }] = await Promise.all([
+      import('@/lib/ai/tools/agent-communication-tools'),
+      import('@/lib/ai/tools/channel-tools'),
+    ]);
 
     const askAgentExecute = agentCommunicationTools.ask_agent.execute;
     const sendChannelExecute = channelTools.send_channel_message.execute;

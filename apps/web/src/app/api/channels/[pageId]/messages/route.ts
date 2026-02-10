@@ -5,7 +5,6 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
-import { triggerMentionedAgentResponses } from '@/lib/channels/agent-mention-responder';
 
 // Type for attachment metadata stored in the database
 interface AttachmentMeta {
@@ -188,17 +187,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     });
 
     if (messageContent.trim().length > 0) {
-      void triggerMentionedAgentResponses({
-        userId,
-        channelId: pageId,
-        channelTitle: channel?.title || 'Channel',
-        channelType: 'CHANNEL',
-        sourceMessageId: createdMessage.id,
-        content: messageContent,
-        driveId: channel?.driveId || null,
-        driveName: channel?.drive?.name || null,
-        driveSlug: channel?.drive?.slug || null,
-      });
+      void import('@/lib/channels/agent-mention-responder')
+        .then(({ triggerMentionedAgentResponses }) =>
+          triggerMentionedAgentResponses({
+            userId,
+            channelId: pageId,
+            channelTitle: channel?.title || 'Channel',
+            channelType: 'CHANNEL',
+            sourceMessageId: createdMessage.id,
+            content: messageContent,
+            driveId: channel?.driveId || null,
+            driveName: channel?.drive?.name || null,
+            driveSlug: channel?.drive?.slug || null,
+          })
+        )
+        .catch((error) => {
+          loggers.realtime.error('Failed to load channel mention responder module:', error as Error);
+        });
     }
 
     if (channel?.driveId) {
