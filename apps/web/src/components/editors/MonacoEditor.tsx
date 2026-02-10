@@ -78,7 +78,11 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', option
         language={language}
         theme={theme}
         value={value}
-        onChange={onChange}
+        onChange={(nextValue) => {
+          if (nextValue !== undefined) {
+            onChange?.(nextValue);
+          }
+        }}
         options={mergedOptions}
       />
     </div>

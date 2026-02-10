@@ -24,8 +24,22 @@ interface RichEditorProps {
   contentMode?: 'html' | 'markdown';
 }
 
+const getEditorRootElement = (editor: Editor | null): HTMLElement | null => {
+  if (!editor || editor.isDestroyed) {
+    return null;
+  }
+
+  try {
+    return editor.view.dom as HTMLElement;
+  } catch {
+    return null;
+  }
+};
+
 const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPaginated = false, contentMode = 'html' }: RichEditorProps) => {
   const router = useRouter();
+  const [isEditorViewMounted, setIsEditorViewMounted] = React.useState(false);
+  const isMarkdownMode = contentMode === 'markdown';
 
   // Subscribe to navigation events from TipTap mentions
   // This enables mobile-aware navigation (stays in WebView on Capacitor)
@@ -49,7 +63,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         codeBlock: false,
       }),
       CodeBlockShiki,
-      Markdown,
+      ...(isMarkdownMode ? [Markdown] : []),
       ...(readOnly ? [] : [Placeholder.configure({
         placeholder: 'Start writing...',
       })]),
@@ -86,10 +100,9 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const storage = editor.storage as Record<string, any>;
-        const serialized = contentMode === 'markdown'
-          ? storage.markdown.getMarkdown()
+        const markdownStorage = editor.storage.markdown as { getMarkdown?: () => string } | undefined;
+        const serialized = isMarkdownMode
+          ? (markdownStorage?.getMarkdown?.() ?? '')
           : editor.getHTML();
         onChange(serialized);
       }
@@ -108,15 +121,49 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [isPaginated, contentMode]); // Recreate editor when pagination or content mode changes
 
   useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      setIsEditorViewMounted(false);
+      return;
+    }
+
+    const mountedElement = getEditorRootElement(editor);
+    if (mountedElement) {
+      setIsEditorViewMounted(true);
+      return;
+    }
+
+    setIsEditorViewMounted(false);
+
+    let frameId: number | null = null;
+
+    const waitForViewMount = () => {
+      const mounted = Boolean(getEditorRootElement(editor));
+      if (mounted) {
+        setIsEditorViewMounted(true);
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(waitForViewMount);
+    };
+
+    frameId = window.requestAnimationFrame(waitForViewMount);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [editor]);
+
+  useEffect(() => {
     if (editor) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const storage = editor.storage as Record<string, any>;
-      const currentSerialized = contentMode === 'markdown'
-        ? storage.markdown.getMarkdown()
+      const markdownStorage = editor.storage.markdown as { getMarkdown?: () => string } | undefined;
+      const currentSerialized = isMarkdownMode
+        ? (markdownStorage?.getMarkdown?.() ?? '')
         : editor.getHTML();
       // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
-      const isDefaultEmpty = contentMode === 'markdown'
+      const isDefaultEmpty = isMarkdownMode
         ? (!currentSerialized || currentSerialized.trim() === '')
         : (currentSerialized === '<p></p>' ||
            currentSerialized === '<p><br></p>' ||
@@ -133,14 +180,14 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         // Save current view state before updating content
         const { from, to } = editor.state.selection;
         // Get current selection position
-        
+
         // Get the current view's scroll position if available
-        const editorElement = editor.view.dom;
+        const editorElement = getEditorRootElement(editor);
         const scrollTop = editorElement?.parentElement?.scrollTop || 0;
-        
+
         // Update content
         editor.commands.setContent(value || '', { emitUpdate: false });
-        
+
         // Restore selection and scroll position after content update
         requestAnimationFrame(() => {
           if (editor && !editor.isDestroyed) {
@@ -185,22 +232,22 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         });
       }
     }
-  }, [value, editor, contentMode]);
+  }, [value, editor, contentMode, isMarkdownMode]);
 
   useEffect(() => {
     onEditorChange(editor);
     // Blur the editor if it's read-only to prevent focus
-    if (editor && readOnly) {
+    if (editor && readOnly && isEditorViewMounted) {
       editor.commands.blur();
     }
     return () => {
       onEditorChange(null);
     };
-  }, [editor, onEditorChange, readOnly]);
+  }, [editor, onEditorChange, readOnly, isEditorViewMounted]);
 
   return (
     <div className="relative flex flex-col w-full h-full">
-      {editor && !readOnly && (
+      {editor && isEditorViewMounted && !readOnly && (
         <BubbleMenu
           editor={editor}
           pluginKey="bubbleMenu"
@@ -220,7 +267,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
         </BubbleMenu>
       )}
-      {editor && !readOnly && (
+      {editor && isEditorViewMounted && !readOnly && (
         <FloatingMenu
           editor={editor}
           pluginKey="floatingMenu"
