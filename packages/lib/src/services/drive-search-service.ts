@@ -300,14 +300,14 @@ function extractLiteralMatchingLines(
     return { matchingLines: [], totalMatches: 0 };
   }
 
-  const needle = literalPattern.toLowerCase();
+  const needle = literalPattern;
   const matchingLines: Array<{ lineNumber: number; content: string }> = [];
   let totalMatches = 0;
 
   const lines = content.split('\n');
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    if (!line.toLowerCase().includes(needle)) {
+    if (!line.includes(needle)) {
       continue;
     }
 
@@ -385,7 +385,9 @@ export async function regexSearchPages(
 
   try {
     matchingPages = await db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL statement_timeout = ${REGEX_QUERY_TIMEOUT_MS}`);
+      await tx.execute(
+        sql`SELECT set_config('statement_timeout', ${REGEX_QUERY_TIMEOUT_MS}::text, true)`
+      );
       return tx
         .select({
           id: pages.id,
