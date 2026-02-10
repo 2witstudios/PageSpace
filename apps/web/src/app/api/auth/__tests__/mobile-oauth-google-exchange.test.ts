@@ -70,6 +70,18 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
+vi.mock('@pagespace/db', () => ({
+  users: { id: 'id', image: 'image' },
+  db: {
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    }),
+  },
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
@@ -191,7 +203,10 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(createOrLinkOAuthUser).toHaveBeenCalledWith(mockUserInfo);
+      expect(createOrLinkOAuthUser).toHaveBeenCalledWith({
+        ...mockUserInfo,
+        picture: undefined,
+      });
     });
 
     it('creates device token for mobile platform', async () => {
@@ -737,7 +752,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const response = await POST(request);
       const body = await response.json();
 
-      expect(body.user.picture).toBe(mockUser.image);
+      expect(body.user.picture).toBeNull();
     });
 
     it('returns user role', async () => {

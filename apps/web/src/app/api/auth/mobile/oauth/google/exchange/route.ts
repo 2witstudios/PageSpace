@@ -51,6 +51,7 @@ import {
   generateCSRFToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import { db, users, eq } from '@pagespace/db';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -63,6 +64,7 @@ import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pages
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
+import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -214,7 +216,24 @@ export async function POST(req: Request) {
       provider: userInfo.provider,
     });
 
-    const user = await createOrLinkOAuthUser(userInfo);
+    const googlePictureUrl = userInfo.picture;
+    let user = await createOrLinkOAuthUser({
+      ...userInfo,
+      picture: undefined,
+    });
+
+    const resolvedImage = await resolveGoogleAvatarImage({
+      userId: user.id,
+      pictureUrl: googlePictureUrl,
+      existingImage: user.image,
+    });
+
+    if (resolvedImage !== (user.image ?? null)) {
+      await db.update(users)
+        .set({ image: resolvedImage })
+        .where(eq(users.id, user.id));
+      user = { ...user, image: resolvedImage };
+    }
 
     loggers.auth.info('OAuth user created/linked', {
       userId: user.id,
