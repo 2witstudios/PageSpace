@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
-import Editor, { useMonaco } from '@monaco-editor/react';
+import { useEffect, useMemo, useCallback } from 'react';
+import Editor, { useMonaco, type Monaco } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { useMonacoTheme } from '@/hooks/useMonacoTheme';
+import { registerSudolangLanguage } from '@/lib/editor/monaco/sudolang-language';
 
 interface MonacoEditorProps {
   value: string;
@@ -82,6 +83,15 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', option
   const monaco = useMonaco();
   const theme = useMonacoTheme(monaco);
 
+  const handleBeforeMount = useCallback((monacoInstance: Monaco) => {
+    registerSudolangLanguage(monacoInstance);
+  }, []);
+
+  useEffect(() => {
+    if (!monaco) return;
+    registerSudolangLanguage(monaco);
+  }, [monaco]);
+
   const defaultOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(() => ({
     readOnly,
     domReadOnly: readOnly,
@@ -114,11 +124,16 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', option
   return (
     <div className={className} style={{ height: '100%' }}>
       <Editor
+        beforeMount={handleBeforeMount}
         height="100%"
         language={language}
         theme={theme}
         value={value}
-        onChange={onChange}
+        onChange={(nextValue) => {
+          if (nextValue !== undefined) {
+            onChange?.(nextValue);
+          }
+        }}
         options={mergedOptions}
       />
     </div>
