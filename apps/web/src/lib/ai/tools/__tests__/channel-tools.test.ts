@@ -99,6 +99,10 @@ const executeToolAs = async (
 describe('channel-tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetActorInfo.mockResolvedValue({
+      actorEmail: 'test@example.com',
+      actorDisplayName: 'Test User',
+    });
     mockCanUserViewPage.mockResolvedValue(true);
     mockChannelMessagesFindFirst.mockResolvedValue({
       id: 'msg-1',

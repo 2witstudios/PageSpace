@@ -19,6 +19,7 @@ vi.mock('@pagespace/lib/server', () => ({
   canUserViewPage: vi.fn(),
   loggers: {
     ai: {
+      debug: vi.fn(),
       child: vi.fn(() => ({
         warn: vi.fn(),
         error: vi.fn(),
@@ -66,7 +67,14 @@ if (!askAgentExecute || !sendChannelExecute) {
 const mockAskAgentExecute = vi.mocked(askAgentExecute);
 const mockSendChannelExecute = vi.mocked(sendChannelExecute);
 
-const createAskAgentSuccess = (response: string) => ({
+type AskAgentExecutionResult = Awaited<ReturnType<typeof askAgentExecute>>;
+type AskAgentSuccessResult = Extract<AskAgentExecutionResult, { success: true }>;
+type AskAgentFailureResult = Extract<AskAgentExecutionResult, { success: false }>;
+
+type SendChannelExecutionResult = Awaited<ReturnType<typeof sendChannelExecute>>;
+type SendChannelSuccessResult = Extract<SendChannelExecutionResult, { success: true }>;
+
+const createAskAgentSuccess = (response: string): AskAgentSuccessResult => ({
   success: true,
   agent: 'Budget Agent',
   agentPath: '/Budget Agent',
@@ -88,7 +96,7 @@ const createAskAgentSuccess = (response: string) => ({
   },
 });
 
-const createAskAgentFailure = (error: string) => ({
+const createAskAgentFailure = (error: string): AskAgentFailureResult => ({
   success: false,
   agent: '/Budget Agent',
   error,
@@ -100,7 +108,7 @@ const createAskAgentFailure = (error: string) => ({
   },
 });
 
-const createSendChannelSuccess = () => ({
+const createSendChannelSuccess = (): SendChannelSuccessResult => ({
   success: true,
   messageId: 'msg-agent-1',
   channelId: 'channel-1',
