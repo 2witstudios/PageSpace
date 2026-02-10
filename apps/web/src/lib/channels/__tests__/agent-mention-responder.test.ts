@@ -64,56 +64,10 @@ if (!askAgentExecute || !sendChannelExecute) {
   throw new Error('Agent mention responder tool mocks are unavailable');
 }
 
-const mockAskAgentExecute = vi.mocked(askAgentExecute);
-const mockSendChannelExecute = vi.mocked(sendChannelExecute);
+const mockAskAgentExecute = askAgentExecute as unknown as Mock;
+const mockSendChannelExecute = sendChannelExecute as unknown as Mock;
 
-interface AskAgentSuccessResult {
-  success: true;
-  agent: string;
-  agentPath: string;
-  question: string;
-  response: string;
-  context: string | undefined;
-  conversationId: string;
-  metadata: {
-    agentId: string;
-    processingTime: number;
-    persistent: boolean;
-    isNewConversation: boolean;
-    callDepth: number;
-    provider: string;
-    model: string;
-    toolsEnabled: number;
-    toolCalls: number;
-    steps: number;
-  };
-}
-
-interface AskAgentFailureResult {
-  success: false;
-  agent: string;
-  error: string;
-  question: string;
-  context: string | undefined;
-  metadata: {
-    processingTime: number;
-    callDepth: number;
-  };
-}
-
-interface SendChannelSuccessResult {
-  success: true;
-  messageId: string;
-  channelId: string;
-  channelTitle: string;
-  senderName: string;
-  senderType: 'global_assistant' | 'agent';
-  messagePreview: string;
-  message: string;
-  summary: string;
-}
-
-const createAskAgentSuccess = (response: string): AskAgentSuccessResult => ({
+const createAskAgentSuccess = (response: string) => ({
   success: true,
   agent: 'Budget Agent',
   agentPath: '/Budget Agent',
@@ -135,7 +89,7 @@ const createAskAgentSuccess = (response: string): AskAgentSuccessResult => ({
   },
 });
 
-const createAskAgentFailure = (error: string): AskAgentFailureResult => ({
+const createAskAgentFailure = (error: string) => ({
   success: false,
   agent: '/Budget Agent',
   error,
@@ -147,7 +101,7 @@ const createAskAgentFailure = (error: string): AskAgentFailureResult => ({
   },
 });
 
-const createSendChannelSuccess = (): SendChannelSuccessResult => ({
+const createSendChannelSuccess = () => ({
   success: true,
   messageId: 'msg-agent-1',
   channelId: 'channel-1',
