@@ -4,6 +4,8 @@ import { useTheme } from 'next-themes';
 import { useEffect, useState } from 'react';
 import type { Monaco } from '@monaco-editor/react';
 
+let colorResolveContext: CanvasRenderingContext2D | null | undefined;
+
 function getCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -101,6 +103,47 @@ function parseRgbLikeColorToHex(value: string): string | null {
   return `#${byteToHex(r)}${byteToHex(g)}${byteToHex(b)}${alphaHex}`;
 }
 
+function getColorResolveContext(): CanvasRenderingContext2D | null {
+  if (colorResolveContext !== undefined) {
+    return colorResolveContext;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  colorResolveContext = canvas.getContext('2d', { willReadFrequently: true });
+  return colorResolveContext;
+}
+
+function parseCssColorToHex(value: string): string | null {
+  const input = value.trim();
+  if (!input || typeof window === 'undefined') {
+    return null;
+  }
+
+  if (!('CSS' in window) || typeof window.CSS.supports !== 'function') {
+    return null;
+  }
+
+  if (!window.CSS.supports('color', input)) {
+    return null;
+  }
+
+  const context = getColorResolveContext();
+  if (!context) {
+    return null;
+  }
+
+  context.clearRect(0, 0, 1, 1);
+  context.fillStyle = 'rgba(0, 0, 0, 0)';
+  context.fillStyle = input;
+  context.fillRect(0, 0, 1, 1);
+
+  const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+  const alphaHex = a < 255 ? byteToHex(a) : '';
+  return `#${byteToHex(r)}${byteToHex(g)}${byteToHex(b)}${alphaHex}`;
+}
+
 function getComputedColorValue(cssValue: string): string | null {
   const probe = document.createElement('span');
   probe.style.color = '';
@@ -136,9 +179,17 @@ function resolveColor(cssValue: string, fallback: string): string {
     return directRgbHex;
   }
 
+  const cssHex = parseCssColorToHex(cssValue);
+  if (cssHex) {
+    return cssHex;
+  }
+
   const computed = getComputedColorValue(cssValue);
   if (computed) {
-    const computedHex = normalizeHexColor(computed) ?? parseRgbLikeColorToHex(computed);
+    const computedHex =
+      normalizeHexColor(computed) ??
+      parseRgbLikeColorToHex(computed) ??
+      parseCssColorToHex(computed);
     if (computedHex) {
       return computedHex;
     }
@@ -211,9 +262,11 @@ export function useMonacoTheme(monaco: Monaco | null): string {
         colors: {
           'editor.background': bg,
           'editor.foreground': fg,
-          'editor.lineHighlightBackground': muted,
+          'editor.lineHighlightBackground': isDark ? '#00000000' : muted,
+          'editor.lineHighlightBorder': isDark ? '#00000000' : border,
           'editorLineNumber.foreground': mutedForeground,
           'editorGutter.background': bg,
+          'minimap.background': bg,
           'editor.selectionBackground': isDark
             ? withAlpha(primary, 0.25, fallbackPalette.primary)
             : withAlpha(primary, 0.20, fallbackPalette.primary),
