@@ -174,14 +174,14 @@ export function useMonacoTheme(monaco: Monaco | null): string {
 
     const fallbackPalette = isDark
       ? {
-          background: '#262626',
+          background: '#222222',
           foreground: '#f0f0f0',
-          border: '#404040',
-          muted: '#2e2e2e',
-          mutedForeground: '#8f8f8f',
+          border: '#373737',
+          muted: '#353535',
+          mutedForeground: '#737373',
           primary: '#5b8cff',
-          card: '#1f1f1f',
-          input: '#303030',
+          card: '#2b2b2b',
+          input: '#373737',
         }
       : {
           background: '#ffffff',
