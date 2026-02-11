@@ -72,6 +72,7 @@ vi.mock('../../../../../../lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => {
     return typeof result === 'object' && result !== null && 'error' in result;
   }),
+  checkMCPDriveScope: vi.fn(() => null), // Default: MCP scope check passes
 }));
 
 vi.mock('../../../../../../lib/websocket/calendar-events', () => ({
