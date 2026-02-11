@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -62,6 +62,10 @@ export async function PATCH(
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, message.pageId);
+    if (scopeError) return scopeError;
 
     // Check if user can edit the page this message belongs to
     const canEdit = await canUserEditPage(userId, message.pageId);
@@ -149,6 +153,10 @@ export async function DELETE(
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, message.pageId);
+    if (scopeError) return scopeError;
 
     // Check if user can edit the page this message belongs to
     const canEdit = await canUserEditPage(userId, message.pageId);

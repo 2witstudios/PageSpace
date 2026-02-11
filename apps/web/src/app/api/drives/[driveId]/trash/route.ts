@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { drives, pages, driveMembers, db, and, eq, asc } from '@pagespace/db';
 import { buildTree } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -30,6 +30,10 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
         { status: 404 },
       );
     }
+
+    // Check MCP drive scope
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     // Check if user is owner
     const isOwner = drive.ownerId === auth.userId;

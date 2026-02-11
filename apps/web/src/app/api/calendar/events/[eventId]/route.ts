@@ -8,7 +8,7 @@ import {
   and,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
@@ -123,6 +123,12 @@ export async function GET(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Check access
     const hasAccess = await canAccessEvent(userId, event);
     if (!hasAccess) {
@@ -167,6 +173,12 @@ export async function PATCH(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
     }
 
     // Check edit permission
@@ -300,6 +312,12 @@ export async function DELETE(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
     }
 
     // Check edit permission

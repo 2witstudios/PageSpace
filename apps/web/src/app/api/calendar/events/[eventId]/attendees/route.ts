@@ -9,7 +9,7 @@ import {
 } from '@pagespace/db';
 import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
 import { isUserDriveMember } from '@pagespace/lib';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -59,6 +59,12 @@ export async function GET(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
     }
 
     const isCreator = event.createdById === userId;
@@ -173,6 +179,12 @@ export async function POST(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
     }
 
     // Only creator can add attendees
@@ -306,6 +318,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Verify user is an attendee
     const attendee = await db.query.eventAttendees.findFirst({
       where: and(
@@ -403,6 +421,12 @@ export async function DELETE(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
     }
 
     // Check permissions

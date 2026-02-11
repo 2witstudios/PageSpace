@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs } from 'ai';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 
@@ -174,6 +174,10 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check view permissions
     const canView = await canUserViewPage(userId, agentId);

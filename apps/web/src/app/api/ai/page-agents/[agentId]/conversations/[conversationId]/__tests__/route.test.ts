@@ -26,6 +26,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPPageScope: vi.fn(),
 }));
 
 // Mock permissions (boundary)
@@ -40,7 +41,7 @@ vi.mock('@pagespace/lib/server', () => ({
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 
 // Test fixtures
@@ -94,6 +95,9 @@ describe('PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]', (
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: MCP scope check passes (null = no error)
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
@@ -278,6 +282,9 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: MCP scope check passes (null = no error)
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);

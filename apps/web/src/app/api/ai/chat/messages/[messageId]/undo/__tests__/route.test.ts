@@ -23,6 +23,7 @@ vi.mock('@/services/api', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  checkMCPPageScope: vi.fn(),
 }));
 
 // Mock repository
@@ -62,11 +63,12 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/server';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
+const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);
 const mockPreviewAiUndo = vi.mocked(previewAiUndo);
 const mockExecuteAiUndo = vi.mocked(executeAiUndo);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -156,6 +158,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuth.mockResolvedValue(mockWebAuth(mockUserId));
+    mockCheckMCPPageScope.mockResolvedValue(null); // MCP scope check passes
     mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
     mockCanUserEditPage.mockResolvedValue(true);
     mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' } as never);
@@ -253,6 +256,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuth.mockResolvedValue(mockWebAuth(mockUserId));
+    mockCheckMCPPageScope.mockResolvedValue(null); // MCP scope check passes
     mockPreviewAiUndo.mockResolvedValue(createAiUndoPreview());
     mockCanUserEditPage.mockResolvedValue(true);
     mockGlobalConvRepo.getConversationById.mockResolvedValue({ id: 'conv_123' } as never);
