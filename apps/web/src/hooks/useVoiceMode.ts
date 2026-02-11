@@ -71,7 +71,6 @@ export interface UseVoiceModeReturn {
   // Actions
   enable: (owner?: VoiceModeOwner) => void;
   disable: () => void;
-  toggle: () => void;
   startListening: () => Promise<void>;
   stopListening: () => void;
   speak: (text: string) => Promise<void>;
@@ -143,7 +142,6 @@ export function useVoiceMode({
   // Store actions
   const enable = useVoiceModeStore((s) => s.enable);
   const disable = useVoiceModeStore((s) => s.disable);
-  const toggle = useVoiceModeStore((s) => s.toggle);
   const setInteractionMode = useVoiceModeStore((s) => s.setInteractionMode);
   const setTTSVoice = useVoiceModeStore((s) => s.setTTSVoice);
   const setAutoSend = useVoiceModeStore((s) => s.setAutoSend);
@@ -714,7 +712,6 @@ export function useVoiceMode({
     // Actions
     enable,
     disable,
-    toggle,
     startListening,
     stopListening,
     speak,

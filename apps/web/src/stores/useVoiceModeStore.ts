@@ -57,7 +57,6 @@ interface VoiceModeState {
   // Actions
   enable: (owner?: VoiceModeOwner) => void;
   disable: () => void;
-  toggle: () => void;
 
   setInteractionMode: (mode: VoiceInteractionMode) => void;
   setTTSVoice: (voice: TTSVoice) => void;
@@ -124,14 +123,6 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     });
     if (typeof window !== 'undefined') {
       localStorage.setItem(VOICE_MODE_KEY, 'false');
-    }
-  },
-
-  toggle: () => {
-    if (get().isEnabled) {
-      get().disable();
-    } else {
-      get().enable();
     }
   },
 

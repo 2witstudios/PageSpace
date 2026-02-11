@@ -28,7 +28,6 @@ describe('VoiceModeDock playback behavior', () => {
       error: null,
       enable: vi.fn(),
       disable: vi.fn(),
-      toggle: vi.fn(),
       startListening: mockStartListening,
       stopListening: vi.fn(),
       speak: mockSpeak,
