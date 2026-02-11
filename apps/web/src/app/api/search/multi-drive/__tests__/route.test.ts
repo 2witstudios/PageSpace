@@ -7,7 +7,16 @@ vi.mock('@/lib/auth', () => ({
   filterDrivesByMCPScope: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  getBatchPagePermissions: vi.fn(),
+  getDriveIdsForUser: vi.fn(),
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn() },
+  },
+}));
+
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
+import { getDriveIdsForUser } from '@pagespace/lib/server';
 
 const mockSessionAuth = {
   userId: 'user_123',
@@ -37,34 +46,45 @@ describe('GET /api/search/multi-drive - MCP Scope Enforcement', () => {
 
   describe('MCP drive scope enforcement', () => {
     it('should call filterDrivesByMCPScope when MCP token is used', async () => {
+      const mockDriveIds = ['drive_abc', 'drive_def'];
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockMCPAuthScoped);
       vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(getDriveIdsForUser).mockResolvedValue(mockDriveIds);
+      vi.mocked(filterDrivesByMCPScope).mockReturnValue(['drive_abc']);
 
       const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
-      await GET(request);
+      const response = await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalled();
+      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(mockMCPAuthScoped, mockDriveIds);
+      expect(response.status).not.toBe(500);
     });
 
-    it('should call filterDrivesByMCPScope with scoped drives when token has scope', async () => {
+    it('should filter to only scoped drives when MCP token has scope', async () => {
+      const mockDriveIds = ['drive_abc', 'drive_def', 'drive_ghi'];
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockMCPAuthScoped);
       vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(getDriveIdsForUser).mockResolvedValue(mockDriveIds);
       vi.mocked(filterDrivesByMCPScope).mockReturnValue([scopedDriveId]);
 
       const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
-      await GET(request);
+      const response = await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalled();
+      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(mockMCPAuthScoped, mockDriveIds);
+      expect(response.status).not.toBe(500);
     });
 
-    it('should NOT call filterDrivesByMCPScope for session auth', async () => {
+    it('should call filterDrivesByMCPScope for session auth (returns unfiltered drives)', async () => {
+      const mockDriveIds = ['drive_123', 'drive_456'];
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth);
       vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(getDriveIdsForUser).mockResolvedValue(mockDriveIds);
+      vi.mocked(filterDrivesByMCPScope).mockReturnValue(mockDriveIds);
 
       const request = new Request('https://example.com/api/search/multi-drive?searchQuery=test');
-      await GET(request);
+      const response = await GET(request);
 
-      expect(filterDrivesByMCPScope).toHaveBeenCalled();
+      expect(filterDrivesByMCPScope).toHaveBeenCalledWith(mockSessionAuth, mockDriveIds);
+      expect(response.status).not.toBe(500);
     });
   });
 });

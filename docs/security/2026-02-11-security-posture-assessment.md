@@ -89,7 +89,8 @@ Representative evidence:
   - `apps/web/src/app/api/upload/route.ts:146`
 
 Quantified blast radius:
-- 47 hybrid routes found; 30 do not directly call MCP scope helper functions (`checkMCPDriveScope`, `checkMCPPageScope`, `filterDrivesByMCPScope`, `checkMCPCreateScope`, `getAllowedDriveIds`).
+- 47 hybrid routes found; 13 do not directly call MCP scope helper functions (`checkMCPDriveScope`, `checkMCPPageScope`, `filterDrivesByMCPScope`, `checkMCPCreateScope`, `getAllowedDriveIds`).
+- 17 routes were fixed in PR #553 (see Appendix A for details).
 
 ### P1: Suspended users can still use MCP tokens
 Risk vector:
@@ -138,34 +139,40 @@ Evidence:
 - Suspension test for MCP token auth.
 - Processor delete authorization test.
 
-## Appendix A: Hybrid Routes Missing Direct MCP Scope Helper Calls (30)
-- `apps/web/src/app/api/upload/route.ts`
-- `apps/web/src/app/api/search/multi-drive/route.ts`
-- `apps/web/src/app/api/activities/export/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/restore/route.ts`
+## Appendix A: MCP Scope Enforcement Status
+
+### Routes Fixed in PR #553 (17)
+These routes now call MCP scope helper functions:
+- `apps/web/src/app/api/upload/route.ts` - uses `checkMCPCreateScope`
+- `apps/web/src/app/api/search/multi-drive/route.ts` - uses `filterDrivesByMCPScope`
+- `apps/web/src/app/api/activities/export/route.ts` - uses `checkMCPDriveScope`, `checkMCPPageScope`, `getAllowedDriveIds`
+- `apps/web/src/app/api/activities/route.ts` - uses `checkMCPDriveScope`, `checkMCPPageScope`, `getAllowedDriveIds`
+- `apps/web/src/app/api/activities/actors/route.ts` - uses `checkMCPDriveScope`, `getAllowedDriveIds`
+- `apps/web/src/app/api/pages/tree/route.ts` - uses `checkMCPDriveScope`
+- `apps/web/src/app/api/pages/reorder/route.ts` - uses `checkMCPDriveScope`
+- `apps/web/src/app/api/pages/[pageId]/export/markdown/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/export/docx/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/export/csv/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/export/xlsx/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/history/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/restore/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/versions/compare/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/pages/[pageId]/agent-config/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/drives/[driveId]/restore/route.ts` - uses `checkMCPDriveScope`
+- `apps/web/src/app/api/drives/[driveId]/access/route.ts` - uses `checkMCPDriveScope`
+
+### Routes Still Outstanding (13)
+These routes accept MCP tokens but do not directly call MCP scope helpers:
 - `apps/web/src/app/api/calendar/events/[eventId]/route.ts`
 - `apps/web/src/app/api/calendar/events/[eventId]/attendees/route.ts`
 - `apps/web/src/app/api/activities/[activityId]/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/export/docx/route.ts`
 - `apps/web/src/app/api/calendar/events/route.ts`
-- `apps/web/src/app/api/activities/actors/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/export/csv/route.ts`
-- `apps/web/src/app/api/activities/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/export/xlsx/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/export/markdown/route.ts`
-- `apps/web/src/app/api/drives/[driveId]/restore/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/history/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/versions/compare/route.ts`
 - `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts`
 - `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/route.ts`
 - `apps/web/src/app/api/drives/[driveId]/trash/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/agent-config/route.ts`
 - `apps/web/src/app/api/ai/chat/messages/[messageId]/undo/route.ts`
 - `apps/web/src/app/api/ai/page-agents/consult/route.ts`
 - `apps/web/src/app/api/pages/[pageId]/tasks/[taskId]/route.ts`
 - `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts`
-- `apps/web/src/app/api/pages/reorder/route.ts`
 - `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/messages/route.ts`
 - `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/route.ts`
-- `apps/web/src/app/api/pages/tree/route.ts`
-- `apps/web/src/app/api/drives/[driveId]/access/route.ts`
