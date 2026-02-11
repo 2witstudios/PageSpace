@@ -18,7 +18,7 @@ interface MonacoEditorProps {
 
 configureMonacoLoader();
 
-const MonacoEditor = ({ value, onChange, readOnly, language = 'markdown', options: optionOverrides, className }: MonacoEditorProps) => {
+const MonacoEditor = ({ value, onChange, readOnly, language = 'html', options: optionOverrides, className }: MonacoEditorProps) => {
   const monaco = useMonaco();
   const theme = useMonacoTheme(monaco);
 

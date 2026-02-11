@@ -17,7 +17,7 @@ We use a controlled component wrapper around `@monaco-editor/react`.
 **Props Interface:**
 *   `value`: The content string (HTML or Markdown).
 *   `onChange`: Callback when content changes.
-*   `language`: Any Monaco language identifier (default: `"markdown"`). Common values: `"markdown"`, `"html"`, `"javascript"`, etc.
+*   `language`: `"html"` (default) or `"markdown"`.
 *   `readOnly`: optimized read-only mode.
 
 ### Editor Configuration
@@ -33,8 +33,8 @@ We configure Monaco for a distraction-free but powerful experience:
 
 ### Language Support
 
-*   **Markdown:** Default mode. Used when page `contentMode` is markdown.
-*   **HTML:** Supported mode. Provides tag matching, auto-completion, and syntax coloring.
+*   **HTML:** Default mode. Provides tag matching, auto-completion, and syntax coloring.
+*   **Markdown:** Optional mode with simplified features. Used when page `contentMode` is markdown.
 *   **Sudolang:** We register a custom `sudolang` language definition (via `registerSudolangLanguage`) for specialized AI prompting files, ensuring they have proper syntax highlighting.
 
 ### Web Worker Configuration
