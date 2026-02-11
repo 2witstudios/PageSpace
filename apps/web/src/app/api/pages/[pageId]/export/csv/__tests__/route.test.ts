@@ -46,6 +46,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
 import { db } from '@pagespace/db';

@@ -23,6 +23,7 @@ vi.mock('../../../../../../services/api', () => ({
 vi.mock('../../../../../../lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock permissions

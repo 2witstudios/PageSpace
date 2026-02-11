@@ -26,6 +26,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/websocket', () => ({
