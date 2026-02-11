@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -32,6 +32,10 @@ export async function PATCH(
         { status: 404 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check permissions (need edit to modify conversations)
     const canEdit = await canUserEditPage(auth.userId, agentId);
@@ -117,6 +121,10 @@ export async function DELETE(
         { status: 404 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check permissions (need edit to delete conversations)
     const canEdit = await canUserEditPage(auth.userId, agentId);

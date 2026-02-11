@@ -89,8 +89,8 @@ Representative evidence:
   - `apps/web/src/app/api/upload/route.ts:146`
 
 Quantified blast radius:
-- 47 hybrid routes found; 13 do not directly call MCP scope helper functions (`checkMCPDriveScope`, `checkMCPPageScope`, `filterDrivesByMCPScope`, `checkMCPCreateScope`, `getAllowedDriveIds`).
-- 17 routes were fixed in PR #553 (see Appendix A for details).
+- 53 hybrid routes found; all now have explicit MCP scope enforcement.
+- 17 routes were fixed in PR #553; 13 additional routes were fixed in PR #547-v2 (see Appendix A for details).
 
 ### P1: Suspended users can still use MCP tokens
 Risk vector:
@@ -161,18 +161,21 @@ These routes now call MCP scope helper functions:
 - `apps/web/src/app/api/drives/[driveId]/restore/route.ts` - uses `checkMCPDriveScope`
 - `apps/web/src/app/api/drives/[driveId]/access/route.ts` - uses `checkMCPDriveScope`
 
-### Routes Still Outstanding (13)
-These routes accept MCP tokens but do not directly call MCP scope helpers:
-- `apps/web/src/app/api/calendar/events/[eventId]/route.ts`
-- `apps/web/src/app/api/calendar/events/[eventId]/attendees/route.ts`
-- `apps/web/src/app/api/activities/[activityId]/route.ts`
-- `apps/web/src/app/api/calendar/events/route.ts`
-- `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts`
-- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/route.ts`
-- `apps/web/src/app/api/drives/[driveId]/trash/route.ts`
-- `apps/web/src/app/api/ai/chat/messages/[messageId]/undo/route.ts`
-- `apps/web/src/app/api/ai/page-agents/consult/route.ts`
-- `apps/web/src/app/api/pages/[pageId]/tasks/[taskId]/route.ts`
-- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts`
-- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/messages/route.ts`
-- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/route.ts`
+### Routes Fixed in PR #547-v2 (13)
+These routes now call MCP scope helper functions:
+- `apps/web/src/app/api/calendar/events/[eventId]/route.ts` - uses `checkMCPDriveScope`
+- `apps/web/src/app/api/calendar/events/[eventId]/attendees/route.ts` - uses `checkMCPDriveScope`
+- `apps/web/src/app/api/calendar/events/route.ts` - uses `checkMCPDriveScope`, `checkMCPCreateScope`, `filterDrivesByMCPScope`
+- `apps/web/src/app/api/activities/[activityId]/route.ts` - uses `checkMCPPageScope`, `checkMCPDriveScope`
+- `apps/web/src/app/api/ai/chat/messages/[messageId]/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/ai/chat/messages/[messageId]/undo/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/ai/page-agents/consult/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/messages/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/[conversationId]/messages/[messageId]/route.ts` - uses `checkMCPPageScope`
+- `apps/web/src/app/api/drives/[driveId]/trash/route.ts` - uses `checkMCPDriveScope`
+- `apps/web/src/app/api/pages/[pageId]/tasks/[taskId]/route.ts` - uses `checkMCPPageScope`
+
+### Routes Still Outstanding (0)
+All hybrid routes now have explicit MCP scope enforcement.

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import {
@@ -39,6 +39,10 @@ export async function GET(
         { status: 404 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check permissions
     const canView = await canUserViewPage(auth.userId, agentId);
@@ -137,6 +141,10 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check permissions
     const canView = await canUserViewPage(auth.userId, agentId);

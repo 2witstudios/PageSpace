@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMCPDriveScope } from '@/lib/auth';
 import { getActivityById, previewRollback } from '@/services/api';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions';
 import type { RollbackContext } from '@pagespace/lib/permissions';
@@ -50,6 +50,15 @@ export async function GET(
       { error: 'Activity not found' },
       { status: 404 }
     );
+  }
+
+  // Check MCP scope based on activity's associated resource
+  if (activity.pageId) {
+    const scopeError = await checkMCPPageScope(auth, activity.pageId);
+    if (scopeError) return scopeError;
+  } else if (activity.driveId) {
+    const scopeError = checkMCPDriveScope(auth, activity.driveId);
+    if (scopeError) return scopeError;
   }
 
   // Authorization check: User must have access to the associated resource

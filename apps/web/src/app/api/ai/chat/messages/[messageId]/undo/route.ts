@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, type AuthResult } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -23,6 +23,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: tr
  * Returns a NextResponse if permission denied, null if allowed
  */
 async function checkUndoPermissions(
+  auth: AuthResult,
   userId: string,
   messageId: string,
   preview: AiUndoPreview,
@@ -32,6 +33,11 @@ async function checkUndoPermissions(
     if (!preview.pageId) {
       return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, preview.pageId);
+    if (scopeError) return scopeError;
+
     const canEdit = await canUserEditPage(userId, preview.pageId);
     if (!canEdit) {
       loggers.api.warn(`Undo ${operationType} permission denied`, {
@@ -95,7 +101,7 @@ export async function GET(
       source: preview.source,
       pageId: preview.pageId ? maskIdentifier(preview.pageId) : null,
     });
-    const permissionError = await checkUndoPermissions(userId, messageId, preview, 'preview');
+    const permissionError = await checkUndoPermissions(auth, userId, messageId, preview, 'preview');
     if (permissionError) return permissionError;
 
     loggers.api.debug('[AiUndo:Route] Permission check passed');
@@ -161,7 +167,7 @@ export async function POST(
     }
 
     // Check permissions
-    const permissionError = await checkUndoPermissions(userId, messageId, preview, 'execution');
+    const permissionError = await checkUndoPermissions(auth, userId, messageId, preview, 'execution');
     if (permissionError) return permissionError;
 
     loggers.api.debug('[AiUndo:Route] Executing undo', {
