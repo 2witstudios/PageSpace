@@ -15,14 +15,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
 import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { VoiceModeOverlay } from '@/components/ai/voice';
+import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
@@ -58,6 +58,8 @@ interface AiChatViewProps {
   page: TreePage;
 }
 
+const VOICE_OWNER: VoiceModeOwner = 'ai-page';
+
 const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const params = useParams();
   const driveId = params.driveId as string;
@@ -78,14 +80,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
   const [consentProvider, setConsentProvider] = useState<string | null>(null);
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const voiceOwner = useVoiceModeStore((s) => s.owner);
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -280,6 +284,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (error) setShowError(true);
   }, [error]);
 
+  useEffect(() => {
+    if (!isVoiceModeActive) {
+      setShowVoiceSettings(false);
+    }
+  }, [isVoiceModeActive]);
+
   // Check if OpenAI is configured (required for voice mode)
   useEffect(() => {
     const checkOpenAI = async () => {
@@ -298,17 +308,21 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Track last AI response for voice mode TTS
   useEffect(() => {
-    if (!isVoiceModeEnabled || isStreaming) return;
+    if (!isVoiceModeActive || isStreaming) return;
 
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
     if (lastAssistantMsg) {
       const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
       const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text && text !== lastAIResponse) {
-        setLastAIResponse(text);
+      if (text.trim()) {
+        setLastAIResponse((current) =>
+          current?.id === lastAssistantMsg.id
+            ? current
+            : { id: lastAssistantMsg.id, text }
+        );
       }
     }
-  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+  }, [messages, isStreaming, isVoiceModeActive]);
 
   // ============================================
   // HANDLERS
@@ -435,12 +449,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Voice mode toggle handler
   const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeEnabled) {
+    if (isVoiceModeActive) {
       disableVoiceMode();
+      setShowVoiceSettings(false);
     } else {
-      enableVoiceMode();
+      enableVoiceMode(VOICE_OWNER);
     }
-  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
+  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -549,18 +564,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Voice Mode Overlay */}
-      {isVoiceModeEnabled && (
-        <VoiceModeOverlay
-          onClose={disableVoiceMode}
-          onSend={handleVoiceSend}
-          aiResponse={lastAIResponse}
-          isAIStreaming={isStreaming}
-          showSettings={showVoiceSettings}
-          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-        />
-      )}
-
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
         <div className="p-4 border-b border-[var(--separator)] space-y-3">
           <div className="flex items-center justify-between">
@@ -659,40 +662,52 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onMcpServerToggle={setServerEnabled}
             showMcp={isDesktop}
             renderInput={(props) => (
-              <ChatInput
-                ref={inputRef}
-                value={props.value}
-                onChange={props.onChange}
-                onSend={props.onSend}
-                onStop={props.onStop}
-                isStreaming={props.isStreaming}
-                disabled={props.disabled}
-                placeholder={props.placeholder}
-                driveId={props.driveId}
-                crossDrive={props.crossDrive}
-                mcpRunningServers={props.mcpRunningServers}
-                mcpServerNames={props.mcpServerNames}
-                mcpEnabledCount={props.mcpEnabledCount}
-                mcpAllEnabled={props.mcpAllEnabled}
-                onMcpToggleAll={props.onMcpToggleAll}
-                isMcpServerEnabled={props.isMcpServerEnabled}
-                onMcpServerToggle={props.onMcpServerToggle}
-                showMcp={props.showMcp}
-                popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
-                selectedProvider={selectedProvider}
-                selectedModel={selectedModel}
-                onProviderModelChange={(provider, model) => {
-                  setSelectedProvider(provider);
-                  setSelectedModel(model);
-                }}
-                onVoiceModeClick={handleVoiceModeToggle}
-                isVoiceModeActive={isVoiceModeEnabled}
-                isVoiceModeAvailable={isOpenAIConfigured}
-                attachments={attachments}
-                onAddFiles={addFiles}
-                onRemoveFile={removeFile}
-                hasVision={hasVision}
-              />
+              isVoiceModeActive ? (
+                <VoiceModeDock
+                  owner={VOICE_OWNER}
+                  onSend={handleVoiceSend}
+                  aiResponse={lastAIResponse}
+                  isAIStreaming={isStreaming}
+                  showSettings={showVoiceSettings}
+                  onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+                  onClose={() => setShowVoiceSettings(false)}
+                />
+              ) : (
+                <ChatInput
+                  ref={inputRef}
+                  value={props.value}
+                  onChange={props.onChange}
+                  onSend={props.onSend}
+                  onStop={props.onStop}
+                  isStreaming={props.isStreaming}
+                  disabled={props.disabled}
+                  placeholder={props.placeholder}
+                  driveId={props.driveId}
+                  crossDrive={props.crossDrive}
+                  mcpRunningServers={props.mcpRunningServers}
+                  mcpServerNames={props.mcpServerNames}
+                  mcpEnabledCount={props.mcpEnabledCount}
+                  mcpAllEnabled={props.mcpAllEnabled}
+                  onMcpToggleAll={props.onMcpToggleAll}
+                  isMcpServerEnabled={props.isMcpServerEnabled}
+                  onMcpServerToggle={props.onMcpServerToggle}
+                  showMcp={props.showMcp}
+                  popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
+                  selectedProvider={selectedProvider}
+                  selectedModel={selectedModel}
+                  onProviderModelChange={(provider, model) => {
+                    setSelectedProvider(provider);
+                    setSelectedModel(model);
+                  }}
+                  onVoiceModeClick={handleVoiceModeToggle}
+                  isVoiceModeActive={isVoiceModeActive}
+                  isVoiceModeAvailable={isOpenAIConfigured}
+                  attachments={attachments}
+                  onAddFiles={addFiles}
+                  onRemoveFile={removeFile}
+                  hasVision={hasVision}
+                />
+              )
             )}
           />
         </TabsContent>
