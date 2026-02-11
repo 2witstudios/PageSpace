@@ -60,8 +60,6 @@ const mockMCPAuthScoped = {
 };
 
 describe('GET /api/search/multi-drive - MCP Scope Enforcement', () => {
-  const scopedDriveId = 'drive_abc';
-
   beforeEach(() => {
     vi.resetAllMocks();
   });
