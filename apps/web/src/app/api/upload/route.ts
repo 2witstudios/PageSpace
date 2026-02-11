@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { db, pages, drives, filePages, files, eq, isNull } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { PageType } from '@pagespace/lib/server';
@@ -67,6 +67,10 @@ export async function POST(request: NextRequest) {
     if (!driveId) {
       return NextResponse.json({ error: 'Drive ID is required' }, { status: 400 });
     }
+
+    // Check MCP token scope before file creation
+    const scopeError = checkMCPCreateScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     // Verify drive exists and user has access
     const drive = await db.query.drives.findFirst({

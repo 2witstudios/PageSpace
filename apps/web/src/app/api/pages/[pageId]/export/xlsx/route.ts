@@ -4,7 +4,7 @@ import { canUserViewPage } from '@pagespace/lib/server';
 import { generateExcel, sanitizeFilename } from '@pagespace/lib';
 import { loggers } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/client-safe';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
@@ -24,6 +24,10 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
   const userId = auth.userId;
 
   try {
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
+
     // Check user permissions
     const canView = await canUserViewPage(userId, pageId);
     if (!canView) {

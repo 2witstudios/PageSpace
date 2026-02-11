@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db, activityLogs, eq, and, desc, count, gte, lt } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -84,6 +84,10 @@ export async function GET(request: Request) {
 
         // Optional drive filter for user context
         if (params.driveId) {
+          // Check MCP token scope before drive access
+          const scopeError = checkMCPDriveScope(auth, params.driveId);
+          if (scopeError) return scopeError;
+
           const canViewDrive = await isUserDriveMember(userId, params.driveId);
           if (!canViewDrive) {
             return NextResponse.json(
@@ -106,6 +110,10 @@ export async function GET(request: Request) {
             { status: 400 }
           );
         }
+
+        // Check MCP token scope before drive access
+        const scopeError = checkMCPDriveScope(auth, params.driveId);
+        if (scopeError) return scopeError;
 
         // Verify user can view drive
         const canViewDrive = await isUserDriveMember(userId, params.driveId);
@@ -131,6 +139,10 @@ export async function GET(request: Request) {
             { status: 400 }
           );
         }
+
+        // Check MCP token scope before page access
+        const scopeError = await checkMCPPageScope(auth, params.pageId);
+        if (scopeError) return scopeError;
 
         // Verify user can view page
         const canViewPage = await canUserViewPage(userId, params.pageId);

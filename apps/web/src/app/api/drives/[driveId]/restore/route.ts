@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -17,6 +17,10 @@ export async function POST(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     const drive = await db.query.drives.findFirst({
       where: and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),

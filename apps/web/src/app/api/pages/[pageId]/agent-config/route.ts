@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/core';
@@ -23,6 +23,10 @@ export async function GET(
     const userId = auth.userId;
 
     const { pageId } = await context.params;
+
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
 
     // Check if user has permission to view this page
     const canView = await canUserEditPage(userId, pageId);
@@ -111,6 +115,10 @@ export async function PATCH(
       pageTreeScope,
       expectedRevision,
     } = body;
+
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
 
     // Check if user has permission to edit this page
     const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });

@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/server';
 import { pages, drives, driveMembers, db, and, eq, asc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -30,6 +30,10 @@ export async function POST(request: Request) {
     }
 
     const { driveId } = parseResult.data;
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     // Find drive and check access
     const drive = await db.query.drives.findFirst({

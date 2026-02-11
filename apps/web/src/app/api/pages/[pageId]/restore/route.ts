@@ -3,7 +3,7 @@ import { pages, db, and, eq } from '@pagespace/db';
 import { loggers, pageTreeCache, getActorInfo } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring';
 
@@ -69,6 +69,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   }
 
   try {
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
+
     const page = await db.query.pages.findFirst({
       where: eq(pages.id, pageId),
       with: {

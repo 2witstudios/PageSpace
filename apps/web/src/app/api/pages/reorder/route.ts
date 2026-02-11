@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, pageTreeCache } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { pageReorderService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -22,6 +22,10 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json();
     const { pageId, newParentId, newPosition } = reorderSchema.parse(body);
+
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
 
     // Validate parent change to prevent circular references
     const validation = await pageReorderService.validateMove(pageId, newParentId);
