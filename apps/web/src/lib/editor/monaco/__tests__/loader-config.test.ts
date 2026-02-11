@@ -46,15 +46,27 @@ describe('loader-config', () => {
     const origin = 'https://app.pagespace.local';
 
     it('builds default Monaco vs path for empty asset prefix', () => {
-      expect(resolveMonacoVsPath('', origin)).toBe('/_next/static/monaco/vs');
+      expect(resolveMonacoVsPath('', origin)).toBe('https://app.pagespace.local/_next/static/monaco/vs');
     });
 
     it('builds Monaco vs path using normalized relative asset prefix', () => {
-      expect(resolveMonacoVsPath('/app-assets/', origin)).toBe('/app-assets/_next/static/monaco/vs');
+      expect(resolveMonacoVsPath('/app-assets/', origin)).toBe('https://app.pagespace.local/app-assets/_next/static/monaco/vs');
     });
 
     it('falls back to default Monaco vs path for cross-origin asset prefix', () => {
-      expect(resolveMonacoVsPath('https://cdn.example.com/assets', origin)).toBe('/_next/static/monaco/vs');
+      expect(resolveMonacoVsPath('https://cdn.example.com/assets', origin)).toBe('https://app.pagespace.local/_next/static/monaco/vs');
+    });
+
+    it('returns absolute URL output that stays valid in blob worker contexts', () => {
+      const monacoVsPath = resolveMonacoVsPath('', origin);
+      const workerModuleUrl = new URL(
+        `${monacoVsPath}/language/html/htmlWorker.js`,
+        'blob:https://app.pagespace.local/some-worker-id'
+      );
+
+      expect(workerModuleUrl.toString()).toBe(
+        'https://app.pagespace.local/_next/static/monaco/vs/language/html/htmlWorker.js'
+      );
     });
   });
 
@@ -79,7 +91,7 @@ describe('loader-config', () => {
         };
       };
 
-      expect(getMonacoVsPath(monacoWindow)).toBe('/tenant-assets/_next/static/monaco/vs');
+      expect(getMonacoVsPath(monacoWindow)).toBe('https://app.pagespace.local/tenant-assets/_next/static/monaco/vs');
     });
   });
 });

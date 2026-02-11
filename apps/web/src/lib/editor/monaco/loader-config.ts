@@ -42,7 +42,12 @@ export const buildMonacoVsPath = (assetPrefix: string): string =>
 
 export const resolveMonacoVsPath = (rawAssetPrefix: string, origin: string): string => {
   const assetPrefix = resolveAssetPrefix(rawAssetPrefix, origin);
-  return buildMonacoVsPath(assetPrefix);
+  const monacoVsPath = buildMonacoVsPath(assetPrefix);
+
+  // Monaco can run worker bootstrapping from blob: URLs (e.g., with COI helpers).
+  // In that context, absolute-path URLs like "/_next/..." cannot be resolved, so
+  // we provide an absolute same-origin URL.
+  return new URL(monacoVsPath, origin).toString();
 };
 
 export const getMonacoVsPath = (targetWindow: MonacoWindow): string =>
