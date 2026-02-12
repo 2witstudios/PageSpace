@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server';
 import { db, users, subscriptions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
-import { sessionService } from '@pagespace/lib/auth';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 
 /**
  * Security Tests for Gift Subscription Admin Routes
@@ -89,17 +89,8 @@ vi.mock('@pagespace/lib/server', async () => {
   };
 });
 
-// Mock CSRF validation to pass - tests focus on admin role version validation
-// Use relative path from auth.ts perspective to ensure mock is applied correctly
-vi.mock('@/lib/auth/csrf-validation', () => ({
-  validateCSRF: vi.fn().mockResolvedValue(null),
-  requiresCSRFProtection: vi.fn().mockReturnValue(true),
-}));
-// Also mock with path that matches how auth.ts imports it
-vi.mock('../../../../../../../lib/auth/csrf-validation', () => ({
-  validateCSRF: vi.fn().mockResolvedValue(null),
-  requiresCSRFProtection: vi.fn().mockReturnValue(true),
-}));
+// Note: We use real CSRF tokens instead of mocking CSRF validation.
+// This ensures the tests accurately reflect production behavior.
 
 import { logSecurityEvent } from '@pagespace/lib/server';
 
@@ -107,6 +98,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   let adminUserId: string;
   let regularUserId: string;
   let adminSessionToken: string;
+  let adminCsrfToken: string;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -145,6 +137,13 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       scopes: ['*'],
       expiresInMs: 3600000,
     });
+
+    // Get session ID for CSRF token generation
+    const sessionClaims = await sessionService.validateSession(adminSessionToken);
+    if (!sessionClaims) {
+      throw new Error('Failed to validate session for CSRF token generation');
+    }
+    adminCsrfToken = generateCSRFToken(sessionClaims.sessionId);
   });
 
   afterEach(async () => {
@@ -167,6 +166,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -197,6 +197,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -243,6 +244,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -319,6 +321,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'DELETE',
           headers: {
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
         }
       );
@@ -342,6 +345,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'DELETE',
           headers: {
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
         }
       );
@@ -382,6 +386,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'DELETE',
           headers: {
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
         }
       );
@@ -435,6 +440,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -470,6 +476,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
