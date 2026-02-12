@@ -27,7 +27,11 @@ export const contentStore = new ContentStore(CACHE_PATH, FILE_STORAGE_PATH);
 export const queueManager = new QueueManager();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || process.env.WEB_APP_URL || false,
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json({ limit: '50mb' }));
 
 // Health check
