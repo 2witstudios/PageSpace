@@ -2,14 +2,16 @@ import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../cache/content-store';
-import { assertFileAccess, checkFileAccess } from '../services/rbac';
+import { authorizeFileAccess, assertFileAccess, type AuthorizationDecision } from '../services/authorization';
 import { db, files, pages, eq } from '@pagespace/db';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
+import { rateLimitRead } from '../middleware/rate-limit';
 
 const router = Router();
 
 // Serve original files (must come before generic preset route)
-router.get('/:contentHash/original', async (req, res) => {
+// codeql[js/missing-rate-limiting] Rate limiting is applied via rateLimitRead middleware
+router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
   try {
     const { contentHash } = req.params;
     const auth = req.auth;
@@ -22,16 +24,11 @@ router.get('/:contentHash/original', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const userId = auth.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
-    let accessInfo;
+    let decision: AuthorizationDecision | undefined;
     try {
-      accessInfo = await checkFileAccess(userId, contentHash, 'view');
-      if (!accessInfo.allowed) {
-        throw new Error('Access denied');
+      decision = await authorizeFileAccess(auth, contentHash, 'view');
+      if (!decision.allowed) {
+        return res.status(403).json({ error: 'Access denied for requested file' });
       }
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
@@ -59,7 +56,7 @@ router.get('/:contentHash/original', async (req, res) => {
       contentType = fileRecord.mimeType;
     }
 
-    const linkedPageId = accessInfo?.pageId;
+    const linkedPageId = decision?.context?.pageId;
     if (linkedPageId) {
       const pageRecord = await db.query.pages.findFirst({
         where: eq(pages.id, linkedPageId),
@@ -123,7 +120,7 @@ router.get('/:contentHash/original', async (req, res) => {
 });
 
 // Serve cached files (generic route comes after specific routes)
-router.get('/:contentHash/:preset', async (req, res) => {
+router.get('/:contentHash/:preset', rateLimitRead, async (req, res) => {
   try {
     const { contentHash, preset } = req.params;
     const auth = req.auth;
@@ -140,13 +137,8 @@ router.get('/:contentHash/:preset', async (req, res) => {
       return res.status(400).json({ error: 'Invalid preset name' });
     }
 
-    const userId = auth.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
     try {
-      await assertFileAccess(userId, contentHash, 'view');
+      await assertFileAccess(auth, contentHash, 'view');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
@@ -203,7 +195,7 @@ router.get('/:contentHash/:preset', async (req, res) => {
 });
 
 // Get file metadata
-router.get('/:contentHash/metadata', async (req, res) => {
+router.get('/:contentHash/metadata', rateLimitRead, async (req, res) => {
   try {
     const { contentHash } = req.params;
     const auth = req.auth;
@@ -216,13 +208,8 @@ router.get('/:contentHash/metadata', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const userId = auth.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
     try {
-      await assertFileAccess(userId, contentHash, 'view');
+      await assertFileAccess(auth, contentHash, 'view');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }

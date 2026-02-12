@@ -153,4 +153,4 @@ export function getUserId(req: Request): string | null {
   return auth.userId;
 }
 
-export { EnforcedAuthContext };
+export { EnforcedAuthContext, type ResourceBinding } from '@pagespace/lib/permissions';
