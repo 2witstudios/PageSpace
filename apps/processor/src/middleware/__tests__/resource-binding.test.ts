@@ -45,7 +45,7 @@ function createMockRequest(overrides: Partial<Request> = {}): Request {
   } as unknown as Request;
 }
 
-function createMockResponse(): { res: Response; statusCode: number | null; jsonBody: unknown } {
+function createMockResponse(): { res: Response; getStatusCode: () => number | null; getJsonBody: () => unknown } {
   let statusCode: number | null = null;
   let jsonBody: unknown = null;
 
@@ -60,7 +60,7 @@ function createMockResponse(): { res: Response; statusCode: number | null; jsonB
     }),
   } as unknown as Response;
 
-  return { res, get statusCode() { return statusCode; }, get jsonBody() { return jsonBody; } };
+  return { res, getStatusCode: () => statusCode, getJsonBody: () => jsonBody };
 }
 
 describe('requireResourceBinding', () => {
@@ -116,27 +116,19 @@ describe('requireResourceBinding', () => {
 
     it('returns 403 when contentHash does NOT match binding', () => {
       const middleware = requireResourceBinding('params');
-      const authObj = createAuth({
-        resourceBinding: { type: 'file', id: OTHER_HASH },
-      });
       const req = createMockRequest({
-        auth: authObj,
+        auth: createAuth({
+          resourceBinding: { type: 'file', id: OTHER_HASH },
+        }),
         params: { contentHash: VALID_HASH },
       });
-      const { res, statusCode, jsonBody } = createMockResponse();
-
-      console.log('DEBUG: auth object:', JSON.stringify(authObj, null, 2));
-      console.log('DEBUG: auth.resourceBinding:', authObj.resourceBinding);
-      console.log('DEBUG: req.params:', req.params);
+      const { res, getStatusCode, getJsonBody } = createMockResponse();
 
       middleware(req, res, next);
 
-      console.log('DEBUG: next called:', (next as any).mock?.calls?.length > 0);
-      console.log('DEBUG: statusCode:', statusCode);
-
       expect(next).not.toHaveBeenCalled();
-      expect(statusCode).toBe(403);
-      expect(jsonBody).toEqual({ error: 'Access denied: token is bound to a different file' });
+      expect(getStatusCode()).toBe(403);
+      expect(getJsonBody()).toEqual({ error: 'Access denied: token is bound to a different file' });
     });
 
     it('handles case-insensitive hash comparison', () => {
@@ -317,13 +309,13 @@ describe('requirePageBinding', () => {
         }),
         params: { pageId: 'page-2' },
       });
-      const { res, statusCode, jsonBody } = createMockResponse();
+      const { res, getStatusCode, getJsonBody } = createMockResponse();
 
       middleware(req, res, next);
 
       expect(next).not.toHaveBeenCalled();
-      expect(statusCode).toBe(403);
-      expect(jsonBody).toEqual({ error: 'Access denied: token is bound to a different page' });
+      expect(getStatusCode()).toBe(403);
+      expect(getJsonBody()).toEqual({ error: 'Access denied: token is bound to a different page' });
     });
   });
 
