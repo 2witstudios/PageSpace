@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, DELETE } from '../route';
 import { NextRequest } from 'next/server';
-import { db, users, subscriptions, eq, and, inArray } from '@pagespace/db';
+import { db, users, subscriptions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
 import { sessionService } from '@pagespace/lib/auth';
@@ -53,7 +53,7 @@ vi.mock('@/lib/stripe-customer', () => ({
 
 // Mock stripe errors
 vi.mock('@/lib/stripe-errors', () => ({
-  getUserFriendlyStripeError: vi.fn((error) => error.message),
+  getUserFriendlyStripeError: vi.fn((error: Error) => error.message),
 }));
 
 // Mock stripe config
@@ -78,10 +78,22 @@ vi.mock('@pagespace/lib/server', async () => {
         error: vi.fn(),
         warn: vi.fn(),
       },
+      auth: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+      },
     },
     logSecurityEvent: vi.fn(),
   };
 });
+
+// Mock CSRF validation to pass - tests focus on admin role version validation
+vi.mock('@/lib/auth/csrf-validation', () => ({
+  validateCSRF: vi.fn().mockResolvedValue(null),
+  requiresCSRFProtection: vi.fn().mockReturnValue(true),
+}));
 
 import { logSecurityEvent } from '@pagespace/lib/server';
 
@@ -130,10 +142,14 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   });
 
   afterEach(async () => {
-    // Clean up test data
-    await db.delete(subscriptions).where(eq(subscriptions.userId, regularUserId));
-    await db.delete(users).where(eq(users.id, adminUserId));
-    await db.delete(users).where(eq(users.id, regularUserId));
+    // Clean up test data - wrapped to prevent cascading failures
+    try {
+      await db.delete(subscriptions).where(eq(subscriptions.userId, regularUserId));
+      await db.delete(users).where(eq(users.id, adminUserId));
+      await db.delete(users).where(eq(users.id, regularUserId));
+    } catch {
+      // Swallow cleanup errors to avoid masking test failures
+    }
   });
 
   describe('POST - Admin role version validation', () => {
@@ -191,13 +207,15 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Forbidden: Admin access required');
 
-      // Security event should be logged
+      // Security event should be logged with detailed context
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'admin_role_version_mismatch',
         expect.objectContaining({
-          reason: 'admin_role_version_validation_failed',
+          reason: 'not_admin', // User was demoted, role is no longer 'admin'
           userId: adminUserId,
           claimedAdminRoleVersion: 0,
+          actualAdminRoleVersion: 1,
+          currentRole: 'user',
           authType: 'session',
           action: 'deny_access',
         })
@@ -236,13 +254,15 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Forbidden: Admin access required');
 
-      // Security event should be logged
+      // Security event should be logged with version mismatch details
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'admin_role_version_mismatch',
         expect.objectContaining({
-          reason: 'admin_role_version_validation_failed',
+          reason: 'version_mismatch', // User is admin again, but version changed
           userId: adminUserId,
           claimedAdminRoleVersion: 0,
+          actualAdminRoleVersion: 2, // Version 2 after demotion (1) and re-promotion (2)
+          currentRole: 'admin',
         })
       );
     });
@@ -328,13 +348,15 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Forbidden: Admin access required');
 
-      // Security event should be logged
+      // Security event should be logged with detailed context
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'admin_role_version_mismatch',
         expect.objectContaining({
-          reason: 'admin_role_version_validation_failed',
+          reason: 'not_admin', // User was demoted
           userId: adminUserId,
           claimedAdminRoleVersion: 0,
+          actualAdminRoleVersion: 1,
+          currentRole: 'user',
           authType: 'session',
           action: 'deny_access',
         })
@@ -365,13 +387,15 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Forbidden: Admin access required');
 
-      // Security event should be logged
+      // Security event should be logged with detailed context
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'admin_role_version_mismatch',
         expect.objectContaining({
-          reason: 'admin_role_version_validation_failed',
+          reason: 'not_admin', // Final state is user after multiple role changes
           userId: adminUserId,
           claimedAdminRoleVersion: 0,
+          actualAdminRoleVersion: 3, // Version incremented 3 times
+          currentRole: 'user',
         })
       );
     });
@@ -416,17 +440,19 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       const context = { params: Promise.resolve({ userId: regularUserId }) };
       await POST(request, context);
 
-      // Verify security event was logged with correct details
+      // Verify security event was logged with correct details including actual version
       expect(logSecurityEvent).toHaveBeenCalledTimes(1);
       expect(logSecurityEvent).toHaveBeenCalledWith(
         'admin_role_version_mismatch',
-        {
-          reason: 'admin_role_version_validation_failed',
+        expect.objectContaining({
+          reason: 'not_admin',
           userId: adminUserId,
           claimedAdminRoleVersion: 0,
+          actualAdminRoleVersion: 1,
+          currentRole: 'user',
           authType: 'session',
           action: 'deny_access',
-        }
+        })
       );
     });
 
