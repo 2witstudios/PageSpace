@@ -13,6 +13,7 @@ import { deleteFileRouter } from './api/delete-file';
 import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
+import { rateLimitRead } from './middleware/rate-limit';
 
 // Load environment variables
 dotenv.config();
@@ -51,7 +52,7 @@ app.use('/api/optimize', authenticateService, requireScope('files:optimize'), re
 app.use('/api/ingest', authenticateService, requireScope('files:ingest'), requirePageBinding(), ingestRouter);
 app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
-app.use('/cache', authenticateService, requireScope('files:read'), requireResourceBinding('params'), cacheRouter);
+app.use('/cache', authenticateService, requireScope('files:read'), rateLimitRead, requireResourceBinding('params'), cacheRouter);
 
 // Queue status endpoint
 app.get(
