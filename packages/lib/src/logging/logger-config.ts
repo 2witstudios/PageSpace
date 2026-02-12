@@ -201,7 +201,7 @@ export function logSecurityEvent(
          'login_csrf_missing' | 'login_csrf_mismatch' | 'login_csrf_invalid' |
          'signup_csrf_missing' | 'signup_csrf_mismatch' | 'signup_csrf_invalid' |
          'origin_validation_failed' | 'origin_validation_warning' |
-         'account_locked_login_attempt',
+         'account_locked_login_attempt' | 'admin_role_version_mismatch',
   details: LogInput
 ): void {
   loggers.security.warn(`Security event: ${event}`, details);

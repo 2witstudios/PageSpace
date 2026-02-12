@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users, subscriptions, and, inArray, desc } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { verifyAdminAuth } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { stripeConfig } from '@/lib/stripe-config';
 import { loggers } from '@pagespace/lib/server';
-
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 type GiftTier = 'pro' | 'founder' | 'business';
 
@@ -23,18 +21,16 @@ export async function POST(
   try {
     const { userId: targetUserId } = await context.params;
 
-    // Verify admin auth
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
-
-    if (auth.role !== 'admin') {
+    // Verify admin auth with role version validation
+    const adminUser = await verifyAdminAuth(request);
+    if (!adminUser) {
       return NextResponse.json(
         { error: 'Forbidden: Admin access required' },
         { status: 403 }
       );
     }
 
-    const adminUserId = auth.userId;
+    const adminUserId = adminUser.id;
 
     // Parse request body
     const body = await request.json();
@@ -176,18 +172,16 @@ export async function DELETE(
   try {
     const { userId: targetUserId } = await context.params;
 
-    // Verify admin auth
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
-
-    if (auth.role !== 'admin') {
+    // Verify admin auth with role version validation
+    const adminUser = await verifyAdminAuth(request);
+    if (!adminUser) {
       return NextResponse.json(
         { error: 'Forbidden: Admin access required' },
         { status: 403 }
       );
     }
 
-    const adminUserId = auth.userId;
+    const adminUserId = adminUser.id;
 
     // Get target user
     const [targetUser] = await db
