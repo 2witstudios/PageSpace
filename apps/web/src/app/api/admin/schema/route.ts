@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     if (isAdminAuthError(adminAuthResult)) {
       return adminAuthResult;
     }
-    const adminUser = adminAuthResult;
+    const _adminUser = adminAuthResult;
     // Get all table information from PostgreSQL information_schema
     const tablesQuery = sql`
       SELECT 

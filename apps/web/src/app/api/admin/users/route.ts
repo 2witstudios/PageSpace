@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     if (isAdminAuthError(adminAuthResult)) {
       return adminAuthResult;
     }
-    const adminUser = adminAuthResult;
+    const _adminUser = adminAuthResult;
     // Get all users
     const allUsers = await db
       .select({

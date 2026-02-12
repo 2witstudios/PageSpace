@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     if (isAdminAuthError(adminAuthResult)) {
       return adminAuthResult;
     }
-    const adminUser = adminAuthResult;
+    const _adminUser = adminAuthResult;
 
     // Parse query parameters
     const url = new URL(request.url);

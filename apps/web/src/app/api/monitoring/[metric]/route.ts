@@ -26,7 +26,7 @@ export async function GET(
     if (isAdminAuthError(adminAuthResult)) {
       return adminAuthResult;
     }
-    const adminUser = adminAuthResult;
+    const _adminUser = adminAuthResult;
 
     const { metric } = await context.params;
     const { searchParams } = new URL(request.url);
