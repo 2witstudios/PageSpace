@@ -152,12 +152,14 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
     throw new DeleteFileAuthorizationError('Service authentication required');
   }
 
-  const context = await getDeleteFileContext(contentHash);
+  // Normalize hash to lowercase since isValidContentHash accepts uppercase but DB stores lowercase
+  const normalizedHash = contentHash.toLowerCase();
+  const context = await getDeleteFileContext(normalizedHash);
 
-  if (!isResourceBindingAllowed(auth, contentHash, context.links, context.fileDriveId)) {
+  if (!isResourceBindingAllowed(auth, normalizedHash, context.links, context.fileDriveId)) {
     loggers.security.warn('delete-file denied: resource binding mismatch', {
       userId: auth.userId,
-      contentHash,
+      contentHash: normalizedHash,
       bindingType: auth.resourceBinding?.type,
       bindingId: auth.resourceBinding?.id,
     });
@@ -179,7 +181,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
     if (!canDeleteLinkedPage) {
       loggers.security.warn('delete-file denied: insufficient page delete permission', {
         userId: auth.userId,
-        contentHash,
+        contentHash: normalizedHash,
         scopedLinksCount: scopedLinks.length,
       });
       throw new DeleteFileAuthorizationError();
@@ -188,7 +190,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
     if (!context.fileDriveId) {
       loggers.security.warn('delete-file denied: orphan file with no drive association', {
         userId: auth.userId,
-        contentHash,
+        contentHash: normalizedHash,
       });
       throw new DeleteFileAuthorizationError();
     }
@@ -197,7 +199,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
     if (!drivePerms || (!drivePerms.isOwner && !drivePerms.isAdmin)) {
       loggers.security.warn('delete-file denied: not drive owner/admin for orphan file', {
         userId: auth.userId,
-        contentHash,
+        contentHash: normalizedHash,
         driveId: context.fileDriveId,
         hasAccess: !!drivePerms,
       });
@@ -208,7 +210,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
   if (context.hasFilePageReferences || context.hasChannelReferences || context.hasPagePathReferences) {
     loggers.security.warn('delete-file denied: file still has references', {
       userId: auth.userId,
-      contentHash,
+      contentHash: normalizedHash,
       hasFilePageReferences: context.hasFilePageReferences,
       hasChannelReferences: context.hasChannelReferences,
       hasPagePathReferences: context.hasPagePathReferences,
