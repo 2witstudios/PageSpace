@@ -116,15 +116,23 @@ describe('requireResourceBinding', () => {
 
     it('returns 403 when contentHash does NOT match binding', () => {
       const middleware = requireResourceBinding('params');
+      const authObj = createAuth({
+        resourceBinding: { type: 'file', id: OTHER_HASH },
+      });
       const req = createMockRequest({
-        auth: createAuth({
-          resourceBinding: { type: 'file', id: OTHER_HASH },
-        }),
+        auth: authObj,
         params: { contentHash: VALID_HASH },
       });
       const { res, statusCode, jsonBody } = createMockResponse();
 
+      console.log('DEBUG: auth object:', JSON.stringify(authObj, null, 2));
+      console.log('DEBUG: auth.resourceBinding:', authObj.resourceBinding);
+      console.log('DEBUG: req.params:', req.params);
+
       middleware(req, res, next);
+
+      console.log('DEBUG: next called:', (next as any).mock?.calls?.length > 0);
+      console.log('DEBUG: statusCode:', statusCode);
 
       expect(next).not.toHaveBeenCalled();
       expect(statusCode).toBe(403);
