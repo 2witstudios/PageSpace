@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../cache/content-store';
-import { authorizeFileAccess, assertFileAccess } from '../services/authorization';
+import { authorizeFileAccess, assertFileAccess, type AuthorizationDecision } from '../services/authorization';
 import { db, files, pages, eq } from '@pagespace/db';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
 
@@ -22,7 +22,7 @@ router.get('/:contentHash/original', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    let decision;
+    let decision: AuthorizationDecision | undefined;
     try {
       decision = await authorizeFileAccess(auth, contentHash, 'view');
       if (!decision.allowed) {

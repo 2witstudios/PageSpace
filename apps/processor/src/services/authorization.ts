@@ -112,7 +112,7 @@ function determineBindingMatchType(
 
   switch (binding.type) {
     case 'file':
-      return binding.id === contentHash ? 'exact' : 'mismatch';
+      return binding.id.toLowerCase() === contentHash ? 'exact' : 'mismatch';
     case 'page':
       return links.some(link => link.pageId === binding.id) ? 'hierarchical' : 'mismatch';
     case 'drive':
@@ -281,7 +281,7 @@ export async function authorizeFileAccess(
 
   if (scopedLinks.length === 0) {
     // File has links but none within token's scope
-    const decision = buildDeniedDecision('binding', binding, 'mismatch', requirement);
+    const decision = buildDeniedDecision('binding', binding, matchType, requirement);
     loggers.security.warn('file-access denied: no links within binding scope', {
       userId: auth.userId,
       contentHash: normalizedHash,
