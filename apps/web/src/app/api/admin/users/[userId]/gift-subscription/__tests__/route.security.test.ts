@@ -4,8 +4,7 @@ import { NextRequest } from 'next/server';
 import { db, users, subscriptions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
-import { sessionService } from '@pagespace/lib/auth';
-import type { VerifiedUser } from '@/lib/auth/auth';
+import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 
 /**
  * Security Tests for Gift Subscription Admin Routes
@@ -18,48 +17,9 @@ import type { VerifiedUser } from '@/lib/auth/auth';
  * Attack Vector: Admin is demoted but existing session still carries admin role
  * Impact: Unauthorized gift subscription operations
  * Fix: Use verifyAdminAuth which validates adminRoleVersion against database
+ *
+ * These tests use real CSRF tokens to ensure CSRF protection is fully tested.
  */
-
-// Mock the auth module to test admin role version validation without CSRF complexity
-// This allows us to focus on testing the adminRoleVersion validation logic
-vi.mock('@/lib/auth', async () => {
-  const actualAuthModule = await vi.importActual<typeof import('@/lib/auth/auth')>('@/lib/auth/auth');
-  const actualIndex = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
-  const { logSecurityEvent } = await vi.importActual<typeof import('@pagespace/lib/server')>('@pagespace/lib/server');
-
-  // Custom verifyAdminAuth that skips CSRF validation but tests admin role version
-  async function testVerifyAdminAuth(request: Request): Promise<VerifiedUser | null> {
-    // Use real verifyAuth to get the user from session
-    const user = await actualAuthModule.verifyAuth(request);
-    if (!user || user.role !== 'admin') {
-      return null;
-    }
-
-    // Validate adminRoleVersion against the database (the core security check)
-    const { validateAdminAccess } = await import('@/lib/auth/admin-role');
-    const validationResult = await validateAdminAccess(user.id, user.adminRoleVersion);
-    if (!validationResult.isValid) {
-      // Log security event with detailed context for forensic analysis
-      logSecurityEvent('admin_role_version_mismatch', {
-        reason: validationResult.reason ?? 'admin_role_version_validation_failed',
-        userId: user.id,
-        claimedAdminRoleVersion: user.adminRoleVersion,
-        actualAdminRoleVersion: validationResult.actualAdminRoleVersion,
-        currentRole: validationResult.currentRole,
-        authType: 'session',
-        action: 'deny_access',
-      });
-      return null;
-    }
-
-    return user;
-  }
-
-  return {
-    ...actualIndex,
-    verifyAdminAuth: testVerifyAdminAuth,
-  };
-});
 
 // Mock Stripe to avoid API calls in tests
 vi.mock('@/lib/stripe', () => ({
@@ -137,6 +97,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   let adminUserId: string;
   let regularUserId: string;
   let adminSessionToken: string;
+  let adminCsrfToken: string;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -175,6 +136,13 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       scopes: ['*'],
       expiresInMs: 3600000,
     });
+
+    // Generate CSRF token bound to the session
+    const sessionClaims = await sessionService.validateSession(adminSessionToken);
+    if (!sessionClaims) {
+      throw new Error('Failed to validate session for CSRF token generation');
+    }
+    adminCsrfToken = generateCSRFToken(sessionClaims.sessionId);
   });
 
   afterEach(async () => {
@@ -197,6 +165,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -220,6 +189,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       await updateUserRole(adminUserId, 'user');
 
       // Attempt to use the old session token (still has adminRoleVersion: 0)
+      // The CSRF token is still valid (bound to sessionId, not role)
       const request = new NextRequest(
         `http://localhost/api/admin/users/${regularUserId}/gift-subscription`,
         {
@@ -227,6 +197,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -266,6 +237,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       await updateUserRole(adminUserId, 'admin');
 
       // Old session token still has adminRoleVersion: 0
+      // CSRF token is still valid (bound to sessionId)
       const request = new NextRequest(
         `http://localhost/api/admin/users/${regularUserId}/gift-subscription`,
         {
@@ -273,6 +245,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -325,6 +298,60 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       expect(response.status).toBe(403);
       expect(body.error).toBe('Forbidden: Admin access required');
     });
+
+    it('POST_withoutCSRFToken_deniesAccess', async () => {
+      // Valid session but missing CSRF token
+      const request = new NextRequest(
+        `http://localhost/api/admin/users/${regularUserId}/gift-subscription`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cookie': `ps-session=${adminSessionToken}`,
+            // No X-CSRF-Token header
+          },
+          body: JSON.stringify({
+            tier: 'pro',
+            reason: 'Test gift',
+          }),
+        }
+      );
+
+      const context = { params: Promise.resolve({ userId: regularUserId }) };
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      // Should be denied due to missing CSRF token
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('CSRF_TOKEN_MISSING');
+    });
+
+    it('POST_withInvalidCSRFToken_deniesAccess', async () => {
+      // Valid session but invalid CSRF token
+      const request = new NextRequest(
+        `http://localhost/api/admin/users/${regularUserId}/gift-subscription`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': 'invalid-csrf-token',
+          },
+          body: JSON.stringify({
+            tier: 'pro',
+            reason: 'Test gift',
+          }),
+        }
+      );
+
+      const context = { params: Promise.resolve({ userId: regularUserId }) };
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      // Should be denied due to invalid CSRF token
+      expect(response.status).toBe(403);
+      expect(body.code).toBe('CSRF_TOKEN_INVALID');
+    });
   });
 
   describe('DELETE - Admin role version validation', () => {
@@ -349,6 +376,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'DELETE',
           headers: {
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
         }
       );
@@ -365,13 +393,14 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       // Admin user is demoted to regular user
       await updateUserRole(adminUserId, 'user');
 
-      // Attempt to use the old session token
+      // Attempt to use the old session token with valid CSRF
       const request = new NextRequest(
         `http://localhost/api/admin/users/${regularUserId}/gift-subscription`,
         {
           method: 'DELETE',
           headers: {
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
         }
       );
@@ -406,12 +435,14 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       await updateUserRole(adminUserId, 'user');    // version = 3
 
       // Old session token still has adminRoleVersion: 0
+      // CSRF token is still valid (bound to sessionId)
       const request = new NextRequest(
         `http://localhost/api/admin/users/${regularUserId}/gift-subscription`,
         {
           method: 'DELETE',
           headers: {
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
         }
       );
@@ -465,6 +496,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
@@ -500,6 +532,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           headers: {
             'Content-Type': 'application/json',
             'Cookie': `ps-session=${adminSessionToken}`,
+            'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
             tier: 'pro',
