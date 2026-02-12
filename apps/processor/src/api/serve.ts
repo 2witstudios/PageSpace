@@ -5,11 +5,12 @@ import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../c
 import { authorizeFileAccess, assertFileAccess, type AuthorizationDecision } from '../services/authorization';
 import { db, files, pages, eq } from '@pagespace/db';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
+import { rateLimitRead } from '../middleware/rate-limit';
 
 const router = Router();
 
 // Serve original files (must come before generic preset route)
-router.get('/:contentHash/original', async (req, res) => {
+router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
   try {
     const { contentHash } = req.params;
     const auth = req.auth;
@@ -118,7 +119,7 @@ router.get('/:contentHash/original', async (req, res) => {
 });
 
 // Serve cached files (generic route comes after specific routes)
-router.get('/:contentHash/:preset', async (req, res) => {
+router.get('/:contentHash/:preset', rateLimitRead, async (req, res) => {
   try {
     const { contentHash, preset } = req.params;
     const auth = req.auth;
@@ -193,7 +194,7 @@ router.get('/:contentHash/:preset', async (req, res) => {
 });
 
 // Get file metadata
-router.get('/:contentHash/metadata', async (req, res) => {
+router.get('/:contentHash/metadata', rateLimitRead, async (req, res) => {
   try {
     const { contentHash } = req.params;
     const auth = req.auth;
