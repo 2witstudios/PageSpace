@@ -139,21 +139,25 @@ describe('socket-utils', () => {
   });
 
   describe('broadcastDriveEvent', () => {
-    it('given drive event, should route to global:drives channel', async () => {
+    it('given drive event with recipients, should route to each user channel', async () => {
       const payload: DriveEventPayload = {
         driveId: 'drive-123',
         operation: 'created',
         name: 'New Drive',
       };
+      const recipientUserIds = ['user-1', 'user-2'];
 
-      await broadcastDriveEvent(payload);
+      await broadcastDriveEvent(payload, recipientUserIds);
 
-      const fetchCall = mockFetch.mock.calls[0];
-      const requestBody = JSON.parse(fetchCall[1].body);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
 
-      expect(requestBody.channelId).toBe('global:drives');
-      expect(requestBody.event).toBe('drive:created');
-      expect(requestBody.payload).toEqual(payload);
+      const firstCall = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(firstCall.channelId).toBe('user:user-1:drives');
+      expect(firstCall.event).toBe('drive:created');
+      expect(firstCall.payload).toEqual(payload);
+
+      const secondCall = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(secondCall.channelId).toBe('user:user-2:drives');
     });
 
     it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
@@ -164,7 +168,18 @@ describe('socket-utils', () => {
         operation: 'deleted',
       };
 
-      await broadcastDriveEvent(payload);
+      await broadcastDriveEvent(payload, ['user-1']);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given empty recipients, should not call fetch', async () => {
+      const payload: DriveEventPayload = {
+        driveId: 'drive-123',
+        operation: 'deleted',
+      };
+
+      await broadcastDriveEvent(payload, []);
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -340,14 +355,14 @@ describe('socket-utils', () => {
       expect(body.channelId).toBe('drive:test-drive');
     });
 
-    it('given drive event, should route to global drives channel', async () => {
+    it('given drive event with recipients, should route to user-specific drives channel', async () => {
       await broadcastDriveEvent({
         driveId: 'test-drive',
         operation: 'created',
-      });
+      }, ['test-user']);
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.channelId).toBe('global:drives');
+      expect(body.channelId).toBe('user:test-user:drives');
     });
 
     it('given member event, should route to user-specific drives channel', async () => {

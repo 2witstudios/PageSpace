@@ -632,24 +632,6 @@ io.on('connection', (socket: AuthSocket) => {
     loggers.realtime.debug('User left drive room', { userId: user.id, room: driveRoom });
   });
 
-  socket.on('join_global_drives', () => {
-    if (!user?.id) return;
-
-    const globalDrivesRoom = 'global:drives';
-    socket.join(globalDrivesRoom);
-    socketRegistry.trackRoomJoin(socket.id, globalDrivesRoom);
-    loggers.realtime.debug('User joined global drives room', { userId: user.id, room: globalDrivesRoom });
-  });
-
-  socket.on('leave_global_drives', () => {
-    if (!user?.id) return;
-
-    const globalDrivesRoom = 'global:drives';
-    socket.leave(globalDrivesRoom);
-    socketRegistry.trackRoomLeave(socket.id, globalDrivesRoom);
-    loggers.realtime.debug('User left global drives room', { userId: user.id, room: globalDrivesRoom });
-  });
-
   // Activity channel handlers - for real-time activity feed updates
   socket.on('join_activity_drive', async (payload: unknown) => {
     if (!user?.id) return;

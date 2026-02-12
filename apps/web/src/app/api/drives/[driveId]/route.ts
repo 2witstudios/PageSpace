@@ -8,6 +8,7 @@ import {
   trashDrive,
 } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -109,11 +110,13 @@ export async function PATCH(
 
     // Broadcast drive update event if name changed
     if (validatedBody.name && updatedDrive) {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {
           name: updatedDrive.name,
           slug: updatedDrive.slug,
-        })
+        }),
+        recipientUserIds
       );
     }
 
@@ -203,6 +206,9 @@ export async function DELETE(
       );
     }
 
+    // Get recipients BEFORE trashing (ensures we have valid member list)
+    const recipientUserIds = await getDriveRecipientUserIds(driveId);
+
     // Move drive to trash
     await trashDrive(driveId);
 
@@ -211,7 +217,8 @@ export async function DELETE(
       createDriveEventPayload(drive.id, 'deleted', {
         name: drive.name,
         slug: drive.slug,
-      })
+      }),
+      recipientUserIds
     );
 
     trackDriveOperation(userId, 'delete', driveId, {
