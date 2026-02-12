@@ -198,14 +198,14 @@ export async function broadcastDriveEvent(
   }
 
   try {
-    await Promise.all(
-      recipientUserIds.map(async (userId) => {
+    const results = await Promise.allSettled(
+      recipientUserIds.map((userId) => {
         const requestBody = JSON.stringify({
           channelId: `user:${userId}:drives`,
           event: `drive:${payload.operation}`,
           payload,
         });
-        await fetch(`${realtimeUrl}/api/broadcast`, {
+        return fetch(`${realtimeUrl}/api/broadcast`, {
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
@@ -213,7 +213,15 @@ export async function broadcastDriveEvent(
       })
     );
 
-    if (verboseRealtimeLogging) {
+    const failures = results.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      realtimeLogger.warn('Some drive event broadcasts failed', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        failedCount: failures.length,
+        totalCount: recipientUserIds.length,
+      });
+    } else if (verboseRealtimeLogging) {
       realtimeLogger.debug('Drive event broadcasted to users', {
         operation: payload.operation,
         driveId: maskIdentifier(payload.driveId),

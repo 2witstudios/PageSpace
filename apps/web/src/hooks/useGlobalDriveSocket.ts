@@ -14,7 +14,7 @@ export function useGlobalDriveSocket() {
   const { user } = useAuth();
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   
-  // Track if we've joined the global drives channel
+  // Track if we've joined the user-specific drives channel
   const hasJoinedRef = useRef(false);
 
   // Store the user ID we joined with, so we can properly leave on cleanup
@@ -73,7 +73,7 @@ export function useGlobalDriveSocket() {
       console.log(`🌍 Joined user:${user.id}:drives channel`);
     }
 
-    // Listen for drive events (both global and user-specific)
+    // Listen for drive events on user-specific channel
     const events = [
       'drive:created',
       'drive:updated',
