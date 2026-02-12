@@ -1,6 +1,11 @@
 import { Router, type Router as RouterType } from 'express';
 import { contentStore } from '../server';
 import { isValidContentHash } from '../cache/content-store';
+import {
+  assertDeleteFileAccess,
+  DeleteFileAuthorizationError,
+  DeleteFileReferencedError,
+} from '../services/rbac';
 
 const router: RouterType = Router();
 
@@ -11,12 +16,19 @@ const router: RouterType = Router();
  */
 router.delete('/:contentHash', async (req, res) => {
   const { contentHash } = req.params;
+  const auth = req.auth;
 
   if (!contentHash || !isValidContentHash(contentHash)) {
     return res.status(400).json({ error: 'Invalid content hash format' });
   }
 
+  if (!auth?.userId) {
+    return res.status(401).json({ error: 'Service authentication required' });
+  }
+
   try {
+    await assertDeleteFileAccess(auth, contentHash);
+
     const { originalDeleted, cacheDeleted } = await contentStore.deleteOriginalAndCache(contentHash);
 
     console.log(
@@ -39,6 +51,14 @@ router.delete('/:contentHash', async (req, res) => {
       cacheDeleted,
     });
   } catch (error) {
+    if (error instanceof DeleteFileAuthorizationError) {
+      return res.status(403).json({ error: 'Access denied for requested file' });
+    }
+
+    if (error instanceof DeleteFileReferencedError) {
+      return res.status(409).json({ error: 'File is still referenced and cannot be hard deleted' });
+    }
+
     console.error('[delete-file] Error:', error);
     return res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to delete file',
