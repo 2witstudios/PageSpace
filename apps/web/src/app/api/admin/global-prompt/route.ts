@@ -9,7 +9,7 @@
  * - Token estimates
  */
 
-import { verifyAdminAuth } from '@/lib/auth';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
@@ -56,10 +56,11 @@ interface ModePromptData {
 
 export async function GET(request: Request) {
   // Verify admin authentication
-  const adminUser = await verifyAdminAuth(request);
-  if (!adminUser) {
-    return new Response('Unauthorized', { status: 401 });
+  const adminAuthResult = await verifyAdminAuth(request);
+  if (isAdminAuthError(adminAuthResult)) {
+    return adminAuthResult;
   }
+  const adminUser = adminAuthResult;
 
   try {
     // Parse query params for context selection

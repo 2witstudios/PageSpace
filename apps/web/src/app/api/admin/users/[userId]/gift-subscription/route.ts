@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, users, subscriptions, and, inArray, desc } from '@pagespace/db';
-import { verifyAdminAuth } from '@/lib/auth';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
@@ -22,13 +22,11 @@ export async function POST(
     const { userId: targetUserId } = await context.params;
 
     // Verify admin auth with role version validation
-    const adminUser = await verifyAdminAuth(request);
-    if (!adminUser) {
-      return NextResponse.json(
-        { error: 'Forbidden: Admin access required' },
-        { status: 403 }
-      );
+    const adminAuthResult = await verifyAdminAuth(request);
+    if (isAdminAuthError(adminAuthResult)) {
+      return adminAuthResult;
     }
+    const adminUser = adminAuthResult;
 
     const adminUserId = adminUser.id;
 
@@ -173,13 +171,11 @@ export async function DELETE(
     const { userId: targetUserId } = await context.params;
 
     // Verify admin auth with role version validation
-    const adminUser = await verifyAdminAuth(request);
-    if (!adminUser) {
-      return NextResponse.json(
-        { error: 'Forbidden: Admin access required' },
-        { status: 403 }
-      );
+    const adminAuthResult = await verifyAdminAuth(request);
+    if (isAdminAuthError(adminAuthResult)) {
+      return adminAuthResult;
     }
+    const adminUser = adminAuthResult;
 
     const adminUserId = adminUser.id;
 

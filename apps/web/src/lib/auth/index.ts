@@ -565,7 +565,7 @@ export function checkMCPCreateScope(
 }
 
 // Re-export from other auth modules
-export { verifyAuth, verifyAdminAuth, type VerifiedUser } from './auth';
+export { verifyAuth, verifyAdminAuth, isAdminAuthError, type VerifiedUser } from './auth';
 export { validateCSRF } from './csrf-validation';
 export {
   validateOrigin,

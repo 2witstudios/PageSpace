@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from './index';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';
@@ -8,6 +9,11 @@ export interface VerifiedUser {
   role: 'user' | 'admin';
   tokenVersion: number;
   adminRoleVersion: number;
+}
+
+/** Type guard to check if result is an error response */
+export function isAdminAuthError(result: VerifiedUser | NextResponse): result is NextResponse {
+  return result instanceof NextResponse;
 }
 
 export async function verifyAuth(request: Request): Promise<VerifiedUser | null> {
@@ -34,11 +40,18 @@ export async function verifyAuth(request: Request): Promise<VerifiedUser | null>
  * - CSRF protection for state-changing requests
  * - adminRoleVersion validation against database
  * - Security event logging for audit trail
+ *
+ * Returns:
+ * - VerifiedUser on success
+ * - NextResponse with error details on failure (use isAdminAuthError to check)
  */
-export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | null> {
+export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | NextResponse> {
   const user = await verifyAuth(request);
-  if (!user || user.role !== 'admin') {
-    return null;
+  if (!user) {
+    return NextResponse.json(
+      { error: 'Forbidden: Admin access required' },
+      { status: 403 }
+    );
   }
 
   // Defense-in-depth: CSRF validation for state-changing admin operations
@@ -55,12 +68,15 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
         authType: 'session',
         action: 'deny_access',
       });
-      return null;
+      // Return the CSRF error response directly to preserve error codes
+      return csrfError;
     }
   }
 
   // Validate adminRoleVersion against the database to ensure
-  // the role hasn't changed since the token was issued
+  // the role hasn't changed since the token was issued.
+  // This is called for ALL authenticated users (not just those with admin role in session)
+  // because the session role may be stale - validateAdminAccess checks the actual DB state.
   const validationResult: AdminValidationResult = await validateAdminAccess(user.id, user.adminRoleVersion);
   if (!validationResult.isValid) {
     // Log security event with detailed context for forensic analysis
@@ -73,7 +89,10 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
       authType: 'session',
       action: 'deny_access',
     });
-    return null;
+    return NextResponse.json(
+      { error: 'Forbidden: Admin access required' },
+      { status: 403 }
+    );
   }
 
   return user;

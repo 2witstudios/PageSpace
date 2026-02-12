@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyAdminAuth } from '@/lib/auth';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import {
   getSystemHealth,
   getApiMetrics,
@@ -22,13 +22,11 @@ export async function GET(
 ) {
   try {
     // CRITICAL: Verify admin authorization
-    const adminUser = await verifyAdminAuth(request);
-    if (!adminUser) {
-      return NextResponse.json(
-        { error: 'Admin access required' },
-        { status: 403 }
-      );
+    const adminAuthResult = await verifyAdminAuth(request);
+    if (isAdminAuthError(adminAuthResult)) {
+      return adminAuthResult;
     }
+    const adminUser = adminAuthResult;
 
     const { metric } = await context.params;
     const { searchParams } = new URL(request.url);

@@ -1,18 +1,16 @@
 import { db, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { verifyAdminAuth } from '@/lib/auth';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 
 export async function GET(request: Request) {
   try {
     // Verify user is authenticated and is an admin
-    const adminUser = await verifyAdminAuth(request);
-    
-    if (!adminUser) {
-      return Response.json(
-        { error: 'Unauthorized: Admin access required' },
-        { status: 403 }
-      );
+    const adminAuthResult = await verifyAdminAuth(request);
+
+    if (isAdminAuthError(adminAuthResult)) {
+      return adminAuthResult;
     }
+    const adminUser = adminAuthResult;
     // Get all table information from PostgreSQL information_schema
     const tablesQuery = sql`
       SELECT 
