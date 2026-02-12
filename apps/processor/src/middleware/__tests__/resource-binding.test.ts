@@ -22,7 +22,6 @@ import type { EnforcedAuthContext } from '../auth';
 import { requireResourceBinding, requirePageBinding } from '../resource-binding';
 
 function createAuth(overrides: Partial<EnforcedAuthContext> = {}): EnforcedAuthContext {
-  const binding = overrides.resourceBinding ?? undefined;
   return {
     userId: 'user-1',
     userRole: 'user',
@@ -30,7 +29,7 @@ function createAuth(overrides: Partial<EnforcedAuthContext> = {}): EnforcedAuthC
     driveId: undefined,
     hasScope: () => true,
     isAdmin: () => false,
-    isBoundToResource: () => binding !== undefined,
+    isBoundToResource: () => !!overrides.resourceBinding,
     ...overrides,
   } as unknown as EnforcedAuthContext;
 }
