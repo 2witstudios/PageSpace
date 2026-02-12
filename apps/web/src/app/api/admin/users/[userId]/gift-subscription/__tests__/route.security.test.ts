@@ -3,7 +3,7 @@ import { POST, DELETE } from '../route';
 import { NextRequest } from 'next/server';
 import { db, users, subscriptions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { updateUserRole, validateAdminAccess } from '@/lib/auth/admin-role';
+import { updateUserRole } from '@/lib/auth/admin-role';
 import { sessionService } from '@pagespace/lib/auth';
 import type { VerifiedUser } from '@/lib/auth/auth';
 
