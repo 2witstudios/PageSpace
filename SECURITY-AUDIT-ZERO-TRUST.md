@@ -8,17 +8,19 @@
 
 ## Executive Verdict
 
-**Can you claim zero-trust? Almost, but not yet.** PageSpace has an exceptionally strong security architecture — opaque tokens, per-request auth, fail-closed permissions, scoped service tokens, and defense-in-depth throughout. However, **two concrete issues** prevent a clean zero-trust claim, plus the known MCP exception you mentioned.
+**Can you claim zero-trust? Yes, after one fix.** PageSpace has an exceptionally strong security architecture — opaque tokens, per-request auth, fail-closed permissions, scoped service tokens, and defense-in-depth throughout. **One concrete issue** was found and fixed in this audit, plus the known MCP exception you mentioned.
 
 ---
 
 ## Findings Summary
 
-| # | Finding | Severity | Zero-Trust Impact |
-|---|---------|----------|-------------------|
-| 1 | Processor service CORS: `app.use(cors())` with no origin restriction | **HIGH** | Violates "never trust the network" |
-| 2 | Nginx cache wildcard CORS (`Access-Control-Allow-Origin: *`) | **LOW** | Internal-only by default, but defense-in-depth gap |
-| 3 | Desktop MCP servers run unsandboxed (by design) | **KNOWN** | Accepted trust boundary, same as Claude Desktop |
+| # | Finding | Severity | Zero-Trust Impact | Status |
+|---|---------|----------|-------------------|--------|
+| 1 | Processor service CORS: `app.use(cors())` with no origin restriction | **HIGH** | Violates "never trust the network" | **FIXED** |
+| 2 | Nginx dev config had wildcard CORS (not used in production — Caddy) | **INFO** | Dev-only, no production impact | **FIXED** |
+| 3 | Desktop MCP servers run unsandboxed (by design) | **KNOWN** | Accepted trust boundary, same as Claude Desktop | Accepted |
+
+**Note:** Production uses Caddy as the reverse proxy (configured outside this repo). The `nginx.conf` in this repo is for local development only. The Caddy production config should be audited separately.
 
 Everything else passed. Details below.
 
@@ -125,49 +127,44 @@ Everything else passed. Details below.
 
 ---
 
-## Issue #1: Processor Service CORS — No Origin Restriction
+## Issue #1: Processor Service CORS — No Origin Restriction (FIXED)
 
 **File:** `apps/processor/src/server.ts:30`
 
+**Was:**
 ```typescript
 app.use(cors());  // Allows ANY origin
 ```
 
-**Impact:** The processor service accepts requests from any origin. While all endpoints require service tokens (which external websites don't have), this violates defense-in-depth. In a zero-trust model, the network boundary should never be the sole protection.
+**Impact:** The processor service accepted requests from any origin. While all endpoints require service tokens (which external websites don't have), this violates defense-in-depth. In a zero-trust model, the network boundary should never be the sole protection.
 
 **Why it matters for zero-trust:** Zero-trust means no implicit trust in any network segment. Even though auth is enforced, allowing any origin to attempt requests means a compromised internal service could be weaponized via CORS to make cross-origin requests to the processor.
 
-**Fix:**
+**Fix applied:**
 ```typescript
 app.use(cors({
-  origin: process.env.WEB_APP_URL || process.env.CORS_ORIGIN || false,
-  methods: ['GET', 'POST', 'DELETE'],
+  origin: process.env.CORS_ORIGIN || process.env.WEB_APP_URL || false,
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 ```
 
 ---
 
-## Issue #2: Nginx Cache Wildcard CORS
+## Issue #2: Nginx Dev Config Wildcard CORS (FIXED — Informational)
 
 **File:** `nginx.conf:59`
 
+**Was:**
 ```nginx
 add_header Access-Control-Allow-Origin "*";
 ```
 
-**Impact:** LOW. The nginx cache service:
-- Only runs with `profiles: [production]` (not started by default)
-- Serves content-addressed files (need to know the SHA-256 hash)
-- Is on the internal Docker network (not internet-facing by default)
-- Has no directory listing (can't enumerate hashes)
+**Impact:** Informational only. This nginx config is used for local development. **Production uses Caddy** (configured outside this repo). The wildcard CORS was removed for defense-in-depth even in dev.
 
-**However,** if this service ever becomes internet-facing (reverse proxy passes through to it), the wildcard CORS would allow any website to fetch cached files if the hash is known. Content-addressed hashes of known files are deterministic.
+**Fix applied:** Removed CORS headers entirely — nginx is an internal-only cache service that browsers should never access directly.
 
-**Fix:** Replace with explicit origin:
-```nginx
-add_header Access-Control-Allow-Origin "$ALLOWED_ORIGIN";
-```
+**Action item:** Audit the production Caddy configuration separately to verify it does not introduce CORS gaps.
 
 ---
 
@@ -232,9 +229,18 @@ The following categories were exhaustively checked with no gaps found:
 
 ## Conclusion
 
-PageSpace implements a zero-trust architecture with two fixable gaps:
+PageSpace implements a zero-trust architecture. One gap was found and fixed in this audit:
 
-1. **Fix `app.use(cors())` in the processor service** — restrict to known origins
-2. **Fix nginx cache CORS wildcard** — replace `*` with explicit origin
+1. **Processor CORS wildcard** — now restricted to known origins via `CORS_ORIGIN` / `WEB_APP_URL`
 
-After those two fixes, plus the accepted MCP exception, PageSpace can legitimately claim a zero-trust security posture. The authentication and authorization implementation is thorough, consistent, and fail-closed throughout.
+The nginx dev config wildcard CORS was also cleaned up, though it had no production impact since production uses Caddy (configured outside this repo).
+
+With the processor CORS fix applied and the accepted MCP desktop exception, **PageSpace can legitimately claim a zero-trust security posture**. The authentication and authorization implementation is thorough, consistent, and fail-closed throughout.
+
+### Out-of-Scope Recommendation
+
+The production Caddy reverse proxy configuration (managed outside this repo) should be audited separately to verify:
+- CORS headers are restricted to the application origin
+- WebSocket upgrade paths are properly authenticated
+- TLS termination settings are current
+- No cache paths bypass authentication
