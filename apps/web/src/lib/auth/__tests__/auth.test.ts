@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { verifyAuth, verifyAdminAuth } from '../auth';
+import type { AdminValidationResult } from '../admin-role';
 
 // Mock the auth index module
 vi.mock('../index', () => ({
@@ -10,6 +11,16 @@ vi.mock('../index', () => ({
 // Mock the admin-role module
 vi.mock('../admin-role', () => ({
   validateAdminAccess: vi.fn(),
+}));
+
+// Mock CSRF validation - allow all requests by default
+vi.mock('../csrf-validation', () => ({
+  validateCSRF: vi.fn().mockResolvedValue(null),
+}));
+
+// Mock security event logging
+vi.mock('@pagespace/lib/server', () => ({
+  logSecurityEvent: vi.fn(),
 }));
 
 import { authenticateSessionRequest } from '../index';
@@ -110,7 +121,8 @@ describe('auth', () => {
         sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
-      mockValidateAdminAccess.mockResolvedValue(true);
+      const validResult: AdminValidationResult = { isValid: true, actualAdminRoleVersion: 0 };
+      mockValidateAdminAccess.mockResolvedValue(validResult);
 
       const request = new Request('http://localhost/api/admin/test');
       const result = await verifyAdminAuth(request);
@@ -165,8 +177,14 @@ describe('auth', () => {
         sessionId: 'test-session-id',
       };
       mockAuthenticateWebRequest.mockResolvedValue(mockAuthResult);
-      // Simulate role change - validateAdminAccess returns false
-      mockValidateAdminAccess.mockResolvedValue(false);
+      // Simulate role change - validateAdminAccess returns invalid result
+      const invalidResult: AdminValidationResult = {
+        isValid: false,
+        reason: 'version_mismatch',
+        actualAdminRoleVersion: 1,
+        currentRole: 'admin',
+      };
+      mockValidateAdminAccess.mockResolvedValue(invalidResult);
 
       const request = new Request('http://localhost/api/admin/test');
       const result = await verifyAdminAuth(request);
