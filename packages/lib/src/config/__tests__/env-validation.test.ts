@@ -23,9 +23,6 @@ describe('env-validation', () => {
     it('given valid required env vars, should parse successfully', () => {
       const validEnv = {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         CSRF_SECRET: 'b'.repeat(32),
         ENCRYPTION_KEY: 'c'.repeat(32),
       };
@@ -37,9 +34,6 @@ describe('env-validation', () => {
 
     it('given missing DATABASE_URL, should fail validation', () => {
       const invalidEnv = {
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         CSRF_SECRET: 'b'.repeat(32),
         ENCRYPTION_KEY: 'c'.repeat(32),
       };
@@ -52,30 +46,9 @@ describe('env-validation', () => {
       }
     });
 
-    it('given JWT_SECRET less than 32 characters, should fail validation', () => {
-      const invalidEnv = {
-        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
-        JWT_SECRET: 'short',
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
-        CSRF_SECRET: 'b'.repeat(32),
-        ENCRYPTION_KEY: 'c'.repeat(32),
-      };
-
-      const result = serverEnvSchema.safeParse(invalidEnv);
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues.some((i) => i.path.includes('JWT_SECRET'))).toBe(true);
-      }
-    });
-
     it('given invalid DATABASE_URL format, should fail validation', () => {
       const invalidEnv = {
         DATABASE_URL: 'not-a-valid-url',
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         CSRF_SECRET: 'b'.repeat(32),
         ENCRYPTION_KEY: 'c'.repeat(32),
       };
@@ -91,9 +64,6 @@ describe('env-validation', () => {
     it('given optional vars missing, should still parse successfully with defaults', () => {
       const minimalEnv = {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         CSRF_SECRET: 'b'.repeat(32),
         ENCRYPTION_KEY: 'c'.repeat(32),
       };
@@ -110,9 +80,6 @@ describe('env-validation', () => {
     it('given NODE_ENV=production, should accept valid value', () => {
       const prodEnv = {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         CSRF_SECRET: 'b'.repeat(32),
         ENCRYPTION_KEY: 'c'.repeat(32),
         NODE_ENV: 'production',
@@ -129,9 +96,6 @@ describe('env-validation', () => {
     it('given NODE_ENV=test without CSRF_SECRET, should parse successfully', () => {
       const testEnv = {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         NODE_ENV: 'test',
       };
 
@@ -143,9 +107,6 @@ describe('env-validation', () => {
     it('given NODE_ENV=production without CSRF_SECRET, should fail validation', () => {
       const prodEnv = {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
-        JWT_SECRET: 'a'.repeat(32),
-        JWT_ISSUER: 'pagespace',
-        JWT_AUDIENCE: 'pagespace-users',
         NODE_ENV: 'production',
       };
 
@@ -161,21 +122,16 @@ describe('env-validation', () => {
   describe('validateEnv', () => {
     it('given valid environment, should return parsed env object', () => {
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
-      process.env.JWT_SECRET = 'a'.repeat(32);
-      process.env.JWT_ISSUER = 'pagespace';
-      process.env.JWT_AUDIENCE = 'pagespace-users';
       process.env.CSRF_SECRET = 'b'.repeat(32);
       process.env.ENCRYPTION_KEY = 'c'.repeat(32);
 
       const result = validateEnv();
 
       expect(result.DATABASE_URL).toBe('postgresql://user:pass@localhost:5432/db');
-      expect(result.JWT_SECRET).toBe('a'.repeat(32));
     });
 
     it('given invalid environment, should throw with descriptive error', () => {
       process.env.DATABASE_URL = '';
-      process.env.JWT_SECRET = 'short';
 
       expect(() => validateEnv()).toThrow(/Environment validation failed/);
     });
@@ -184,9 +140,6 @@ describe('env-validation', () => {
   describe('getEnvErrors', () => {
     it('given valid environment, should return empty array', () => {
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
-      process.env.JWT_SECRET = 'a'.repeat(32);
-      process.env.JWT_ISSUER = 'pagespace';
-      process.env.JWT_AUDIENCE = 'pagespace-users';
       process.env.CSRF_SECRET = 'b'.repeat(32);
       process.env.ENCRYPTION_KEY = 'c'.repeat(32);
 
@@ -197,7 +150,6 @@ describe('env-validation', () => {
 
     it('given multiple missing vars, should return all errors', () => {
       process.env.DATABASE_URL = '';
-      process.env.JWT_SECRET = '';
       process.env.CSRF_SECRET = '';
 
       const errors = getEnvErrors();
@@ -210,9 +162,6 @@ describe('env-validation', () => {
   describe('isEnvValid', () => {
     it('given valid environment, should return true', () => {
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
-      process.env.JWT_SECRET = 'a'.repeat(32);
-      process.env.JWT_ISSUER = 'pagespace';
-      process.env.JWT_AUDIENCE = 'pagespace-users';
       process.env.CSRF_SECRET = 'b'.repeat(32);
       process.env.ENCRYPTION_KEY = 'c'.repeat(32);
 
