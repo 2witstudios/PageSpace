@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "admin_role_version" integer DEFAULT 0 NOT NULL;
