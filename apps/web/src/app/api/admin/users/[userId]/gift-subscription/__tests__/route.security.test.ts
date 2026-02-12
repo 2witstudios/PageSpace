@@ -164,7 +164,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
@@ -196,7 +196,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
@@ -244,7 +244,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
@@ -307,7 +307,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             // No X-CSRF-Token header
           },
           body: JSON.stringify({
@@ -334,7 +334,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': 'invalid-csrf-token',
           },
           body: JSON.stringify({
@@ -375,7 +375,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
         {
           method: 'DELETE',
           headers: {
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
         }
@@ -399,7 +399,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
         {
           method: 'DELETE',
           headers: {
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
         }
@@ -441,7 +441,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
         {
           method: 'DELETE',
           headers: {
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
         }
@@ -495,7 +495,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
@@ -531,7 +531,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Cookie': `ps-session=${adminSessionToken}`,
+            'Cookie': `session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
           body: JSON.stringify({
