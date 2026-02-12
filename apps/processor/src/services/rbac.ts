@@ -4,14 +4,6 @@ import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/perm
 import type { EnforcedAuthContext } from '../middleware/auth';
 import { getLinksForFile, type FileLink } from './file-links';
 
-export type AccessRequirement = 'view' | 'edit';
-
-export interface FileAccessResult {
-  allowed: boolean;
-  pageId?: string;
-  driveId?: string;
-}
-
 export class DeleteFileAuthorizationError extends Error {
   constructor(message = 'Access denied for requested file') {
     super(message);
@@ -41,7 +33,6 @@ function isResourceBindingAllowed(
   fileDriveId?: string
 ): boolean {
   const binding = auth.resourceBinding;
-  // Unscoped service tokens (no binding) pass this check; RBAC checks below still gate the operation
   if (!binding) {
     return true;
   }
@@ -105,54 +96,11 @@ async function getDeleteFileContext(contentHash: string): Promise<DeleteFileCont
   };
 }
 
-export async function checkFileAccess(
-  userId: string,
-  contentHash: string,
-  requirement: AccessRequirement
-): Promise<FileAccessResult> {
-  const links = await getLinksForFile(contentHash);
-  if (links.length === 0) {
-    return { allowed: false };
-  }
-
-  for (const link of links) {
-    const perms = await getUserAccessLevel(userId, link.pageId);
-    if (!perms) {
-      continue;
-    }
-
-    if (requirement === 'view' && perms.canView) {
-      return { allowed: true, pageId: link.pageId, driveId: link.driveId };
-    }
-
-    if (requirement === 'edit' && (perms.canEdit || perms.canShare)) {
-      return { allowed: true, pageId: link.pageId, driveId: link.driveId };
-    }
-  }
-
-  return { allowed: false };
-}
-
-export async function assertFileAccess(
-  userId: string,
-  contentHash: string,
-  requirement: AccessRequirement
-): Promise<void> {
-  const result = await checkFileAccess(userId, contentHash, requirement);
-  if (!result.allowed) {
-    const action = requirement === 'edit' ? 'modify' : 'view';
-    const error = new Error(`User ${userId} is not authorized to ${action} file`);
-    error.name = 'AuthorizationError';
-    throw error;
-  }
-}
-
 export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefined, contentHash: string): Promise<void> {
   if (!auth?.userId) {
     throw new DeleteFileAuthorizationError('Service authentication required');
   }
 
-  // Normalize hash to lowercase since isValidContentHash accepts uppercase but DB stores lowercase
   const normalizedHash = contentHash.toLowerCase();
   const context = await getDeleteFileContext(normalizedHash);
 

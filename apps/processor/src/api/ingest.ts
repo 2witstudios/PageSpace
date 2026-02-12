@@ -3,23 +3,32 @@ import type { Router as ExpressRouter } from 'express';
 import { queueManager } from '../server';
 import { getPageForIngestion } from '../db';
 import { InvalidContentHashError, isValidContentHash } from '../cache/content-store';
-import { assertFileAccess } from '../services/rbac';
+import { assertFileAccess } from '../services/authorization';
+import { loggers } from '@pagespace/lib/logger-config';
 
 const router = Router();
 
 // Enqueue ingestion job by pageId
 router.post('/by-page/:pageId', async (req, res) => {
   try {
-    if (!req.auth) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
-    const userId = req.auth.userId;
-    if (!userId) {
+    const auth = req.auth;
+    if (!auth) {
       return res.status(401).json({ error: 'Service authentication required' });
     }
 
     const { pageId } = req.params;
+
+    // Fast-fail: if token is page-bound, verify pageId matches
+    const binding = auth.resourceBinding;
+    if (binding?.type === 'page' && binding.id !== pageId) {
+      loggers.security.warn('ingest denied: page binding mismatch', {
+        userId: auth.userId,
+        requestedPageId: pageId,
+        boundPageId: binding.id,
+      });
+      return res.status(403).json({ error: 'Access denied: token is bound to a different page' });
+    }
+
     const page = await getPageForIngestion(pageId);
 
     if (!page) {
@@ -36,7 +45,7 @@ router.post('/by-page/:pageId', async (req, res) => {
     }
 
     try {
-      await assertFileAccess(userId, contentHash, 'edit');
+      await assertFileAccess(auth, contentHash, 'edit');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Router as ExpressRouter } from 'express';
 import { contentStore } from '../server';
 import { InvalidContentHashError, isValidContentHash, isValidPreset } from '../cache/content-store';
-import { assertFileAccess, checkFileAccess } from '../services/rbac';
+import { authorizeFileAccess, assertFileAccess } from '../services/authorization';
 import { db, files, pages, eq } from '@pagespace/db';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
 
@@ -22,16 +22,11 @@ router.get('/:contentHash/original', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const userId = auth.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
-    let accessInfo;
+    let decision;
     try {
-      accessInfo = await checkFileAccess(userId, contentHash, 'view');
-      if (!accessInfo.allowed) {
-        throw new Error('Access denied');
+      decision = await authorizeFileAccess(auth, contentHash, 'view');
+      if (!decision.allowed) {
+        return res.status(403).json({ error: 'Access denied for requested file' });
       }
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
@@ -59,7 +54,7 @@ router.get('/:contentHash/original', async (req, res) => {
       contentType = fileRecord.mimeType;
     }
 
-    const linkedPageId = accessInfo?.pageId;
+    const linkedPageId = decision?.context?.pageId;
     if (linkedPageId) {
       const pageRecord = await db.query.pages.findFirst({
         where: eq(pages.id, linkedPageId),
@@ -140,13 +135,8 @@ router.get('/:contentHash/:preset', async (req, res) => {
       return res.status(400).json({ error: 'Invalid preset name' });
     }
 
-    const userId = auth.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
     try {
-      await assertFileAccess(userId, contentHash, 'view');
+      await assertFileAccess(auth, contentHash, 'view');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
@@ -216,13 +206,8 @@ router.get('/:contentHash/metadata', async (req, res) => {
       return res.status(400).json({ error: 'Invalid content hash' });
     }
 
-    const userId = auth.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Service authentication required' });
-    }
-
     try {
-      await assertFileAccess(userId, contentHash, 'view');
+      await assertFileAccess(auth, contentHash, 'view');
     } catch {
       return res.status(403).json({ error: 'Access denied for requested file' });
     }
