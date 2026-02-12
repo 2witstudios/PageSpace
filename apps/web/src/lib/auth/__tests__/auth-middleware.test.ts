@@ -19,6 +19,15 @@ vi.mock('@pagespace/lib/auth', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/server', () => ({
+  EnforcedAuthContext: class EnforcedAuthContext {
+    static fromSession(sessionClaims: unknown): unknown {
+      return sessionClaims;
+    }
+  },
+  logSecurityEvent: vi.fn(),
+}));
+
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
@@ -51,6 +60,7 @@ vi.mock('../cookie-config', () => ({
 }));
 
 import { sessionService } from '@pagespace/lib/auth';
+import { logSecurityEvent } from '@pagespace/lib/server';
 import { db } from '@pagespace/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';
@@ -213,6 +223,52 @@ describe('Auth Middleware', () => {
       expect(capturedSetValues).toBeDefined();
       expect(capturedSetValues!.lastUsed).toBeInstanceOf(Date);
     });
+
+    it('denies and revokes MCP token for suspended users', async () => {
+      // Arrange
+      const mockMCPToken = {
+        id: 'token-id',
+        userId: 'test-user-id',
+        user: {
+          id: 'test-user-id',
+          role: 'user' as const,
+          tokenVersion: 0,
+          adminRoleVersion: 0,
+          suspendedAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        driveScopes: [],
+      };
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
+
+      let capturedSetValues: Record<string, unknown> | undefined;
+      const mockSet = vi.fn().mockImplementation((values: Record<string, unknown>) => {
+        capturedSetValues = values;
+        return {
+          where: vi.fn().mockResolvedValue(undefined),
+        };
+      });
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+      // Act
+      const result = await validateMCPToken('mcp_valid-token');
+
+      // Assert
+      expect(result).toBeNull();
+      expect(capturedSetValues).toBeDefined();
+      expect(capturedSetValues).toMatchObject({
+        revokedAt: expect.any(Date),
+      });
+      expect(logSecurityEvent).toHaveBeenCalledWith(
+        'unauthorized',
+        expect.objectContaining({
+          reason: 'mcp_token_user_suspended',
+          userId: 'test-user-id',
+          tokenId: 'token-id',
+          authType: 'mcp',
+          action: 'revoke_and_deny',
+        })
+      );
+    });
   });
 
   describe('authenticateSessionRequest', () => {
@@ -349,6 +405,40 @@ describe('Auth Middleware', () => {
         method: 'GET',
         headers: {
           Authorization: 'Bearer mcp_invalid-token',
+        },
+      });
+
+      // Act
+      const result = await authenticateMCPRequest(request);
+
+      // Assert
+      expect(isAuthError(result)).toBe(true);
+      if (isAuthError(result)) {
+        const body = await result.error.json();
+        expect(body.error).toBe('Invalid MCP token');
+      }
+    });
+
+    it('returns error for suspended user MCP token', async () => {
+      // Arrange
+      const mockMCPToken = {
+        id: 'token-id',
+        userId: 'test-user-id',
+        user: {
+          id: 'test-user-id',
+          role: 'user' as const,
+          tokenVersion: 0,
+          adminRoleVersion: 0,
+          suspendedAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+        driveScopes: [],
+      };
+      vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(mockMCPToken as never);
+
+      const request = new Request('http://localhost/api/test', {
+        method: 'GET',
+        headers: {
+          Authorization: 'Bearer mcp_suspended-user-token',
         },
       });
 
