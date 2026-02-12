@@ -47,9 +47,9 @@ export async function verifyAuth(request: Request): Promise<VerifiedUser | null>
  */
 /**
  * Admin route context type for withAdminAuth wrapper.
- * Allows handlers to receive context with Promise params (Next.js 15 pattern).
+ * Used for dynamic routes with params (Next.js 15 pattern).
  */
-export type AdminRouteContext = { params: Promise<Record<string, string>> } | undefined;
+export type AdminRouteContext = { params: Promise<Record<string, string>> };
 
 /**
  * Higher-order function that wraps admin route handlers with authentication.
@@ -57,22 +57,33 @@ export type AdminRouteContext = { params: Promise<Record<string, string>> } | un
  *
  * Usage:
  * ```typescript
+ * // For routes WITHOUT dynamic params:
  * export const GET = withAdminAuth(async (adminUser, request) => {
- *   // adminUser is guaranteed to be VerifiedUser - no type guard needed
  *   return Response.json({ userId: adminUser.id });
  * });
  *
- * // With context (for dynamic routes):
- * export const POST = withAdminAuth(async (adminUser, request, context) => {
- *   const { userId } = await (context as { params: Promise<{ userId: string }> }).params;
+ * // For routes WITH dynamic params:
+ * export const POST = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
+ *   const { userId } = await context.params;
  *   return Response.json({ targetUserId: userId });
  * });
  * ```
  */
+// Overload for routes WITHOUT context (no dynamic params)
+export function withAdminAuth(
+  handler: (user: VerifiedUser, request: Request) => Promise<Response>
+): (request: Request) => Promise<Response>;
+
+// Overload for routes WITH context (dynamic params)
 export function withAdminAuth<T extends AdminRouteContext>(
   handler: (user: VerifiedUser, request: Request, context: T) => Promise<Response>
+): (request: Request, context: T) => Promise<Response>;
+
+// Implementation
+export function withAdminAuth<T extends AdminRouteContext>(
+  handler: (user: VerifiedUser, request: Request, context?: T) => Promise<Response>
 ) {
-  return async (request: Request, context: T): Promise<Response> => {
+  return async (request: Request, context?: T): Promise<Response> => {
     const result = await verifyAdminAuth(request);
     if (isAdminAuthError(result)) return result;
     return handler(result, request, context);

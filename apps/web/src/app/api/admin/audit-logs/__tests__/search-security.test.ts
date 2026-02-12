@@ -139,7 +139,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request, undefined);
+      await GET(request);
 
       // Assert: The % should be escaped to \%
       expect(mockIlike).toHaveBeenCalled();
@@ -156,7 +156,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request, undefined);
+      await GET(request);
 
       // Assert: The _ should be escaped to \_
       expect(mockIlike).toHaveBeenCalled();
@@ -172,7 +172,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request, undefined);
+      await GET(request);
 
       // Assert: Backslashes should be escaped
       expect(mockIlike).toHaveBeenCalled();
@@ -188,7 +188,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request, undefined);
+      await GET(request);
 
       // Assert: All special characters should be escaped
       expect(mockIlike).toHaveBeenCalled();
@@ -205,7 +205,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request, undefined);
+      await GET(request);
 
       // Assert: Pattern should just have the search term wrapped in wildcards
       expect(mockIlike).toHaveBeenCalled();
@@ -220,7 +220,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request, undefined);
+      await GET(request);
 
       // Assert: ilike function should be called (not raw SQL template)
       expect(mockIlike).toHaveBeenCalled();
@@ -244,7 +244,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      const response = await GET(request, undefined);
+      const response = await GET(request);
       const body = await response.json();
 
       // Assert
