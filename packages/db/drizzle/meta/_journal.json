@@ -575,6 +575,13 @@
       "when": 1770658470954,
       "tag": "0081_glorious_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1770925609174,
+      "tag": "0082_common_maverick",
+      "breakpoints": true
     }
   ]
 }

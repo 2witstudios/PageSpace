@@ -10,7 +10,7 @@ import {
   sql,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { verifyAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 
 /**
@@ -95,17 +95,8 @@ function logToCSVRow(log: Record<string, unknown>): string {
  * - search: Full-text search in resourceTitle, actorEmail, actorDisplayName
  * - format: Export format (default: csv, only csv supported currently)
  */
-export async function GET(request: Request) {
+export const GET = withAdminAuth(async (_adminUser, request) => {
   try {
-    // Verify user is authenticated and is an admin
-    const adminUser = await verifyAdminAuth(request);
-
-    if (!adminUser) {
-      return Response.json(
-        { error: 'Unauthorized: Admin access required' },
-        { status: 403 }
-      );
-    }
 
     // Parse query parameters
     const url = new URL(request.url);
@@ -265,4 +256,4 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});

@@ -24,6 +24,7 @@ export const sessions = pgTable('sessions', {
 
   // Security context
   tokenVersion: integer('token_version').notNull(),
+  adminRoleVersion: integer('admin_role_version').notNull().default(0),
   createdByService: text('created_by_service'),
   createdByIp: text('created_by_ip'),
 

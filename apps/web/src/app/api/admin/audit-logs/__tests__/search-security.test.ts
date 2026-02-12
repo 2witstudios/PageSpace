@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
 import { GET } from '../route';
 
 /**
@@ -22,9 +23,25 @@ const { mockIlike } = vi.hoisted(() => ({
   })),
 }));
 
+// Create mock auth functions using vi.hoisted() to ensure they're available when vi.mock is hoisted
+const { mockVerifyAdminAuth, mockIsAdminAuthError } = vi.hoisted(() => ({
+  mockVerifyAdminAuth: vi.fn(),
+  mockIsAdminAuthError: vi.fn((result: unknown) => result instanceof NextResponse),
+}));
+
 // Mock dependencies
 vi.mock('@/lib/auth', () => ({
-  verifyAdminAuth: vi.fn(),
+  verifyAdminAuth: mockVerifyAdminAuth,
+  isAdminAuthError: mockIsAdminAuthError,
+  // withAdminAuth HOF that uses the mocked verifyAdminAuth
+  withAdminAuth: <T>(handler: (user: unknown, request: Request, context: T) => Promise<Response>) => {
+    return async (request: Request, context: T): Promise<Response> => {
+      const result = mockVerifyAdminAuth(request);
+      const resolved = await result;
+      if (mockIsAdminAuthError(resolved)) return resolved;
+      return handler(resolved, request, context);
+    };
+  },
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -99,8 +116,6 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-import { verifyAdminAuth } from '@/lib/auth';
-
 describe('/api/admin/audit-logs - Search Security', () => {
   const mockAdminUser = {
     id: 'admin-user-id',
@@ -111,7 +126,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(verifyAdminAuth).mockResolvedValue(mockAdminUser);
+    mockVerifyAdminAuth.mockResolvedValue(mockAdminUser);
   });
 
   describe('LIKE pattern injection prevention', () => {
@@ -216,8 +231,12 @@ describe('/api/admin/audit-logs - Search Security', () => {
 
   describe('authentication requirements', () => {
     it('GET_withoutAdminAuth_returns403', async () => {
-      // Arrange: Not an admin
-      vi.mocked(verifyAdminAuth).mockResolvedValue(null);
+      // Arrange: Not an admin - verifyAdminAuth returns error response
+      const errorResponse = NextResponse.json(
+        { error: 'Forbidden: Admin access required' },
+        { status: 403 }
+      );
+      mockVerifyAdminAuth.mockResolvedValue(errorResponse);
 
       const request = new Request(
         'http://localhost/api/admin/audit-logs?search=test',
@@ -230,7 +249,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
 
       // Assert
       expect(response.status).toBe(403);
-      expect(body.error).toBe('Unauthorized: Admin access required');
+      expect(body.error).toBe('Forbidden: Admin access required');
     });
   });
 });

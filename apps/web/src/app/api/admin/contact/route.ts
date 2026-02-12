@@ -8,20 +8,11 @@ import {
   count
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { verifyAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
-export async function GET(request: Request) {
+export const GET = withAdminAuth(async (_adminUser, request) => {
   try {
-    // Verify user is authenticated and is an admin
-    const adminUser = await verifyAdminAuth(request);
-
-    if (!adminUser) {
-      return Response.json(
-        { error: 'Unauthorized: Admin access required' },
-        { status: 403 }
-      );
-    }
 
     // Parse query parameters
     const url = new URL(request.url);
@@ -115,4 +106,4 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});

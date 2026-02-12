@@ -9,7 +9,7 @@
  * - Token estimates
  */
 
-import { verifyAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import {
   buildCompleteRequest,
   type CompletePayloadResult,
@@ -54,13 +54,7 @@ interface ModePromptData {
   completePayload: CompletePayloadResult;
 }
 
-export async function GET(request: Request) {
-  // Verify admin authentication
-  const adminUser = await verifyAdminAuth(request);
-  if (!adminUser) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
+export const GET = withAdminAuth(async (adminUser, request) => {
   try {
     // Parse query params for context selection
     const { searchParams } = new URL(request.url);
@@ -408,4 +402,4 @@ export async function GET(request: Request) {
     console.error('Error generating global prompt data:', error);
     return new Response('Internal Server Error', { status: 500 });
   }
-}
+});

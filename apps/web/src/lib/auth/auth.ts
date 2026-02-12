@@ -1,11 +1,19 @@
+import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from './index';
-import { validateAdminAccess } from './admin-role';
+import { validateAdminAccess, type AdminValidationResult } from './admin-role';
+import { validateCSRF } from './csrf-validation';
+import { logSecurityEvent } from '@pagespace/lib/server';
 
 export interface VerifiedUser {
   id: string;
   role: 'user' | 'admin';
   tokenVersion: number;
   adminRoleVersion: number;
+}
+
+/** Type guard to check if result is an error response */
+export function isAdminAuthError(result: VerifiedUser | NextResponse): result is NextResponse {
+  return result instanceof NextResponse;
 }
 
 export async function verifyAuth(request: Request): Promise<VerifiedUser | null> {
@@ -26,18 +34,110 @@ export async function verifyAuth(request: Request): Promise<VerifiedUser | null>
  * Verify that the request is from an authenticated admin user.
  * Validates both the role and adminRoleVersion to prevent race conditions
  * where a user's admin status changes between token issuance and request.
+ *
+ * Security features (zero-trust, defense-in-depth):
+ * - Session authentication validation
+ * - CSRF protection for state-changing requests
+ * - adminRoleVersion validation against database
+ * - Security event logging for audit trail
+ *
+ * Returns:
+ * - VerifiedUser on success
+ * - NextResponse with error details on failure (use isAdminAuthError to check)
  */
-export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | null> {
+/**
+ * Admin route context type for withAdminAuth wrapper.
+ * Used for dynamic routes with params (Next.js 15 pattern).
+ */
+export type AdminRouteContext = { params: Promise<Record<string, string>> };
+
+/**
+ * Higher-order function that wraps admin route handlers with authentication.
+ * Eliminates the repetitive 3-line auth pattern across admin routes.
+ *
+ * Usage:
+ * ```typescript
+ * // For routes WITHOUT dynamic params:
+ * export const GET = withAdminAuth(async (adminUser, request) => {
+ *   return Response.json({ userId: adminUser.id });
+ * });
+ *
+ * // For routes WITH dynamic params:
+ * export const POST = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
+ *   const { userId } = await context.params;
+ *   return Response.json({ targetUserId: userId });
+ * });
+ * ```
+ */
+// Overload for routes WITHOUT context (no dynamic params)
+export function withAdminAuth(
+  handler: (user: VerifiedUser, request: Request) => Promise<Response>
+): (request: Request) => Promise<Response>;
+
+// Overload for routes WITH context (dynamic params)
+export function withAdminAuth<T extends AdminRouteContext>(
+  handler: (user: VerifiedUser, request: Request, context: T) => Promise<Response>
+): (request: Request, context: T) => Promise<Response>;
+
+// Implementation
+export function withAdminAuth<T extends AdminRouteContext>(
+  handler: (user: VerifiedUser, request: Request, context?: T) => Promise<Response>
+) {
+  return async (request: Request, context?: T): Promise<Response> => {
+    const result = await verifyAdminAuth(request);
+    if (isAdminAuthError(result)) return result;
+    return handler(result, request, context);
+  };
+}
+
+export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | NextResponse> {
   const user = await verifyAuth(request);
-  if (!user || user.role !== 'admin') {
-    return null;
+  if (!user) {
+    return NextResponse.json(
+      { error: 'Forbidden: Admin access required' },
+      { status: 403 }
+    );
+  }
+
+  // Defense-in-depth: CSRF validation for state-changing admin operations
+  // Even with SameSite=Strict cookies, we add explicit CSRF validation for zero-trust security
+  const method = request.method.toUpperCase();
+  const isStateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+  if (isStateChanging) {
+    const csrfError = await validateCSRF(request);
+    if (csrfError) {
+      logSecurityEvent('unauthorized', {
+        reason: 'admin_csrf_validation_failed',
+        userId: user.id,
+        method,
+        authType: 'session',
+        action: 'deny_access',
+      });
+      // Return the CSRF error response directly to preserve error codes
+      return csrfError;
+    }
   }
 
   // Validate adminRoleVersion against the database to ensure
-  // the role hasn't changed since the token was issued
-  const isValidAdmin = await validateAdminAccess(user.id, user.adminRoleVersion);
-  if (!isValidAdmin) {
-    return null;
+  // the role hasn't changed since the token was issued.
+  // This is called for ALL authenticated users (not just those with admin role in session)
+  // because the session role may be stale - validateAdminAccess checks the actual DB state.
+  const validationResult: AdminValidationResult = await validateAdminAccess(user.id, user.adminRoleVersion);
+  if (!validationResult.isValid) {
+    // Log security event with detailed context for forensic analysis
+    logSecurityEvent('admin_role_version_mismatch', {
+      reason: validationResult.reason ?? 'admin_role_version_validation_failed',
+      userId: user.id,
+      claimedAdminRoleVersion: user.adminRoleVersion,
+      actualAdminRoleVersion: validationResult.actualAdminRoleVersion,
+      currentRole: validationResult.currentRole,
+      authType: 'session',
+      action: 'deny_access',
+    });
+    return NextResponse.json(
+      { error: 'Forbidden: Admin access required' },
+      { status: 403 }
+    );
   }
 
   return user;
