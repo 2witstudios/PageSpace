@@ -10,6 +10,8 @@ import { rateLimitRead } from '../middleware/rate-limit';
 const router = Router();
 
 // Serve original files (must come before generic preset route)
+// Rate limiting is applied via rateLimitRead middleware
+// codeql[js/missing-rate-limiting] false positive - custom rate limiter middleware is applied
 router.get('/:contentHash/original', rateLimitRead, async (req, res) => {
   try {
     const { contentHash } = req.params;
