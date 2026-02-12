@@ -29,7 +29,7 @@ function createAuth(overrides: Partial<EnforcedAuthContext> = {}): EnforcedAuthC
     driveId: undefined,
     hasScope: () => true,
     isAdmin: () => false,
-    isBoundToResource: () => !!overrides.resourceBinding,
+    isBoundToResource: () => true,
     ...overrides,
   } as unknown as EnforcedAuthContext;
 }
