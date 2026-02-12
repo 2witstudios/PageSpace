@@ -5,6 +5,11 @@ Scope: `apps/web`, `apps/processor`, `packages/lib`, `packages/db`, desktop MCP 
 ## Executive Summary
 Your proposed statement is directionally right, but not fully true as written.
 
+Update (February 12, 2026):
+- Issue #548 has been remediated.
+- `validateMCPToken` now denies suspended users, logs the attempt as a security event, and revokes the presented MCP token on first detection.
+- Previously issued MCP tokens are therefore invalidated at first post-suspension use (not just denied per-request).
+
 What is true now:
 - Authenticated web/service operations are largely built around opaque server-issued tokens and server-side revalidation.
 - Session tokens are hashed at rest and revalidated against DB state (expiry, revocation, suspension, token version) on each use.
@@ -13,7 +18,6 @@ What is true now:
 What is not true now:
 - Not every endpoint is session-mediated (by design: health, webhooks, monitoring ingest, unsubscribe links, etc.).
 - Scoped MCP token restrictions are not consistently enforced across hybrid (`session` + `mcp`) routes.
-- A suspended user can still authenticate with existing MCP tokens (suspension check is present for sessions, not MCP token validation).
 - Page/chat content is plaintext at the application layer (intentional tradeoff for search/AI workflows).
 
 ## Can You Publish This Exact Claim?
@@ -92,14 +96,19 @@ Quantified blast radius:
 - 53 hybrid routes found; all now have explicit MCP scope enforcement.
 - 17 routes were fixed in PR #553; 13 additional routes were fixed in PR #547-v2 (see Appendix A for details).
 
-### P1: Suspended users can still use MCP tokens
+### P1 (Resolved February 12, 2026): Suspended users can still use MCP tokens
 Risk vector:
 - Session validation blocks suspended users and revokes sessions.
 - MCP token validation does not check `suspendedAt`, so suspended accounts retain MCP API access until token revocation.
 
-Evidence:
+Evidence (before remediation):
 - Session suspension enforcement: `packages/lib/src/auth/session-service.ts:99`
 - MCP token validation path lacks suspension check and returns auth details: `apps/web/src/lib/auth/index.ts:63`
+
+Resolution:
+- `validateMCPToken` now checks `user.suspendedAt`.
+- Suspended-user MCP token attempts are logged as security events.
+- The token presented by a suspended user is revoked (`revokedAt`) on first detection, then denied for all subsequent requests.
 
 ### P1: Processor file-delete endpoint lacks resource ownership authorization
 Risk vector:
@@ -125,13 +134,13 @@ Evidence:
 1. Local MCP server execution model: user-trusted local code execution, not sandboxed.
 2. Plaintext searchable content: no app-layer content encryption for pages/chat.
 3. Hybrid MCP scope inconsistency: scoped tokens may exceed intended drive boundaries.
-4. MCP suspension gap: suspended users may retain MCP token access.
+4. MCP suspension gap (resolved February 12, 2026): suspended users no longer retain MCP token access.
 5. Processor hash-delete authorization gap: delete by hash lacks ownership check.
 6. Admin stale-role path in one endpoint: bypasses role-version hardening model.
 
 ## Remediation Priority
 1. Enforce MCP scope checks in all hybrid routes (or deny MCP by default unless explicit scope guard is present).
-2. Add suspension enforcement to `validateMCPToken`.
+2. Add suspension enforcement to `validateMCPToken`. (Completed February 12, 2026)
 3. Add ownership/resource authorization in `apps/processor/src/api/delete-file.ts` (match serve RBAC pattern).
 4. Migrate `gift-subscription` route to `verifyAdminAuth`.
 5. Add automated tests:
