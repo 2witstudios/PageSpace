@@ -130,6 +130,29 @@ export async function getDriveMemberUserIds(driveId: string): Promise<string[]> 
 }
 
 /**
+ * Get all user IDs who should receive broadcast events for a drive.
+ * Returns owner + all drive members.
+ *
+ * Migration note: When org layer is added, this can be replaced with
+ * org-scoped room membership or org member queries.
+ */
+export async function getDriveRecipientUserIds(driveId: string): Promise<string[]> {
+  const drive = await db.query.drives.findFirst({
+    where: eq(drives.id, driveId),
+    columns: { ownerId: true },
+  });
+  if (!drive) return [];
+
+  const members = await db
+    .select({ userId: driveMembers.userId })
+    .from(driveMembers)
+    .where(eq(driveMembers.driveId, driveId));
+
+  const userIds = new Set([drive.ownerId, ...members.map((m) => m.userId)]);
+  return Array.from(userIds);
+}
+
+/**
  * List all members of a drive with their details and permission counts
  */
 export async function listDriveMembers(driveId: string): Promise<MemberWithDetails[]> {

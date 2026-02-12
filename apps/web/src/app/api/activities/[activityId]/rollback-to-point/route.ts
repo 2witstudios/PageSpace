@@ -14,6 +14,7 @@ import {
   broadcastDriveEvent,
   createDriveEventPayload,
 } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -182,10 +183,12 @@ export async function POST(
     } else if (activity.resourceType === 'drive' && activity.driveId) {
       if (!broadcastedDrives.has(activity.driveId)) {
         broadcastedDrives.add(activity.driveId);
+        const recipientUserIds = await getDriveRecipientUserIds(activity.driveId);
         await broadcastDriveEvent(
           createDriveEventPayload(activity.driveId, 'updated', {
             name: activity.resourceTitle ?? undefined,
-          })
+          }),
+          recipientUserIds
         );
       }
     }

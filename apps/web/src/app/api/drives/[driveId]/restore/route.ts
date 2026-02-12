@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
@@ -43,11 +44,13 @@ export async function POST(
       })
       .where(eq(drives.id, drive.id));
 
+    const recipientUserIds = await getDriveRecipientUserIds(drive.id);
     await broadcastDriveEvent(
       createDriveEventPayload(drive.id, 'updated', {
         name: drive.name,
         slug: drive.slug,
       }),
+      recipientUserIds
     );
 
     // Log activity for audit trail

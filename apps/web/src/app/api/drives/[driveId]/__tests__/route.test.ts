@@ -47,6 +47,10 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logDriveActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
+}));
+
 import {
   getDriveById,
   getDriveAccess,
@@ -516,7 +520,10 @@ describe('PATCH /api/drives/[driveId]', () => {
         'updated',
         { name: 'New', slug: 'new' }
       );
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId, event: 'updated' }),
+        ['user-123', 'user-456']
+      );
     });
 
     it('should NOT broadcast event when only drivePrompt changes', async () => {
@@ -725,7 +732,10 @@ describe('DELETE /api/drives/[driveId]', () => {
         'deleted',
         { name: 'Deleted Drive', slug: 'deleted-drive' }
       );
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId, event: 'deleted' }),
+        ['user-123', 'user-456']
+      );
     });
   });
 

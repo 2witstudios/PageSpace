@@ -26,6 +26,7 @@ import {
 import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
@@ -295,10 +296,16 @@ async function trashDrive(
     throw new Error('Drive is already in trash');
   }
 
+  // Get recipients BEFORE trashing (ensures we have valid member list)
+  const trashRecipientUserIds = await getDriveRecipientUserIds(drive.id);
+
   // Use repository seam for drive trash
   await driveRepository.trash(drive.id);
 
-  await broadcastDriveEvent(createDriveEventPayload(drive.id, 'deleted', { name: drive.name, slug: drive.slug }));
+  await broadcastDriveEvent(
+    createDriveEventPayload(drive.id, 'deleted', { name: drive.name, slug: drive.slug }),
+    trashRecipientUserIds
+  );
 
   return { id: drive.id, name: drive.name, slug: drive.slug };
 }
@@ -363,7 +370,11 @@ async function restoreDrive(
   // Use repository seam for drive restore
   const restoredDrive = await driveRepository.restore(drive.id);
 
-  await broadcastDriveEvent(createDriveEventPayload(restoredDrive.id, 'updated', { name: restoredDrive.name, slug: restoredDrive.slug }));
+  const restoreRecipientUserIds = await getDriveRecipientUserIds(restoredDrive.id);
+  await broadcastDriveEvent(
+    createDriveEventPayload(restoredDrive.id, 'updated', { name: restoredDrive.name, slug: restoredDrive.slug }),
+    restoreRecipientUserIds
+  );
 
   return { id: restoredDrive.id, name: restoredDrive.name, slug: restoredDrive.slug };
 }
