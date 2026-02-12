@@ -5,8 +5,9 @@ import { useDriveStore } from './useDrive';
 import { DriveEventPayload, DriveMemberEventPayload } from '@/lib/websocket';
 
 /**
- * Hook that listens for global drive events and updates the drive store
- * Ensures real-time synchronization when drives are created, updated, or deleted
+ * Hook that listens for drive events and updates the drive store.
+ * Receives events via user-specific channel (user:${userId}:drives) for security.
+ * Ensures real-time synchronization when drives are created, updated, or deleted.
  */
 export function useGlobalDriveSocket() {
   const socket = useSocket();
@@ -62,15 +63,14 @@ export function useGlobalDriveSocket() {
       return;
     }
 
-    console.log('🌍 useGlobalDriveSocket: Setting up global drive listeners');
+    console.log('🌍 useGlobalDriveSocket: Setting up drive event listeners');
 
-    // Join the global drives channel AND user-specific drives channel
+    // Join user-specific drives channel for secure drive events
     if (!hasJoinedRef.current && user?.id) {
-      socket.emit('join_global_drives');
-      socket.emit('join', `user:${user.id}:drives`); // Join user-specific channel for member events
+      socket.emit('join', `user:${user.id}:drives`);
       hasJoinedRef.current = true;
       joinedUserIdRef.current = user.id;
-      console.log(`🌍 Joined global:drives and user:${user.id}:drives channels`);
+      console.log(`🌍 Joined user:${user.id}:drives channel`);
     }
 
     // Listen for drive events (both global and user-specific)
@@ -90,7 +90,7 @@ export function useGlobalDriveSocket() {
 
     // Cleanup function - runs when socket, user?.id, or handleDriveEvent changes
     return () => {
-      console.log('🌍 useGlobalDriveSocket: Cleaning up global drive listeners');
+      console.log('🌍 useGlobalDriveSocket: Cleaning up drive event listeners');
 
       // Remove all event listeners
       events.forEach(event => {
@@ -103,11 +103,10 @@ export function useGlobalDriveSocket() {
         revalidationTimeoutRef.current = undefined;
       }
 
-      // Leave the global drives channel and user-specific drives channel
+      // Leave the user-specific drives channel
       if (hasJoinedRef.current && joinedUserIdRef.current) {
-        socket.emit('leave_global_drives');
         socket.emit('leave', `user:${joinedUserIdRef.current}:drives`);
-        console.log(`🌍 Left global:drives and user:${joinedUserIdRef.current}:drives channels`);
+        console.log(`🌍 Left user:${joinedUserIdRef.current}:drives channel`);
         hasJoinedRef.current = false;
         joinedUserIdRef.current = null;
       }

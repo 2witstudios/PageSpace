@@ -47,6 +47,10 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logDriveActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
+}));
+
 import {
   getDriveById,
   getDriveAccess,

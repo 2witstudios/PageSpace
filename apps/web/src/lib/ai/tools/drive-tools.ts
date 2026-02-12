@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
 import { slugify, logDriveActivity, getActorInfo, getDriveAccessWithDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -160,12 +161,13 @@ export const driveTools = {
           drivePrompt: drives.drivePrompt,
         });
 
-        // Broadcast drive creation event
+        // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(
           createDriveEventPayload(newDrive.id, 'created', {
             name: newDrive.name,
             slug: newDrive.slug,
-          })
+          }),
+          [userId]
         );
 
         // Log activity for AI-generated drive creation
@@ -258,11 +260,13 @@ export const driveTools = {
           });
 
         // Broadcast drive update event
+        const renameRecipientUserIds = await getDriveRecipientUserIds(updatedDrive.id);
         await broadcastDriveEvent(
           createDriveEventPayload(updatedDrive.id, 'updated', {
             name: updatedDrive.name,
             slug: updatedDrive.slug,
-          })
+          }),
+          renameRecipientUserIds
         );
 
         // Log activity for AI-generated drive rename
@@ -364,10 +368,12 @@ This context persists across conversations and helps provide better assistance. 
           });
 
         // Broadcast drive update event for real-time sync
+        const contextRecipientUserIds = await getDriveRecipientUserIds(updatedDrive.id);
         await broadcastDriveEvent(
           createDriveEventPayload(updatedDrive.id, 'updated', {
             name: updatedDrive.name,
-          })
+          }),
+          contextRecipientUserIds
         );
 
         // Log activity for AI-generated context update

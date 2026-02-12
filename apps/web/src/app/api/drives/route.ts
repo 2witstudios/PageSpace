@@ -75,6 +75,7 @@ export async function POST(request: Request) {
         name: newDrive.name,
         slug: newDrive.slug,
       }),
+      [userId] // Only the creator receives the event for new drives
     );
 
     trackDriveOperation(userId, 'create', newDrive.id, {
