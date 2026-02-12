@@ -1,16 +1,9 @@
 import { db, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 
-export async function GET(request: Request) {
+export const GET = withAdminAuth(async (_adminUser) => {
   try {
-    // Verify user is authenticated and is an admin
-    const adminAuthResult = await verifyAdminAuth(request);
-
-    if (isAdminAuthError(adminAuthResult)) {
-      return adminAuthResult;
-    }
-    const _adminUser = adminAuthResult;
     // Get all table information from PostgreSQL information_schema
     const tablesQuery = sql`
       SELECT 
@@ -164,4 +157,4 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});

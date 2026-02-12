@@ -23,10 +23,25 @@ const { mockIlike } = vi.hoisted(() => ({
   })),
 }));
 
+// Create mock auth functions using vi.hoisted() to ensure they're available when vi.mock is hoisted
+const { mockVerifyAdminAuth, mockIsAdminAuthError } = vi.hoisted(() => ({
+  mockVerifyAdminAuth: vi.fn(),
+  mockIsAdminAuthError: vi.fn((result: unknown) => result instanceof NextResponse),
+}));
+
 // Mock dependencies
 vi.mock('@/lib/auth', () => ({
-  verifyAdminAuth: vi.fn(),
-  isAdminAuthError: vi.fn((result: unknown) => result instanceof NextResponse),
+  verifyAdminAuth: mockVerifyAdminAuth,
+  isAdminAuthError: mockIsAdminAuthError,
+  // withAdminAuth HOF that uses the mocked verifyAdminAuth
+  withAdminAuth: <T>(handler: (user: unknown, request: Request, context: T) => Promise<Response>) => {
+    return async (request: Request, context: T): Promise<Response> => {
+      const result = mockVerifyAdminAuth(request);
+      const resolved = await result;
+      if (mockIsAdminAuthError(resolved)) return resolved;
+      return handler(resolved, request, context);
+    };
+  },
 }));
 
 vi.mock('@pagespace/lib/server', () => ({
@@ -101,8 +116,6 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-import { verifyAdminAuth } from '@/lib/auth';
-
 describe('/api/admin/audit-logs - Search Security', () => {
   const mockAdminUser = {
     id: 'admin-user-id',
@@ -113,7 +126,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(verifyAdminAuth).mockResolvedValue(mockAdminUser);
+    mockVerifyAdminAuth.mockResolvedValue(mockAdminUser);
   });
 
   describe('LIKE pattern injection prevention', () => {
@@ -126,7 +139,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request);
+      await GET(request, undefined);
 
       // Assert: The % should be escaped to \%
       expect(mockIlike).toHaveBeenCalled();
@@ -143,7 +156,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request);
+      await GET(request, undefined);
 
       // Assert: The _ should be escaped to \_
       expect(mockIlike).toHaveBeenCalled();
@@ -159,7 +172,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request);
+      await GET(request, undefined);
 
       // Assert: Backslashes should be escaped
       expect(mockIlike).toHaveBeenCalled();
@@ -175,7 +188,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request);
+      await GET(request, undefined);
 
       // Assert: All special characters should be escaped
       expect(mockIlike).toHaveBeenCalled();
@@ -192,7 +205,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request);
+      await GET(request, undefined);
 
       // Assert: Pattern should just have the search term wrapped in wildcards
       expect(mockIlike).toHaveBeenCalled();
@@ -207,7 +220,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      await GET(request);
+      await GET(request, undefined);
 
       // Assert: ilike function should be called (not raw SQL template)
       expect(mockIlike).toHaveBeenCalled();
@@ -223,7 +236,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
         { error: 'Forbidden: Admin access required' },
         { status: 403 }
       );
-      vi.mocked(verifyAdminAuth).mockResolvedValue(errorResponse);
+      mockVerifyAdminAuth.mockResolvedValue(errorResponse);
 
       const request = new Request(
         'http://localhost/api/admin/audit-logs?search=test',
@@ -231,7 +244,7 @@ describe('/api/admin/audit-logs - Search Security', () => {
       );
 
       // Act
-      const response = await GET(request);
+      const response = await GET(request, undefined);
       const body = await response.json();
 
       // Assert

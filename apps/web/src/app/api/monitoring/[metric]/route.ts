@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import {
   getSystemHealth,
   getApiMetrics,
@@ -11,23 +11,15 @@ import {
 } from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/server';
 
+type RouteContext = { params: Promise<{ metric: string }> };
+
 /**
  * GET /api/monitoring/[metric]
  * Returns monitoring data for the specified metric
  * ADMIN ONLY - Contains sensitive system data
  */
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ metric: string }> }
-) {
+export const GET = withAdminAuth<RouteContext>(async (_adminUser, request, context) => {
   try {
-    // CRITICAL: Verify admin authorization
-    const adminAuthResult = await verifyAdminAuth(request);
-    if (isAdminAuthError(adminAuthResult)) {
-      return adminAuthResult;
-    }
-    const _adminUser = adminAuthResult;
-
     const { metric } = await context.params;
     const { searchParams } = new URL(request.url);
     const range = searchParams.get('range') as '24h' | '7d' | '30d' | 'all' || '24h';
@@ -82,4 +74,4 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});

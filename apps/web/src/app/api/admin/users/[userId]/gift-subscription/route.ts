@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { db, eq, users, subscriptions, and, inArray, desc } from '@pagespace/db';
-import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
@@ -9,25 +9,16 @@ import { loggers } from '@pagespace/lib/server';
 
 type GiftTier = 'pro' | 'founder' | 'business';
 
+type RouteContext = { params: Promise<{ userId: string }> };
+
 /**
  * POST /api/admin/users/[userId]/gift-subscription
  * Gift a subscription to a user with a 100% discount coupon.
  * The subscription is created in Stripe, and the webhook updates the user tier.
  */
-export async function POST(
-  request: NextRequest,
-  context: { params: Promise<{ userId: string }> }
-) {
+export const POST = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
   try {
     const { userId: targetUserId } = await context.params;
-
-    // Verify admin auth with role version validation
-    const adminAuthResult = await verifyAdminAuth(request);
-    if (isAdminAuthError(adminAuthResult)) {
-      return adminAuthResult;
-    }
-    const adminUser = adminAuthResult;
-
     const adminUserId = adminUser.id;
 
     // Parse request body
@@ -156,27 +147,16 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+});
 
 /**
  * DELETE /api/admin/users/[userId]/gift-subscription
  * Revoke a gifted subscription immediately.
  * The subscription is deleted in Stripe, and the webhook reverts the user to free tier.
  */
-export async function DELETE(
-  request: NextRequest,
-  context: { params: Promise<{ userId: string }> }
-) {
+export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
   try {
     const { userId: targetUserId } = await context.params;
-
-    // Verify admin auth with role version validation
-    const adminAuthResult = await verifyAdminAuth(request);
-    if (isAdminAuthError(adminAuthResult)) {
-      return adminAuthResult;
-    }
-    const adminUser = adminAuthResult;
-
     const adminUserId = adminUser.id;
 
     // Get target user
@@ -246,4 +226,4 @@ export async function DELETE(
       { status: 500 }
     );
   }
-}
+});

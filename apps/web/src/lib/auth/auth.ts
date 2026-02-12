@@ -45,6 +45,40 @@ export async function verifyAuth(request: Request): Promise<VerifiedUser | null>
  * - VerifiedUser on success
  * - NextResponse with error details on failure (use isAdminAuthError to check)
  */
+/**
+ * Admin route context type for withAdminAuth wrapper.
+ * Allows handlers to receive context with Promise params (Next.js 15 pattern).
+ */
+export type AdminRouteContext = { params: Promise<Record<string, string>> } | undefined;
+
+/**
+ * Higher-order function that wraps admin route handlers with authentication.
+ * Eliminates the repetitive 3-line auth pattern across admin routes.
+ *
+ * Usage:
+ * ```typescript
+ * export const GET = withAdminAuth(async (adminUser, request) => {
+ *   // adminUser is guaranteed to be VerifiedUser - no type guard needed
+ *   return Response.json({ userId: adminUser.id });
+ * });
+ *
+ * // With context (for dynamic routes):
+ * export const POST = withAdminAuth(async (adminUser, request, context) => {
+ *   const { userId } = await (context as { params: Promise<{ userId: string }> }).params;
+ *   return Response.json({ targetUserId: userId });
+ * });
+ * ```
+ */
+export function withAdminAuth<T extends AdminRouteContext>(
+  handler: (user: VerifiedUser, request: Request, context: T) => Promise<Response>
+) {
+  return async (request: Request, context: T): Promise<Response> => {
+    const result = await verifyAdminAuth(request);
+    if (isAdminAuthError(result)) return result;
+    return handler(result, request, context);
+  };
+}
+
 export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | NextResponse> {
   const user = await verifyAuth(request);
   if (!user) {
