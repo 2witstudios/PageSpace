@@ -142,4 +142,14 @@ describe('delete-file route', () => {
       cacheDeleted: false,
     });
   });
+
+  it('returns 500 when deletion throws an unexpected error', async () => {
+    const app = createApp({ userId: 'user-1' });
+    mockDeleteOriginalAndCache.mockRejectedValue(new Error('disk failure'));
+
+    const response = await request(app).delete(`/files/${VALID_HASH}`);
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({ error: 'disk failure' });
+  });
 });

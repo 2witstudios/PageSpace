@@ -1,4 +1,5 @@
 import { db, channelMessages, eq, filePages, files, pages } from '@pagespace/db';
+import { loggers } from '@pagespace/lib/logger-config';
 import { getUserAccessLevel, getUserDrivePermissions } from '@pagespace/lib/permissions-cached';
 import type { EnforcedAuthContext } from '../middleware/auth';
 import { getLinksForFile, type FileLink } from './file-links';
@@ -40,6 +41,7 @@ function isResourceBindingAllowed(
   fileDriveId?: string
 ): boolean {
   const binding = auth.resourceBinding;
+  // Unscoped service tokens (no binding) pass this check; RBAC checks below still gate the operation
   if (!binding) {
     return true;
   }
@@ -153,6 +155,12 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
   const context = await getDeleteFileContext(contentHash);
 
   if (!isResourceBindingAllowed(auth, contentHash, context.links, context.fileDriveId)) {
+    loggers.security.warn('delete-file denied: resource binding mismatch', {
+      userId: auth.userId,
+      contentHash,
+      bindingType: auth.resourceBinding?.type,
+      bindingId: auth.resourceBinding?.id,
+    });
     throw new DeleteFileAuthorizationError();
   }
 
@@ -169,20 +177,42 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
     }
 
     if (!canDeleteLinkedPage) {
+      loggers.security.warn('delete-file denied: insufficient page delete permission', {
+        userId: auth.userId,
+        contentHash,
+        scopedLinksCount: scopedLinks.length,
+      });
       throw new DeleteFileAuthorizationError();
     }
   } else {
     if (!context.fileDriveId) {
+      loggers.security.warn('delete-file denied: orphan file with no drive association', {
+        userId: auth.userId,
+        contentHash,
+      });
       throw new DeleteFileAuthorizationError();
     }
 
     const drivePerms = await getUserDrivePermissions(auth.userId, context.fileDriveId);
     if (!drivePerms || (!drivePerms.isOwner && !drivePerms.isAdmin)) {
+      loggers.security.warn('delete-file denied: not drive owner/admin for orphan file', {
+        userId: auth.userId,
+        contentHash,
+        driveId: context.fileDriveId,
+        hasAccess: !!drivePerms,
+      });
       throw new DeleteFileAuthorizationError();
     }
   }
 
   if (context.hasFilePageReferences || context.hasChannelReferences || context.hasPagePathReferences) {
+    loggers.security.warn('delete-file denied: file still has references', {
+      userId: auth.userId,
+      contentHash,
+      hasFilePageReferences: context.hasFilePageReferences,
+      hasChannelReferences: context.hasChannelReferences,
+      hasPagePathReferences: context.hasPagePathReferences,
+    });
     throw new DeleteFileReferencedError();
   }
 }

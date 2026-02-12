@@ -19,6 +19,16 @@ vi.mock('@pagespace/lib/permissions-cached', () => ({
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 
+vi.mock('@pagespace/lib/logger-config', () => ({
+  loggers: {
+    security: {
+      warn: vi.fn(),
+      info: vi.fn(),
+      error: vi.fn(),
+    },
+  },
+}));
+
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
@@ -80,6 +90,10 @@ describe('assertDeleteFileAccess', () => {
       isMember: true,
       canEdit: true,
     });
+  });
+
+  it('denies when auth is undefined', async () => {
+    await expect(assertDeleteFileAccess(undefined, VALID_HASH)).rejects.toBeInstanceOf(DeleteFileAuthorizationError);
   });
 
   it('allows page-bound token when resource binding matches and page delete permission is granted', async () => {
