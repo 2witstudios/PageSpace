@@ -208,31 +208,37 @@ describe('Admin Role Versioning', () => {
   });
 
   describe('validateAdminAccess', () => {
-    it('returns true for valid admin with matching adminRoleVersion', async () => {
+    it('returns isValid true for valid admin with matching adminRoleVersion', async () => {
       const result = await validateAdminAccess(adminUserId, 0);
-      expect(result).toBe(true);
+      expect(result.isValid).toBe(true);
+      expect(result.actualAdminRoleVersion).toBe(0);
     });
 
-    it('returns false when user is not admin', async () => {
+    it('returns isValid false with reason not_admin when user is not admin', async () => {
       const result = await validateAdminAccess(regularUserId, 0);
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
+      expect(result.reason).toBe('not_admin');
+      expect(result.currentRole).toBe('user');
     });
 
-    it('returns false when adminRoleVersion does not match', async () => {
+    it('returns isValid false with reason version_mismatch when adminRoleVersion does not match', async () => {
       // User was admin with version 0, but we claim version 1
       const result = await validateAdminAccess(adminUserId, 1);
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
+      expect(result.reason).toBe('version_mismatch');
+      expect(result.actualAdminRoleVersion).toBe(0);
     });
 
-    it('returns false for non-existent user', async () => {
+    it('returns isValid false with reason user_not_found for non-existent user', async () => {
       const result = await validateAdminAccess('non-existent-id', 0);
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
+      expect(result.reason).toBe('user_not_found');
     });
 
     it('role demotion invalidates admin access with old version', async () => {
       // Admin has version 0
       const validBefore = await validateAdminAccess(adminUserId, 0);
-      expect(validBefore).toBe(true);
+      expect(validBefore.isValid).toBe(true);
 
       // Demote admin to user (bumps version to 1)
       await updateUserRole(adminUserId, 'user');
@@ -240,7 +246,9 @@ describe('Admin Role Versioning', () => {
       // Access with old version should fail (even though version now matches 1,
       // the user is no longer admin)
       const validAfterDemotion = await validateAdminAccess(adminUserId, 0);
-      expect(validAfterDemotion).toBe(false);
+      expect(validAfterDemotion.isValid).toBe(false);
+      expect(validAfterDemotion.reason).toBe('not_admin');
+      expect(validAfterDemotion.actualAdminRoleVersion).toBe(1);
     });
 
     it('adminRoleVersion mismatch rejects request even for valid admin', async () => {
@@ -249,11 +257,12 @@ describe('Admin Role Versioning', () => {
 
       // Access with old version 0 should fail
       const validWithOldVersion = await validateAdminAccess(regularUserId, 0);
-      expect(validWithOldVersion).toBe(false);
+      expect(validWithOldVersion.isValid).toBe(false);
+      expect(validWithOldVersion.reason).toBe('version_mismatch');
 
       // Access with correct version 1 should succeed
       const validWithNewVersion = await validateAdminAccess(regularUserId, 1);
-      expect(validWithNewVersion).toBe(true);
+      expect(validWithNewVersion.isValid).toBe(true);
     });
   });
 });

@@ -90,7 +90,13 @@ vi.mock('@pagespace/lib/server', async () => {
 });
 
 // Mock CSRF validation to pass - tests focus on admin role version validation
+// Use relative path from auth.ts perspective to ensure mock is applied correctly
 vi.mock('@/lib/auth/csrf-validation', () => ({
+  validateCSRF: vi.fn().mockResolvedValue(null),
+  requiresCSRFProtection: vi.fn().mockReturnValue(true),
+}));
+// Also mock with path that matches how auth.ts imports it
+vi.mock('../../../../../../../lib/auth/csrf-validation', () => ({
   validateCSRF: vi.fn().mockResolvedValue(null),
   requiresCSRFProtection: vi.fn().mockReturnValue(true),
 }));
