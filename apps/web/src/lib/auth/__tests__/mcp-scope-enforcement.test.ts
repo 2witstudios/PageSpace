@@ -74,7 +74,6 @@ import {
   getAllowedDriveIds,
   type MCPAuthResult,
   type SessionAuthResult,
-  type AuthResult,
 } from '../index';
 
 describe('MCP Scope Enforcement', () => {
