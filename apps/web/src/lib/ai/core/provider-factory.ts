@@ -89,7 +89,7 @@ export async function createAIProvider(
   const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
   let currentModel = selectedModel || user?.currentAiModel || 'glm-4.7';
 
-  // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.5-air')
+  // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.7')
   if (currentProvider === 'pagespace') {
     currentModel = resolvePageSpaceModel(currentModel);
   }
