@@ -579,29 +579,15 @@
     {
       "idx": 82,
       "version": "7",
-      "when": 1770925609174,
-      "tag": "0082_common_maverick",
+      "when": 1771005277675,
+      "tag": "0082_typical_zeigeist",
       "breakpoints": true
     },
     {
       "idx": 83,
       "version": "7",
-      "when": 1770953445466,
+      "when": 1771005300000,
       "tag": "0083_migrate_pagespace_model_tiers",
-      "breakpoints": true
-    },
-    {
-      "idx": 84,
-      "version": "7",
-      "when": 1770953445467,
-      "tag": "0084_update_default_ai_model",
-      "breakpoints": true
-    },
-    {
-      "idx": 85,
-      "version": "7",
-      "when": 1770392153668,
-      "tag": "0085_lonely_johnny_blaze",
       "breakpoints": true
     }
   ]
