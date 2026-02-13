@@ -32,14 +32,12 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
 
   // Use conversation-based tracking for Global Assistant
   const { usage: conversationUsage, isLoading: conversationLoading, isError: conversationError, mutate: mutateConversation } = useAiUsage(
-    conversationId,
-    15000
+    conversationId
   );
 
   // Use page-based tracking for Page AI (fallback)
   const { usage: pageUsage, isLoading: pageLoading, isError: pageError, mutate: mutatePage } = usePageAiUsage(
-    !conversationId ? pageId : null, // Only query if no conversationId
-    15000
+    !conversationId ? pageId : null // Only query if no conversationId
   );
 
   // Socket.IO listener for real-time usage updates
