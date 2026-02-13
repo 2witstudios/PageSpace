@@ -33,6 +33,9 @@ export * from './services/drive-role-service';
 // Drive search service
 export * from './services/drive-search-service';
 
+// Passkey (WebAuthn) service (server-only)
+export * from './auth/passkey-service';
+
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';
 export * from './auth/oauth-types';

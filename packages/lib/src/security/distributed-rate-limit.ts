@@ -406,6 +406,18 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: true,
   },
+  PASSKEY_REGISTER: {
+    maxAttempts: 5,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  PASSKEY_AUTH: {
+    maxAttempts: 10,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: true,
+  },
 } as const;
 
 // =============================================================================

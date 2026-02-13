@@ -70,6 +70,9 @@ export * from './encryption';
 export * from './auth/rate-limit-utils';
 export * from './auth/verification-utils';
 
+// Passkey (WebAuthn) service (server-only)
+export * from './auth/passkey-service';
+
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';
 export * from './auth/oauth-types';

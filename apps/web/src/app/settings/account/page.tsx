@@ -20,7 +20,8 @@ import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
 import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
 import { useDevices } from "@/hooks/useDevices";
-import { Smartphone } from "lucide-react";
+import { PasskeyManager } from "@/components/settings/PasskeyManager";
+import { Smartphone, Fingerprint } from "lucide-react";
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -584,11 +585,27 @@ export default function AccountPage() {
         </CardContent>
       </Card>
 
+      {/* Passkeys Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Fingerprint className="h-5 w-5" />
+            Passkeys
+          </CardTitle>
+          <CardDescription>
+            Sign in securely with your fingerprint, face, or security key
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PasskeyManager />
+        </CardContent>
+      </Card>
+
       {/* Security Section */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Security</CardTitle>
-          <CardDescription>Manage your password and security settings</CardDescription>
+          <CardTitle>Password</CardTitle>
+          <CardDescription>Change your password</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handlePasswordChange} className="space-y-4">

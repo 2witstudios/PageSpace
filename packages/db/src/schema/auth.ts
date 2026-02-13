@@ -178,6 +178,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   subscriptions: many(subscriptions),
   sessions: many(sessions),
   emailUnsubscribeTokens: many(emailUnsubscribeTokens),
+  passkeys: many(passkeys),
 }));
 
 export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
@@ -216,6 +217,34 @@ export const verificationTokensRelations = relations(verificationTokens, ({ one 
 export const socketTokensRelations = relations(socketTokens, ({ one }) => ({
   user: one(users, {
     fields: [socketTokens.userId],
+    references: [users.id],
+  }),
+}));
+
+// WebAuthn passkeys for passwordless authentication
+// Stores credential info for TouchID, FaceID, Windows Hello, and security keys
+export const passkeys = pgTable('passkeys', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  credentialId: text('credential_id').notNull().unique(), // base64url encoded
+  publicKey: text('public_key').notNull(), // base64url encoded COSE key
+  counter: integer('counter').notNull().default(0),
+  deviceType: text('device_type'), // 'singleDevice' | 'multiDevice'
+  transports: text('transports').array(), // ['usb', 'ble', 'nfc', 'internal', 'hybrid']
+  backedUp: boolean('backed_up').default(false),
+  name: text('name'), // user-provided friendly name
+  lastUsedAt: timestamp('last_used_at', { mode: 'date' }),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    userIdx: index('passkeys_user_id_idx').on(table.userId),
+    credentialIdx: index('passkeys_credential_id_idx').on(table.credentialId),
+  };
+});
+
+export const passkeysRelations = relations(passkeys, ({ one }) => ({
+  user: one(users, {
+    fields: [passkeys.userId],
     references: [users.id],
   }),
 }));

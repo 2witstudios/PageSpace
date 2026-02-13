@@ -38,6 +38,8 @@ export {
   socketTokensRelations,
   emailUnsubscribeTokens,
   emailUnsubscribeTokensRelations,
+  passkeys,
+  passkeysRelations,
   userRole,
   authProvider,
   platformType,
