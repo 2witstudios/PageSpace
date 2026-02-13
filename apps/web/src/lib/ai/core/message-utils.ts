@@ -5,7 +5,7 @@ import {
   type DynamicToolUIPart,
 } from 'ai';
 import { db, chatMessages, messages } from '@pagespace/db';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, conversationCache, type CachedMessage } from '@pagespace/lib/server';
 
 /** Narrow a UIMessage part to TextUIPart */
 function isTextPart(part: { type: string }): part is TextUIPart {
@@ -427,6 +427,23 @@ export async function saveMessageToDatabase({
           sourceAgentId: sourceAgentId ?? null,
         }
       });
+
+    // Append to cache - must await since conversation may be read shortly after
+    const cachedMessage: CachedMessage = {
+      id: messageId,
+      role,
+      content: structuredContent,
+      toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
+      toolResults: toolResults ? JSON.stringify(toolResults) : null,
+      createdAt: Date.now(),
+      editedAt: null,
+      messageType: 'standard',
+    };
+    try {
+      await conversationCache.appendMessage(pageId, conversationId, cachedMessage);
+    } catch (err) {
+      loggers.ai.warn('Failed to append message to conversation cache', { error: err });
+    }
   } catch (error) {
     console.error('Error saving message to database:', error);
     throw error;

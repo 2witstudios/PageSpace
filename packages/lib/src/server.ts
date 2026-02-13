@@ -85,3 +85,7 @@ export {
 
 // Enforced auth context
 export { EnforcedAuthContext } from './permissions/enforced-context';
+
+// Conversation caching (server-only)
+export { conversationCache, ConversationCache } from './services/conversation-cache';
+export type { CachedMessage, CachedConversation, ConversationCacheMetrics } from './services/conversation-cache';

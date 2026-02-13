@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, conversationCache } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
@@ -93,6 +93,9 @@ export async function PATCH(
     // Update the message content and set editedAt
     await chatMessageRepository.updateMessageContent(messageId, updatedContent);
 
+    // Invalidate conversation cache to ensure next read gets fresh data
+    await conversationCache.invalidateConversation(message.pageId, message.conversationId);
+
     // Log activity for audit trail (non-blocking)
     try {
       const actorInfo = await getActorInfo(userId);
@@ -180,6 +183,9 @@ export async function DELETE(
 
     // Soft delete the message
     await chatMessageRepository.softDeleteMessage(messageId);
+
+    // Invalidate conversation cache to ensure next read gets fresh data
+    await conversationCache.invalidateConversation(message.pageId, message.conversationId);
 
     // Log activity for audit trail (non-blocking)
     try {
