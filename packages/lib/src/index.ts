@@ -105,6 +105,10 @@ export type { CachedAgent, CachedDriveAgents } from './services/agent-awareness-
 export { pageTreeCache, PageTreeCache } from './services/page-tree-cache';
 export type { CachedTreeNode, CachedPageTree } from './services/page-tree-cache';
 
+// Conversation caching (server-only)
+export { conversationCache, ConversationCache } from './services/conversation-cache';
+export type { CachedMessage, CachedConversation, ConversationCacheMetrics } from './services/conversation-cache';
+
 // File processing utilities (server-only)
 export * from './file-processing';
 

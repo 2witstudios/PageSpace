@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/server';
+import { canUserEditPage, conversationCache } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
@@ -149,6 +149,9 @@ export async function DELETE(
 
     // Soft-delete all messages in the conversation
     await conversationRepository.softDeleteConversation(agentId, conversationId);
+
+    // Invalidate conversation cache
+    await conversationCache.invalidateConversation(agentId, conversationId);
 
     // Audit log the deletion for security and compliance
     await conversationRepository.logConversationDeletion({
