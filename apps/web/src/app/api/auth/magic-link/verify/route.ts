@@ -124,7 +124,9 @@ export async function GET(req: Request) {
 
     // Store CSRF token in a temporary cookie for the client to retrieve
     // This follows the pattern from login - client-side JS will read and store this
-    headers.append('Set-Cookie', `csrf_token=${csrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60`);
+    const isProduction = process.env.NODE_ENV === 'production';
+    const secureFlag = isProduction ? '; Secure' : '';
+    headers.append('Set-Cookie', `csrf_token=${csrfToken}; Path=/; HttpOnly=false; SameSite=Lax; Max-Age=60${secureFlag}`);
 
     loggers.auth.info('Magic link login successful', {
       userId,

@@ -15,6 +15,14 @@ const sendMagicLinkSchema = z.object({
   email: z.email('Please enter a valid email address'),
 });
 
+/** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return '***@***';
+  const visibleChars = Math.min(2, local.length);
+  return `${local.slice(0, visibleChars)}***@${domain}`;
+}
+
 export async function POST(req: Request) {
   try {
     const clientIP = getClientIP(req);
@@ -104,7 +112,7 @@ export async function POST(req: Request) {
     }
 
     if (!emailRateLimit.allowed) {
-      logSecurityEvent('magic_link_rate_limit_email', { email: normalizedEmail, ip: clientIP });
+      logSecurityEvent('magic_link_rate_limit_email', { email: maskEmail(normalizedEmail), ip: clientIP });
       return Response.json(
         {
           error: 'Too many requests for this email. Please try again later.',
@@ -128,7 +136,7 @@ export async function POST(req: Request) {
     // Even if user is suspended, we return success but don't send email
     if (!result.ok) {
       if (result.error.code === 'USER_SUSPENDED') {
-        logSecurityEvent('magic_link_suspended_user', { email: normalizedEmail, ip: clientIP });
+        logSecurityEvent('magic_link_suspended_user', { email: maskEmail(normalizedEmail), ip: clientIP });
         // Return success to prevent enumeration, but don't send email
         return Response.json({
           message: 'If an account exists with this email, we have sent a sign-in link.',
@@ -162,14 +170,14 @@ export async function POST(req: Request) {
       });
 
       loggers.auth.info('Magic link email sent', {
-        email: normalizedEmail,
+        email: maskEmail(normalizedEmail),
         isNewUser: result.data.isNewUser,
         ip: clientIP,
       });
     } catch (error) {
       // Log but don't expose email sending errors
       loggers.auth.error('Failed to send magic link email', error as Error, {
-        email: normalizedEmail,
+        email: maskEmail(normalizedEmail),
       });
     }
 

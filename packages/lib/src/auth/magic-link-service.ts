@@ -92,16 +92,41 @@ export async function createMagicLinkToken(input: unknown): Promise<CreateMagicL
   } else {
     // Create a temporary user for magic link signup
     // The user will be marked as pending until they complete verification
-    const [newUser] = await db.insert(users).values({
-      id: createId(),
-      name: normalizedEmail.split('@')[0] ?? 'New User',
-      email: normalizedEmail,
-      provider: 'email',
-      role: 'user',
-      tokenVersion: 1,
-    }).returning();
-    userId = newUser.id;
-    isNewUser = true;
+    // Handle race condition where concurrent requests try to create the same user
+    try {
+      const [newUser] = await db.insert(users).values({
+        id: createId(),
+        name: normalizedEmail.split('@')[0] ?? 'New User',
+        email: normalizedEmail,
+        provider: 'email',
+        role: 'user',
+        tokenVersion: 1,
+      }).returning();
+      userId = newUser.id;
+      isNewUser = true;
+    } catch (error: unknown) {
+      // Handle unique constraint violation - another request created the user
+      const isConstraintViolation =
+        error instanceof Error &&
+        (error.message.includes('unique constraint') ||
+          error.message.includes('duplicate key') ||
+          error.message.includes('UNIQUE constraint'));
+
+      if (isConstraintViolation) {
+        const [existingUserAfterRace] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, normalizedEmail));
+
+        if (!existingUserAfterRace) {
+          throw error; // Unexpected state, rethrow
+        }
+        userId = existingUserAfterRace.id;
+        isNewUser = false;
+      } else {
+        throw error;
+      }
+    }
   }
 
   // Clean up old unused magic link tokens for this user
@@ -211,11 +236,23 @@ export async function verifyMagicLinkToken(input: unknown): Promise<VerifyMagicL
     return { ok: false, error: { code: 'TOKEN_NOT_FOUND' } };
   }
 
-  // Mark token as used BEFORE returning success (atomic operation)
-  await db
+  // Mark token as used atomically with WHERE usedAt IS NULL
+  // This prevents TOCTOU race where concurrent requests both pass validation
+  const updateResult = await db
     .update(verificationTokens)
     .set({ usedAt: new Date() })
-    .where(eq(verificationTokens.id, record.id));
+    .where(
+      and(
+        eq(verificationTokens.id, record.id),
+        isNull(verificationTokens.usedAt)
+      )
+    )
+    .returning();
+
+  // If no rows updated, another request already used this token
+  if (updateResult.length === 0) {
+    return { ok: false, error: { code: 'TOKEN_ALREADY_USED' } };
+  }
 
   // Determine if this is a new user (no email verified yet)
   const isNewUser = record.user.emailVerified === null;

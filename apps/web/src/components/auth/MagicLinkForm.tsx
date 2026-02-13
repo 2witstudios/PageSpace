@@ -75,7 +75,7 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
         throw new Error('Failed to initialize security token');
       }
 
-      const { csrfToken } = await csrfResponse.json();
+      const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
 
       // Send magic link request
       const response = await fetch('/api/auth/magic-link/send', {
@@ -90,7 +90,7 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
 
       if (response.status === 429) {
         // Rate limited
-        const data = await response.json();
+        const data = (await response.json()) as { retryAfter?: number; message?: string };
         const retryAfter = data.retryAfter || 60;
         setRetryAfterSeconds(retryAfter);
         setFormState('error');
@@ -100,14 +100,14 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
 
       if (response.status === 403) {
         // CSRF error
-        const data = await response.json();
+        const data = (await response.json()) as { details?: string; error?: string };
         setFormState('error');
         setError(data.details || 'Security verification failed. Please refresh the page.');
         return;
       }
 
       if (!response.ok) {
-        const data = await response.json();
+        const data = (await response.json()) as { error?: string; message?: string };
         setFormState('error');
         setError(data.error || 'Failed to send magic link. Please try again.');
         return;
@@ -126,8 +126,14 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;
+    // Reset to input state and re-trigger form submission
     setFormState('input');
-    // Submit will be triggered by user clicking send again
+    setError(null);
+    // Use setTimeout to ensure state updates before submit
+    setTimeout(() => {
+      const form = document.querySelector('form') as HTMLFormElement;
+      if (form) form.requestSubmit();
+    }, 0);
   }, [cooldownSeconds]);
 
   const handleReset = useCallback(() => {

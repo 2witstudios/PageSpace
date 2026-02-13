@@ -10,7 +10,7 @@ import {
   Section,
   Text,
 } from '@react-email/components';
-import { emailStyles, spacing } from './shared-styles';
+import { emailStyles } from './shared-styles';
 
 interface MagicLinkEmailProps {
   magicLinkUrl: string;

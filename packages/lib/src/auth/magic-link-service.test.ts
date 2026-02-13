@@ -24,8 +24,10 @@ const assert = ({ given, should, actual, expected }: AssertParams): void => {
 describe('Magic Link Service', () => {
   let testUserId: string;
   let testUserEmail: string;
+  let dynamicallyCreatedUserIds: string[] = [];
 
   beforeEach(async () => {
+    dynamicallyCreatedUserIds = [];
     testUserEmail = `magic-link-test-${Date.now()}@example.com`;
     const [user] = await db.insert(users).values({
       id: createId(),
@@ -41,8 +43,16 @@ describe('Magic Link Service', () => {
   });
 
   afterEach(async () => {
-    await db.delete(verificationTokens).where(eq(verificationTokens.userId, testUserId));
+    // Clean up tokens for all users (test user and dynamically created ones)
+    const allUserIds = [testUserId, ...dynamicallyCreatedUserIds];
+    for (const userId of allUserIds) {
+      await db.delete(verificationTokens).where(eq(verificationTokens.userId, userId));
+    }
+    // Clean up users
     await db.delete(users).where(eq(users.id, testUserId));
+    for (const userId of dynamicallyCreatedUserIds) {
+      await db.delete(users).where(eq(users.id, userId));
+    }
   });
 
   describe('createMagicLinkToken', () => {
@@ -134,6 +144,9 @@ describe('Magic Link Service', () => {
       });
 
       if (result.ok) {
+        // Track dynamically created user for cleanup
+        dynamicallyCreatedUserIds.push(result.data.userId);
+
         assert({
           given: 'an email for non-existent user',
           should: 'return isNewUser: true',
