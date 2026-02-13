@@ -1,30 +1,13 @@
-/**
- * Cross-Tenant Escalation & Data Leakage Tests (Enterprise Integration Tests)
- *
- * Zero-trust tests that prove cross-tenant isolation at every seam using REAL
- * database operations. These create actual multi-tenant data scenarios and verify
- * that authorization boundaries cannot be bypassed.
- *
- * Security properties tested:
- * 1. IDOR: Forged page/drive IDs cannot access other tenants
- * 2. Drive membership isolation: Admin of driveA has NO access to driveB
- * 3. Page collaborator containment: Page permission doesn't grant drive access
- * 4. Enumeration prevention: All unauthorized pages return null (no info leak)
- * 5. Scope isolation in EnforcedAuthContext
- * 6. Resource binding enforcement
- * 7. Fail-closed on ambiguous state
- */
-
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db, users, pages, drives, pagePermissions, driveMembers } from '@pagespace/db';
+import { db, users, pages, drives, pagePermissions, driveMembers, eq } from '@pagespace/db';
+import { createId } from '@paralleldrive/cuid2';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
 import { getUserDrivePermissions } from '../permissions/permissions-cached';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import type { SessionClaims } from '../auth/session-service';
 import { PermissionCache } from '../services/permission-cache';
 
-// Helper to create session claims
 function createClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
   return {
     sessionId: 'session-test',
@@ -40,31 +23,19 @@ function createClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
 }
 
 describe('Cross-Tenant Escalation Prevention (Integration)', () => {
-  // Alice owns driveA with pageA
   let alice: Awaited<ReturnType<typeof factories.createUser>>;
   let driveA: Awaited<ReturnType<typeof factories.createDrive>>;
   let pageA: Awaited<ReturnType<typeof factories.createPage>>;
 
-  // Bob owns driveB with pageB
   let bob: Awaited<ReturnType<typeof factories.createUser>>;
   let driveB: Awaited<ReturnType<typeof factories.createDrive>>;
   let pageB: Awaited<ReturnType<typeof factories.createPage>>;
 
-  // Mallory is an attacker with no drives
   let mallory: Awaited<ReturnType<typeof factories.createUser>>;
 
   beforeEach(async () => {
-    // Clean in FK order to avoid deadlocks from cascade contention
-    await db.delete(pagePermissions);
-    await db.delete(pages);
-    await db.delete(driveMembers);
-    await db.delete(drives);
-    await db.delete(users);
-
-    // Clear permission cache
     await PermissionCache.getInstance().clearAll();
 
-    // Create multi-tenant scenario
     alice = await factories.createUser();
     bob = await factories.createUser();
     mallory = await factories.createUser();
@@ -76,36 +47,46 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     pageB = await factories.createPage(driveB.id);
   });
 
-  // ===========================================================================
-  // 1. IDOR VIA FORGED PAGE IDS
-  // ===========================================================================
+  afterEach(async () => {
+    await PermissionCache.getInstance().clearAll();
+    // Clean up only our test data to avoid interfering with parallel tests
+    if (driveA) {
+      await db.delete(pagePermissions).where(eq(pagePermissions.pageId, pageA.id)).catch(() => {});
+      await db.delete(pages).where(eq(pages.driveId, driveA.id)).catch(() => {});
+      await db.delete(driveMembers).where(eq(driveMembers.driveId, driveA.id)).catch(() => {});
+      await db.delete(drives).where(eq(drives.id, driveA.id)).catch(() => {});
+    }
+    if (driveB) {
+      await db.delete(pagePermissions).where(eq(pagePermissions.pageId, pageB.id)).catch(() => {});
+      await db.delete(pages).where(eq(pages.driveId, driveB.id)).catch(() => {});
+      await db.delete(driveMembers).where(eq(driveMembers.driveId, driveB.id)).catch(() => {});
+      await db.delete(drives).where(eq(drives.id, driveB.id)).catch(() => {});
+    }
+    if (alice) await db.delete(users).where(eq(users.id, alice.id)).catch(() => {});
+    if (bob) await db.delete(users).where(eq(users.id, bob.id)).catch(() => {});
+    if (mallory) await db.delete(users).where(eq(users.id, mallory.id)).catch(() => {});
+  });
 
   describe('IDOR via forged page IDs', () => {
-    it('given Mallory supplies Alices page ID, should return null (no access)', async () => {
+    it('given Mallory supplies Alices page ID, should return null', async () => {
       const access = await getUserAccessLevel(mallory.id, pageA.id);
-
       expect(access).toBeNull();
     });
 
-    it('given Bob supplies Alices page ID, should return null even though Bob is a drive owner', async () => {
-      // Bob owns driveB but NOT driveA
+    it('given Bob supplies Alices page ID, should return null', async () => {
       const access = await getUserAccessLevel(bob.id, pageA.id);
-
       expect(access).toBeNull();
     });
 
     it('given Alice supplies Bobs page ID, should return null', async () => {
       const access = await getUserAccessLevel(alice.id, pageB.id);
-
       expect(access).toBeNull();
     });
 
-    it('given attacker enumerates page IDs, all should return null (no info leak)', async () => {
-      // Create additional pages
+    it('given attacker enumerates page IDs, all should return null', async () => {
       const pageA2 = await factories.createPage(driveA.id);
       const pageB2 = await factories.createPage(driveB.id);
 
-      // Mallory tries multiple page IDs
       const results = await Promise.all([
         getUserAccessLevel(mallory.id, pageA.id),
         getUserAccessLevel(mallory.id, pageA2.id),
@@ -113,15 +94,12 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         getUserAccessLevel(mallory.id, pageB2.id),
       ]);
 
-      // All return null - cannot distinguish which exist or who owns them
       expect(results.every((r) => r === null)).toBe(true);
     });
 
     it('given non-existent page ID, should return same null as existing unauthorized page', async () => {
-      const { createId } = await import('@paralleldrive/cuid2');
       const nonExistentPageId = createId();
 
-      // Both should return null - no info leak
       const existingUnauthorized = await getUserAccessLevel(mallory.id, pageA.id);
       const nonExistent = await getUserAccessLevel(mallory.id, nonExistentPageId);
 
@@ -129,10 +107,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       expect(nonExistent).toBeNull();
     });
   });
-
-  // ===========================================================================
-  // 2. DRIVE ACCESS ISOLATION
-  // ===========================================================================
 
   describe('drive access isolation', () => {
     it('given Alice is owner of driveA, she should NOT have access to driveB', async () => {
@@ -151,8 +125,7 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       expect(bobDriveA).toBeNull();
     });
 
-    it('given Bob is ADMIN of driveB, should NOT grant any access to driveA', async () => {
-      // Make Bob an admin of his own drive (not owner for this test)
+    it('given Bob is ADMIN of driveC, should NOT grant access to driveA', async () => {
       const charlie = await factories.createUser();
       const driveC = await factories.createDrive(charlie.id);
       await factories.createDriveMember(driveC.id, bob.id, { role: 'ADMIN' });
@@ -167,23 +140,16 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     it('given MEMBER role in driveB, should NOT grant access to driveA pages', async () => {
       await factories.createDriveMember(driveB.id, mallory.id, { role: 'MEMBER' });
 
-      // MEMBER of driveB
       const malloryDriveB = await getUserDriveAccess(mallory.id, driveB.id);
       expect(malloryDriveB).toBe(true);
 
-      // But NO access to driveA pages
       const malloryPageA = await getUserAccessLevel(mallory.id, pageA.id);
       expect(malloryPageA).toBeNull();
     });
   });
 
-  // ===========================================================================
-  // 3. PAGE COLLABORATOR CANNOT ESCAPE TO DRIVE LEVEL
-  // ===========================================================================
-
   describe('page collaborator cannot escape to drive-level access', () => {
     it('given Mallory has page-level canView on Alices page, should NOT have drive access', async () => {
-      // Grant page-level access to Mallory
       await factories.createPagePermission(pageA.id, mallory.id, {
         canView: true,
         canEdit: false,
@@ -192,11 +158,9 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      // Mallory can access pageA
       const pageAccess = await getUserAccessLevel(mallory.id, pageA.id);
       expect(pageAccess?.canView).toBe(true);
 
-      // But Mallory has NO drive-level permissions
       const drivePermissions = await getUserDrivePermissions(mallory.id, driveA.id);
       expect(drivePermissions).toBeNull();
     });
@@ -204,7 +168,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     it('given page collaborator, should NOT access other pages in same drive', async () => {
       const pageA2 = await factories.createPage(driveA.id);
 
-      // Grant access only to pageA
       await factories.createPagePermission(pageA.id, mallory.id, {
         canView: true,
         canEdit: true,
@@ -213,11 +176,9 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      // Mallory can access pageA
       const pageAAccess = await getUserAccessLevel(mallory.id, pageA.id);
       expect(pageAAccess?.canView).toBe(true);
 
-      // But NOT pageA2
       const pageA2Access = await getUserAccessLevel(mallory.id, pageA2.id);
       expect(pageA2Access).toBeNull();
     });
@@ -253,10 +214,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     });
   });
 
-  // ===========================================================================
-  // 4. ENFORCED CONTEXT BOUNDARY INTEGRITY
-  // ===========================================================================
-
   describe('EnforcedAuthContext cross-tenant boundaries', () => {
     it('given context bound to Alice drive, should not match Bob drive', () => {
       const ctx = EnforcedAuthContext.fromSession(
@@ -289,11 +246,9 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       const ctx = EnforcedAuthContext.fromSession(
         createClaims({
           userId: alice.id,
-          // No resourceType/resourceId
         })
       );
 
-      // Unrestricted context - callers MUST additionally check permissions
       expect(ctx.isBoundToResource('drive', driveB.id)).toBe(true);
       expect(ctx.isBoundToResource('page', pageB.id)).toBe(true);
     });
@@ -307,11 +262,8 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         })
       );
 
-      // Correct type + id
       expect(ctx.isBoundToResource('page', pageA.id)).toBe(true);
-      // Wrong type
       expect(ctx.isBoundToResource('drive', pageA.id)).toBe(false);
-      // Wrong id
       expect(ctx.isBoundToResource('page', pageB.id)).toBe(false);
     });
 
@@ -330,10 +282,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       }).toThrow();
     });
   });
-
-  // ===========================================================================
-  // 5. SCOPE ISOLATION
-  // ===========================================================================
 
   describe('scope isolation', () => {
     it('given context with files:read scope, should not match admin:* scope', () => {
@@ -387,49 +335,34 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     });
   });
 
-  // ===========================================================================
-  // 6. FAIL-CLOSED ON AMBIGUOUS STATE
-  // ===========================================================================
-
   describe('fail-closed on ambiguous state', () => {
     it('given no permission exists, access should be denied', async () => {
       const access = await getUserAccessLevel(mallory.id, pageA.id);
-
       expect(access).toBeNull();
     });
 
     it('given no drive permission exists, access should be denied', async () => {
       const access = await getUserDrivePermissions(mallory.id, driveA.id);
-
       expect(access).toBeNull();
     });
 
     it('given non-existent drive, should return null', async () => {
-      const { createId } = await import('@paralleldrive/cuid2');
       const nonExistentDriveId = createId();
 
       const access = await getUserDrivePermissions(alice.id, nonExistentDriveId);
-
       expect(access).toBeNull();
     });
 
     it('given drive access returns false for unknown drive, user cannot access', async () => {
-      const { createId } = await import('@paralleldrive/cuid2');
       const unknownDriveId = createId();
 
       const access = await getUserDriveAccess(alice.id, unknownDriveId);
-
       expect(access).toBe(false);
     });
   });
 
-  // ===========================================================================
-  // 7. MULTI-USER PERMISSION ISOLATION
-  // ===========================================================================
-
   describe('multi-user permission isolation', () => {
     it('given Alice grants Bob page access, Mallory still has no access', async () => {
-      // Alice shares pageA with Bob
       await factories.createPagePermission(pageA.id, bob.id, {
         canView: true,
         canEdit: true,
@@ -438,17 +371,14 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      // Bob has access
       const bobAccess = await getUserAccessLevel(bob.id, pageA.id);
       expect(bobAccess?.canView).toBe(true);
 
-      // Mallory still has no access
       const malloryAccess = await getUserAccessLevel(mallory.id, pageA.id);
       expect(malloryAccess).toBeNull();
     });
 
-    it('given permission granted to Bob, should not apply to Mallory even with same email domain', async () => {
-      // This tests that permissions are user-ID specific, not email-based
+    it('given permission granted to Bob, should not apply to Mallory', async () => {
       await factories.createPagePermission(pageA.id, bob.id, {
         canView: true,
         canEdit: true,
@@ -458,7 +388,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       });
 
       const malloryAccess = await getUserAccessLevel(mallory.id, pageA.id);
-
       expect(malloryAccess).toBeNull();
     });
 
@@ -466,7 +395,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       const pageA2 = await factories.createPage(driveA.id);
       const pageA3 = await factories.createPage(driveA.id);
 
-      // Grant different permissions
       await factories.createPagePermission(pageA.id, mallory.id, {
         canView: true,
         canEdit: false,
@@ -483,8 +411,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      // No permission for pageA3
-
       const accessA = await getUserAccessLevel(mallory.id, pageA.id);
       const accessA2 = await getUserAccessLevel(mallory.id, pageA2.id);
       const accessA3 = await getUserAccessLevel(mallory.id, pageA3.id);
@@ -494,10 +420,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       expect(accessA3).toBeNull();
     });
   });
-
-  // ===========================================================================
-  // 8. DRIVE MEMBERSHIP ROLE BOUNDARIES
-  // ===========================================================================
 
   describe('drive membership role boundaries', () => {
     it('given ADMIN in driveB, should NOT be ADMIN in driveA', async () => {
@@ -521,18 +443,13 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
     });
 
     it('given owner of driveA, should not have ADMIN permissions in driveB', async () => {
-      // Alice owns driveA
       const aliceDriveA = await getUserDrivePermissions(alice.id, driveA.id);
       const aliceDriveB = await getUserDrivePermissions(alice.id, driveB.id);
 
       expect(aliceDriveA?.isOwner).toBe(true);
-      expect(aliceDriveB).toBeNull(); // Not even MEMBER
+      expect(aliceDriveB).toBeNull();
     });
   });
-
-  // ===========================================================================
-  // 9. EXPIRED CROSS-TENANT PERMISSIONS
-  // ===========================================================================
 
   describe('expired cross-tenant permissions', () => {
     it('given expired page permission, should deny even if was previously granted', async () => {
@@ -549,7 +466,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
       });
 
       const access = await getUserAccessLevel(mallory.id, pageA.id);
-
       expect(access).toBeNull();
     });
 
@@ -566,19 +482,13 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         grantedBy: alice.id,
       });
 
-      // Has access to pageA
       const accessA = await getUserAccessLevel(mallory.id, pageA.id);
       expect(accessA?.canView).toBe(true);
 
-      // But NOT to pageB in different tenant
       const accessB = await getUserAccessLevel(mallory.id, pageB.id);
       expect(accessB).toBeNull();
     });
   });
-
-  // ===========================================================================
-  // 10. CONTEXT USER ROLE
-  // ===========================================================================
 
   describe('context user role', () => {
     it('given user role context, isAdmin returns false', () => {
@@ -613,7 +523,6 @@ describe('Cross-Tenant Escalation Prevention (Integration)', () => {
         })
       );
 
-      // Admin role doesn't bypass resource binding
       expect(ctx.isAdmin()).toBe(true);
       expect(ctx.isBoundToResource('drive', driveA.id)).toBe(true);
       expect(ctx.isBoundToResource('drive', driveB.id)).toBe(false);
