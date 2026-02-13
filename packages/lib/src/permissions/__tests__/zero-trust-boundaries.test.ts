@@ -133,8 +133,9 @@ describe('Zero-Trust Permission Boundaries', () => {
     it('given a page with expired permission, should deny access (DB filters expired rows)', async () => {
       // The query now includes: or(isNull(expiresAt), gt(expiresAt, now()))
       // This means the DB excludes expired rows, returning empty results.
+      // Override the entire mock chain for this test to ensure proper isolation
       let callCount = 0;
-      mockSelectLimit.mockImplementation(() => {
+      const mockLimit = vi.fn(() => {
         callCount++;
         if (callCount === 1) {
           // First call: page lookup - page exists with different owner
@@ -150,6 +151,13 @@ describe('Zero-Trust Permission Boundaries', () => {
           // Third call: explicit permissions - empty because DB filtered expired rows
           return Promise.resolve([]);
         }
+      });
+
+      const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+
+      mockSelectFrom.mockReturnValue({
+        leftJoin: vi.fn().mockReturnValue({ where: mockWhere }),
+        where: mockWhere,
       });
 
       const result = await getUserAccessLevel('user-requester', 'page-123');
@@ -296,9 +304,9 @@ describe('Zero-Trust Permission Boundaries', () => {
 
   describe('permission hierarchy integrity', () => {
     it('given non-owner userId, should not receive owner-level permissions', async () => {
-      // Set up call counter to return different values on each call
+      // Override the entire mock chain for this test to ensure proper isolation
       let callCount = 0;
-      mockSelectLimit.mockImplementation(() => {
+      const mockLimit = vi.fn(() => {
         callCount++;
         if (callCount === 1) {
           // First call: page lookup - returns page with different owner
@@ -314,6 +322,13 @@ describe('Zero-Trust Permission Boundaries', () => {
           // Third call: explicit permissions check - no permissions
           return Promise.resolve([]);
         }
+      });
+
+      const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+
+      mockSelectFrom.mockReturnValue({
+        leftJoin: vi.fn().mockReturnValue({ where: mockWhere }),
+        where: mockWhere,
       });
 
       const result = await getUserAccessLevel('user-different', 'page-target');
@@ -362,9 +377,9 @@ describe('Zero-Trust Permission Boundaries', () => {
 
   describe('drive owner impersonation prevention', () => {
     it('given a non-owner userId, should be denied access when no explicit permissions exist', async () => {
-      // Set up call counter to return different values on each call
+      // Override the entire mock chain for this test to ensure proper isolation
       let callCount = 0;
-      mockSelectLimit.mockImplementation(() => {
+      const mockLimit = vi.fn(() => {
         callCount++;
         if (callCount === 1) {
           // First call: page lookup - returns page with different owner
@@ -380,6 +395,13 @@ describe('Zero-Trust Permission Boundaries', () => {
           // Third call: explicit permissions check - no permissions
           return Promise.resolve([]);
         }
+      });
+
+      const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+
+      mockSelectFrom.mockReturnValue({
+        leftJoin: vi.fn().mockReturnValue({ where: mockWhere }),
+        where: mockWhere,
       });
 
       const result = await getUserAccessLevel('user-attacker', 'page-123');
