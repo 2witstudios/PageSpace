@@ -139,16 +139,18 @@ describe('Passkey Service', () => {
       assert({
         given: 'generated registration options',
         should: 'store challenge hash in database',
-        actual: storedChallenge !== null && storedChallenge.tokenHash.length > 0,
+        actual: storedChallenge !== undefined && storedChallenge.tokenHash.length > 0,
         expected: true,
       });
 
-      assert({
-        given: 'stored challenge',
-        should: 'set 5-minute expiry',
-        actual: storedChallenge!.expiresAt > new Date(),
-        expected: true,
-      });
+      if (storedChallenge) {
+        assert({
+          given: 'stored challenge',
+          should: 'set 5-minute expiry',
+          actual: storedChallenge.expiresAt > new Date(),
+          expected: true,
+        });
+      }
     });
 
     it('returns error for non-existent user', async () => {
