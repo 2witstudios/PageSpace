@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { db, users, passkeys, verificationTokens, eq, and, isNull } from '@pagespace/db';
+import { db, users, passkeys, verificationTokens, eq, and, isNull, sql } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import {
   generateRegistrationOptions as simpleGenerateRegistrationOptions,
@@ -484,6 +484,7 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
   }
 
   // Atomic counter update with replay protection
+  // Counter must be greater than stored value to prevent replay attacks
   const newCounter = verification.authenticationInfo.newCounter;
   const counterUpdateResult = await db
     .update(passkeys)
@@ -494,14 +495,14 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
     .where(
       and(
         eq(passkeys.id, passkey.id),
-        // Only update if new counter is greater (prevents replay)
-        // Use raw SQL for the < comparison
+        // Atomic replay protection: only update if new counter is greater than stored counter
+        sql`${passkeys.counter} < ${newCounter}`
       )
     )
     .returning();
 
-  // Check counter wasn't replayed (simplified check - newCounter should be > old counter)
-  if (newCounter <= passkey.counter) {
+  // If no rows were updated, either passkey was deleted or counter replay attack
+  if (counterUpdateResult.length === 0) {
     return { ok: false, error: { code: 'COUNTER_REPLAY_DETECTED' } };
   }
 

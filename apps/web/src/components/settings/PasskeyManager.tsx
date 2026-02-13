@@ -36,8 +36,11 @@ interface Passkey {
   createdAt: string;
 }
 
+// Import fetchWithAuth for consistent auth handling across the app
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+
 const fetcher = async (url: string) => {
-  const res = await fetch(url);
+  const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch');
   return res.json();
 };
@@ -74,11 +77,10 @@ export function PasskeyManager() {
 
     try {
       // Get registration options
-      const optionsRes = await fetch('/api/auth/passkey/register/options', {
+      const optionsRes = await fetchWithAuth('/api/auth/passkey/register/options', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfToken,
         },
       });
 
@@ -98,11 +100,10 @@ export function PasskeyManager() {
       const registrationResponse = await startRegistration({ optionsJSON: options });
 
       // Verify registration (without name first)
-      const verifyRes = await fetch('/api/auth/passkey/register', {
+      const verifyRes = await fetchWithAuth('/api/auth/passkey/register', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfToken,
         },
         body: JSON.stringify({
           response: registrationResponse,
@@ -148,11 +149,8 @@ export function PasskeyManager() {
     if (!deletePasskeyId || !csrfToken) return;
 
     try {
-      const res = await fetch(`/api/auth/passkey/${deletePasskeyId}`, {
+      const res = await fetchWithAuth(`/api/auth/passkey/${deletePasskeyId}`, {
         method: 'DELETE',
-        headers: {
-          'X-CSRF-Token': csrfToken,
-        },
       });
 
       if (!res.ok) {
@@ -175,11 +173,10 @@ export function PasskeyManager() {
     if (!passkeyId || !csrfToken || !newName.trim()) return;
 
     try {
-      const res = await fetch(`/api/auth/passkey/${passkeyId}`, {
+      const res = await fetchWithAuth(`/api/auth/passkey/${passkeyId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRF-Token': csrfToken,
         },
         body: JSON.stringify({ name: newName.trim() }),
       });
