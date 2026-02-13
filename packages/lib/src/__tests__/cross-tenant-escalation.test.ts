@@ -1,92 +1,30 @@
 /**
- * Cross-Tenant Escalation & Data Leakage Tests
+ * Cross-Tenant Escalation & Data Leakage Tests (Enterprise Integration Tests)
  *
- * Zero-trust tests that prove cross-tenant isolation at every seam.
- * These go beyond the basic multi-tenant isolation tests to cover
- * abuse vectors specific to batch operations, IDOR, and edge cases.
+ * Zero-trust tests that prove cross-tenant isolation at every seam using REAL
+ * database operations. These create actual multi-tenant data scenarios and verify
+ * that authorization boundaries cannot be bypassed.
  *
  * Security properties tested:
- * 1. Batch permission checks don't leak cross-tenant data
- * 2. IDOR: Forged page/drive IDs cannot access other tenants
- * 3. Drive membership role doesn't grant cross-drive access
- * 4. Page collaborators cannot escape to drive-level access
- * 5. getUserDrivePermissions distinguishes members from page collaborators
- * 6. Batch results contain ONLY authorized pages
- * 7. Permission hierarchy is strictly enforced per-drive
+ * 1. IDOR: Forged page/drive IDs cannot access other tenants
+ * 2. Drive membership isolation: Admin of driveA has NO access to driveB
+ * 3. Page collaborator containment: Page permission doesn't grant drive access
+ * 4. Enumeration prevention: All unauthorized pages return null (no info leak)
+ * 5. Scope isolation in EnforcedAuthContext
+ * 6. Resource binding enforcement
+ * 7. Fail-closed on ambiguous state
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { factories } from '@pagespace/db/test/factories';
+import { db, users, pages, drives, pagePermissions, driveMembers } from '@pagespace/db';
+import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
+import { getUserDrivePermissions } from '../permissions/permissions-cached';
 import { EnforcedAuthContext } from '../permissions/enforced-context';
 import type { SessionClaims } from '../auth/session-service';
+import { PermissionCache } from '../services/permission-cache';
 
-// =============================================================================
-// Mocks
-// =============================================================================
-
-const mockGetUserAccessLevel = vi.fn();
-const mockGetUserDriveAccess = vi.fn();
-const mockGetUserDrivePermissions = vi.fn();
-
-vi.mock('@pagespace/db', () => {
-  const mockSelect = vi.fn().mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      leftJoin: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-      where: vi.fn().mockReturnValue({
-        limit: vi.fn().mockResolvedValue([]),
-      }),
-    }),
-  });
-
-  return {
-    db: {
-      select: mockSelect,
-      query: {
-        pages: { findFirst: vi.fn() },
-        driveMembers: { findFirst: vi.fn() },
-        pagePermissions: { findFirst: vi.fn() },
-        drives: { findFirst: vi.fn() },
-      },
-    },
-    pages: { id: 'pages.id', driveId: 'pages.driveId' },
-    drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
-    driveMembers: { userId: 'dm.userId', driveId: 'dm.driveId', role: 'dm.role' },
-    pagePermissions: { userId: 'pp.userId', pageId: 'pp.pageId', canView: 'pp.canView' },
-    eq: vi.fn((a: unknown, b: unknown) => ({ op: 'eq', a, b })),
-    and: vi.fn((...c: unknown[]) => ({ op: 'and', c })),
-    inArray: vi.fn(),
-  };
-});
-
-vi.mock('../permissions/permissions', () => ({
-  getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
-  getUserDriveAccess: (...args: unknown[]) => mockGetUserDriveAccess(...args),
-}));
-
-vi.mock('../permissions/permissions-cached', () => ({
-  getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
-  getUserDriveAccess: (...args: unknown[]) => mockGetUserDriveAccess(...args),
-  getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
-}));
-
-vi.mock('../logging/logger-config', () => ({
-  loggers: {
-    api: { debug: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
-    security: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
-  },
-}));
-
-// =============================================================================
-// Test Fixtures
-// =============================================================================
-
-const ALICE = { userId: 'user-alice', driveId: 'drive-alice' };
-const BOB = { userId: 'user-bob', driveId: 'drive-bob' };
-const MALLORY = { userId: 'user-mallory' }; // Attacker with no drives
-
+// Helper to create session claims
 function createClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
   return {
     sessionId: 'session-test',
@@ -101,9 +39,41 @@ function createClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
   };
 }
 
-describe('Cross-Tenant Escalation Prevention', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe('Cross-Tenant Escalation Prevention (Integration)', () => {
+  // Alice owns driveA with pageA
+  let alice: Awaited<ReturnType<typeof factories.createUser>>;
+  let driveA: Awaited<ReturnType<typeof factories.createDrive>>;
+  let pageA: Awaited<ReturnType<typeof factories.createPage>>;
+
+  // Bob owns driveB with pageB
+  let bob: Awaited<ReturnType<typeof factories.createUser>>;
+  let driveB: Awaited<ReturnType<typeof factories.createDrive>>;
+  let pageB: Awaited<ReturnType<typeof factories.createPage>>;
+
+  // Mallory is an attacker with no drives
+  let mallory: Awaited<ReturnType<typeof factories.createUser>>;
+
+  beforeEach(async () => {
+    // Clean in FK order to avoid deadlocks from cascade contention
+    await db.delete(pagePermissions);
+    await db.delete(pages);
+    await db.delete(driveMembers);
+    await db.delete(drives);
+    await db.delete(users);
+
+    // Clear permission cache
+    await PermissionCache.getInstance().clearAll();
+
+    // Create multi-tenant scenario
+    alice = await factories.createUser();
+    bob = await factories.createUser();
+    mallory = await factories.createUser();
+
+    driveA = await factories.createDrive(alice.id);
+    driveB = await factories.createDrive(bob.id);
+
+    pageA = await factories.createPage(driveA.id);
+    pageB = await factories.createPage(driveB.id);
   });
 
   // ===========================================================================
@@ -112,39 +82,51 @@ describe('Cross-Tenant Escalation Prevention', () => {
 
   describe('IDOR via forged page IDs', () => {
     it('given Mallory supplies Alices page ID, should return null (no access)', async () => {
-      mockGetUserAccessLevel.mockResolvedValue(null);
-
-      const { getUserAccessLevel } = await import('../permissions/permissions');
-      const access = await getUserAccessLevel(MALLORY.userId, 'page-in-alice-drive');
+      const access = await getUserAccessLevel(mallory.id, pageA.id);
 
       expect(access).toBeNull();
     });
 
-    it('given Bob supplies Alices page ID, should return null even though Bob is member of different drive', async () => {
-      // Bob is a member of his own drive but NOT Alice's
-      mockGetUserAccessLevel.mockResolvedValue(null);
+    it('given Bob supplies Alices page ID, should return null even though Bob is a drive owner', async () => {
+      // Bob owns driveB but NOT driveA
+      const access = await getUserAccessLevel(bob.id, pageA.id);
 
-      const { getUserAccessLevel } = await import('../permissions/permissions');
-      const access = await getUserAccessLevel(BOB.userId, 'page-in-alice-drive');
+      expect(access).toBeNull();
+    });
+
+    it('given Alice supplies Bobs page ID, should return null', async () => {
+      const access = await getUserAccessLevel(alice.id, pageB.id);
 
       expect(access).toBeNull();
     });
 
     it('given attacker enumerates page IDs, all should return null (no info leak)', async () => {
-      mockGetUserAccessLevel.mockResolvedValue(null);
+      // Create additional pages
+      const pageA2 = await factories.createPage(driveA.id);
+      const pageB2 = await factories.createPage(driveB.id);
 
-      const { getUserAccessLevel } = await import('../permissions/permissions');
-
-      // Try multiple page IDs - all should return the same null response
+      // Mallory tries multiple page IDs
       const results = await Promise.all([
-        getUserAccessLevel(MALLORY.userId, 'page-alice-1'),
-        getUserAccessLevel(MALLORY.userId, 'page-alice-2'),
-        getUserAccessLevel(MALLORY.userId, 'page-bob-1'),
-        getUserAccessLevel(MALLORY.userId, 'page-nonexistent'),
+        getUserAccessLevel(mallory.id, pageA.id),
+        getUserAccessLevel(mallory.id, pageA2.id),
+        getUserAccessLevel(mallory.id, pageB.id),
+        getUserAccessLevel(mallory.id, pageB2.id),
       ]);
 
-      // All return null - cannot distinguish existing from non-existing
-      expect(results.every(r => r === null)).toBe(true);
+      // All return null - cannot distinguish which exist or who owns them
+      expect(results.every((r) => r === null)).toBe(true);
+    });
+
+    it('given non-existent page ID, should return same null as existing unauthorized page', async () => {
+      const { createId } = await import('@paralleldrive/cuid2');
+      const nonExistentPageId = createId();
+
+      // Both should return null - no info leak
+      const existingUnauthorized = await getUserAccessLevel(mallory.id, pageA.id);
+      const nonExistent = await getUserAccessLevel(mallory.id, nonExistentPageId);
+
+      expect(existingUnauthorized).toBeNull();
+      expect(nonExistent).toBeNull();
     });
   });
 
@@ -153,44 +135,45 @@ describe('Cross-Tenant Escalation Prevention', () => {
   // ===========================================================================
 
   describe('drive access isolation', () => {
-    it('given Alice is owner of drive-alice, she should NOT have access to drive-bob', async () => {
-      mockGetUserDrivePermissions
-        .mockResolvedValueOnce({
-          hasAccess: true,
-          isOwner: true,
-          isAdmin: false,
-          isMember: false,
-          canEdit: true,
-        })
-        .mockResolvedValueOnce(null); // No access to Bob's drive
+    it('given Alice is owner of driveA, she should NOT have access to driveB', async () => {
+      const aliceDriveA = await getUserDrivePermissions(alice.id, driveA.id);
+      const aliceDriveB = await getUserDrivePermissions(alice.id, driveB.id);
 
-      const { getUserDrivePermissions } = await import('../permissions/permissions-cached');
-
-      const aliceDrive = await getUserDrivePermissions(ALICE.userId, ALICE.driveId);
-      expect(aliceDrive?.isOwner).toBe(true);
-
-      const bobDrive = await getUserDrivePermissions(ALICE.userId, BOB.driveId);
-      expect(bobDrive).toBeNull();
+      expect(aliceDriveA?.isOwner).toBe(true);
+      expect(aliceDriveB).toBeNull();
     });
 
-    it('given Bob is ADMIN of drive-bob, should not grant any access to drive-alice', async () => {
-      mockGetUserDrivePermissions
-        .mockResolvedValueOnce({
-          hasAccess: true,
-          isOwner: false,
-          isAdmin: true,
-          isMember: true,
-          canEdit: true,
-        })
-        .mockResolvedValueOnce(null);
+    it('given Bob is owner of driveB, he should NOT have access to driveA', async () => {
+      const bobDriveB = await getUserDrivePermissions(bob.id, driveB.id);
+      const bobDriveA = await getUserDrivePermissions(bob.id, driveA.id);
 
-      const { getUserDrivePermissions } = await import('../permissions/permissions-cached');
+      expect(bobDriveB?.isOwner).toBe(true);
+      expect(bobDriveA).toBeNull();
+    });
 
-      const ownDrive = await getUserDrivePermissions(BOB.userId, BOB.driveId);
-      expect(ownDrive?.isAdmin).toBe(true);
+    it('given Bob is ADMIN of driveB, should NOT grant any access to driveA', async () => {
+      // Make Bob an admin of his own drive (not owner for this test)
+      const charlie = await factories.createUser();
+      const driveC = await factories.createDrive(charlie.id);
+      await factories.createDriveMember(driveC.id, bob.id, { role: 'ADMIN' });
 
-      const aliceDrive = await getUserDrivePermissions(BOB.userId, ALICE.driveId);
-      expect(aliceDrive).toBeNull();
+      const bobDriveC = await getUserDrivePermissions(bob.id, driveC.id);
+      const bobDriveA = await getUserDrivePermissions(bob.id, driveA.id);
+
+      expect(bobDriveC?.isAdmin).toBe(true);
+      expect(bobDriveA).toBeNull();
+    });
+
+    it('given MEMBER role in driveB, should NOT grant access to driveA pages', async () => {
+      await factories.createDriveMember(driveB.id, mallory.id, { role: 'MEMBER' });
+
+      // MEMBER of driveB
+      const malloryDriveB = await getUserDriveAccess(mallory.id, driveB.id);
+      expect(malloryDriveB).toBe(true);
+
+      // But NO access to driveA pages
+      const malloryPageA = await getUserAccessLevel(mallory.id, pageA.id);
+      expect(malloryPageA).toBeNull();
     });
   });
 
@@ -199,36 +182,74 @@ describe('Cross-Tenant Escalation Prevention', () => {
   // ===========================================================================
 
   describe('page collaborator cannot escape to drive-level access', () => {
-    it('given Mallory has page-level canView on one of Alices pages, should NOT have drive access', async () => {
-      // Page-level access exists
-      mockGetUserAccessLevel.mockResolvedValue({
+    it('given Mallory has page-level canView on Alices page, should NOT have drive access', async () => {
+      // Grant page-level access to Mallory
+      await factories.createPagePermission(pageA.id, mallory.id, {
         canView: true,
         canEdit: false,
         canShare: false,
         canDelete: false,
+        grantedBy: alice.id,
       });
 
-      // But drive-level: no membership
-      mockGetUserDrivePermissions.mockResolvedValue(null);
-
-      const { getUserAccessLevel } = await import('../permissions/permissions');
-      const { getUserDrivePermissions } = await import('../permissions/permissions-cached');
-
-      const pageAccess = await getUserAccessLevel(MALLORY.userId, 'page-shared-by-alice');
+      // Mallory can access pageA
+      const pageAccess = await getUserAccessLevel(mallory.id, pageA.id);
       expect(pageAccess?.canView).toBe(true);
 
-      const driveAccess = await getUserDrivePermissions(MALLORY.userId, ALICE.driveId);
-      expect(driveAccess).toBeNull();
+      // But Mallory has NO drive-level permissions
+      const drivePermissions = await getUserDrivePermissions(mallory.id, driveA.id);
+      expect(drivePermissions).toBeNull();
     });
 
-    it('given page collaborator, getUserDrivePermissions should return null (not isMember)', async () => {
-      // getUserDrivePermissions specifically excludes page-level collaborators
-      mockGetUserDrivePermissions.mockResolvedValue(null);
+    it('given page collaborator, should NOT access other pages in same drive', async () => {
+      const pageA2 = await factories.createPage(driveA.id);
 
-      const { getUserDrivePermissions } = await import('../permissions/permissions-cached');
-      const result = await getUserDrivePermissions(MALLORY.userId, ALICE.driveId);
+      // Grant access only to pageA
+      await factories.createPagePermission(pageA.id, mallory.id, {
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
 
-      expect(result).toBeNull();
+      // Mallory can access pageA
+      const pageAAccess = await getUserAccessLevel(mallory.id, pageA.id);
+      expect(pageAAccess?.canView).toBe(true);
+
+      // But NOT pageA2
+      const pageA2Access = await getUserAccessLevel(mallory.id, pageA2.id);
+      expect(pageA2Access).toBeNull();
+    });
+
+    it('given page edit permission, should NOT grant page delete permission', async () => {
+      await factories.createPagePermission(pageA.id, mallory.id, {
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
+
+      const access = await getUserAccessLevel(mallory.id, pageA.id);
+
+      expect(access?.canEdit).toBe(true);
+      expect(access?.canDelete).toBe(false);
+    });
+
+    it('given page share permission, should NOT grant page delete permission', async () => {
+      await factories.createPagePermission(pageA.id, mallory.id, {
+        canView: true,
+        canEdit: true,
+        canShare: true,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
+
+      const access = await getUserAccessLevel(mallory.id, pageA.id);
+
+      expect(access?.canShare).toBe(true);
+      expect(access?.canDelete).toBe(false);
     });
   });
 
@@ -238,53 +259,74 @@ describe('Cross-Tenant Escalation Prevention', () => {
 
   describe('EnforcedAuthContext cross-tenant boundaries', () => {
     it('given context bound to Alice drive, should not match Bob drive', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        userId: ALICE.userId,
-        resourceType: 'drive',
-        resourceId: ALICE.driveId,
-        driveId: ALICE.driveId,
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          resourceType: 'drive',
+          resourceId: driveA.id,
+          driveId: driveA.id,
+        })
+      );
 
-      expect(ctx.isBoundToResource('drive', ALICE.driveId)).toBe(true);
-      expect(ctx.isBoundToResource('drive', BOB.driveId)).toBe(false);
+      expect(ctx.isBoundToResource('drive', driveA.id)).toBe(true);
+      expect(ctx.isBoundToResource('drive', driveB.id)).toBe(false);
+    });
+
+    it('given context bound to pageA, should not match pageB', () => {
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          resourceType: 'page',
+          resourceId: pageA.id,
+        })
+      );
+
+      expect(ctx.isBoundToResource('page', pageA.id)).toBe(true);
+      expect(ctx.isBoundToResource('page', pageB.id)).toBe(false);
     });
 
     it('given context with no resource binding, isBoundToResource returns true for everything', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        userId: ALICE.userId,
-        // No resourceType/resourceId
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          // No resourceType/resourceId
+        })
+      );
 
-      // Unrestricted context — callers MUST additionally check permissions
-      expect(ctx.isBoundToResource('drive', BOB.driveId)).toBe(true);
-      expect(ctx.isBoundToResource('page', 'any-page')).toBe(true);
+      // Unrestricted context - callers MUST additionally check permissions
+      expect(ctx.isBoundToResource('drive', driveB.id)).toBe(true);
+      expect(ctx.isBoundToResource('page', pageB.id)).toBe(true);
     });
 
     it('given context with mismatched resource type, should deny', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        userId: ALICE.userId,
-        resourceType: 'page',
-        resourceId: 'page-alice-1',
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          resourceType: 'page',
+          resourceId: pageA.id,
+        })
+      );
 
       // Correct type + id
-      expect(ctx.isBoundToResource('page', 'page-alice-1')).toBe(true);
+      expect(ctx.isBoundToResource('page', pageA.id)).toBe(true);
       // Wrong type
-      expect(ctx.isBoundToResource('drive', 'page-alice-1')).toBe(false);
+      expect(ctx.isBoundToResource('drive', pageA.id)).toBe(false);
       // Wrong id
-      expect(ctx.isBoundToResource('page', 'page-alice-2')).toBe(false);
+      expect(ctx.isBoundToResource('page', pageB.id)).toBe(false);
     });
 
     it('given frozen context, mutation attempt should throw', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        userId: ALICE.userId,
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+        })
+      );
 
       expect(Object.isFrozen(ctx)).toBe(true);
 
       expect(() => {
         // @ts-expect-error - Testing immutability
-        ctx.userId = MALLORY.userId;
+        ctx.userId = mallory.id;
       }).toThrow();
     });
   });
@@ -295,9 +337,11 @@ describe('Cross-Tenant Escalation Prevention', () => {
 
   describe('scope isolation', () => {
     it('given context with files:read scope, should not match admin:* scope', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        scopes: ['files:read'],
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          scopes: ['files:read'],
+        })
+      );
 
       expect(ctx.hasScope('files:read')).toBe(true);
       expect(ctx.hasScope('files:write')).toBe(false);
@@ -306,9 +350,11 @@ describe('Cross-Tenant Escalation Prevention', () => {
     });
 
     it('given context with namespace wildcard, should not cross namespaces', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        scopes: ['files:*'],
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          scopes: ['files:*'],
+        })
+      );
 
       expect(ctx.hasScope('files:read')).toBe(true);
       expect(ctx.hasScope('files:write')).toBe(true);
@@ -317,10 +363,24 @@ describe('Cross-Tenant Escalation Prevention', () => {
       expect(ctx.hasScope('pages:read')).toBe(false);
     });
 
+    it('given global wildcard scope, should match everything', () => {
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          scopes: ['*'],
+        })
+      );
+
+      expect(ctx.hasScope('files:read')).toBe(true);
+      expect(ctx.hasScope('admin:write')).toBe(true);
+      expect(ctx.hasScope('anything:else')).toBe(true);
+    });
+
     it('given empty scopes, should deny all scope checks', () => {
-      const ctx = EnforcedAuthContext.fromSession(createClaims({
-        scopes: [],
-      }));
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          scopes: [],
+        })
+      );
 
       expect(ctx.hasScope('files:read')).toBe(false);
       expect(ctx.hasScope('*')).toBe(false);
@@ -332,31 +392,231 @@ describe('Cross-Tenant Escalation Prevention', () => {
   // ===========================================================================
 
   describe('fail-closed on ambiguous state', () => {
-    it('given permission check returns null (ambiguous), access should be denied', async () => {
-      mockGetUserAccessLevel.mockResolvedValue(null);
-
-      const { getUserAccessLevel } = await import('../permissions/permissions');
-      const access = await getUserAccessLevel(ALICE.userId, 'page-ambiguous');
+    it('given no permission exists, access should be denied', async () => {
+      const access = await getUserAccessLevel(mallory.id, pageA.id);
 
       expect(access).toBeNull();
     });
 
-    it('given drive permission returns null, access should be denied', async () => {
-      mockGetUserDrivePermissions.mockResolvedValue(null);
-
-      const { getUserDrivePermissions } = await import('../permissions/permissions-cached');
-      const access = await getUserDrivePermissions(ALICE.userId, 'drive-unknown');
+    it('given no drive permission exists, access should be denied', async () => {
+      const access = await getUserDrivePermissions(mallory.id, driveA.id);
 
       expect(access).toBeNull();
     });
 
-    it('given drive access returns false, user cannot access drive', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(false);
+    it('given non-existent drive, should return null', async () => {
+      const { createId } = await import('@paralleldrive/cuid2');
+      const nonExistentDriveId = createId();
 
-      const { getUserDriveAccess } = await import('../permissions/permissions');
-      const access = await getUserDriveAccess(ALICE.userId, 'drive-unknown');
+      const access = await getUserDrivePermissions(alice.id, nonExistentDriveId);
+
+      expect(access).toBeNull();
+    });
+
+    it('given drive access returns false for unknown drive, user cannot access', async () => {
+      const { createId } = await import('@paralleldrive/cuid2');
+      const unknownDriveId = createId();
+
+      const access = await getUserDriveAccess(alice.id, unknownDriveId);
 
       expect(access).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // 7. MULTI-USER PERMISSION ISOLATION
+  // ===========================================================================
+
+  describe('multi-user permission isolation', () => {
+    it('given Alice grants Bob page access, Mallory still has no access', async () => {
+      // Alice shares pageA with Bob
+      await factories.createPagePermission(pageA.id, bob.id, {
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
+
+      // Bob has access
+      const bobAccess = await getUserAccessLevel(bob.id, pageA.id);
+      expect(bobAccess?.canView).toBe(true);
+
+      // Mallory still has no access
+      const malloryAccess = await getUserAccessLevel(mallory.id, pageA.id);
+      expect(malloryAccess).toBeNull();
+    });
+
+    it('given permission granted to Bob, should not apply to Mallory even with same email domain', async () => {
+      // This tests that permissions are user-ID specific, not email-based
+      await factories.createPagePermission(pageA.id, bob.id, {
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
+
+      const malloryAccess = await getUserAccessLevel(mallory.id, pageA.id);
+
+      expect(malloryAccess).toBeNull();
+    });
+
+    it('given multiple pages with different permissions, isolation maintained', async () => {
+      const pageA2 = await factories.createPage(driveA.id);
+      const pageA3 = await factories.createPage(driveA.id);
+
+      // Grant different permissions
+      await factories.createPagePermission(pageA.id, mallory.id, {
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
+
+      await factories.createPagePermission(pageA2.id, mallory.id, {
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+        grantedBy: alice.id,
+      });
+
+      // No permission for pageA3
+
+      const accessA = await getUserAccessLevel(mallory.id, pageA.id);
+      const accessA2 = await getUserAccessLevel(mallory.id, pageA2.id);
+      const accessA3 = await getUserAccessLevel(mallory.id, pageA3.id);
+
+      expect(accessA?.canEdit).toBe(false);
+      expect(accessA2?.canEdit).toBe(true);
+      expect(accessA3).toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // 8. DRIVE MEMBERSHIP ROLE BOUNDARIES
+  // ===========================================================================
+
+  describe('drive membership role boundaries', () => {
+    it('given ADMIN in driveB, should NOT be ADMIN in driveA', async () => {
+      await factories.createDriveMember(driveB.id, mallory.id, { role: 'ADMIN' });
+
+      const driveAPerms = await getUserDrivePermissions(mallory.id, driveA.id);
+      const driveBPerms = await getUserDrivePermissions(mallory.id, driveB.id);
+
+      expect(driveBPerms?.isAdmin).toBe(true);
+      expect(driveAPerms).toBeNull();
+    });
+
+    it('given MEMBER in driveB, should NOT be MEMBER in driveA', async () => {
+      await factories.createDriveMember(driveB.id, mallory.id, { role: 'MEMBER' });
+
+      const driveAAccess = await getUserDriveAccess(mallory.id, driveA.id);
+      const driveBAccess = await getUserDriveAccess(mallory.id, driveB.id);
+
+      expect(driveBAccess).toBe(true);
+      expect(driveAAccess).toBe(false);
+    });
+
+    it('given owner of driveA, should not have ADMIN permissions in driveB', async () => {
+      // Alice owns driveA
+      const aliceDriveA = await getUserDrivePermissions(alice.id, driveA.id);
+      const aliceDriveB = await getUserDrivePermissions(alice.id, driveB.id);
+
+      expect(aliceDriveA?.isOwner).toBe(true);
+      expect(aliceDriveB).toBeNull(); // Not even MEMBER
+    });
+  });
+
+  // ===========================================================================
+  // 9. EXPIRED CROSS-TENANT PERMISSIONS
+  // ===========================================================================
+
+  describe('expired cross-tenant permissions', () => {
+    it('given expired page permission, should deny even if was previously granted', async () => {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      await factories.createPagePermission(pageA.id, mallory.id, {
+        canView: true,
+        canEdit: true,
+        canShare: true,
+        canDelete: true,
+        expiresAt: yesterday,
+        grantedBy: alice.id,
+      });
+
+      const access = await getUserAccessLevel(mallory.id, pageA.id);
+
+      expect(access).toBeNull();
+    });
+
+    it('given non-expired permission, cross-tenant isolation still applies to other pages', async () => {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      await factories.createPagePermission(pageA.id, mallory.id, {
+        canView: true,
+        canEdit: true,
+        canShare: false,
+        canDelete: false,
+        expiresAt: tomorrow,
+        grantedBy: alice.id,
+      });
+
+      // Has access to pageA
+      const accessA = await getUserAccessLevel(mallory.id, pageA.id);
+      expect(accessA?.canView).toBe(true);
+
+      // But NOT to pageB in different tenant
+      const accessB = await getUserAccessLevel(mallory.id, pageB.id);
+      expect(accessB).toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // 10. CONTEXT USER ROLE
+  // ===========================================================================
+
+  describe('context user role', () => {
+    it('given user role context, isAdmin returns false', () => {
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          userRole: 'user',
+        })
+      );
+
+      expect(ctx.isAdmin()).toBe(false);
+    });
+
+    it('given admin role context, isAdmin returns true', () => {
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          userRole: 'admin',
+        })
+      );
+
+      expect(ctx.isAdmin()).toBe(true);
+    });
+
+    it('given admin role in context, should still require proper resource binding', () => {
+      const ctx = EnforcedAuthContext.fromSession(
+        createClaims({
+          userId: alice.id,
+          userRole: 'admin',
+          resourceType: 'drive',
+          resourceId: driveA.id,
+        })
+      );
+
+      // Admin role doesn't bypass resource binding
+      expect(ctx.isAdmin()).toBe(true);
+      expect(ctx.isBoundToResource('drive', driveA.id)).toBe(true);
+      expect(ctx.isBoundToResource('drive', driveB.id)).toBe(false);
     });
   });
 });
