@@ -9,5 +9,4 @@ export * from './conversation-repository';
 export * from './chat-message-repository';
 export * from './global-conversation-repository';
 export * from './ai-settings-repository';
-export * from './ai-consent-repository';
 export * from './auth-repository';
