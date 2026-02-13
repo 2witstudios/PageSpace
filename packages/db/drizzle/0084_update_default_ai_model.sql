@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "currentAiModel" SET DEFAULT 'glm-4.7';

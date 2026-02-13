@@ -582,6 +582,20 @@
       "when": 1770925609174,
       "tag": "0082_common_maverick",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1770953445466,
+      "tag": "0083_migrate_pagespace_model_tiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1770953445467,
+      "tag": "0084_update_default_ai_model",
+      "breakpoints": true
     }
   ]
 }
