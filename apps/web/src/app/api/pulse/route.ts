@@ -10,6 +10,7 @@ import {
   driveMembers,
   calendarEvents,
   eventAttendees,
+  users,
   eq,
   and,
   or,
@@ -22,6 +23,7 @@ import {
   isNull,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -70,13 +72,19 @@ export async function GET(req: Request) {
   try {
     const now = new Date();
     const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    // Get user timezone for accurate "today" boundaries
+    const [user] = await db.select({ timezone: users.timezone }).from(users).where(eq(users.id, userId));
+    const userTimezone = normalizeTimezone(user?.timezone);
+    const startOfToday = getStartOfTodayInTimezone(userTimezone);
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-    // Week boundaries (Sunday start)
-    const dayOfWeek = now.getDay();
-    const startOfWeek = new Date(startOfToday);
-    startOfWeek.setDate(startOfWeek.getDate() - dayOfWeek);
+    // Week boundaries (Sunday start) in user's timezone
+    // Determine user's local day-of-week from startOfToday
+    const userLocalDay = new Intl.DateTimeFormat('en-US', { timeZone: userTimezone, weekday: 'short' }).format(now);
+    const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const dayOfWeek = dayMap[userLocalDay] ?? 0;
+    const startOfWeek = new Date(startOfToday.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
     const endOfWeek = new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     // Fetch latest pulse summary

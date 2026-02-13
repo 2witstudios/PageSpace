@@ -9,6 +9,7 @@ import {
   getStartOfTodayInTimezone,
   isValidTimezone,
   normalizeTimezone,
+  formatDateInTimezone,
 } from '@/lib/ai/core';
 import {
   db,
@@ -561,24 +562,25 @@ export async function POST(req: Request) {
         happeningNow: happeningNow.map(e => ({
           title: e.title,
           location: e.location || undefined,
-          endAt: e.endAt.toISOString(),
+          endAt: e.allDay ? 'All day' : formatDateInTimezone(e.endAt, userTimezone),
+          allDay: e.allDay,
         })),
         upcomingToday: upcomingToday.map(e => ({
           title: e.title,
           location: e.location || undefined,
-          startAt: e.startAt.toISOString(),
-          endAt: e.endAt.toISOString(),
+          startAt: e.allDay ? 'All day' : formatDateInTimezone(e.startAt, userTimezone),
+          endAt: e.allDay ? 'All day' : formatDateInTimezone(e.endAt, userTimezone),
           allDay: e.allDay,
         })),
         tomorrow: tomorrowEvents.map(e => ({
           title: e.title,
           location: e.location || undefined,
-          startAt: e.startAt.toISOString(),
+          startAt: e.allDay ? 'All day' : formatDateInTimezone(e.startAt, userTimezone),
           allDay: e.allDay,
         })),
         pendingInvites: pendingRsvps.map(r => ({
           title: r.eventTitle,
-          startAt: r.startAt.toISOString(),
+          startAt: r.allDay ? 'All day' : formatDateInTimezone(r.startAt, userTimezone),
         })),
       },
 
