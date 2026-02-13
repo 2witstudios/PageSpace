@@ -314,3 +314,180 @@ describe('withPerEventAuth', () => {
     expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1', { bypassCache: true });
   });
 });
+
+// =============================================================================
+// ZERO-TRUST ABUSE VECTOR TESTS
+// =============================================================================
+
+describe('Zero-Trust: Revoked-But-Connected Attack', () => {
+  const mockedGetUserAccessLevel = vi.mocked(getUserAccessLevel);
+
+  beforeEach(() => {
+    mockedGetUserAccessLevel.mockReset();
+  });
+
+  function createMockSocket(userId?: string): { socket: AuthSocket; emitFn: ReturnType<typeof vi.fn> } {
+    const emitFn = vi.fn();
+    const toFn = vi.fn().mockReturnValue({ emit: vi.fn() });
+    return {
+      socket: {
+        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined },
+        emit: emitFn,
+        to: toFn,
+      } as unknown as AuthSocket,
+      emitFn,
+    };
+  }
+
+  it('given user had edit access when joining, then revoked between events, second write should be denied', async () => {
+    const handler = vi.fn();
+    const { socket, emitFn } = createMockSocket('user-1');
+
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
+    // First event: user still has access
+    mockedGetUserAccessLevel.mockResolvedValueOnce({
+      canView: true,
+      canEdit: true,
+      canShare: false,
+      canDelete: false,
+    });
+
+    await wrapped({ pageId: 'page-1' });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // Permission revoked between events
+    mockedGetUserAccessLevel.mockResolvedValueOnce(null);
+
+    await wrapped({ pageId: 'page-1' });
+    expect(handler).toHaveBeenCalledTimes(1); // NOT called again
+    expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
+      event: 'document_update',
+    }));
+  });
+
+  it('given user had edit access downgraded to view-only, edit events should be denied', async () => {
+    const handler = vi.fn();
+    const { socket, emitFn } = createMockSocket('user-1');
+
+    const wrapped = withPerEventAuth(socket, 'document_update', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
+    // First: full access
+    mockedGetUserAccessLevel.mockResolvedValueOnce({
+      canView: true,
+      canEdit: true,
+      canShare: true,
+      canDelete: true,
+    });
+
+    await wrapped({ pageId: 'page-1' });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // Downgraded to view-only
+    mockedGetUserAccessLevel.mockResolvedValueOnce({
+      canView: true,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    await wrapped({ pageId: 'page-1' });
+    expect(handler).toHaveBeenCalledTimes(1); // NOT called again
+    expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
+      event: 'document_update',
+      message: expect.stringContaining('denied'),
+    }));
+  });
+
+  it('given intermittent DB failure during re-auth, event should be denied (fail-closed)', async () => {
+    const handler = vi.fn();
+    const { socket, emitFn } = createMockSocket('user-1');
+
+    const wrapped = withPerEventAuth(socket, 'page_delete', handler, {
+      pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+    });
+
+    // DB error on permission check
+    mockedGetUserAccessLevel.mockRejectedValueOnce(new Error('Connection reset'));
+
+    await wrapped({ pageId: 'page-1' });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
+      event: 'page_delete',
+      message: expect.stringContaining('denied'),
+    }));
+  });
+});
+
+describe('Zero-Trust: All Sensitive Events Require Re-Auth', () => {
+  const mockedGetUserAccessLevel = vi.mocked(getUserAccessLevel);
+
+  beforeEach(() => {
+    mockedGetUserAccessLevel.mockReset();
+  });
+
+  function createMockSocket(userId: string): { socket: AuthSocket; emitFn: ReturnType<typeof vi.fn> } {
+    const emitFn = vi.fn();
+    return {
+      socket: {
+        data: { user: { id: userId, name: 'Test', avatarUrl: null } },
+        emit: emitFn,
+        to: vi.fn().mockReturnValue({ emit: vi.fn() }),
+      } as unknown as AuthSocket,
+      emitFn,
+    };
+  }
+
+  const allSensitiveEvents: SensitiveEventType[] = [
+    'document_update',
+    'page_content_change',
+    'page_delete',
+    'page_move',
+    'file_upload',
+    'comment_create',
+    'comment_delete',
+    'task_create',
+    'task_update',
+    'task_delete',
+  ];
+
+  for (const eventType of allSensitiveEvents) {
+    it(`given '${eventType}' with revoked access, handler should NOT execute`, async () => {
+      mockedGetUserAccessLevel.mockResolvedValue(null); // Access revoked
+
+      const handler = vi.fn();
+      const { socket, emitFn } = createMockSocket('user-revoked');
+
+      const wrapped = withPerEventAuth(socket, eventType, handler, {
+        pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
+      });
+
+      await wrapped({ pageId: 'page-1' });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
+        event: eventType,
+      }));
+    });
+  }
+});
+
+describe('Zero-Trust: Event Type Case Sensitivity', () => {
+  it('given case-varied sensitive event name, should NOT trigger re-auth (treated as unknown)', () => {
+    // Attackers cannot bypass by sending 'Document_Update' instead of 'document_update'
+    expect(isSensitiveEvent('Document_Update')).toBe(false);
+    expect(isSensitiveEvent('DOCUMENT_UPDATE')).toBe(false);
+    expect(isSensitiveEvent('Page_Delete')).toBe(false);
+  });
+
+  it('given empty or whitespace event name, should NOT be sensitive', () => {
+    expect(isSensitiveEvent('')).toBe(false);
+    expect(isSensitiveEvent(' ')).toBe(false);
+    expect(isSensitiveEvent('\n')).toBe(false);
+  });
+});
