@@ -100,7 +100,7 @@ export function trackFeature(
  */
 export function trackAuthEvent(
   userId: string | undefined,
-  event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed_login' | 'failed_oauth' | 'email_verified' | 'magic_link_login',
+  event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed_login' | 'failed_oauth' | 'email_verified' | 'magic_link_login' | 'passkey_login' | 'passkey_registered' | 'passkey_deleted',
   metadata?: LogInput
 ): void {
   trackActivity(userId || 'anonymous', `auth_${event}`, {

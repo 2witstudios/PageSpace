@@ -135,10 +135,12 @@ export const verificationTokens = pgTable('verification_tokens', {
   tokenHash: text('tokenHash').unique().notNull(),
   tokenPrefix: text('tokenPrefix').notNull(),
 
-  type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link'
+  type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link' | 'webauthn_signup'
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   usedAt: timestamp('usedAt', { mode: 'date' }),
+  // Optional JSON metadata for extended token data (e.g., signup email/name)
+  metadata: text('metadata'),
 }, (table) => {
   return {
     userIdx: index('verification_tokens_user_id_idx').on(table.userId),
@@ -178,6 +180,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   subscriptions: many(subscriptions),
   sessions: many(sessions),
   emailUnsubscribeTokens: many(emailUnsubscribeTokens),
+  passkeys: many(passkeys),
 }));
 
 export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
@@ -216,6 +219,31 @@ export const verificationTokensRelations = relations(verificationTokens, ({ one 
 export const socketTokensRelations = relations(socketTokens, ({ one }) => ({
   user: one(users, {
     fields: [socketTokens.userId],
+    references: [users.id],
+  }),
+}));
+
+// Passkeys for WebAuthn authentication
+export const passkeys = pgTable('passkeys', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  credentialId: text('credential_id').notNull().unique(),
+  publicKey: text('public_key').notNull(),
+  counter: integer('counter').notNull().default(0),
+  deviceType: text('device_type'),
+  transports: text('transports').array(),
+  backedUp: boolean('backed_up').default(false),
+  name: text('name'),
+  lastUsedAt: timestamp('last_used_at', { mode: 'date' }),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index('passkeys_user_id_idx').on(table.userId),
+  credentialIdx: index('passkeys_credential_id_idx').on(table.credentialId),
+}));
+
+export const passkeysRelations = relations(passkeys, ({ one }) => ({
+  user: one(users, {
+    fields: [passkeys.userId],
     references: [users.id],
   }),
 }));

@@ -412,6 +412,7 @@
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
+    "@simplewebauthn/server": "^13.2.2",
     "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.32.2",

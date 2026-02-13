@@ -36,6 +36,8 @@ export {
   verificationTokensRelations,
   socketTokens,
   socketTokensRelations,
+  passkeys,
+  passkeysRelations,
   emailUnsubscribeTokens,
   emailUnsubscribeTokensRelations,
   userRole,
