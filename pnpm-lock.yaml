@@ -813,6 +813,9 @@ importers:
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
+      yaml:
+        specifier: ^2.8.2
+        version: 2.8.2
       zod:
         specifier: ^4.0.16
         version: 4.1.11
@@ -10311,6 +10314,11 @@ packages:
   yallist@5.0.0:
     resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
     engines: {node: '>=18'}
+
+  yaml@2.8.2:
+    resolution: {integrity: sha512-mplynKqc1C2hTVYxd0PU2xQAc22TI1vShAYGksCCfxbn/dFwnHTNi1bvYsBTkhdUNtGIf5xNOg938rrSSYvS9A==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
 
   yargs-parser@21.1.1:
     resolution: {integrity: sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw==}
@@ -20915,6 +20923,8 @@ snapshots:
   yallist@4.0.0: {}
 
   yallist@5.0.0: {}
+
+  yaml@2.8.2: {}
 
   yargs-parser@21.1.1: {}
 

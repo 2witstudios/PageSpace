@@ -31,6 +31,7 @@ export * from './personalization-utils';
 export * from './ai-tools';
 export * from './tool-filtering';
 export * from './mcp-tool-converter';
+export * from './integration-tool-resolver';
 
 // Utilities
 export * from './ai-utils';

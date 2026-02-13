@@ -13,7 +13,7 @@ import {
 
 export interface IntegrationRateLimitConfig {
   connectionId: string;
-  agentId: string;
+  agentId: string | null;
   toolName: string;
   requestsPerMinute: number;
 }
@@ -25,7 +25,7 @@ export interface IntegrationRateLimitConfig {
  * This ensures rate limits are tracked per connection, agent, and tool.
  */
 export const buildRateLimitKey = (config: IntegrationRateLimitConfig): string => {
-  return `integration:${config.connectionId}:${config.agentId}:${config.toolName}`;
+  return `integration:${config.connectionId}:${config.agentId ?? 'global'}:${config.toolName}`;
 };
 
 /**
@@ -70,10 +70,10 @@ export const resetIntegrationRateLimit = async (
  */
 export const checkConnectionRateLimit = async (
   connectionId: string,
-  agentId: string,
+  agentId: string | null,
   requestsPerMinute: number
 ): Promise<RateLimitResult> => {
-  const key = `integration:${connectionId}:${agentId}:provider`;
+  const key = `integration:${connectionId}:${agentId ?? 'global'}:provider`;
 
   return checkDistributedRateLimit(key, {
     maxAttempts: requestsPerMinute,

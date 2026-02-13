@@ -249,7 +249,6 @@ export const integrationAuditLog = pgTable(
 
     // Context
     driveId: text('drive_id')
-      .notNull()
       .references(() => drives.id, { onDelete: 'cascade' }),
     agentId: text('agent_id').references(() => pages.id, { onDelete: 'set null' }),
     userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
