@@ -4,15 +4,15 @@
 
 ## Current Focus
 
-**Issue #646**: [Landing] Hero section (P1)
+**Issue #647**: [Landing] AI architecture section (P1)
 
-Hero section with core value proposition and full UI overview.
+Explain the core AI innovation: Global Assistant + Page Agents.
 
 ## Next 3 Issues
 
-1. **#646** [Landing] Hero section (P1) - CURRENT
-2. **#647** [Landing] AI architecture section (P1)
-3. **#648** [Landing] Documents section (P1)
+1. **#647** [Landing] AI architecture section (P1) - CURRENT
+2. **#648** [Landing] Documents section (P1)
+3. **#649** [Landing] Channels + DMs section (P1)
 
 ## Progress Summary
 
@@ -20,13 +20,13 @@ Hero section with core value proposition and full UI overview.
 |------|------|-------|---|
 | Site Architecture | 1 | 4 | 25% |
 | SEO Foundation | 3 | 4 | 75% |
-| Landing Page Redesign | 0 | 7 | 0% |
+| Landing Page Redesign | 1 | 7 | 14% |
 | Remotion Video System | 0 | 6 | 0% |
 | Downloads Hub | 0 | 4 | 0% |
 | Pricing Page | 0 | 2 | 0% |
 | Product Tour | 0 | 1 | 0% |
 | Integrations Page | 0 | 2 | 0% |
-| **TOTAL** | **4** | **41*** | **10%** |
+| **TOTAL** | **5** | **41*** | **12%** |
 
 *Note: 11 remaining issues from content infrastructure epics not yet counted
 
