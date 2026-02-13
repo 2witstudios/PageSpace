@@ -28,6 +28,7 @@ export interface ConversationCacheMetrics {
   invalidations: number;
   invalidationFailures: number;
   ttlExpirations: number;
+  sizeEvictions: number;
   redisErrors: number;
   appendOperations: number;
 }
@@ -64,6 +65,7 @@ export class ConversationCache {
     invalidations: 0,
     invalidationFailures: 0,
     ttlExpirations: 0,
+    sizeEvictions: 0,
     redisErrors: 0,
     appendOperations: 0,
   };
@@ -88,6 +90,8 @@ export class ConversationCache {
   static getInstance(config?: Partial<CacheConfig>): ConversationCache {
     if (!ConversationCache.instance) {
       ConversationCache.instance = new ConversationCache(config);
+    } else if (config) {
+      loggers.api.warn('ConversationCache.getInstance called with config but singleton already exists; config ignored');
     }
     return ConversationCache.instance;
   }
@@ -136,12 +140,13 @@ export class ConversationCache {
   private startMemoryCacheCleanup(): void {
     this.cleanupInterval = setInterval(() => {
       const now = Date.now();
-      let cleanedCount = 0;
+      let ttlCleanedCount = 0;
+      let sizeEvictedCount = 0;
 
       for (const [key, entry] of this.memoryCache.entries()) {
         if (now > entry.cachedAt + (entry.ttl * 1000)) {
           this.memoryCache.delete(key);
-          cleanedCount++;
+          ttlCleanedCount++;
         }
       }
 
@@ -153,11 +158,12 @@ export class ConversationCache {
 
         for (let i = 0; i < excess && i < sortedEntries.length; i++) {
           this.memoryCache.delete(sortedEntries[i][0]);
-          cleanedCount++;
+          sizeEvictedCount++;
         }
       }
 
-      this.metrics.ttlExpirations += cleanedCount;
+      this.metrics.ttlExpirations += ttlCleanedCount;
+      this.metrics.sizeEvictions += sizeEvictedCount;
 
       const totalRequests = this.metrics.hits + this.metrics.misses;
       const hitRate = totalRequests > 0 ? Math.round((this.metrics.hits / totalRequests) * 100) : 0;
@@ -377,15 +383,17 @@ export class ConversationCache {
         keysToDelete.push(key);
       }
     }
-    keysToDelete.forEach(key => this.memoryCache.delete(key));
+    for (const key of keysToDelete) {
+      this.memoryCache.delete(key);
+    }
 
-    // Clear from L2
+    // Clear from L2 using SCAN (non-blocking) instead of KEYS
     if (this.isRedisAvailable && this.redis) {
       try {
         const pattern = this.getPagePattern(pageId);
-        const keys = await this.redis.keys(pattern);
-        if (keys.length > 0) {
-          await this.redis.del(...keys);
+        const keysToDeleteFromRedis = await this.scanKeys(pattern);
+        if (keysToDeleteFromRedis.length > 0) {
+          await this.redis.del(...keysToDeleteFromRedis);
         }
       } catch (error) {
         this.metrics.invalidationFailures++;
@@ -428,9 +436,29 @@ export class ConversationCache {
       invalidations: 0,
       invalidationFailures: 0,
       ttlExpirations: 0,
+      sizeEvictions: 0,
       redisErrors: 0,
       appendOperations: 0,
     };
+  }
+
+  /**
+   * Iterate keys using SCAN (non-blocking) instead of KEYS
+   * SCAN is O(1) per call and doesn't block Redis
+   */
+  private async scanKeys(pattern: string): Promise<string[]> {
+    if (!this.redis) return [];
+
+    const keys: string[] = [];
+    let cursor = '0';
+
+    do {
+      const [nextCursor, batch] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = nextCursor;
+      keys.push(...batch);
+    } while (cursor !== '0');
+
+    return keys;
   }
 
   /**
@@ -439,9 +467,10 @@ export class ConversationCache {
   async clearAll(): Promise<void> {
     this.memoryCache.clear();
 
+    // Use SCAN (non-blocking) instead of KEYS
     if (this.isRedisAvailable && this.redis) {
       try {
-        const keys = await this.redis.keys(`${this.config.keyPrefix}*`);
+        const keys = await this.scanKeys(`${this.config.keyPrefix}*`);
         if (keys.length > 0) {
           await this.redis.del(...keys);
         }

@@ -432,6 +432,7 @@ describe('conversation-cache', () => {
       expect(metrics.invalidations).toBe(0)
       expect(metrics.appendOperations).toBe(0)
       expect(metrics.ttlExpirations).toBe(0)
+      expect(metrics.sizeEvictions).toBe(0)
       expect(metrics.redisErrors).toBe(0)
     })
   })

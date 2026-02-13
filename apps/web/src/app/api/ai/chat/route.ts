@@ -709,7 +709,7 @@ export async function POST(request: Request) {
         toolResults: (msg.toolResults as string | null) ?? null,
         createdAt: msg.createdAt.getTime(),
         editedAt: msg.editedAt?.getTime() ?? null,
-        messageType: 'standard' as const,
+        messageType: (msg.messageType as 'standard' | 'todo_list') ?? 'standard',
       }));
       conversationCache.setConversation(pageId, conversationId, messagesToCache).catch(err => {
         loggers.ai.warn('Failed to populate conversation cache', { error: err });
