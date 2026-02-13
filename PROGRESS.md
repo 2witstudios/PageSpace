@@ -4,17 +4,17 @@
 
 ## Current Focus
 
-**Issue #665**: [Product Tour] Workflow demonstrations (P2)
+**Remaining Issues**: Require external resources/access
 
-Create product tour page.
+## Remaining Issues (External Dependencies)
 
-## Next 3 Issues
+1. **#639** [Site Architecture] Shared auth integration - Requires web app auth system
+2. **#640** [Site Architecture] Google One Tap integration - Requires Google OAuth credentials
+3. **#645** [SEO] Google Search Console setup - Requires Google Search Console access
+4. **#661** [Downloads] App store assets - Requires app store submissions
+5. **#662** [Downloads] Smart banners and deep links - Requires app IDs and URL schemes
 
-1. **#665** [Product Tour] Workflow demonstrations (P2) - CURRENT
-2. **#666** [Integrations] MCP servers showcase (P2)
-3. **#667** [Integrations] Third-party integrations (P2)
-
-## Deferred
+## Deferred (Blocked)
 
 - **Remotion compositions (#654-658)**: Waiting for UI component parity with actual PageSpace
 
@@ -22,17 +22,22 @@ Create product tour page.
 
 | Epic | Done | Total | % |
 |------|------|-------|---|
-| Site Architecture | 1 | 4 | 25% |
+| Site Architecture | 2 | 4 | 50% |
 | SEO Foundation | 3 | 4 | 75% |
 | Landing Page Redesign | 7 | 7 | 100% ✓ |
-| Remotion Video System | 1 | 6 | 17% (deferred) |
+| Remotion Video System | 1 | 6 | 17% (5 deferred) |
 | Downloads Hub | 2 | 4 | 50% |
 | Pricing Page | 2 | 2 | 100% ✓ |
-| Product Tour | 0 | 1 | 0% |
-| Integrations Page | 0 | 2 | 0% |
-| **TOTAL** | **16** | **41*** | **39%** |
+| Product Tour | 1 | 1 | 100% ✓ |
+| Integrations Page | 2 | 2 | 100% ✓ |
+| Blog | 2 | 2 | 100% ✓ |
+| FAQ/Help | 1 | 1 | 100% ✓ |
+| Developer Docs | 3 | 3 | 100% ✓ |
+| Changelog | 1 | 1 | 100% ✓ |
+| **TOTAL** | **27** | **41** | **66%** |
 
-*Note: 11 remaining issues from content infrastructure epics not yet counted
+**Implementable Issues Done**: 27/31 (87%)
+**Remaining**: 9 issues deferred + 5 require external resources
 
 ## Branch
 

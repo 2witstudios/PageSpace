@@ -5,9 +5,9 @@
 
 ## Summary
 - **Total Items**: 41
-- **Done**: 16
+- **Done**: 27
 - **In Progress**: 0
-- **Todo**: 25
+- **Todo**: 14 (5 deferred - Remotion compositions, 4 require external resources)
 
 ---
 
@@ -19,9 +19,9 @@
 | # | Title | Status | PR |
 |---|-------|--------|-----|
 | 638 | [Site Architecture] Marketing site setup | Done | - |
-| 639 | [Site Architecture] Shared auth integration | Todo | - |
-| 640 | [Site Architecture] Google One Tap integration | Todo | - |
-| 641 | [Site Architecture] SSG/SSR optimization | Todo | - |
+| 639 | [Site Architecture] Shared auth integration | Todo | Requires web app auth system |
+| 640 | [Site Architecture] Google One Tap integration | Todo | Requires Google OAuth credentials |
+| 641 | [Site Architecture] SSG/SSR optimization | Done | All 25 pages static/SSG |
 
 ---
 
@@ -33,7 +33,7 @@
 | 642 | [SEO] Sitemap and robots.txt | Done | - |
 | 643 | [SEO] Schema.org structured data | Done | - |
 | 644 | [SEO] Meta tags and Open Graph | Done | - |
-| 645 | [SEO] Google Search Console setup | Todo | - |
+| 645 | [SEO] Google Search Console setup | Todo | Requires Google Search Console access |
 
 ---
 
@@ -58,11 +58,11 @@
 | # | Title | Status | PR |
 |---|-------|--------|-----|
 | 653 | [Remotion] Setup and infrastructure | Done | - |
-| 654 | [Remotion] Document editing composition | Todo | - |
-| 655 | [Remotion] Channels composition | Todo | - |
-| 656 | [Remotion] Tasks composition | Todo | - |
-| 657 | [Remotion] Calendar composition | Todo | - |
-| 658 | [Remotion] Hero composition | Todo | - |
+| 654 | [Remotion] Document editing composition | Deferred | UI parity with actual PageSpace needed |
+| 655 | [Remotion] Channels composition | Deferred | UI parity with actual PageSpace needed |
+| 656 | [Remotion] Tasks composition | Deferred | UI parity with actual PageSpace needed |
+| 657 | [Remotion] Calendar composition | Deferred | UI parity with actual PageSpace needed |
+| 658 | [Remotion] Hero composition | Deferred | UI parity with actual PageSpace needed |
 
 ---
 
@@ -73,8 +73,8 @@
 |---|-------|--------|-----|
 | 659 | [Downloads] Desktop apps page | Done | - |
 | 660 | [Downloads] Mobile apps page | Done | - |
-| 661 | [Downloads] App store assets | Todo | - |
-| 662 | [Downloads] Smart banners and deep links | Todo | - |
+| 661 | [Downloads] App store assets | Todo | Requires app store submissions |
+| 662 | [Downloads] Smart banners and deep links | Todo | Requires app IDs and URL schemes |
 
 ---
 
@@ -93,7 +93,7 @@
 
 | # | Title | Status | PR |
 |---|-------|--------|-----|
-| 665 | [Product Tour] Workflow demonstrations | Todo | - |
+| 665 | [Product Tour] Workflow demonstrations | Done | - |
 
 ---
 
@@ -102,15 +102,47 @@
 
 | # | Title | Status | PR |
 |---|-------|--------|-----|
-| 666 | [Integrations] MCP servers showcase | Todo | - |
-| 667 | [Integrations] Third-party integrations | Todo | - |
+| 666 | [Integrations] MCP servers showcase | Done | - |
+| 667 | [Integrations] Third-party integrations | Done | - |
 
 ---
 
-### Epic 9-12: Content Infrastructure (P2/P3)
-> Blog, FAQ/Help, Developer Docs, Changelog - to be populated from remaining issues
+### Epic 9: Blog (P2 Important)
+> Blog infrastructure with MDX support and initial content.
 
-*Issues 668-678 not yet fetched - update when available*
+| # | Title | Status | PR |
+|---|-------|--------|-----|
+| 668 | [Blog] Blog infrastructure | Done | - |
+| 669 | [Blog] Initial blog posts | Done | - |
+
+---
+
+### Epic 10: FAQ/Help (P2 Important)
+> FAQ page with common questions and answers.
+
+| # | Title | Status | PR |
+|---|-------|--------|-----|
+| 670 | [FAQ] FAQ page implementation | Done | - |
+
+---
+
+### Epic 11: Developer Documentation (P3 Nice-to-have)
+> Developer docs with API reference and guides.
+
+| # | Title | Status | PR |
+|---|-------|--------|-----|
+| 671 | [Docs] Documentation infrastructure | Done | - |
+| 672 | [Docs] API reference | Done | - |
+| 673 | [Docs] Getting started guide | Done | - |
+
+---
+
+### Epic 12: Changelog (P3 Nice-to-have)
+> Changelog page showing product updates.
+
+| # | Title | Status | PR |
+|---|-------|--------|-----|
+| 674 | [Changelog] Changelog page | Done | - |
 
 ---
 

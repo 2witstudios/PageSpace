@@ -79,14 +79,37 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
   ];
 
-  // Blog routes will be dynamically generated in the future
-  // For now, include the main blog index
+  // Blog routes
   const blogRoutes: MetadataRoute.Sitemap = [
     {
       url: `${BASE_URL}/blog`,
       lastModified,
       changeFrequency: "daily",
       priority: 0.7,
+    },
+    {
+      url: `${BASE_URL}/blog/introducing-pagespace`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.6,
+    },
+    {
+      url: `${BASE_URL}/blog/understanding-page-agents`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.6,
+    },
+    {
+      url: `${BASE_URL}/blog/mcp-servers-explained`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.6,
+    },
+    {
+      url: `${BASE_URL}/blog/ai-rollback-why-it-matters`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.6,
     },
   ];
 
