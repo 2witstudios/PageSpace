@@ -1,7 +1,7 @@
 # Marketing & Pre-Onboarding Experience - Project Mirror
 
 > **Source of Truth**: https://github.com/users/2witstudios/projects/5
-> **Last Updated**: 2026-02-13T09:41:00Z
+> **Last Updated**: 2026-02-13T13:30:00Z
 
 ## Summary
 - **Total Items**: 30 (actual GitHub Project items)
@@ -149,7 +149,9 @@
 ---
 
 ## Notes
-- All 41 issues are currently in "Todo" status
-- Priority order: P0 > P1 > P2 > P3
-- The `apps/marketing` directory already exists with basic Next.js 15 setup
-- Build currently passes with 11 static pages (screenshot generator)
+- **GitHub Project Status**: 20/30 Done (67%), 10 Todo
+- **Remaining Todo items**:
+  - 5 Remotion compositions (deferred awaiting UI parity with PageSpace)
+  - 5 require external resources (auth credentials, app store access)
+- **Build Status**: 25 static pages, all tests passing
+- **Extra Implementation**: Blog, FAQ, Docs, Changelog pages implemented beyond original project scope
