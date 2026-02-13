@@ -288,13 +288,18 @@ describe('Zero-Trust Permission Boundaries', () => {
   // ===========================================================================
 
   describe('permission hierarchy integrity', () => {
-    it('given non-owner userId, driveOwnerId comparison should correctly fail', async () => {
-      // Verify the core comparison logic that protects the owner check
-      const driveOwnerId = 'user-actual-owner';
-      const requestingUserId = 'user-different';
+    it('given non-owner userId, should not receive owner-level permissions', async () => {
+      mockSelectLimit
+        .mockResolvedValueOnce([{
+          id: 'page-target',
+          driveId: 'drive-owner',
+          driveOwnerId: 'user-actual-owner',
+        }])
+        .mockResolvedValueOnce([])  // not admin
+        .mockResolvedValueOnce([]); // no explicit permissions
 
-      // This is the exact comparison the permission system uses
-      expect(driveOwnerId === requestingUserId).toBe(false);
+      const result = await getUserAccessLevel('user-different', 'page-target');
+      expect(result).toBeNull();
     });
   });
 
@@ -338,27 +343,19 @@ describe('Zero-Trust Permission Boundaries', () => {
   // ===========================================================================
 
   describe('drive owner impersonation prevention', () => {
-    it('given a non-owner userId, driveOwnerId check should not match', async () => {
-      // Page owned by user-other, but user-attacker tries to access
-      // The check: pageData.driveOwnerId === validUserId should be false
+    it('given a non-owner userId, should be denied access when no explicit permissions exist', async () => {
       mockSelectLimit
         .mockResolvedValueOnce([{
           id: 'page-123',
           driveId: 'drive-BBB',
           driveOwnerId: 'user-other-owner',
-        }]);
+        }])
+        .mockResolvedValueOnce([])   // not admin
+        .mockResolvedValueOnce([]);  // no explicit permissions
 
       const result = await getUserAccessLevel('user-attacker', 'page-123');
 
-      // The driveOwnerId check ('user-other-owner' === 'user-attacker') is false
-      // So full permissions should NOT be granted via the owner path
-      if (result !== null) {
-        // If there's a result from admin/explicit check, it should not be full access
-        // unless the mock chain happens to return something
-        expect(result).toBeDefined();
-      }
-      // The key property: user-attacker !== user-other-owner
-      expect('user-other-owner' === 'user-attacker').toBe(false);
+      expect(result).toBeNull();
     });
   });
 });
