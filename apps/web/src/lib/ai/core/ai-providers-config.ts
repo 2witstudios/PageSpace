@@ -9,8 +9,8 @@
  * This abstraction lets agents update their model without knowing the specific backend model.
  */
 export const PAGESPACE_MODEL_ALIASES: Record<string, string> = {
-  standard: 'glm-4.5-air',
-  pro: 'glm-4.7',
+  standard: 'glm-4.7',
+  pro: 'glm-5',
 } as const;
 
 /**
@@ -30,12 +30,29 @@ export function isPageSpaceModelAlias(model: string): boolean {
   return model.toLowerCase() in PAGESPACE_MODEL_ALIASES;
 }
 
+/**
+ * Get the PageSpace tier ('standard' or 'pro') for a given model
+ * Returns null if the model is not a PageSpace tier model
+ *
+ * This is the reverse lookup of PAGESPACE_MODEL_ALIASES - given a model ID,
+ * find which tier it belongs to. Used for rate limiting and subscription checks.
+ */
+export function getPageSpaceModelTier(model: string): 'standard' | 'pro' | null {
+  const modelLower = model.toLowerCase();
+  for (const [tier, tierModel] of Object.entries(PAGESPACE_MODEL_ALIASES)) {
+    if (tierModel.toLowerCase() === modelLower) {
+      return tier as 'standard' | 'pro';
+    }
+  }
+  return null;
+}
+
 export const AI_PROVIDERS = {
   pagespace: {
     name: 'PageSpace',
     models: {
-      'glm-4.5-air': 'Standard',
-      'glm-4.7': 'Pro (Pro/Business)',
+      'glm-4.7': 'Standard',
+      'glm-5': 'Pro (Pro/Business)',
     },
   },
   openrouter: {
@@ -82,7 +99,8 @@ export const AI_PROVIDERS = {
       'mistralai/devstral-medium': 'Devstral Medium',
       'mistralai/devstral-small': 'Devstral Small',
 
-      // Chinese/Asian Models (2025)
+      // Chinese/Asian Models (2025-2026)
+      'z-ai/glm-5': 'GLM 5',
       'z-ai/glm-4.7': 'GLM 4.7',
       'z-ai/glm-4.5v': 'GLM 4.5V',
       'z-ai/glm-4.5': 'GLM 4.5',
@@ -93,6 +111,7 @@ export const AI_PROVIDERS = {
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
       'qwen/qwen3-coder': 'Qwen3 Coder',
       'moonshotai/kimi-k2': 'Kimi K2',
+      'minimax/minimax-m2.5': 'MiniMax M2.5',
       'minimax/minimax-m1': 'MiniMax M1',
 
       // DeepSeek Models (2025)
@@ -320,6 +339,7 @@ export const AI_PROVIDERS = {
   glm: {
     name: 'GLM Coder Plan',
     models: {
+      'glm-5': 'GLM-5 (Pro)',
       'glm-4.7': 'GLM-4.7 (Standard)',
       'glm-4.6': 'GLM-4.6',
       'glm-4.5-air': 'GLM-4.5 Air (Fast)',
@@ -328,6 +348,7 @@ export const AI_PROVIDERS = {
   minimax: {
     name: 'MiniMax',
     models: {
+      'MiniMax-M2.5': 'MiniMax M2.5',
       'MiniMax-M2.1': 'MiniMax M2.1',
       'MiniMax-M2': 'MiniMax M2',
       'MiniMax-M2-Stable': 'MiniMax M2 Stable',
@@ -359,9 +380,9 @@ export function getBackendProvider(uiProvider: string): string {
  * Get default model for a provider
  */
 export function getDefaultModel(provider: string): string {
-  // Always return glm-4.5-air for PageSpace provider
+  // Always return glm-4.7 for PageSpace provider (Standard tier)
   if (provider === 'pagespace') {
-    return 'glm-4.5-air';
+    return 'glm-4.7';
   }
 
   // Always return gemini-2.5-flash for Google provider
@@ -371,7 +392,7 @@ export function getDefaultModel(provider: string): string {
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return 'glm-4.5-air'; // fallback default to GLM 4.5 Air
+    return 'glm-4.7'; // fallback default to GLM 4.7
   }
 
   return Object.keys(providerConfig.models)[0];
@@ -423,10 +444,10 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
   if (provider === 'pagespace') {
     // Resolve alias to actual model for comparison
     const resolvedModel = resolvePageSpaceModel(model);
-    if (resolvedModel === 'glm-4.7') {
+    if (resolvedModel === 'glm-5') {
       return 'PageSpace Pro';
     }
-    if (resolvedModel === 'glm-4.5-air') {
+    if (resolvedModel === 'glm-4.7') {
       return 'PageSpace Standard';
     }
     // Any other PageSpace model defaults to Standard

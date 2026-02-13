@@ -87,7 +87,7 @@ export async function createAIProvider(
   // Get user's current AI provider settings
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-  let currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
+  let currentModel = selectedModel || user?.currentAiModel || 'glm-4.7';
 
   // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.5-air')
   if (currentProvider === 'pagespace') {

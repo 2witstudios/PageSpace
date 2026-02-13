@@ -89,6 +89,10 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   // Chinese/Asian Vision Models
   'z-ai/glm-4.5v': true,
 
+  // MiniMax Vision Models
+  'MiniMax-M2.5': true,
+  'minimax/minimax-m2.5': true,
+
   // Special handling for o1 models - they DON'T support vision
   'o1': false,
   'o1-mini': false,
