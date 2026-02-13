@@ -70,7 +70,7 @@ describe('Admin Escalation Prevention', () => {
       // Token was issued when version was 0
       const result = await validateAdminAccess('user-ex-admin', 0);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
 
     it('given admin demoted to user, even correct version should fail because role is user', async () => {
@@ -82,7 +82,7 @@ describe('Admin Escalation Prevention', () => {
       // Even with matching version, role is not admin
       const result = await validateAdminAccess('user-ex-admin', 1);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
   });
 
@@ -100,7 +100,7 @@ describe('Admin Escalation Prevention', () => {
       // Old token had version 0
       const result = await validateAdminAccess('user-new-admin', 0);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
 
     it('given user promoted to admin, new token with correct version should succeed', async () => {
@@ -111,7 +111,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-new-admin', 1);
 
-      expect(result).toBe(true);
+      expect(result.isValid).toBe(true);
     });
   });
 
@@ -128,7 +128,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-admin', 6);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
 
     it('given version off by -1, should reject', async () => {
@@ -139,7 +139,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-admin', 4);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
 
     it('given exact version match with admin role, should accept', async () => {
@@ -150,7 +150,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-admin', 5);
 
-      expect(result).toBe(true);
+      expect(result.isValid).toBe(true);
     });
 
     it('given version 0 with actual version 0 and admin role, should accept', async () => {
@@ -161,7 +161,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-admin', 0);
 
-      expect(result).toBe(true);
+      expect(result.isValid).toBe(true);
     });
 
     it('given negative claimed version, should reject', async () => {
@@ -172,7 +172,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-admin', -1);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
   });
 
@@ -186,7 +186,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-nonexistent', 0);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
 
     it('given undefined user lookup result, should deny access', async () => {
@@ -194,7 +194,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-deleted', 0);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
   });
 
@@ -213,7 +213,7 @@ describe('Admin Escalation Prevention', () => {
 
       const result = await validateAdminAccess('user-flipflop', 1);
 
-      expect(result).toBe(false);
+      expect(result.isValid).toBe(false);
     });
 
     it('given high version number from many changes, only exact match succeeds', async () => {
@@ -222,9 +222,9 @@ describe('Admin Escalation Prevention', () => {
         adminRoleVersion: 100,
       });
 
-      expect(await validateAdminAccess('user-admin', 99)).toBe(false);
-      expect(await validateAdminAccess('user-admin', 100)).toBe(true);
-      expect(await validateAdminAccess('user-admin', 101)).toBe(false);
+      expect((await validateAdminAccess('user-admin', 99)).isValid).toBe(false);
+      expect((await validateAdminAccess('user-admin', 100)).isValid).toBe(true);
+      expect((await validateAdminAccess('user-admin', 101)).isValid).toBe(false);
     });
   });
 
@@ -236,7 +236,7 @@ describe('Admin Escalation Prevention', () => {
     it('gate 1 fail: user does not exist', async () => {
       mockFindFirst.mockResolvedValue(null);
 
-      expect(await validateAdminAccess('ghost', 0)).toBe(false);
+      expect((await validateAdminAccess('ghost', 0)).isValid).toBe(false);
     });
 
     it('gate 2 fail: user exists but is not admin', async () => {
@@ -245,7 +245,7 @@ describe('Admin Escalation Prevention', () => {
         adminRoleVersion: 0,
       });
 
-      expect(await validateAdminAccess('user-regular', 0)).toBe(false);
+      expect((await validateAdminAccess('user-regular', 0)).isValid).toBe(false);
     });
 
     it('gate 3 fail: user is admin but version mismatches', async () => {
@@ -254,7 +254,7 @@ describe('Admin Escalation Prevention', () => {
         adminRoleVersion: 2,
       });
 
-      expect(await validateAdminAccess('user-admin', 1)).toBe(false);
+      expect((await validateAdminAccess('user-admin', 1)).isValid).toBe(false);
     });
 
     it('all gates pass: user exists, is admin, version matches', async () => {
@@ -263,7 +263,7 @@ describe('Admin Escalation Prevention', () => {
         adminRoleVersion: 2,
       });
 
-      expect(await validateAdminAccess('user-admin', 2)).toBe(true);
+      expect((await validateAdminAccess('user-admin', 2)).isValid).toBe(true);
     });
   });
 });
