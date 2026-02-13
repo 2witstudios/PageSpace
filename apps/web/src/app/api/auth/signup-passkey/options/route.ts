@@ -102,6 +102,13 @@ export async function POST(req: Request) {
         );
       }
 
+      if (result.error.code === 'VALIDATION_FAILED') {
+        return NextResponse.json(
+          { error: 'Invalid data provided', code: 'VALIDATION_FAILED' },
+          { status: 400 }
+        );
+      }
+
       loggers.auth.warn('Passkey signup options failed', {
         error: result.error.code,
         ip: clientIP,

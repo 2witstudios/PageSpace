@@ -294,7 +294,7 @@ describe('Passkey Service', () => {
         assert({
           given: 'successful registration',
           should: 'store passkey in database',
-          actual: storedPasskey !== null,
+          actual: storedPasskey !== undefined,
           expected: true,
         });
 
@@ -339,7 +339,7 @@ describe('Passkey Service', () => {
       assert({
         given: 'a used challenge',
         should: 'have usedAt set',
-        actual: usedChallenge?.usedAt !== null,
+        actual: usedChallenge?.usedAt != null, // checks both null and undefined
         expected: true,
       });
     });
@@ -454,7 +454,7 @@ describe('Passkey Service', () => {
       assert({
         given: 'generated auth options',
         should: 'store challenge hash in database',
-        actual: storedChallenge !== null,
+        actual: storedChallenge !== undefined,
         expected: true,
       });
     });

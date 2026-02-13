@@ -151,12 +151,16 @@ export async function POST(req: Request) {
     }
 
     // Add default 'ollama' provider for the new user
-    await db.insert(userAiSettings).values({
-      userId,
-      provider: 'ollama',
-      baseUrl: 'http://host.docker.internal:11434',
-      updatedAt: new Date(),
-    });
+    try {
+      await db.insert(userAiSettings).values({
+        userId,
+        provider: 'ollama',
+        baseUrl: 'http://host.docker.internal:11434',
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      loggers.auth.error('Failed to insert default AI settings', error as Error, { userId });
+    }
 
     // Log auth events
     logAuthEvent('signup', userId, email, clientIP);
@@ -169,9 +173,12 @@ export async function POST(req: Request) {
     ]);
 
     // Track signup event (using 'signup' + passkey_registered for full event tracking)
+    // Mask PII to comply with data retention policies
+    const maskedEmail = email.substring(0, 3) + '***@' + (email.split('@')[1] || '***');
+    const maskedName = name.substring(0, 1) + '***';
     trackAuthEvent(userId, 'signup', {
-      email,
-      name,
+      email: maskedEmail,
+      name: maskedName,
       ip: clientIP,
       userAgent: req.headers.get('user-agent'),
       method: 'passkey',
