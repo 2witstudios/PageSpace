@@ -17,10 +17,10 @@ const assert = ({ given, should, actual, expected }: AssertParams): void => {
 
 // Mock @simplewebauthn/server for unit tests
 vi.mock('@simplewebauthn/server', () => ({
-  generateRegistrationOptions: vi.fn().mockResolvedValue({
+  generateRegistrationOptions: vi.fn().mockImplementation(async (options) => ({
     challenge: 'mock-challenge-base64',
     rp: { name: 'PageSpace', id: 'localhost' },
-    user: { id: 'mock-user-id', name: 'test@example.com', displayName: 'Test User' },
+    user: { id: 'mock-user-id', name: options?.userName || 'test@example.com', displayName: options?.userDisplayName || 'Test User' },
     pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
     timeout: 60000,
     attestation: 'none',
@@ -28,14 +28,16 @@ vi.mock('@simplewebauthn/server', () => ({
       residentKey: 'preferred',
       userVerification: 'preferred',
     },
-  }),
-  generateAuthenticationOptions: vi.fn().mockResolvedValue({
+    // Return excludeCredentials if provided (this is what the real library does)
+    excludeCredentials: options?.excludeCredentials || [],
+  })),
+  generateAuthenticationOptions: vi.fn().mockImplementation(async (options) => ({
     challenge: 'mock-auth-challenge-base64',
     timeout: 60000,
     rpId: 'localhost',
-    allowCredentials: [],
+    allowCredentials: options?.allowCredentials || [],
     userVerification: 'preferred',
-  }),
+  })),
   verifyRegistrationResponse: vi.fn().mockResolvedValue({
     verified: true,
     registrationInfo: {
@@ -68,6 +70,9 @@ import {
   PASSKEY_CONFIG,
 } from './passkey-service';
 
+// System user ID for anonymous auth challenges - must match passkey-service.ts
+const SYSTEM_USER_ID = 'system-passkey-auth';
+
 describe('Passkey Service', () => {
   let testUserId: string;
   let testUserEmail: string;
@@ -85,14 +90,26 @@ describe('Passkey Service', () => {
       emailVerified: new Date(),
     }).returning();
     testUserId = user.id;
+
+    // Ensure system user exists for anonymous auth challenges
+    // Use upsert pattern to handle concurrent test runs
+    await db.insert(users).values({
+      id: SYSTEM_USER_ID,
+      name: 'System',
+      email: 'system@pagespace.local',
+      provider: 'email',
+      role: 'user',
+      tokenVersion: 0,
+    }).onConflictDoNothing();
   });
 
   afterEach(async () => {
     // Clean up passkeys
     await db.delete(passkeys).where(eq(passkeys.userId, testUserId));
-    // Clean up verification tokens (challenges)
+    // Clean up verification tokens (challenges) - both for test user and system user
     await db.delete(verificationTokens).where(eq(verificationTokens.userId, testUserId));
-    // Clean up user
+    await db.delete(verificationTokens).where(eq(verificationTokens.userId, SYSTEM_USER_ID));
+    // Clean up user (don't delete system user as other tests may need it)
     await db.delete(users).where(eq(users.id, testUserId));
     vi.clearAllMocks();
   });

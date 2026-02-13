@@ -20,4 +20,9 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "passkeys_user_id_idx" ON "passkeys" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "passkeys_credential_id_idx" ON "passkeys" USING btree ("credential_id");
+CREATE INDEX IF NOT EXISTS "passkeys_credential_id_idx" ON "passkeys" USING btree ("credential_id");--> statement-breakpoint
+-- System user for anonymous passkey authentication challenges (conditional UI)
+-- This user is used as a FK target when storing auth challenges without a specific user
+INSERT INTO "users" ("id", "name", "email", "provider", "role", "tokenVersion", "createdAt", "updatedAt")
+VALUES ('system-passkey-auth', 'System', 'system@pagespace.local', 'email', 'user', 0, now(), now())
+ON CONFLICT (id) DO NOTHING;

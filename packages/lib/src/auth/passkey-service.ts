@@ -30,6 +30,9 @@ export const PASSKEY_CONFIG = {
   maxPasskeysPerUser: 10,
   timeout: 60000,
   maxNameLength: 255,
+  // System user ID for anonymous auth challenges (conditional UI without email)
+  // This user must exist in the database - created via migration
+  systemUserId: 'system-passkey-auth',
 } as const;
 
 // Input validation schemas
@@ -368,11 +371,11 @@ export async function generateAuthenticationOptions(
     });
   } else {
     // For conditional UI (no specific user), we need to track the challenge differently
-    // We'll create a temporary system entry and validate against it
-    // The actual user will be determined by the credential ID during verification
+    // We use a system user entry - the actual user will be determined by the credential ID during verification
+    // IMPORTANT: The system user (PASSKEY_CONFIG.systemUserId) must exist in the database
     await db.insert(verificationTokens).values({
       id: challengeId,
-      userId: 'system', // Placeholder for anonymous auth challenges
+      userId: PASSKEY_CONFIG.systemUserId,
       tokenHash: challengeHash,
       tokenPrefix: options.challenge.substring(0, 12),
       type: 'webauthn_auth',
