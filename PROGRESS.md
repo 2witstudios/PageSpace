@@ -1,18 +1,18 @@
 # Marketing Redesign Progress
 
-> **Last Updated**: 2026-02-13T09:04:00Z
+> **Last Updated**: 2026-02-13T11:20:00Z
 
 ## Current Focus
 
-**Issue #648**: [Landing] Documents section (P1)
+**Issue #654**: [Remotion] Document editing composition (P1)
 
-Showcase document editing capabilities with AI.
+Create document editing video composition.
 
 ## Next 3 Issues
 
-1. **#648** [Landing] Documents section (P1) - CURRENT
-2. **#649** [Landing] Channels + DMs section (P1)
-3. **#650** [Landing] Tasks section (P1)
+1. **#654** [Remotion] Document editing composition (P1) - CURRENT
+2. **#655** [Remotion] Channels composition (P1)
+3. **#656** [Remotion] Tasks composition (P1)
 
 ## Progress Summary
 
@@ -20,13 +20,13 @@ Showcase document editing capabilities with AI.
 |------|------|-------|---|
 | Site Architecture | 1 | 4 | 25% |
 | SEO Foundation | 3 | 4 | 75% |
-| Landing Page Redesign | 2 | 7 | 29% |
-| Remotion Video System | 0 | 6 | 0% |
+| Landing Page Redesign | 7 | 7 | 100% ✓ |
+| Remotion Video System | 1 | 6 | 17% |
 | Downloads Hub | 0 | 4 | 0% |
 | Pricing Page | 0 | 2 | 0% |
 | Product Tour | 0 | 1 | 0% |
 | Integrations Page | 0 | 2 | 0% |
-| **TOTAL** | **6** | **41*** | **15%** |
+| **TOTAL** | **12** | **41*** | **29%** |
 
 *Note: 11 remaining issues from content infrastructure epics not yet counted
 

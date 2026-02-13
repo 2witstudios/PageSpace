@@ -5,9 +5,9 @@
 
 ## Summary
 - **Total Items**: 41
-- **Done**: 6
+- **Done**: 12
 - **In Progress**: 0
-- **Todo**: 35
+- **Todo**: 29
 
 ---
 
@@ -44,11 +44,11 @@
 |---|-------|--------|-----|
 | 646 | [Landing] Hero section | Done | - |
 | 647 | [Landing] AI architecture section | Done | - |
-| 648 | [Landing] Documents section | Todo | - |
-| 649 | [Landing] Channels + DMs section | Todo | - |
-| 650 | [Landing] Tasks section | Todo | - |
-| 651 | [Landing] Calendar section | Todo | - |
-| 652 | [Landing] Final CTA section | Todo | - |
+| 648 | [Landing] Documents section | Done | - |
+| 649 | [Landing] Channels + DMs section | Done | - |
+| 650 | [Landing] Tasks section | Done | - |
+| 651 | [Landing] Calendar section | Done | - |
+| 652 | [Landing] Final CTA section | Done | - |
 
 ---
 
@@ -57,7 +57,7 @@
 
 | # | Title | Status | PR |
 |---|-------|--------|-----|
-| 653 | [Remotion] Setup and infrastructure | Todo | - |
+| 653 | [Remotion] Setup and infrastructure | Done | - |
 | 654 | [Remotion] Document editing composition | Todo | - |
 | 655 | [Remotion] Channels composition | Todo | - |
 | 656 | [Remotion] Tasks composition | Todo | - |
