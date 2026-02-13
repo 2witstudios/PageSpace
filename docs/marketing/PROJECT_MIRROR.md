@@ -1,13 +1,13 @@
 # Marketing & Pre-Onboarding Experience - Project Mirror
 
 > **Source of Truth**: https://github.com/users/2witstudios/projects/5
-> **Last Updated**: 2026-02-13T09:14:00Z
+> **Last Updated**: 2026-02-13T09:16:00Z
 
 ## Summary
 - **Total Items**: 41
-- **Done**: 1
+- **Done**: 2
 - **In Progress**: 0
-- **Todo**: 40
+- **Todo**: 39
 
 ---
 
@@ -30,7 +30,7 @@
 
 | # | Title | Status | PR |
 |---|-------|--------|-----|
-| 642 | [SEO] Sitemap and robots.txt | Todo | - |
+| 642 | [SEO] Sitemap and robots.txt | Done | - |
 | 643 | [SEO] Schema.org structured data | Todo | - |
 | 644 | [SEO] Meta tags and Open Graph | Todo | - |
 | 645 | [SEO] Google Search Console setup | Todo | - |

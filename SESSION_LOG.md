@@ -53,3 +53,29 @@
 None
 
 ---
+
+## Iteration 2 - 2026-02-13T09:15:00Z
+
+### Current Issue
+**#642**: [SEO] Sitemap and robots.txt
+
+**Acceptance Criteria**:
+- [x] sitemap.xml generated at build time
+- [x] All public pages included
+- [x] robots.txt allows crawling
+- [x] Sitemap accessible at /sitemap.xml
+- [x] No private/auth pages in sitemap
+
+### Actions
+- Updated robots.txt for marketing site (removed web app paths)
+- Created src/app/sitemap.ts with all planned marketing routes
+- Sitemap includes: /, /pricing, /downloads, /tour, /integrations, /faq, /changelog, /docs/*, /blog
+- Verified sitemap.xml is generated at build time (12 URLs)
+
+### Result
+**Issue #642 COMPLETE** - All acceptance criteria met
+
+### Blockers
+None
+
+---
