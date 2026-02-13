@@ -62,7 +62,8 @@ export function PasskeyManager() {
 
   const { data, error, isLoading } = useSWR<{ passkeys: Passkey[] }>(
     '/api/auth/passkey',
-    fetcher
+    fetcher,
+    { revalidateOnFocus: false }
   );
 
   const passkeys = data?.passkeys ?? [];
@@ -285,6 +286,7 @@ export function PasskeyManager() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label="Rename passkey"
                       onClick={() => {
                         setEditPasskey(passkey);
                         setNewName(passkey.name || '');
@@ -295,6 +297,7 @@ export function PasskeyManager() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      aria-label="Delete passkey"
                       onClick={() => setDeletePasskeyId(passkey.id)}
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />

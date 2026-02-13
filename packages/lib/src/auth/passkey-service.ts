@@ -357,6 +357,19 @@ export async function generateAuthenticationOptions(
   const challengeHash = hashToken(options.challenge);
   const expiresAt = new Date(Date.now() + PASSKEY_CONFIG.challengeExpiryMinutes * 60 * 1000);
 
+  // Clean up old unused auth challenges for this user (or system user)
+  // This prevents unbounded accumulation of stale challenges
+  const cleanupUserId = challengeUserId ?? PASSKEY_CONFIG.systemUserId;
+  await db
+    .delete(verificationTokens)
+    .where(
+      and(
+        eq(verificationTokens.userId, cleanupUserId),
+        eq(verificationTokens.type, 'webauthn_auth'),
+        isNull(verificationTokens.usedAt)
+      )
+    );
+
   // For authentication challenges without a specific user, we need a special approach
   // Store with a placeholder user ID or use a different table
   // For now, we'll use a system-level challenge storage pattern
@@ -485,6 +498,9 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
 
   // Atomic counter update with replay protection
   // Counter must be greater than stored value to prevent replay attacks
+  // NOTE: WebAuthn allows authenticators to keep signCount at 0 (counters not supported).
+  // Multi-device passkeys (iCloud Keychain, Google Password Manager) often return 0 on every auth.
+  // We allow updates when stored counter is 0 (no clone detection possible) or when new > stored.
   const newCounter = verification.authenticationInfo.newCounter;
   const counterUpdateResult = await db
     .update(passkeys)
@@ -495,8 +511,8 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
     .where(
       and(
         eq(passkeys.id, passkey.id),
-        // Atomic replay protection: only update if new counter is greater than stored counter
-        sql`${passkeys.counter} < ${newCounter}`
+        // Allow counters at 0 (unsupported) or verify new counter is greater (clone detection)
+        sql`${passkeys.counter} = 0 OR ${passkeys.counter} < ${newCounter}`
       )
     )
     .returning();
