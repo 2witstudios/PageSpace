@@ -71,6 +71,9 @@ vi.mock('@pagespace/db', () => {
     },
     eq: vi.fn((a: unknown, b: unknown) => ({ op: 'eq', a, b })),
     and: vi.fn((...conditions: unknown[]) => ({ op: 'and', conditions })),
+    or: vi.fn((...conditions: unknown[]) => ({ op: 'or', conditions })),
+    isNull: vi.fn((col: unknown) => ({ op: 'isNull', col })),
+    gt: vi.fn((a: unknown, b: unknown) => ({ op: 'gt', a, b })),
   };
 });
 
@@ -127,13 +130,9 @@ describe('Zero-Trust Permission Boundaries', () => {
   // ===========================================================================
 
   describe('expired permission enforcement', () => {
-    it('given a page with expired permission, should deny access even if canView=true in database', async () => {
-      // This tests whether the permission system checks expiresAt.
-      // The schema has expiresAt on pagePermissions but the current
-      // getUserAccessLevel does NOT filter by it.
-      // This test documents the gap — expired permissions are currently honored.
-
-      // Setup: page exists, user is not owner/admin, has explicit permission WITH expired date
+    it('given a page with expired permission, should deny access (DB filters expired rows)', async () => {
+      // The query now includes: or(isNull(expiresAt), gt(expiresAt, now()))
+      // This means the DB excludes expired rows, returning empty results.
       mockSelectLimit
         // First call: page lookup
         .mockResolvedValueOnce([{
@@ -143,25 +142,13 @@ describe('Zero-Trust Permission Boundaries', () => {
         }])
         // Second call: admin membership check
         .mockResolvedValueOnce([])
-        // Third call: explicit page permissions (with expired entry)
-        .mockResolvedValueOnce([{
-          canView: true,
-          canEdit: true,
-          canShare: false,
-          canDelete: false,
-          expiresAt: new Date('2020-01-01'), // Expired
-        }]);
+        // Third call: explicit page permissions — empty because DB filtered out expired rows
+        .mockResolvedValueOnce([]);
 
       const result = await getUserAccessLevel('user-requester', 'page-123');
 
-      // KNOWN GAP: Currently returns permissions even when expired.
-      // This test documents the behavior. When expiresAt enforcement is added,
-      // this assertion should change to expect null.
-      //
-      // Current behavior (documenting the gap):
-      expect(result).not.toBeNull();
-      // Expected zero-trust behavior (uncomment when fix is implemented):
-      // expect(result).toBeNull();
+      // Expired permissions are now excluded at the query level
+      expect(result).toBeNull();
     });
   });
 

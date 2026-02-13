@@ -97,6 +97,9 @@ vi.mock('@pagespace/db', () => {
     },
     eq: vi.fn(),
     and: vi.fn(),
+    or: vi.fn(),
+    isNull: vi.fn(),
+    gt: vi.fn(),
     inArray: vi.fn(),
   };
 });

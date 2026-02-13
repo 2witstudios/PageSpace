@@ -1,4 +1,4 @@
-import { db, and, eq, inArray } from '@pagespace/db';
+import { db, and, eq, or, isNull, gt, inArray } from '@pagespace/db';
 import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
 import { PermissionCache, PermissionLevel } from '../services/permission-cache';
 import { loggers } from '../logging/logger-config';
@@ -116,18 +116,19 @@ export async function getUserAccessLevel(
           loggers.api.debug(`[PERMISSIONS] User is drive admin - granting full access`);
         }
       } else {
-        // Check direct page permissions
+        // Check direct page permissions (excluding expired)
         const permission = await db.select()
           .from(pagePermissions)
           .where(and(
             eq(pagePermissions.pageId, pageId),
-            eq(pagePermissions.userId, userId)
+            eq(pagePermissions.userId, userId),
+            or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
           ))
           .limit(1);
 
         if (permission.length === 0) {
           if (!silent) {
-            loggers.api.debug(`[PERMISSIONS] No explicit permissions found - denying access`);
+            loggers.api.debug(`[PERMISSIONS] No explicit permissions found (or expired) - denying access`);
           }
           return null;
         }
@@ -257,14 +258,15 @@ export async function getUserDriveAccess(
       loggers.api.debug('[DRIVE_ACCESS] User is not a drive member - checking page permissions');
     }
 
-    // Check if user has any page permissions in this drive
+    // Check if user has any page permissions in this drive (excluding expired)
     const pageAccess = await db.select({ id: pagePermissions.id })
       .from(pagePermissions)
       .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
       .where(and(
         eq(pages.driveId, driveData.id),
         eq(pagePermissions.userId, userId),
-        eq(pagePermissions.canView, true)
+        eq(pagePermissions.canView, true),
+        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
       ))
       .limit(1);
 
@@ -464,7 +466,8 @@ export async function getBatchPagePermissions(
     .leftJoin(drives, eq(pages.driveId, drives.id))
     .leftJoin(pagePermissions, and(
       eq(pagePermissions.pageId, pages.id),
-      eq(pagePermissions.userId, userId)
+      eq(pagePermissions.userId, userId),
+      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
     ))
     .where(inArray(pages.id, uncachedPageIds));
 

@@ -1,4 +1,4 @@
-import { db, and, eq } from '@pagespace/db';
+import { db, and, eq, or, isNull, gt } from '@pagespace/db';
 import { pages, drives, driveMembers, pagePermissions } from '@pagespace/db';
 import { loggers } from '../logging/logger-config';
 import { parseUserId, parsePageId } from '../validators';
@@ -28,13 +28,14 @@ export async function getDriveIdsForUser(userId: string): Promise<string[]> {
     driveIdSet.add(membership.driveId);
   }
 
-  // 3. Get drives where user has page permissions
+  // 3. Get drives where user has page permissions (excluding expired)
   const pageDrives = await db.select({ driveId: pages.driveId })
     .from(pagePermissions)
     .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
     .where(and(
       eq(pagePermissions.userId, userId),
-      eq(pagePermissions.canView, true)
+      eq(pagePermissions.canView, true),
+      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
     ));
 
   for (const page of pageDrives) {
@@ -152,18 +153,19 @@ export async function getUserAccessLevel(
       loggers.api.debug(`[PERMISSIONS] User is NOT drive owner or admin - checking explicit permissions`);
     }
 
-    // 4. Check direct page permissions
+    // 4. Check direct page permissions (excluding expired)
     const permission = await db.select()
       .from(pagePermissions)
       .where(and(
         eq(pagePermissions.pageId, validPageId),
-        eq(pagePermissions.userId, validUserId)
+        eq(pagePermissions.userId, validUserId),
+        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
       ))
       .limit(1);
 
     if (permission.length === 0) {
       if (!silent) {
-        loggers.api.debug(`[PERMISSIONS] No explicit permissions found - denying access`);
+        loggers.api.debug(`[PERMISSIONS] No explicit permissions found (or expired) - denying access`);
       }
       return null; // No access
     }
@@ -331,14 +333,15 @@ export async function getUserAccessiblePagesInDrive(
     return allPages.map((page: { id: string }) => page.id);
   }
 
-  // Get pages with explicit permissions
+  // Get pages with explicit permissions (excluding expired)
   const permissions = await db.select({ pageId: pagePermissions.pageId })
     .from(pagePermissions)
     .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
     .where(and(
       eq(pagePermissions.userId, userId),
       eq(pages.driveId, driveId),
-      eq(pagePermissions.canView, true)
+      eq(pagePermissions.canView, true),
+      or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
     ));
 
   return permissions.map((entry: { pageId: string }) => entry.pageId);
@@ -443,7 +446,8 @@ export async function getUserAccessiblePagesInDriveWithDetails(
     eq(pages.driveId, driveId),
     eq(pages.isTrashed, false),
     eq(pagePermissions.userId, userId),
-    eq(pagePermissions.canView, true)
+    eq(pagePermissions.canView, true),
+    or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
   ));
 
   return pagesWithPermissions.map((page): PageWithPermissions => ({
@@ -529,14 +533,15 @@ export async function getUserDriveAccess(
       loggers.api.debug('[DRIVE_ACCESS] User is not a drive member - checking page permissions');
     }
 
-    // Check if user has any page permissions in this drive
+    // Check if user has any page permissions in this drive (excluding expired)
     const pageAccess = await db.select({ id: pagePermissions.id })
       .from(pagePermissions)
       .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
       .where(and(
         eq(pages.driveId, driveData.id),
         eq(pagePermissions.userId, userId),
-        eq(pagePermissions.canView, true)
+        eq(pagePermissions.canView, true),
+        or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
       ))
       .limit(1);
 
