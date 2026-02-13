@@ -4,29 +4,29 @@
 
 ## Current Focus
 
-**Issue #644**: [SEO] Meta tags and Open Graph (P0)
+**Issue #643**: [SEO] Schema.org structured data (P0)
 
-Comprehensive meta tags and Open Graph for all pages.
+Implement Schema.org structured data for rich search results.
 
 ## Next 3 Issues
 
-1. **#644** [SEO] Meta tags and Open Graph (P0) - CURRENT
-2. **#643** [SEO] Schema.org structured data (P0)
-3. **#646** [Landing] Hero section (P1)
+1. **#643** [SEO] Schema.org structured data (P0) - CURRENT
+2. **#646** [Landing] Hero section (P1)
+3. **#647** [Landing] AI architecture section (P1)
 
 ## Progress Summary
 
 | Epic | Done | Total | % |
 |------|------|-------|---|
 | Site Architecture | 1 | 4 | 25% |
-| SEO Foundation | 1 | 4 | 25% |
+| SEO Foundation | 2 | 4 | 50% |
 | Landing Page Redesign | 0 | 7 | 0% |
 | Remotion Video System | 0 | 6 | 0% |
 | Downloads Hub | 0 | 4 | 0% |
 | Pricing Page | 0 | 2 | 0% |
 | Product Tour | 0 | 1 | 0% |
 | Integrations Page | 0 | 2 | 0% |
-| **TOTAL** | **2** | **41*** | **5%** |
+| **TOTAL** | **3** | **41*** | **7%** |
 
 *Note: 11 remaining issues from content infrastructure epics not yet counted
 
