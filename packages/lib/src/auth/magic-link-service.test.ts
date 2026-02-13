@@ -35,6 +35,7 @@ describe('Magic Link Service', () => {
       provider: 'email',
       role: 'user',
       tokenVersion: 1,
+      emailVerified: new Date(),
     }).returning();
     testUserId = user.id;
   });
