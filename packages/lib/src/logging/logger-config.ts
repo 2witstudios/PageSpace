@@ -172,7 +172,7 @@ export function logDatabaseQuery(
  * Log authentication events
  */
 export function logAuthEvent(
-  event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed',
+  event: 'login' | 'logout' | 'signup' | 'refresh' | 'failed' | 'magic_link_login',
   userId?: string,
   email?: string,
   ip?: string,
@@ -201,7 +201,9 @@ export function logSecurityEvent(
          'login_csrf_missing' | 'login_csrf_mismatch' | 'login_csrf_invalid' |
          'signup_csrf_missing' | 'signup_csrf_mismatch' | 'signup_csrf_invalid' |
          'origin_validation_failed' | 'origin_validation_warning' |
-         'account_locked_login_attempt' | 'admin_role_version_mismatch',
+         'account_locked_login_attempt' | 'admin_role_version_mismatch' |
+         'magic_link_csrf_missing' | 'magic_link_csrf_mismatch' | 'magic_link_csrf_invalid' |
+         'magic_link_rate_limit_ip' | 'magic_link_rate_limit_email' | 'magic_link_suspended_user',
   details: LogInput
 ): void {
   loggers.security.warn(`Security event: ${event}`, details);
