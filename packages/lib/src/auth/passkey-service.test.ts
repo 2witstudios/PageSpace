@@ -25,8 +25,9 @@ vi.mock('@simplewebauthn/server', () => ({
     timeout: 60000,
     attestation: 'none',
     authenticatorSelection: {
-      residentKey: 'preferred',
-      userVerification: 'preferred',
+      residentKey: options?.authenticatorSelection?.residentKey || 'required',
+      requireResidentKey: options?.authenticatorSelection?.requireResidentKey || true,
+      userVerification: options?.authenticatorSelection?.userVerification || 'required',
     },
     // Return excludeCredentials if provided (this is what the real library does)
     excludeCredentials: options?.excludeCredentials || [],
@@ -36,7 +37,7 @@ vi.mock('@simplewebauthn/server', () => ({
     timeout: 60000,
     rpId: 'localhost',
     allowCredentials: options?.allowCredentials || [],
-    userVerification: 'preferred',
+    userVerification: options?.userVerification || 'required',
   })),
   verifyRegistrationResponse: vi.fn().mockResolvedValue({
     verified: true,
@@ -67,6 +68,8 @@ import {
   listUserPasskeys,
   deletePasskey,
   updatePasskeyName,
+  generateRegistrationOptionsForSignup,
+  verifySignupRegistration,
   PASSKEY_CONFIG,
 } from './passkey-service';
 
@@ -803,6 +806,302 @@ describe('Passkey Service', () => {
           should: 'return VALIDATION_FAILED error',
           actual: result.error.code,
           expected: 'VALIDATION_FAILED',
+        });
+      }
+    });
+  });
+
+  describe('generateRegistrationOptionsForSignup', () => {
+    const signupEmail = `passkey-signup-${Date.now()}@example.com`;
+    const signupName = 'Test Signup User';
+
+    afterEach(async () => {
+      // Clean up any signup challenges
+      await db.delete(verificationTokens).where(eq(verificationTokens.type, 'webauthn_signup'));
+      // Clean up any users created during signup tests
+      await db.delete(users).where(eq(users.email, signupEmail.toLowerCase()));
+    });
+
+    it('generates registration options for new email', async () => {
+      const result = await generateRegistrationOptionsForSignup({
+        email: signupEmail,
+        name: signupName,
+      });
+
+      assert({
+        given: 'a new email for signup',
+        should: 'return ok: true',
+        actual: result.ok,
+        expected: true,
+      });
+
+      if (result.ok) {
+        assert({
+          given: 'a new email for signup',
+          should: 'return options with challenge',
+          actual: typeof result.data.options.challenge,
+          expected: 'string',
+        });
+
+        assert({
+          given: 'a new email for signup',
+          should: 'return a challengeId',
+          actual: typeof result.data.challengeId,
+          expected: 'string',
+        });
+      }
+    });
+
+    it('stores challenge for verification', async () => {
+      const result = await generateRegistrationOptionsForSignup({
+        email: signupEmail,
+        name: signupName,
+      });
+
+      if (!result.ok) throw new Error('Expected success');
+
+      const storedChallenge = await db.query.verificationTokens.findFirst({
+        where: eq(verificationTokens.type, 'webauthn_signup'),
+      });
+
+      assert({
+        given: 'generated signup options',
+        should: 'store challenge in database',
+        actual: storedChallenge !== undefined,
+        expected: true,
+      });
+    });
+
+    it('returns error for existing email', async () => {
+      // Use the existing test user's email
+      const result = await generateRegistrationOptionsForSignup({
+        email: testUserEmail,
+        name: 'Existing User',
+      });
+
+      assert({
+        given: 'an existing email',
+        should: 'return ok: false',
+        actual: result.ok,
+        expected: false,
+      });
+
+      if (!result.ok) {
+        assert({
+          given: 'an existing email',
+          should: 'return EMAIL_EXISTS error',
+          actual: result.error.code,
+          expected: 'EMAIL_EXISTS',
+        });
+      }
+    });
+
+    it('validates email format', async () => {
+      const result = await generateRegistrationOptionsForSignup({
+        email: 'invalid-email',
+        name: signupName,
+      });
+
+      assert({
+        given: 'an invalid email',
+        should: 'return ok: false',
+        actual: result.ok,
+        expected: false,
+      });
+
+      if (!result.ok) {
+        assert({
+          given: 'an invalid email',
+          should: 'return VALIDATION_FAILED error',
+          actual: result.error.code,
+          expected: 'VALIDATION_FAILED',
+        });
+      }
+    });
+  });
+
+  describe('verifySignupRegistration', () => {
+    const signupEmail = `passkey-verify-signup-${Date.now()}@example.com`;
+    const signupName = 'Test Verify Signup User';
+
+    afterEach(async () => {
+      // Clean up any signup challenges
+      await db.delete(verificationTokens).where(eq(verificationTokens.type, 'webauthn_signup'));
+      // Clean up any users and passkeys created during signup tests
+      const createdUser = await db.query.users.findFirst({
+        where: eq(users.email, signupEmail.toLowerCase()),
+      });
+      if (createdUser) {
+        await db.delete(passkeys).where(eq(passkeys.userId, createdUser.id));
+        await db.delete(users).where(eq(users.id, createdUser.id));
+      }
+    });
+
+    it('creates user and passkey on successful verification', async () => {
+      // Generate options first
+      const optionsResult = await generateRegistrationOptionsForSignup({
+        email: signupEmail,
+        name: signupName,
+      });
+      if (!optionsResult.ok) throw new Error('Setup failed');
+
+      const mockResponse = {
+        id: 'mock-credential-id',
+        rawId: 'mock-credential-id',
+        response: {
+          clientDataJSON: 'mock-client-data',
+          attestationObject: 'mock-attestation',
+        },
+        type: 'public-key' as const,
+        clientExtensionResults: {},
+        authenticatorAttachment: 'platform' as const,
+      };
+
+      const result = await verifySignupRegistration({
+        email: signupEmail,
+        name: signupName,
+        response: mockResponse,
+        expectedChallenge: optionsResult.data.options.challenge,
+        acceptedTos: true,
+      });
+
+      assert({
+        given: 'a valid signup registration response',
+        should: 'return ok: true',
+        actual: result.ok,
+        expected: true,
+      });
+
+      if (result.ok) {
+        // Verify user was created
+        const createdUser = await db.query.users.findFirst({
+          where: eq(users.email, signupEmail.toLowerCase()),
+        });
+
+        assert({
+          given: 'successful signup verification',
+          should: 'create user in database',
+          actual: createdUser !== undefined,
+          expected: true,
+        });
+
+        assert({
+          given: 'successful signup verification',
+          should: 'set provider to email',
+          actual: createdUser?.provider,
+          expected: 'email',
+        });
+
+        assert({
+          given: 'successful signup verification',
+          should: 'mark email as verified',
+          actual: createdUser?.emailVerified !== null,
+          expected: true,
+        });
+
+        // Verify passkey was created
+        const createdPasskey = await db.query.passkeys.findFirst({
+          where: eq(passkeys.userId, result.data.userId),
+        });
+
+        assert({
+          given: 'successful signup verification',
+          should: 'create passkey in database',
+          actual: createdPasskey !== undefined,
+          expected: true,
+        });
+      }
+    });
+
+    it('returns error for TOS not accepted', async () => {
+      const optionsResult = await generateRegistrationOptionsForSignup({
+        email: signupEmail,
+        name: signupName,
+      });
+      if (!optionsResult.ok) throw new Error('Setup failed');
+
+      const mockResponse = {
+        id: 'mock-credential-id',
+        rawId: 'mock-credential-id',
+        response: {
+          clientDataJSON: 'mock-client-data',
+          attestationObject: 'mock-attestation',
+        },
+        type: 'public-key' as const,
+        clientExtensionResults: {},
+        authenticatorAttachment: 'platform' as const,
+      };
+
+      const result = await verifySignupRegistration({
+        email: signupEmail,
+        name: signupName,
+        response: mockResponse,
+        expectedChallenge: optionsResult.data.options.challenge,
+        acceptedTos: false,
+      });
+
+      assert({
+        given: 'TOS not accepted',
+        should: 'return ok: false',
+        actual: result.ok,
+        expected: false,
+      });
+
+      if (!result.ok) {
+        assert({
+          given: 'TOS not accepted',
+          should: 'return VALIDATION_FAILED error',
+          actual: result.error.code,
+          expected: 'VALIDATION_FAILED',
+        });
+      }
+    });
+
+    it('returns error for expired challenge', async () => {
+      const optionsResult = await generateRegistrationOptionsForSignup({
+        email: signupEmail,
+        name: signupName,
+      });
+      if (!optionsResult.ok) throw new Error('Setup failed');
+
+      // Expire the challenge
+      await db.update(verificationTokens)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(verificationTokens.type, 'webauthn_signup'));
+
+      const mockResponse = {
+        id: 'mock-credential-id',
+        rawId: 'mock-credential-id',
+        response: {
+          clientDataJSON: 'mock-client-data',
+          attestationObject: 'mock-attestation',
+        },
+        type: 'public-key' as const,
+        clientExtensionResults: {},
+        authenticatorAttachment: 'platform' as const,
+      };
+
+      const result = await verifySignupRegistration({
+        email: signupEmail,
+        name: signupName,
+        response: mockResponse,
+        expectedChallenge: optionsResult.data.options.challenge,
+        acceptedTos: true,
+      });
+
+      assert({
+        given: 'an expired challenge',
+        should: 'return ok: false',
+        actual: result.ok,
+        expected: false,
+      });
+
+      if (!result.ok) {
+        assert({
+          given: 'an expired challenge',
+          should: 'return CHALLENGE_EXPIRED error',
+          actual: result.error.code,
+          expected: 'CHALLENGE_EXPIRED',
         });
       }
     });

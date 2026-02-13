@@ -71,6 +71,22 @@ const updateNameSchema = z.object({
   name: z.string().min(1).max(PASSKEY_CONFIG.maxNameLength),
 });
 
+const generateSignupRegOptionsSchema = z.object({
+  email: z.string().email(),
+  name: z.string().min(1).max(255),
+});
+
+const verifySignupRegSchema = z.object({
+  email: z.string().email(),
+  name: z.string().min(1).max(255),
+  response: z.any(), // RegistrationResponseJSON validated by simplewebauthn
+  expectedChallenge: z.string().min(1),
+  passkeyName: z.string().max(PASSKEY_CONFIG.maxNameLength).optional(),
+  acceptedTos: z.boolean().refine((val) => val === true, {
+    message: 'You must accept the Terms of Service',
+  }),
+});
+
 // Result types following zero-trust pattern
 export type PasskeyError =
   | { code: 'VALIDATION_FAILED'; message: string }
@@ -83,7 +99,8 @@ export type PasskeyError =
   | { code: 'VERIFICATION_FAILED'; message: string }
   | { code: 'CREDENTIAL_NOT_FOUND' }
   | { code: 'COUNTER_REPLAY_DETECTED' }
-  | { code: 'PASSKEY_NOT_FOUND' };
+  | { code: 'PASSKEY_NOT_FOUND' }
+  | { code: 'EMAIL_EXISTS' };
 
 export type GenerateRegOptionsResult =
   | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>> } }
@@ -111,6 +128,14 @@ export type DeletePasskeyResult =
 
 export type UpdateNameResult =
   | { ok: true; data: { updated: boolean } }
+  | { ok: false; error: PasskeyError };
+
+export type GenerateSignupRegOptionsResult =
+  | { ok: true; data: { options: Awaited<ReturnType<typeof simpleGenerateRegistrationOptions>>; challengeId: string } }
+  | { ok: false; error: PasskeyError };
+
+export type VerifySignupRegistrationResult =
+  | { ok: true; data: { userId: string; passkeyId: string } }
   | { ok: false; error: PasskeyError };
 
 export interface PasskeyInfo {
@@ -169,7 +194,7 @@ export async function generateRegistrationOptions(
     transports: (pk.transports as AuthenticatorTransportFuture[]) || undefined,
   }));
 
-  // Generate options
+  // Generate options with discoverable credentials (required for true passwordless)
   const options = await simpleGenerateRegistrationOptions({
     rpName: PASSKEY_CONFIG.rpName,
     rpID: PASSKEY_CONFIG.rpId,
@@ -178,8 +203,9 @@ export async function generateRegistrationOptions(
     attestationType: 'none',
     excludeCredentials,
     authenticatorSelection: {
-      residentKey: 'preferred',
-      userVerification: 'preferred',
+      residentKey: 'required',
+      requireResidentKey: true,
+      userVerification: 'required',
     },
     timeout: PASSKEY_CONFIG.timeout,
   });
@@ -347,7 +373,7 @@ export async function generateAuthenticationOptions(
 
   const options = await simpleGenerateAuthenticationOptions({
     rpID: PASSKEY_CONFIG.rpId,
-    userVerification: 'preferred',
+    userVerification: 'required',
     timeout: PASSKEY_CONFIG.timeout,
     allowCredentials,
   });
@@ -631,4 +657,217 @@ export async function updatePasskeyName(input: unknown): Promise<UpdateNameResul
   }
 
   return { ok: true, data: { updated: true } };
+}
+
+/**
+ * Generate WebAuthn registration options for new user signup.
+ * Unlike generateRegistrationOptions, this doesn't require an existing user.
+ * The challenge is stored against the system user with email metadata.
+ */
+export async function generateRegistrationOptionsForSignup(
+  input: unknown
+): Promise<GenerateSignupRegOptionsResult> {
+  const parsed = generateSignupRegOptionsSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION_FAILED', message: parsed.error.issues[0]?.message ?? 'Invalid input' },
+    };
+  }
+
+  const { email, name } = parsed.data;
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // Check if user already exists
+  const existingUser = await db.query.users.findFirst({
+    where: eq(users.email, normalizedEmail),
+    columns: { id: true },
+  });
+
+  if (existingUser) {
+    return { ok: false, error: { code: 'EMAIL_EXISTS' } };
+  }
+
+  // Generate options with email as userName (user doesn't exist yet)
+  const options = await simpleGenerateRegistrationOptions({
+    rpName: PASSKEY_CONFIG.rpName,
+    rpID: PASSKEY_CONFIG.rpId,
+    userName: normalizedEmail,
+    userDisplayName: name,
+    attestationType: 'none',
+    authenticatorSelection: {
+      residentKey: 'required',
+      requireResidentKey: true,
+      userVerification: 'required',
+    },
+    timeout: PASSKEY_CONFIG.timeout,
+  });
+
+  // Clean up old unused signup challenges for this email
+  // We use a deterministic ID based on email hash to enable cleanup
+  const emailHash = hashToken(normalizedEmail);
+  await db
+    .delete(verificationTokens)
+    .where(
+      and(
+        eq(verificationTokens.userId, PASSKEY_CONFIG.systemUserId),
+        eq(verificationTokens.type, 'webauthn_signup'),
+        eq(verificationTokens.tokenPrefix, emailHash.substring(0, 12))
+      )
+    );
+
+  // Store challenge hash with email metadata
+  const challengeId = createId();
+  const challengeHash = hashToken(options.challenge);
+  const expiresAt = new Date(Date.now() + PASSKEY_CONFIG.challengeExpiryMinutes * 60 * 1000);
+
+  await db.insert(verificationTokens).values({
+    id: challengeId,
+    userId: PASSKEY_CONFIG.systemUserId,
+    tokenHash: challengeHash,
+    tokenPrefix: emailHash.substring(0, 12), // Store email hash prefix for cleanup
+    type: 'webauthn_signup',
+    expiresAt,
+    metadata: JSON.stringify({ email: normalizedEmail, name }),
+  });
+
+  return { ok: true, data: { options, challengeId } };
+}
+
+/**
+ * Verify signup registration response and create user + passkey atomically.
+ */
+export async function verifySignupRegistration(input: unknown): Promise<VerifySignupRegistrationResult> {
+  const parsed = verifySignupRegSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION_FAILED', message: parsed.error.issues[0]?.message ?? 'Invalid input' },
+    };
+  }
+
+  const { email, name, response, expectedChallenge, passkeyName } = parsed.data;
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // Look up challenge
+  const challengeHash = hashToken(expectedChallenge);
+  const challenge = await db.query.verificationTokens.findFirst({
+    where: and(
+      eq(verificationTokens.tokenHash, challengeHash),
+      eq(verificationTokens.type, 'webauthn_signup')
+    ),
+  });
+
+  if (!challenge) {
+    return { ok: false, error: { code: 'CHALLENGE_NOT_FOUND' } };
+  }
+
+  if (challenge.usedAt) {
+    return { ok: false, error: { code: 'CHALLENGE_ALREADY_USED' } };
+  }
+
+  if (challenge.expiresAt < new Date()) {
+    return { ok: false, error: { code: 'CHALLENGE_EXPIRED' } };
+  }
+
+  // Verify email matches challenge metadata
+  const metadata = challenge.metadata ? JSON.parse(challenge.metadata as string) : {};
+  if (metadata.email !== normalizedEmail) {
+    return { ok: false, error: { code: 'VALIDATION_FAILED', message: 'Email mismatch' } };
+  }
+
+  // Double-check email doesn't exist (race condition protection)
+  const existingUser = await db.query.users.findFirst({
+    where: eq(users.email, normalizedEmail),
+    columns: { id: true },
+  });
+
+  if (existingUser) {
+    return { ok: false, error: { code: 'EMAIL_EXISTS' } };
+  }
+
+  // Mark challenge as used atomically
+  const updateResult = await db
+    .update(verificationTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(verificationTokens.id, challenge.id),
+        isNull(verificationTokens.usedAt)
+      )
+    )
+    .returning();
+
+  if (updateResult.length === 0) {
+    return { ok: false, error: { code: 'CHALLENGE_ALREADY_USED' } };
+  }
+
+  // Verify registration with SimpleWebAuthn
+  let verification;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: response as RegistrationResponseJSON,
+      expectedChallenge,
+      expectedOrigin: PASSKEY_CONFIG.origin,
+      expectedRPID: PASSKEY_CONFIG.rpId,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: { code: 'VERIFICATION_FAILED', message: error instanceof Error ? error.message : 'Unknown error' },
+    };
+  }
+
+  if (!verification.verified || !verification.registrationInfo) {
+    return { ok: false, error: { code: 'VERIFICATION_FAILED', message: 'Verification failed' } };
+  }
+
+  const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+
+  // Create user and passkey atomically
+  const userId = createId();
+  const passkeyId = createId();
+  const publicKeyBase64 = Buffer.from(credential.publicKey).toString('base64url');
+
+  try {
+    // Create user (no password - passwordless signup)
+    // Provider is 'email' since passkey auth is email-based (similar to magic link)
+    await db.insert(users).values({
+      id: userId,
+      name,
+      email: normalizedEmail,
+      provider: 'email',
+      role: 'user',
+      tokenVersion: 1,
+      emailVerified: new Date(), // Passkey signup = verified (device ownership proven)
+      tosAcceptedAt: new Date(),
+    });
+
+    // Create passkey
+    await db.insert(passkeys).values({
+      id: passkeyId,
+      userId,
+      credentialId: credential.id,
+      publicKey: publicKeyBase64,
+      counter: credential.counter,
+      deviceType: credentialDeviceType,
+      backedUp: credentialBackedUp,
+      transports: (response as RegistrationResponseJSON).response.transports || null,
+      name: passkeyName || null,
+    });
+  } catch (error: unknown) {
+    // Handle unique constraint violation - email was taken during our verification
+    const isConstraintViolation =
+      error instanceof Error &&
+      (error.message.includes('unique constraint') ||
+        error.message.includes('duplicate key') ||
+        error.message.includes('UNIQUE constraint'));
+
+    if (isConstraintViolation) {
+      return { ok: false, error: { code: 'EMAIL_EXISTS' } };
+    }
+    throw error;
+  }
+
+  return { ok: true, data: { userId, passkeyId } };
 }

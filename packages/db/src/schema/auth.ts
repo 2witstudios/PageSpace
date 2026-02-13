@@ -135,10 +135,12 @@ export const verificationTokens = pgTable('verification_tokens', {
   tokenHash: text('tokenHash').unique().notNull(),
   tokenPrefix: text('tokenPrefix').notNull(),
 
-  type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link'
+  type: text('type').notNull(), // 'email_verification' | 'password_reset' | 'magic_link' | 'webauthn_signup'
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   usedAt: timestamp('usedAt', { mode: 'date' }),
+  // Optional JSON metadata for extended token data (e.g., signup email/name)
+  metadata: text('metadata'),
 }, (table) => {
   return {
     userIdx: index('verification_tokens_user_id_idx').on(table.userId),
