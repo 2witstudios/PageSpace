@@ -12,7 +12,7 @@ import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 
 const sendMagicLinkSchema = z.object({
-  email: z.email('Please enter a valid email address'),
+  email: z.email({ message: 'Please enter a valid email address' }),
 });
 
 /** Mask email to prevent PII in logs (e.g., john@example.com -> jo***@example.com) */
@@ -74,7 +74,15 @@ export async function POST(req: Request) {
     }
 
     // Validate request body
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json(
+        { error: 'Invalid request body' },
+        { status: 400 }
+      );
+    }
     const validation = sendMagicLinkSchema.safeParse(body);
 
     if (!validation.success) {

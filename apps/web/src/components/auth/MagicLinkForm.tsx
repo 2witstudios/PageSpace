@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +14,7 @@ interface MagicLinkFormProps {
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
 export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [formState, setFormState] = useState<FormState>('input');
   const [error, setError] = useState<string | null>(null);
@@ -131,8 +132,7 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
     setError(null);
     // Use setTimeout to ensure state updates before submit
     setTimeout(() => {
-      const form = document.querySelector('form') as HTMLFormElement;
-      if (form) form.requestSubmit();
+      formRef.current?.requestSubmit();
     }, 0);
   }, [cooldownSeconds]);
 
@@ -195,7 +195,7 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
 
   // Input state - show form
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
       <div className="grid gap-2">
         <Label htmlFor="magic-link-email">Email</Label>
         <div className="relative">
