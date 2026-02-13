@@ -30,6 +30,9 @@ vi.mock('@/lib/auth', () => ({
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/server', () => ({
   canUserEditPage: vi.fn(),
+  conversationCache: {
+    invalidateConversation: vi.fn().mockResolvedValue(undefined),
+  },
   loggers: {
     api: {
       info: vi.fn(),
