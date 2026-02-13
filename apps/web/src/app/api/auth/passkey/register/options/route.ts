@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { generateRegistrationOptions, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -36,9 +36,10 @@ export async function POST(req: Request) {
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        loggers.auth.warn('CSRF validation failed for passkey registration', {
+        logSecurityEvent('passkey_csrf_invalid', {
           userId,
           ip: clientIP,
+          flow: 'register_options',
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -55,7 +56,7 @@ export async function POST(req: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      loggers.auth.warn('Passkey registration rate limited', {
+      logSecurityEvent('passkey_rate_limit_register', {
         userId,
         ip: clientIP,
         retryAfter: rateLimitResult.retryAfter,
@@ -98,6 +99,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       options: result.data.options,
+    }, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
     });
 
   } catch (error) {

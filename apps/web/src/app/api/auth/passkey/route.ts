@@ -43,6 +43,8 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       passkeys: result.data.passkeys,
+    }, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
     });
 
   } catch (error) {

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { deletePasskey, updatePasskeyName, validateCSRFToken } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   authenticateSessionRequest,
@@ -42,10 +42,11 @@ export async function DELETE(
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        loggers.auth.warn('CSRF validation failed for passkey deletion', {
+        logSecurityEvent('passkey_csrf_invalid', {
           userId,
           passkeyId,
           ip: clientIP,
+          flow: 'delete',
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },
@@ -130,10 +131,11 @@ export async function PATCH(
     if (!hasBearerAuth && sessionId) {
       const csrfToken = req.headers.get('x-csrf-token');
       if (!csrfToken || !validateCSRFToken(csrfToken, sessionId)) {
-        loggers.auth.warn('CSRF validation failed for passkey update', {
+        logSecurityEvent('passkey_csrf_invalid', {
           userId,
           passkeyId,
           ip: clientIP,
+          flow: 'update',
         });
         return NextResponse.json(
           { error: 'Invalid CSRF token' },

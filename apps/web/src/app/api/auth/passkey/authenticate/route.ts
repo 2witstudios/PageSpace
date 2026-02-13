@@ -6,7 +6,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     );
 
     if (!rateLimitResult.allowed) {
-      loggers.auth.warn('Passkey auth verification rate limited', {
+      logSecurityEvent('passkey_rate_limit_auth', {
         ip: clientIP,
         retryAfter: rateLimitResult.retryAfter,
       });
@@ -65,8 +65,9 @@ export async function POST(req: Request) {
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
-      loggers.auth.warn('Login CSRF validation failed for passkey auth', {
+      logSecurityEvent('passkey_csrf_invalid', {
         ip: clientIP,
+        flow: 'authenticate',
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -153,6 +154,7 @@ export async function POST(req: Request) {
 
     // Build response headers with session cookie
     const headers = new Headers();
+    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     appendSessionCookie(headers, sessionToken);
 
     // Add CSRF token cookie for client to retrieve

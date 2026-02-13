@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth';
-import { loggers } from '@pagespace/lib/server';
+import { loggers, logSecurityEvent } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -32,7 +32,7 @@ export async function POST(req: Request) {
     );
 
     if (!ipRateLimitResult.allowed) {
-      loggers.auth.warn('Passkey signup options rate limited by IP', {
+      logSecurityEvent('passkey_rate_limit_signup_ip', {
         ip: clientIP,
         retryAfter: ipRateLimitResult.retryAfter,
       });
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
     );
 
     if (!emailRateLimitResult.allowed) {
-      loggers.auth.warn('Passkey signup options rate limited by email', {
+      logSecurityEvent('passkey_rate_limit_signup_email', {
         email: normalizedEmail.substring(0, 3) + '***',
         retryAfter: emailRateLimitResult.retryAfter,
       });
@@ -76,9 +76,10 @@ export async function POST(req: Request) {
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
-      loggers.auth.warn('Login CSRF validation failed for passkey signup', {
+      logSecurityEvent('passkey_csrf_invalid', {
         ip: clientIP,
         email: normalizedEmail.substring(0, 3) + '***',
+        flow: 'signup_options',
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -120,6 +121,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       options: result.data.options,
       challengeId: result.data.challengeId,
+    }, {
+      headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
     });
 
   } catch (error) {

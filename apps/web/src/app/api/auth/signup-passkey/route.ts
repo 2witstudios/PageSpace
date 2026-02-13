@@ -7,7 +7,7 @@ import {
   generateCSRFToken,
   SESSION_DURATION_MS,
 } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, logSecurityEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import {
   checkDistributedRateLimit,
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
     );
 
     if (!ipRateLimitResult.allowed) {
-      loggers.auth.warn('Passkey signup verification rate limited by IP', {
+      logSecurityEvent('passkey_rate_limit_signup_ip', {
         ip: clientIP,
         retryAfter: ipRateLimitResult.retryAfter,
       });
@@ -81,7 +81,7 @@ export async function POST(req: Request) {
     );
 
     if (!emailRateLimitResult.allowed) {
-      loggers.auth.warn('Passkey signup verification rate limited by email', {
+      logSecurityEvent('passkey_rate_limit_signup_email', {
         email: email.substring(0, 3) + '***',
         retryAfter: emailRateLimitResult.retryAfter,
       });
@@ -93,9 +93,10 @@ export async function POST(req: Request) {
 
     // Verify login CSRF token
     if (!validateLoginCSRFToken(csrfToken)) {
-      loggers.auth.warn('Login CSRF validation failed for passkey signup', {
+      logSecurityEvent('passkey_csrf_invalid', {
         ip: clientIP,
         email: email.substring(0, 3) + '***',
+        flow: 'signup',
       });
       return NextResponse.json(
         { error: 'Invalid CSRF token' },
@@ -209,6 +210,7 @@ export async function POST(req: Request) {
 
     // Build response headers with session cookie
     const headers = new Headers();
+    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     appendSessionCookie(headers, sessionToken);
 
     // Add CSRF token cookie for client to retrieve
