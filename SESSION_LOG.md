@@ -177,3 +177,36 @@ None
 None
 
 ---
+
+## Iteration 6 - 2026-02-13T09:40:00Z
+
+### Current Issue
+**#647**: [Landing] AI architecture section
+
+**Acceptance Criteria**:
+- [x] Clear explanation of Global vs Page agents
+- [x] Visual shows context hierarchy
+- [x] Differentiates from ChatGPT/Notion AI
+- [x] ICP example resonates
+
+### Actions
+- Added AI Architecture section to landing page
+- Created visual file tree showing:
+  - Global Assistant at top level
+  - Project-level AI agents (Marketing AI, Code Review AI)
+  - Document hierarchy with context flow indicator
+- Added 4 feature cards explaining:
+  - Global Assistant (personal, cross-workspace)
+  - Page Agents (file tree, custom prompts)
+  - Nested Context (hierarchical awareness)
+  - Team AI (multi-user collaboration)
+- Added ICP example quote from founder perspective
+- Section header with "AI that lives in your workspace" headline
+
+### Result
+**Issue #647 COMPLETE** - All acceptance criteria met
+
+### Blockers
+None
+
+---

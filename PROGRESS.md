@@ -4,15 +4,15 @@
 
 ## Current Focus
 
-**Issue #647**: [Landing] AI architecture section (P1)
+**Issue #648**: [Landing] Documents section (P1)
 
-Explain the core AI innovation: Global Assistant + Page Agents.
+Showcase document editing capabilities with AI.
 
 ## Next 3 Issues
 
-1. **#647** [Landing] AI architecture section (P1) - CURRENT
-2. **#648** [Landing] Documents section (P1)
-3. **#649** [Landing] Channels + DMs section (P1)
+1. **#648** [Landing] Documents section (P1) - CURRENT
+2. **#649** [Landing] Channels + DMs section (P1)
+3. **#650** [Landing] Tasks section (P1)
 
 ## Progress Summary
 
@@ -20,13 +20,13 @@ Explain the core AI innovation: Global Assistant + Page Agents.
 |------|------|-------|---|
 | Site Architecture | 1 | 4 | 25% |
 | SEO Foundation | 3 | 4 | 75% |
-| Landing Page Redesign | 1 | 7 | 14% |
+| Landing Page Redesign | 2 | 7 | 29% |
 | Remotion Video System | 0 | 6 | 0% |
 | Downloads Hub | 0 | 4 | 0% |
 | Pricing Page | 0 | 2 | 0% |
 | Product Tour | 0 | 1 | 0% |
 | Integrations Page | 0 | 2 | 0% |
-| **TOTAL** | **5** | **41*** | **12%** |
+| **TOTAL** | **6** | **41*** | **15%** |
 
 *Note: 11 remaining issues from content infrastructure epics not yet counted
 

@@ -1,13 +1,13 @@
 # Marketing & Pre-Onboarding Experience - Project Mirror
 
 > **Source of Truth**: https://github.com/users/2witstudios/projects/5
-> **Last Updated**: 2026-02-13T09:33:00Z
+> **Last Updated**: 2026-02-13T09:41:00Z
 
 ## Summary
 - **Total Items**: 41
-- **Done**: 5
+- **Done**: 6
 - **In Progress**: 0
-- **Todo**: 36
+- **Todo**: 35
 
 ---
 
@@ -43,7 +43,7 @@
 | # | Title | Status | PR |
 |---|-------|--------|-----|
 | 646 | [Landing] Hero section | Done | - |
-| 647 | [Landing] AI architecture section | Todo | - |
+| 647 | [Landing] AI architecture section | Done | - |
 | 648 | [Landing] Documents section | Todo | - |
 | 649 | [Landing] Channels + DMs section | Todo | - |
 | 650 | [Landing] Tasks section | Todo | - |
