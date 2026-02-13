@@ -178,6 +178,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   subscriptions: many(subscriptions),
   sessions: many(sessions),
   emailUnsubscribeTokens: many(emailUnsubscribeTokens),
+  passkeys: many(passkeys),
 }));
 
 export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({

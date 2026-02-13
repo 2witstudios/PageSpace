@@ -97,12 +97,14 @@ export function PasskeyLoginButton({
       const { redirectUrl } = await verifyRes.json();
 
       // Read the CSRF token from cookie (set by server)
+      // Use substring after first '=' to preserve any '=' chars in the token value
       const csrfCookie = document.cookie
         .split('; ')
         .find(row => row.startsWith('csrf_token='));
 
       if (csrfCookie) {
-        const newCsrfToken = csrfCookie.split('=')[1];
+        const eqIndex = csrfCookie.indexOf('=');
+        const newCsrfToken = csrfCookie.substring(eqIndex + 1);
         localStorage.setItem('csrfToken', newCsrfToken);
       }
 
@@ -233,12 +235,14 @@ export function useConditionalPasskeyUI(
       const { redirectUrl } = await verifyRes.json();
 
       // Read the CSRF token from cookie
+      // Use substring after first '=' to preserve any '=' chars in the token value
       const csrfCookie = document.cookie
         .split('; ')
         .find(row => row.startsWith('csrf_token='));
 
       if (csrfCookie) {
-        const newCsrfToken = csrfCookie.split('=')[1];
+        const eqIndex = csrfCookie.indexOf('=');
+        const newCsrfToken = csrfCookie.substring(eqIndex + 1);
         localStorage.setItem('csrfToken', newCsrfToken);
       }
 
