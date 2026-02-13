@@ -5,9 +5,9 @@
 
 ## Summary
 - **Total Items**: 41
-- **Done**: 12
+- **Done**: 16
 - **In Progress**: 0
-- **Todo**: 29
+- **Todo**: 25
 
 ---
 
@@ -71,8 +71,8 @@
 
 | # | Title | Status | PR |
 |---|-------|--------|-----|
-| 659 | [Downloads] Desktop apps page | Todo | - |
-| 660 | [Downloads] Mobile apps page | Todo | - |
+| 659 | [Downloads] Desktop apps page | Done | - |
+| 660 | [Downloads] Mobile apps page | Done | - |
 | 661 | [Downloads] App store assets | Todo | - |
 | 662 | [Downloads] Smart banners and deep links | Todo | - |
 
@@ -83,8 +83,8 @@
 
 | # | Title | Status | PR |
 |---|-------|--------|-----|
-| 663 | [Pricing] Comparison table | Todo | - |
-| 664 | [Pricing] Enterprise contact | Todo | - |
+| 663 | [Pricing] Comparison table | Done | - |
+| 664 | [Pricing] Enterprise contact | Done | - |
 
 ---
 

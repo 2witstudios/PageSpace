@@ -1,6 +1,7 @@
 import { Composition } from "remotion";
 import { SampleComposition } from "./compositions/Sample";
 import { HeroComposition } from "./compositions/Hero";
+import { DocumentEditingComposition } from "./compositions/DocumentEditing";
 import "./styles.css";
 
 // Shared design tokens
@@ -86,6 +87,30 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="HeroDark"
         component={HeroComposition}
+        durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          theme: "dark" as const,
+        }}
+      />
+
+      {/* Document Editing Composition */}
+      <Composition
+        id="DocumentEditing"
+        component={DocumentEditingComposition}
+        durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          theme: "light" as const,
+        }}
+      />
+      <Composition
+        id="DocumentEditingDark"
+        component={DocumentEditingComposition}
         durationInFrames={300}
         fps={30}
         width={1920}

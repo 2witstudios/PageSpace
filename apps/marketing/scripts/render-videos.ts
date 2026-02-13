@@ -21,6 +21,7 @@ import fs from "fs";
 const COMPOSITIONS = [
   { id: "Sample", light: "Sample", dark: "SampleDark" },
   { id: "Hero", light: "Hero", dark: "HeroDark" },
+  { id: "DocumentEditing", light: "DocumentEditing", dark: "DocumentEditingDark" },
 ];
 
 async function renderVideo(
