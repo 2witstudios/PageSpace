@@ -198,6 +198,7 @@ describe('Session Abuse Vectors', () => {
         id: 'session-valid',
         tokenHash: 'hash-valid',
         tokenVersion: 5,
+        adminRoleVersion: 0, // Session stores adminRoleVersion at creation time
         userId: 'user-123',
         type: 'user',
         scopes: ['files:read'],
@@ -268,6 +269,7 @@ describe('Session Abuse Vectors', () => {
         id: 'session-full',
         tokenHash: 'hash-full',
         tokenVersion: 1,
+        adminRoleVersion: 3, // Session stores adminRoleVersion at creation time
         userId: 'user-123',
         type: 'user',
         scopes: ['files:read', 'files:write'],
@@ -307,6 +309,7 @@ describe('Session Abuse Vectors', () => {
         id: 'session-minimal',
         tokenHash: 'hash-minimal',
         tokenVersion: 1,
+        adminRoleVersion: 0, // Session stores adminRoleVersion at creation time
         userId: 'user-123',
         type: 'user',
         scopes: [],

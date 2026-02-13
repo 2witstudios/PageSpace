@@ -133,17 +133,24 @@ describe('Zero-Trust Permission Boundaries', () => {
     it('given a page with expired permission, should deny access (DB filters expired rows)', async () => {
       // The query now includes: or(isNull(expiresAt), gt(expiresAt, now()))
       // This means the DB excludes expired rows, returning empty results.
-      mockSelectLimit
-        // First call: page lookup
-        .mockResolvedValueOnce([{
-          id: 'page-123',
-          driveId: 'drive-abc',
-          driveOwnerId: 'user-other',
-        }])
-        // Second call: admin membership check
-        .mockResolvedValueOnce([])
-        // Third call: explicit page permissions — empty because DB filtered out expired rows
-        .mockResolvedValueOnce([]);
+      let callCount = 0;
+      mockSelectLimit.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: page lookup - page exists with different owner
+          return Promise.resolve([{
+            id: 'page-123',
+            driveId: 'drive-abc',
+            driveOwnerId: 'user-other', // Different from 'user-requester'
+          }]);
+        } else if (callCount === 2) {
+          // Second call: admin membership check - not an admin
+          return Promise.resolve([]);
+        } else {
+          // Third call: explicit permissions - empty because DB filtered expired rows
+          return Promise.resolve([]);
+        }
+      });
 
       const result = await getUserAccessLevel('user-requester', 'page-123');
 
@@ -289,14 +296,25 @@ describe('Zero-Trust Permission Boundaries', () => {
 
   describe('permission hierarchy integrity', () => {
     it('given non-owner userId, should not receive owner-level permissions', async () => {
-      mockSelectLimit
-        .mockResolvedValueOnce([{
-          id: 'page-target',
-          driveId: 'drive-owner',
-          driveOwnerId: 'user-actual-owner',
-        }])
-        .mockResolvedValueOnce([])  // not admin
-        .mockResolvedValueOnce([]); // no explicit permissions
+      // Set up call counter to return different values on each call
+      let callCount = 0;
+      mockSelectLimit.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: page lookup - returns page with different owner
+          return Promise.resolve([{
+            id: 'page-target',
+            driveId: 'drive-owner',
+            driveOwnerId: 'user-actual-owner', // Different from 'user-different'
+          }]);
+        } else if (callCount === 2) {
+          // Second call: admin membership check - not an admin
+          return Promise.resolve([]);
+        } else {
+          // Third call: explicit permissions check - no permissions
+          return Promise.resolve([]);
+        }
+      });
 
       const result = await getUserAccessLevel('user-different', 'page-target');
       expect(result).toBeNull();
@@ -344,14 +362,25 @@ describe('Zero-Trust Permission Boundaries', () => {
 
   describe('drive owner impersonation prevention', () => {
     it('given a non-owner userId, should be denied access when no explicit permissions exist', async () => {
-      mockSelectLimit
-        .mockResolvedValueOnce([{
-          id: 'page-123',
-          driveId: 'drive-BBB',
-          driveOwnerId: 'user-other-owner',
-        }])
-        .mockResolvedValueOnce([])   // not admin
-        .mockResolvedValueOnce([]);  // no explicit permissions
+      // Set up call counter to return different values on each call
+      let callCount = 0;
+      mockSelectLimit.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: page lookup - returns page with different owner
+          return Promise.resolve([{
+            id: 'page-123',
+            driveId: 'drive-BBB',
+            driveOwnerId: 'user-other-owner', // Different from 'user-attacker'
+          }]);
+        } else if (callCount === 2) {
+          // Second call: admin membership check - not an admin
+          return Promise.resolve([]);
+        } else {
+          // Third call: explicit permissions check - no permissions
+          return Promise.resolve([]);
+        }
+      });
 
       const result = await getUserAccessLevel('user-attacker', 'page-123');
 
