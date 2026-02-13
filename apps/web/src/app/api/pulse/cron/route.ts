@@ -695,7 +695,8 @@ async function generatePulseForUser(userId: string, now: Date): Promise<void> {
       happeningNow: happeningNow.map(e => ({
         title: e.title,
         location: e.location || undefined,
-        endAt: formatDateInTimezone(e.endAt, userTimezone),
+        endAt: e.allDay ? 'All day' : formatDateInTimezone(e.endAt, userTimezone),
+        allDay: e.allDay,
       })),
       upcomingToday: upcomingToday.map(e => ({
         title: e.title,
