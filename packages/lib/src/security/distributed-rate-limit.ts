@@ -400,6 +400,12 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
+  MAGIC_LINK: {
+    maxAttempts: 3,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: true,
+  },
 } as const;
 
 // =============================================================================
