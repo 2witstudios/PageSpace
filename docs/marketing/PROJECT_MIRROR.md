@@ -4,10 +4,12 @@
 > **Last Updated**: 2026-02-13T09:41:00Z
 
 ## Summary
-- **Total Items**: 41
-- **Done**: 27
+- **Total Items**: 30 (actual GitHub Project items)
+- **Done**: 20
 - **In Progress**: 0
-- **Todo**: 14 (5 deferred - Remotion compositions, 4 require external resources)
+- **Todo**: 10 (5 deferred - Remotion compositions, 5 require external resources)
+
+*Note: Issues #668-674 (Blog, FAQ, Docs, Changelog) were implemented but not in the original GitHub Project scope*
 
 ---
 

@@ -763,3 +763,37 @@ Remaining issues require:
 4. UI component parity with PageSpace for Remotion
 
 ---
+
+## Iteration 21 - 2026-02-13T13:30:00Z
+
+### GitHub Project Sync
+
+Updated GitHub Project #5 with all completed issues:
+
+**Marked as Done (14 items):**
+- #641 SSG/SSR optimization
+- #648 Documents section
+- #649 Channels + DMs section
+- #650 Tasks section
+- #651 Calendar section
+- #652 Final CTA section
+- #653 Remotion setup
+- #659 Desktop apps page
+- #660 Mobile apps page
+- #663 Pricing comparison table
+- #664 Enterprise contact
+- #665 Product Tour
+- #666 MCP servers showcase
+- #667 Third-party integrations
+
+**Final GitHub Project Status:**
+- Done: 20/30 (67%)
+- Todo: 10/30 (5 deferred Remotion + 5 external deps)
+
+**Additional Pages Implemented (not in original scope):**
+- /blog + 4 blog posts
+- /faq
+- /docs + /docs/getting-started
+- /changelog
+
+---

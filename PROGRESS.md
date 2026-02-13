@@ -36,8 +36,9 @@
 | Changelog | 1 | 1 | 100% ✓ |
 | **TOTAL** | **27** | **41** | **66%** |
 
-**Implementable Issues Done**: 27/31 (87%)
-**Remaining**: 9 issues deferred + 5 require external resources
+**GitHub Project Items Done**: 20/30 (67%)
+**Remaining**: 5 issues deferred (Remotion) + 5 require external resources
+**Extra Pages Implemented**: Blog, FAQ, Docs, Changelog (not in original project scope)
 
 ## Branch
 
