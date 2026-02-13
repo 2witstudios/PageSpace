@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -66,13 +66,13 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (getUserAccessLevel as Mock).mockResolvedValue(mockPermissions());
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(getUserAccessLevel).mockResolvedValue(mockPermissions());
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -82,7 +82,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
 
   describe('permission check', () => {
     it('returns full permissions for user with all access', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue({
+      vi.mocked(getUserAccessLevel).mockResolvedValue({
         canView: true,
         canEdit: true,
         canShare: true,
@@ -100,7 +100,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
     });
 
     it('returns view-only permissions', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue({
+      vi.mocked(getUserAccessLevel).mockResolvedValue({
         canView: true,
         canEdit: false,
         canShare: false,
@@ -118,7 +118,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
     });
 
     it('returns no permissions when user has no access', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue(null);
+      vi.mocked(getUserAccessLevel).mockResolvedValue(null);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -131,7 +131,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
     });
 
     it('returns edit and view permissions', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue({
+      vi.mocked(getUserAccessLevel).mockResolvedValue({
         canView: true,
         canEdit: true,
         canShare: false,
@@ -149,7 +149,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
     });
 
     it('returns share permission without delete', async () => {
-      (getUserAccessLevel as Mock).mockResolvedValue({
+      vi.mocked(getUserAccessLevel).mockResolvedValue({
         canView: true,
         canEdit: true,
         canShare: true,
@@ -167,7 +167,7 @@ describe('GET /api/pages/[pageId]/permissions/check', () => {
 
   describe('error handling', () => {
     it('returns 500 when getUserAccessLevel throws', async () => {
-      (getUserAccessLevel as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(getUserAccessLevel).mockRejectedValue(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

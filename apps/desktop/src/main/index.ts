@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session, powerMonitor } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, Tray, nativeImage, dialog, session, powerMonitor, systemPreferences } from 'electron';
 import electronUpdaterPkg from 'electron-updater';
 const { autoUpdater } = electronUpdaterPkg;
 import * as path from 'path';
@@ -8,6 +8,8 @@ import { initializeWSClient, shutdownWSClient, getWSClient } from './ws-client';
 import type { MCPConfig } from '../shared/mcp-types';
 import { logger } from './logger';
 import { loadAuthSession, saveAuthSession, clearAuthSession, type StoredAuthSession } from './auth-storage';
+import { getErrorMessage } from './error-utils';
+import { isMediaPermission, shouldAllowMediaPermission } from './permissions';
 import nodeMachineId from 'node-machine-id';
 const { machineIdSync } = nodeMachineId;
 import * as os from 'node:os';
@@ -33,6 +35,19 @@ let isSuspended = false; // Track system suspend state for auth refresh coordina
 let suspendTime: number | null = null; // Track when system was suspended
 
 let cachedMachineId: string | null = null;
+
+// In-memory session cache. Preloaded on startup, updated on store/clear.
+// Eliminates Keychain reads from the IPC hot path.
+let cachedSession: StoredAuthSession | null | undefined = undefined;
+
+async function preloadAuthSession(): Promise<void> {
+  try {
+    cachedSession = await loadAuthSession();
+  } catch (error) {
+    logger.error('[Auth] Failed to preload session', { error });
+    cachedSession = null;
+  }
+}
 
 function getMachineIdentifier(): string {
   if (cachedMachineId) {
@@ -77,6 +92,107 @@ function getAppUrl(): string {
   }
 
   return baseUrl + '/dashboard';
+}
+
+function shouldRequestMicrophone(permission: string, details: Electron.PermissionRequest): boolean {
+  if (permission === 'audioCapture') return true;
+  if (permission !== 'media') return false;
+
+  if (!('mediaTypes' in details)) {
+    return true;
+  }
+
+  // If Chromium doesn't provide mediaTypes, treat it as audio-capable and request mic.
+  if (!Array.isArray(details.mediaTypes) || details.mediaTypes.length === 0) {
+    return true;
+  }
+
+  return details.mediaTypes.includes('audio');
+}
+
+function shouldRequestCamera(permission: string, details: Electron.PermissionRequest): boolean {
+  if (permission === 'videoCapture') return true;
+  if (permission !== 'media') return false;
+  if (!('mediaTypes' in details)) return false;
+  return Array.isArray(details.mediaTypes) && details.mediaTypes.includes('video');
+}
+
+async function requestDarwinMediaAccess(
+  permission: string,
+  details: Electron.PermissionRequest
+): Promise<boolean> {
+  if (process.platform !== 'darwin') return true;
+
+  const needsMicrophone = shouldRequestMicrophone(permission, details);
+  const needsCamera = shouldRequestCamera(permission, details);
+
+  let microphoneAllowed = true;
+  let cameraAllowed = true;
+
+  if (needsMicrophone) {
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    microphoneAllowed = micStatus === 'granted'
+      ? true
+      : await systemPreferences.askForMediaAccess('microphone');
+  }
+
+  if (needsCamera) {
+    const cameraStatus = systemPreferences.getMediaAccessStatus('camera');
+    cameraAllowed = cameraStatus === 'granted'
+      ? true
+      : await systemPreferences.askForMediaAccess('camera');
+  }
+
+  return microphoneAllowed && cameraAllowed;
+}
+
+function setupMediaPermissionHandlers(): void {
+  const defaultSession = session.defaultSession;
+
+  defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+    if (!isMediaPermission(permission)) {
+      return true;
+    }
+
+    const allowed = shouldAllowMediaPermission(permission, requestingOrigin, getAppUrl());
+    if (!allowed) {
+      logger.warn('[Permissions] Blocked media permission check', { permission, requestingOrigin });
+    }
+    return allowed;
+  });
+
+  defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    if (!isMediaPermission(permission)) {
+      callback(true);
+      return;
+    }
+
+    const requestingUrl = details.requestingUrl || ('securityOrigin' in details ? details.securityOrigin || '' : '');
+    const allowedByOrigin = shouldAllowMediaPermission(permission, requestingUrl, getAppUrl());
+
+    if (!allowedByOrigin) {
+      logger.warn('[Permissions] Blocked media permission request (origin mismatch)', {
+        permission,
+        requestingUrl,
+      });
+      callback(false);
+      return;
+    }
+
+    void (async () => {
+      const platformAllowed = await requestDarwinMediaAccess(permission, details);
+      if (!platformAllowed) {
+        logger.warn('[Permissions] Blocked media permission request (platform denied)', {
+          permission,
+          requestingUrl,
+        });
+      }
+      callback(platformAllowed);
+    })().catch((error) => {
+      logger.error('[Permissions] Failed handling media permission request', { permission, error });
+      callback(false);
+    });
+  });
 }
 
 // Inject desktop-specific styles for titlebar and window dragging
@@ -191,6 +307,7 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      backgroundThrottling: false, // Prevent Chromium from throttling timers/rAF when window is hidden during startup
     },
     show: false, // Don't show until ready
   };
@@ -241,6 +358,9 @@ function createWindow(): void {
   // Show window when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+    // Re-enable background throttling now that the initial render is complete.
+    // This was disabled during startup to prevent Chromium from throttling timers/rAF.
+    mainWindow?.webContents.setBackgroundThrottling(true);
   });
 
   // Save window bounds on resize/move
@@ -556,30 +676,34 @@ ipcMain.handle('window:is-maximized', () => {
 
 // Auth IPC handlers
 /**
- * Retrieves the current session token from secure storage.
+ * Retrieves the current session token from in-memory cache (preloaded on startup).
+ * Falls back to Keychain only if cache is uninitialized (undefined).
  * @returns Session token string (ps_sess_*) or null if not authenticated
  */
 ipcMain.handle('auth:get-session-token', async () => {
-  const storedSession = await loadAuthSession();
-  return storedSession?.sessionToken ?? null;
+  if (cachedSession === undefined) cachedSession = await loadAuthSession();
+  return cachedSession?.sessionToken ?? null;
 });
 
 ipcMain.handle('auth:get-session', async () => {
-  return loadAuthSession();
+  if (cachedSession === undefined) cachedSession = await loadAuthSession();
+  return cachedSession ?? null;
 });
 
 ipcMain.handle('auth:store-session', async (_event, sessionData: StoredAuthSession) => {
   await saveAuthSession(sessionData);
+  cachedSession = sessionData;
   return { success: true };
 });
 
 /**
- * Clears authentication data from secure storage and cookies.
+ * Clears authentication data from secure storage, memory cache, and cookies.
  * Called during logout to ensure clean state.
  */
 ipcMain.handle('auth:clear-auth', async () => {
   try {
     await clearAuthSession();
+    cachedSession = null;
     await session.defaultSession.clearStorageData({
       storages: ['cookies'],
     });
@@ -622,10 +746,11 @@ ipcMain.handle('mcp:update-config', async (_event, config: MCPConfig) => {
     await mcpManager.updateConfig(config);
     logger.info('Config updated successfully', {});
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('Failed to update config', { error });
-    logger.error('Error message', { errorMessage: error.message });
-    return { success: false, error: error.message };
+    const message = getErrorMessage(error);
+    logger.error('Error message', { errorMessage: message });
+    return { success: false, error: message };
   }
 });
 
@@ -634,8 +759,8 @@ ipcMain.handle('mcp:start-server', async (_event, name: string) => {
   try {
     await mcpManager.startServer(name);
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -644,8 +769,8 @@ ipcMain.handle('mcp:stop-server', async (_event, name: string) => {
   try {
     await mcpManager.stopServer(name);
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -654,8 +779,8 @@ ipcMain.handle('mcp:restart-server', async (_event, name: string) => {
   try {
     await mcpManager.restartServer(name);
     return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -771,6 +896,10 @@ function setupPowerMonitor(): void {
 
     isSuspended = false;
 
+    // Invalidate main process session cache and proactively reload from Keychain
+    cachedSession = undefined;
+    preloadAuthSession();
+
     // Notify renderer to resume auth and force token refresh
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('power:resume', {
@@ -825,6 +954,12 @@ function setupPowerMonitor(): void {
 
 // App lifecycle
 app.whenReady().then(async () => {
+  // Preload auth session into memory so IPC handlers return instantly
+  await preloadAuthSession();
+
+  // Strict media permissions for microphone/camera access.
+  setupMediaPermissionHandlers();
+
   // Initialize MCP manager
   try {
     const mcpManager = getMCPManager();
@@ -1000,11 +1135,36 @@ async function handleAuthExchange(url: string): Promise<boolean> {
     }
 
     // Store tokens securely in OS keychain (validated above)
-    await saveAuthSession({
+    const sessionData = {
       sessionToken: tokens.sessionToken,
       csrfToken: tokens.csrfToken,
       deviceToken: tokens.deviceToken,
-    });
+    };
+    await saveAuthSession(sessionData);
+    cachedSession = sessionData;
+
+    // Propagate the session cookie into the BrowserWindow's cookie jar.
+    // The exchange endpoint returns Set-Cookie, but main-process fetch doesn't
+    // share cookies with the renderer session. Without this, the Next.js
+    // middleware (which checks for a session cookie on page routes) would
+    // redirect /dashboard to /auth/signin after OAuth exchange.
+    const appUrl = new URL(getAppUrl());
+    try {
+      await session.defaultSession.cookies.set({
+        url: appUrl.origin,
+        name: 'session',
+        value: tokens.sessionToken,
+        path: '/',
+        httpOnly: true,
+        secure: !appUrl.origin.includes('localhost') && !appUrl.origin.includes('127.0.0.1'),
+        sameSite: 'strict' as const,
+        expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
+      });
+    } catch (cookieError) {
+      // Non-fatal: the auth hook will recover via device refresh, but the
+      // initial page load may flash the signin page briefly.
+      logger.warn('[Auth Exchange] Failed to set session cookie in BrowserWindow', { cookieError });
+    }
 
     logger.info('[Auth Exchange] OAuth exchange successful', { provider });
 

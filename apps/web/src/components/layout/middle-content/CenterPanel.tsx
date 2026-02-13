@@ -5,6 +5,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ViewHeader } from './content-header';
 import { usePageTree, TreePage } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { AlertCircle, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import FolderView from './page-views/folder/FolderView';
 import AiChatView from './page-views/ai-page/AiChatView';
 import ChannelView from './page-views/channel/ChannelView';
@@ -12,6 +14,7 @@ import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
+import CodePageView from './page-views/code/CodePageView';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/client-safe';
@@ -19,19 +22,43 @@ import AiSettingsView from './page-views/settings/ai-api/AiSettingsView';
 import MCPSettingsView from './page-views/settings/mcp/MCPSettingsView';
 import CanvasPageView from './page-views/canvas/CanvasPageView';
 import GlobalAssistantView from './page-views/dashboard/GlobalAssistantView';
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { usePageStore } from '@/hooks/usePage';
 import { useGlobalDriveSocket } from '@/hooks/useGlobalDriveSocket';
 import { usePageRefresh } from '@/hooks/usePageRefresh';
 import { post } from '@/lib/auth/auth-fetch';
 
+const LOADING_TIMEOUT_MS = 12000; // Show retry hint after 12 seconds
+
 // Memoized page content component to prevent unnecessary re-renders
 const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   const params = useParams();
   const pathname = usePathname();
   const driveId = params.driveId as string;
-  const { tree, isLoading } = usePageTree(driveId);
+  const { tree, isLoading, isError, isValidating, retry } = usePageTree(driveId);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
+  const retryCount = useRef(0);
+  const [timerKey, setTimerKey] = useState(0);
+
+  const handleRetry = useCallback(() => {
+    setLoadingTimedOut(false);
+    retryCount.current += 1;
+    setTimerKey(retryCount.current); // Force timer effect to re-run
+    retry();
+  }, [retry]);
+
+  // Track loading duration - show retry hint if loading takes too long.
+  // timerKey forces the timer to restart after a retry even when isLoading
+  // stays true throughout (the dependency doesn't change otherwise).
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setLoadingTimedOut(true), LOADING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isLoading, timerKey]);
 
   // Handle special routes
   if (pathname.endsWith('/settings')) {
@@ -42,7 +69,52 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     return <MCPSettingsView />;
   }
 
+  // Error state - only show error overlay when no stale data is available
+  // AND SWR is not currently retrying. SWR keeps `data` populated during
+  // failed revalidations, so prefer showing stale content.
+  if (isError && !isValidating && tree.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+        <AlertCircle className="h-10 w-10 text-muted-foreground" />
+        <div className="text-center">
+          <p className="text-sm font-medium text-foreground">Failed to load pages</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {isError?.message || 'Something went wrong loading the page tree.'}
+          </p>
+        </div>
+        <Button onClick={handleRetry} size="sm">
+          <RefreshCw className="h-4 w-4" />
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  // Show loading skeleton while SWR is retrying after a failed initial fetch.
+  // Without this, the component falls through to "Page not found" during retry
+  // windows because isLoading is false (error exists) but tree is still empty.
+  // Gated on !isLoading so the initial load still goes through the isLoading
+  // branch below, which has timeout+retry UI.
+  if (!isLoading && isValidating && tree.length === 0) {
+    return <Skeleton className="h-full w-full" />;
+  }
+
   if (isLoading) {
+    // After timeout, show skeleton with retry option
+    if (loadingTimedOut) {
+      return (
+        <div className="h-full w-full relative">
+          <Skeleton className="h-full w-full" />
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <p className="text-sm text-muted-foreground">Taking longer than expected...</p>
+            <Button onClick={handleRetry} variant="outline" size="sm">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          </div>
+        </div>
+      );
+    }
     return <Skeleton className="h-full w-full" />;
   }
 
@@ -76,6 +148,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     FileViewer,
     SheetView,
     TaskListView,
+    CodePageView,
   };
 
   const componentName = getPageTypeComponent(page.type);
@@ -92,7 +165,16 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     );
   } else if (componentName === 'DocumentView') {
     // DocumentView accepts only pageId (new pattern)
-    pageComponent = <DocumentView pageId={page.id} />;
+    pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} />;
+  } else if (componentName === 'CodePageView') {
+    // CodePageView accepts only pageId (new pattern)
+    pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
+  } else if (componentName === 'CanvasPageView') {
+    // CanvasPageView should remount per page to isolate edit/undo state
+    pageComponent = <CanvasPageView key={`canvas-${page.id}`} page={page} />;
+  } else if (componentName === 'SheetView') {
+    // SheetView should remount per page to isolate undo/redo history
+    pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here

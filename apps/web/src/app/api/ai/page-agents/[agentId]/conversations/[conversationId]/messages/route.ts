@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { db, chatMessages, pages, eq, and, desc, sql } from '@pagespace/db';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core';
@@ -75,6 +75,10 @@ export async function GET(
         { status: 404 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check permissions
     const canView = await canUserViewPage(auth.userId, agentId);

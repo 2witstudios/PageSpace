@@ -471,6 +471,18 @@ describe('useAuthStore', () => {
       expect(state.isLoading).toBe(false);
     });
 
+    it('given first loadSession call, should mark server session initialized', async () => {
+      const user = createMockUser();
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+
+      await useAuthStore.getState().loadSession();
+
+      expect(useAuthStore.getState()._serverSessionInitialized).toBe(true);
+    });
+
     it('given 401 response, should clear user state', async () => {
       useAuthStore.setState({ user: createMockUser(), isAuthenticated: true });
       vi.mocked(global.fetch).mockResolvedValue({
@@ -509,6 +521,45 @@ describe('useAuthStore', () => {
       await useAuthStore.getState().loadSession(true);
 
       expect(global.fetch).toHaveBeenCalled();
+    });
+
+    it('given overlapping force loads, should keep latest auth promise active', async () => {
+      const user = createMockUser();
+      let resolveFirstFetch!: (value: Response) => void;
+      let resolveSecondFetch!: (value: Response) => void;
+      const firstFetch = new Promise<Response>((resolve) => {
+        resolveFirstFetch = resolve;
+      });
+      const secondFetch = new Promise<Response>((resolve) => {
+        resolveSecondFetch = resolve;
+      });
+
+      vi.mocked(global.fetch)
+        .mockImplementationOnce(() => firstFetch)
+        .mockImplementationOnce(() => secondFetch);
+
+      const firstLoad = useAuthStore.getState().loadSession(true);
+      const secondLoad = useAuthStore.getState().loadSession(true);
+      const activePromise = useAuthStore.getState()._authPromise;
+
+      // Latest request should own dedupe slot.
+      expect(activePromise).not.toBeNull();
+
+      resolveFirstFetch({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+      await firstLoad;
+
+      // Completing first request must not clear second in-flight promise.
+      expect(useAuthStore.getState()._authPromise).toBe(activePromise);
+
+      resolveSecondFetch({
+        ok: true,
+        json: () => Promise.resolve(user),
+      } as Response);
+      await secondLoad;
+      expect(useAuthStore.getState()._authPromise).toBeNull();
     });
 
     it('given network error, should record failed attempt', async () => {
@@ -747,7 +798,29 @@ describe('authStoreHelpers', () => {
 
   describe('needsAuthCheck', () => {
     it('given no lastAuthCheck, should return true', () => {
-      useAuthStore.setState({ lastAuthCheck: null });
+      useAuthStore.setState({ lastAuthCheck: null, _serverSessionInitialized: false });
+
+      expect(authStoreHelpers.needsAuthCheck()).toBe(true);
+    });
+
+    it('given initialized unauthenticated state without lastAuthCheck, should return false', () => {
+      useAuthStore.setState({
+        lastAuthCheck: null,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+      });
+
+      expect(authStoreHelpers.needsAuthCheck()).toBe(false);
+    });
+
+    it('given initialized unauthenticated state with failed attempt, should return true', () => {
+      useAuthStore.setState({
+        lastAuthCheck: null,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastFailedAuthCheck: Date.now(),
+        authFailedPermanently: false,
+      });
 
       expect(authStoreHelpers.needsAuthCheck()).toBe(true);
     });
@@ -821,6 +894,16 @@ describe('authStoreHelpers', () => {
       expect(authStoreHelpers.shouldLoadSession()).toBe(true);
     });
 
+    it('given no server initialization and recent auth check, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: false,
+        lastAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
     it('given circuit breaker active, should return false', () => {
       useAuthStore.setState({
         hasHydrated: true,
@@ -845,6 +928,39 @@ describe('authStoreHelpers', () => {
         hasHydrated: true,
         _serverSessionInitialized: true,
         lastAuthCheck: Date.now() - 16 * 60 * 1000, // Stale
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(true);
+    });
+
+    it('given server initialized and recent check, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        lastAuthCheck: Date.now(),
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+    it('given server initialized and unauthenticated with no check timestamp, should return false', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastAuthCheck: null,
+      });
+
+      expect(authStoreHelpers.shouldLoadSession()).toBe(false);
+    });
+
+    it('given server initialized unauthenticated with failed attempt, should return true', () => {
+      useAuthStore.setState({
+        hasHydrated: true,
+        _serverSessionInitialized: true,
+        isAuthenticated: false,
+        lastAuthCheck: null,
+        lastFailedAuthCheck: Date.now(),
+        authFailedPermanently: false,
       });
 
       expect(authStoreHelpers.shouldLoadSession()).toBe(true);
@@ -890,6 +1006,26 @@ describe('persist partialize behavior', () => {
     if (stored) {
       const parsed = JSON.parse(stored);
       expect(parsed.state.authFailedPermanently).toBe(true);
+    }
+  });
+
+  it('given user with email set, email should NOT be included in persisted state', () => {
+    useAuthStore.setState({
+      user: {
+        id: 'user-123',
+        name: 'Test User',
+        email: 'test@example.com',
+        image: null,
+        emailVerified: null,
+      },
+    });
+
+    const stored = mockLocalStorage.getItem('auth-storage');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      expect(parsed.state.user.email).toBeUndefined();
+      expect(parsed.state.user.id).toBe('user-123');
+      expect(parsed.state.user.name).toBe('Test User');
     }
   });
 

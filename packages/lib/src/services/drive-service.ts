@@ -34,6 +34,7 @@ export interface DriveWithAccess {
   updatedAt: Date;
   isOwned: boolean;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  lastAccessedAt: Date | null;
 }
 
 export interface ListDrivesOptions {
@@ -79,9 +80,9 @@ export async function listAccessibleDrives(
       : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
   });
 
-  // 2. Get drives where user is a member
+  // 2. Get drives where user is a member (including last access time)
   const memberDrives = await db
-    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role })
+    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, lastAccessedAt: driveMembers.lastAccessedAt })
     .from(driveMembers)
     .where(eq(driveMembers.userId, userId));
 
@@ -95,14 +96,16 @@ export async function listAccessibleDrives(
         .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
         .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
 
-  // 4. Build role map (membership role takes precedence)
+  // 4. Build role map and lastAccessedAt map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
+  const driveLastAccessed = new Map<string, Date | null>();
   const allSharedDriveIds = new Set<string>();
 
   for (const d of memberDrives) {
     if (d.driveId) {
       allSharedDriveIds.add(d.driveId);
       driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
+      driveLastAccessed.set(d.driveId, d.lastAccessedAt);
     }
   }
 
@@ -136,11 +139,13 @@ export async function listAccessibleDrives(
       ...drive,
       isOwned: true,
       role: 'OWNER' as const,
+      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
     ...sharedDrives.map((drive) => ({
       ...drive,
       isOwned: false,
       role: driveRoles.get(drive.id) || ('MEMBER' as const),
+      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
     })),
   ];
 
@@ -177,6 +182,7 @@ export async function createDrive(
     ...newDrive,
     isOwned: true,
     role: 'OWNER' as const,
+    lastAccessedAt: null,
   };
 }
 
@@ -307,6 +313,7 @@ export async function getDriveWithAccess(
     isOwned: access.isOwner,
     isMember: access.isMember,
     role: access.role || 'MEMBER',
+    lastAccessedAt: null, // Not fetched here — only listAccessibleDrives queries driveMembers for this
   };
 }
 
@@ -371,4 +378,46 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
     .returning();
 
   return updated || null;
+}
+
+/**
+ * Update a user's last accessed timestamp for a drive.
+ * Tries updating an existing driveMembers row first. If no row was affected
+ * (e.g., drive owner without a driveMembers entry), inserts one with OWNER role
+ * only when the user actually owns the drive.
+ */
+export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
+  const now = new Date();
+
+  // Try updating existing membership row
+  const updated = await db.update(driveMembers)
+    .set({ lastAccessedAt: now })
+    .where(and(
+      eq(driveMembers.userId, userId),
+      eq(driveMembers.driveId, driveId)
+    ))
+    .returning({ id: driveMembers.id });
+
+  if (updated.length > 0) return;
+
+  // No membership row — check if user is the drive owner before inserting
+  const [drive] = await db.select({ ownerId: drives.ownerId })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  if (drive?.ownerId === userId) {
+    await db.insert(driveMembers)
+      .values({
+        driveId,
+        userId,
+        role: 'OWNER',
+        lastAccessedAt: now,
+        invitedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [driveMembers.driveId, driveMembers.userId],
+        set: { lastAccessedAt: now },
+      });
+  }
 }

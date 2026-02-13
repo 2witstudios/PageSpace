@@ -7,11 +7,13 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   type LanguageModelUsage,
+  type TextUIPart,
+  type ToolSet,
 } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -65,6 +67,8 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
+import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -98,6 +102,13 @@ export async function POST(request: Request) {
     }
     userId = authResult.userId;
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
+
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.ai.warn('AI Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
 
     // Parse request body for AI SDK v5 pattern
     const requestBody = await request.json();
@@ -176,10 +187,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 });
     }
 
+    const mcpScopeError = await checkMCPPageScope(authResult, chatId);
+    if (mcpScopeError) return mcpScopeError;
+
     // Ensure userId and chatId are defined
     if (!userId) {
       loggers.ai.warn('AI Chat API: No userId after authentication');
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    }
+
+    // Image security validation — validate file parts in the user message
+    const userMessageForValidation = messages[messages.length - 1];
+    const messageHasImages = userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation);
+    if (messageHasImages) {
+      const imageValidation = validateUserMessageFileParts(userMessageForValidation);
+      if (!imageValidation.valid) {
+        loggers.ai.warn('AI Chat API: Image validation failed', { error: imageValidation.error });
+        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+      }
     }
 
     // Check if user has permission to view and edit this AI chat page
@@ -234,6 +259,18 @@ export async function POST(request: Request) {
     if (!page) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+    }
+
+    // Vision capability gate — reject images sent to non-vision models
+    if (messageHasImages) {
+      const effectiveModel = selectedModel || page.aiModel;
+      if (effectiveModel && !hasVisionCapability(effectiveModel)) {
+        loggers.ai.warn('AI Chat API: Images sent to non-vision model', { model: effectiveModel });
+        return NextResponse.json(
+          { error: `The selected model "${effectiveModel}" does not support image attachments. Please choose a vision-capable model.` },
+          { status: 400 }
+        );
+      }
     }
 
     // Extract custom agent configuration from page
@@ -303,17 +340,16 @@ export async function POST(request: Request) {
         
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        await db.insert(chatMessages).values({
-          id: messageId,
+        await saveMessageToDatabase({
+          messageId,
           pageId: chatId,
-          conversationId, // Group messages into conversation sessions
+          conversationId,
           userId,
           role: 'user',
           content: messageContent,
-          toolCalls: null,
-          toolResults: null,
-          createdAt: new Date(),
-          isActive: true,
+          toolCalls: undefined,
+          toolResults: undefined,
+          uiMessage: userMessage,
         });
         
         loggers.ai.debug('AI Chat API: User message saved to database');
@@ -462,7 +498,7 @@ export async function POST(request: Request) {
     // Filter tools based on custom enabled tools configuration
     // - null or [] = no tools enabled (default behavior)
     // - ['tool1', 'tool2'] = specific tools → use only those
-    let filteredTools;
+    let filteredTools: ToolSet;
     if (enabledTools === null || enabledTools.length === 0) {
       // No tools configured - default to no tools
       filteredTools = {};
@@ -475,12 +511,10 @@ export async function POST(request: Request) {
     } else {
       // Filter tools based on the page's enabled tools configuration
       // Simple object filtering approach to avoid complex TypeScript issues
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const filtered: Record<string, any> = {};
+      const filtered: Record<string, (typeof pageSpaceTools)[keyof typeof pageSpaceTools]> = {};
       for (const toolName of enabledTools) {
         if (toolName in pageSpaceTools) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          filtered[toolName] = (pageSpaceTools as any)[toolName];
+          filtered[toolName] = pageSpaceTools[toolName as keyof typeof pageSpaceTools];
         }
       }
       // Apply read-only filtering on top of enabled tools
@@ -536,8 +570,7 @@ export async function POST(request: Request) {
         for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
           mcpToolsWithExecute[toolName] = {
             ...toolSchema,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            execute: async (args: any) => {
+            execute: async (args: Record<string, unknown>) => {
               // Ensure userId is defined (it should be from authentication)
               if (!userId) {
                 throw new Error('User ID not available for MCP tool execution');
@@ -605,8 +638,7 @@ export async function POST(request: Request) {
 
         // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
         // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        filteredTools = sanitizeToolNamesForProvider({ ...filteredTools, ...mcpToolsWithExecute }) as any;
+        filteredTools = sanitizeToolNamesForProvider({ ...filteredTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
 
         loggers.ai.info('AI Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(filteredTools).length,
@@ -725,7 +757,8 @@ export async function POST(request: Request) {
     }
     
     // Build timestamp system prompt for temporal awareness
-    const timestampSystemPrompt = buildTimestampSystemPrompt();
+    const userTimezone = user?.timezone ?? undefined;
+    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
@@ -791,6 +824,7 @@ export async function POST(request: Request) {
             abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
             experimental_context: {
               userId,
+              timezone: userTimezone,
               aiProvider: currentProvider,
               aiModel: currentModel,
               conversationId,
@@ -808,8 +842,13 @@ export async function POST(request: Request) {
                 } : undefined,
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
-              modelCapabilities: getModelCapabilities(currentModel, currentProvider)
-            }, // Pass userId, AI context, location context, and model capabilities to tools
+              modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
+              chatSource: {
+                type: 'page' as const,
+                agentPageId: chatId,
+                agentTitle: page.title,
+              },
+            }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
             maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {
@@ -875,12 +914,10 @@ export async function POST(request: Request) {
           // Log each part in detail
           responseMessage?.parts?.forEach((part, index) => {
             if (part.type === 'text') {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const text = (part as any).text || '';
+              const text = (part as TextUIPart).text || '';
               loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
             } else if (part.type.startsWith('tool-')) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const toolPart = part as any;
+              const toolPart = part as { state?: string; output?: unknown };
               loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
             } else {
               loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });

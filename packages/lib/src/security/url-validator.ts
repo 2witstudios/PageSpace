@@ -268,6 +268,124 @@ export async function validateExternalURL(
 }
 
 /**
+ * Check if an IP address is a cloud metadata endpoint.
+ * Unlike isBlockedIP, this ONLY blocks cloud metadata IPs and the link-local range
+ * (169.254.x.x) where cloud metadata lives. It allows regular private IPs
+ * (127.x, 10.x, 172.16-31.x, 192.168.x) since local AI providers run there.
+ */
+function isCloudMetadataIP(ip: string): boolean {
+  const normalizedIP = normalizeIP(ip);
+
+  // Check explicit cloud metadata block list
+  if (BLOCKED_IPS.includes(normalizedIP)) {
+    return true;
+  }
+
+  // Check link-local range (169.254.0.0/16) where cloud metadata endpoints live
+  const ipv4Match = normalizedIP.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4Match) {
+    const [, a, b] = ipv4Match.map(Number);
+    if (a === 169 && b === 254) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if a hostname is a cloud metadata hostname.
+ * Unlike isBlockedHostname, this does NOT block localhost or .local domains
+ * since those are valid for local AI providers.
+ */
+function isCloudMetadataHostname(hostname: string): boolean {
+  let normalizedHostname = hostname.toLowerCase();
+  if (normalizedHostname.endsWith('.')) {
+    normalizedHostname = normalizedHostname.slice(0, -1);
+  }
+
+  // Check explicit cloud metadata hostnames
+  if (BLOCKED_HOSTNAMES.includes(normalizedHostname)) {
+    return true;
+  }
+
+  // Block .internal domains (cloud metadata pattern) but NOT .local
+  if (normalizedHostname.endsWith('.internal')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Validate a URL for local AI provider safety (Ollama, LM Studio).
+ * Unlike validateExternalURL, this ALLOWS localhost and private IPs
+ * (since local AI providers run there) but still blocks cloud metadata
+ * endpoints and dangerous protocols.
+ */
+export async function validateLocalProviderURL(
+  urlString: string,
+): Promise<URLValidationResult> {
+  // 1. Parse URL
+  let url: URL;
+  try {
+    url = new URL(urlString);
+  } catch {
+    return { valid: false, error: 'Invalid URL format' };
+  }
+
+  // 2. Check protocol (only http:/https:)
+  if (!ALLOWED_PROTOCOLS.includes(url.protocol)) {
+    return { valid: false, error: `Protocol not allowed: ${url.protocol}` };
+  }
+
+  // 3. Check for cloud metadata hostnames
+  if (isCloudMetadataHostname(url.hostname)) {
+    return { valid: false, error: `Hostname blocked: ${url.hostname}` };
+  }
+
+  // 4. If hostname is IP: check for cloud metadata IPs only
+  const normalizedHostname = normalizeIP(url.hostname);
+  const ipVersion = isIP(normalizedHostname);
+
+  if (ipVersion !== 0) {
+    if (isCloudMetadataIP(normalizedHostname)) {
+      return { valid: false, error: `IP address blocked: ${normalizedHostname}` };
+    }
+    return { valid: true, url, resolvedIPs: [normalizedHostname] };
+  }
+
+  // 5. If hostname is domain: resolve DNS, check all IPs for cloud metadata only
+  try {
+    const [resolvedIPv4, resolvedIPv6] = await Promise.all([
+      dns.resolve4(url.hostname).catch(() => [] as string[]),
+      dns.resolve6(url.hostname).catch(() => [] as string[]),
+    ]);
+    const allIPs = [...resolvedIPv4, ...resolvedIPv6];
+
+    if (allIPs.length === 0) {
+      return { valid: false, error: 'Could not resolve hostname' };
+    }
+
+    // Check ALL resolved IPs for cloud metadata endpoints
+    for (const ip of allIPs) {
+      if (isCloudMetadataIP(ip)) {
+        return {
+          valid: false,
+          error: `Hostname resolves to blocked IP: ${ip}`,
+          resolvedIPs: allIPs,
+        };
+      }
+    }
+
+    return { valid: true, url, resolvedIPs: allIPs };
+  } catch (error) {
+    return {
+      valid: false,
+      error: `DNS resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
  * Build a URL that connects directly to a resolved IP while preserving the original Host header.
  * This prevents DNS rebinding attacks by bypassing DNS resolution during fetch().
  *

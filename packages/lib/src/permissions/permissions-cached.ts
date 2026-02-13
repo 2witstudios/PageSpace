@@ -528,9 +528,10 @@ export async function getBatchPagePermissions(
  */
 export async function canUserViewPage(
   userId: string,
-  pageId: string
+  pageId: string,
+  options: { bypassCache?: boolean } = {}
 ): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
+  const perms = await getUserAccessLevel(userId, pageId, options);
   return perms?.canView || false;
 }
 
@@ -539,9 +540,10 @@ export async function canUserViewPage(
  */
 export async function canUserEditPage(
   userId: string,
-  pageId: string
+  pageId: string,
+  options: { bypassCache?: boolean } = {}
 ): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
+  const perms = await getUserAccessLevel(userId, pageId, options);
   return perms?.canEdit || false;
 }
 
@@ -550,9 +552,10 @@ export async function canUserEditPage(
  */
 export async function canUserSharePage(
   userId: string,
-  pageId: string
+  pageId: string,
+  options: { bypassCache?: boolean } = {}
 ): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
+  const perms = await getUserAccessLevel(userId, pageId, options);
   return perms?.canShare || false;
 }
 
@@ -561,9 +564,10 @@ export async function canUserSharePage(
  */
 export async function canUserDeletePage(
   userId: string,
-  pageId: string
+  pageId: string,
+  options: { bypassCache?: boolean } = {}
 ): Promise<boolean> {
-  const perms = await getUserAccessLevel(userId, pageId);
+  const perms = await getUserAccessLevel(userId, pageId, options);
   return perms?.canDelete || false;
 }
 

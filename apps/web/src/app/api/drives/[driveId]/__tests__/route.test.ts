@@ -39,11 +39,16 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
   // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+  isMCPAuthResult: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
   logDriveActivity: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
 }));
 
 import {
@@ -102,6 +107,7 @@ const createDriveWithAccessFixture = (
   drivePrompt: overrides.drivePrompt ?? null,
   isOwned: overrides.isOwned ?? true,
   role: overrides.role ?? 'OWNER',
+  lastAccessedAt: overrides.lastAccessedAt ?? null,
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 
@@ -514,7 +520,10 @@ describe('PATCH /api/drives/[driveId]', () => {
         'updated',
         { name: 'New', slug: 'new' }
       );
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId, event: 'updated' }),
+        ['user-123', 'user-456']
+      );
     });
 
     it('should NOT broadcast event when only drivePrompt changes', async () => {
@@ -723,7 +732,10 @@ describe('DELETE /api/drives/[driveId]', () => {
         'deleted',
         { name: 'Deleted Drive', slug: 'deleted-drive' }
       );
-      expect(broadcastDriveEvent).toHaveBeenCalled();
+      expect(broadcastDriveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId, event: 'deleted' }),
+        ['user-123', 'user-456']
+      );
     });
   });
 

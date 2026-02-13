@@ -4,6 +4,7 @@ import React, { memo, useCallback, useMemo, useState } from 'react';
 import { EditableTitle } from './EditableTitle';
 import { Breadcrumbs } from './Breadcrumbs';
 import { EditorToggles } from './EditorToggles';
+import { PageSetupButton } from './PageSetupButton';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
 import { ShareDialog } from './page-settings/ShareDialog';
 import { usePageTree } from '@/hooks/usePageTree';
@@ -12,11 +13,13 @@ import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage } from '@pagespace/lib/client-safe';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage } from '@pagespace/lib/client-safe';
 import { ExportDropdown } from './ExportDropdown';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
+import { usePagePresence } from '@/hooks/usePagePresence';
+import { PageViewers } from '@/components/common/PageViewers';
 
 interface ContentHeaderProps {
   children?: React.ReactNode;
@@ -70,7 +73,11 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   const pageIsDocument = page ? isDocumentPage(page.type) : false;
   const pageIsSheet = page ? isSheetPage(page.type) : false;
   const pageIsFile = page ? isFilePage(page.type) : false;
-  const showSaveStatus = (pageIsDocument || pageIsSheet) && !isMobile;
+  const pageIsCode = page ? isCodePage(page.type) : false;
+  const showSaveStatus = (pageIsDocument || pageIsSheet || pageIsCode) && !isMobile;
+
+  // Track and display presence (who else is viewing this page)
+  usePagePresence(pageId);
 
   // Handle file download
   const handleDownload = useCallback(async () => {
@@ -107,8 +114,9 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
           <EditableTitle pageId={pageId} />
           <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
         </div>
-        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2">
           {pageIsDocument && <EditorToggles />}
+          {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (
             <ExportDropdown pageId={page.id} pageTitle={page.title} pageType={page.type} />
           )}
@@ -123,6 +131,7 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
               {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
             </Button>
           )}
+          <PageViewers pageId={pageId} />
           <ShareDialog pageId={pageId} />
           {children}
         </div>

@@ -100,12 +100,12 @@ const IMAGE_PRESETS = {
 Manages durable background jobs via PgBoss with unified ingestion:
 
 ```typescript
-type JobType = 'ingest-file' | 'image-optimize' | 'text-extract' | 'ocr-process';
+type QueueName = 'ingest-file' | 'image-optimize' | 'text-extract' | 'ocr-process';
 
 interface QueueManager {
-  addJob(type: JobType, data: any, options?: any): Promise<string>;
+  addJob<Q extends QueueName>(queue: Q, data: JobDataMap[Q], options?: PgBoss.SendOptions): Promise<string>;
   getJob(jobId: string): Promise<ProcessingJob | null>;
-  getQueueStatus(): Promise<Record<string, any>>;
+  getQueueStatus(): Promise<Record<QueueName, QueueStats>>;
 }
 ```
 
@@ -120,12 +120,8 @@ Extracts text content from documents and writes cache artifacts:
 
 ```typescript
 // Uses pdfjs-dist for PDFs and mammoth for DOCX
-export async function extractText(data: {
-  contentHash: string;
-  fileId: string; // pageId
-  mimeType: string;
-  originalName: string;
-}): Promise<{ success: boolean; text?: string; metadata?: any }>;
+export async function extractText(data: TextExtractJobData): Promise<TextExtractResult>;
+// TextExtractResult: { success: boolean; text?: string; textLength?: number; metadata?: Record<string, unknown>; error?: string; cached?: boolean }
 ```
 
 **Status**: ✅ Implemented
@@ -154,8 +150,8 @@ All uploads are queued as a single `ingest-file` job. The processor classifies t
 
 **Job Contract**
 - `type`: `ingest-file`
-- `data`: `{ pageId, contentHash, mimeType, originalName, priority?, traceId? }`
-- Idempotency: keyed by `contentHash` (+ `pageId`); checks cache before work.
+- `data`: `{ fileId, contentHash, mimeType, originalName }` (see `IngestFileJobData`)
+- Idempotency: keyed by `contentHash` (+ `fileId`); checks cache before work.
 
 **Behavior**
 - Images → mark `processingStatus=visual`, `extractionMethod=visual`; queue `image-optimize` for `ai-chat` and `thumbnail`; optionally queue `ocr-process` if OCR enabled.
@@ -177,12 +173,13 @@ Headers: {
 Body: file (binary), pageId, userId
 
 Response: {
+  success: boolean,
   contentHash: string,
   originalName: string,
   size: number,
   mimeType: string,
   deduplicated: boolean,
-  jobs: { ingest?: true } | { textExtraction?: true; imageOptimization?: string[]; ocr?: true }
+  jobs: string[]  // job IDs from PgBoss
 }
 ```
 
@@ -442,9 +439,8 @@ interface HealthMetrics {
 ### Performance Improvements
 1. **WebAssembly**: WASM-based image processing
 2. **GPU Acceleration**: For AI and image processing
-3. **Streaming Uploads**: Chunked upload support
-4. **Progressive Enhancement**: Progressive image loading
-5. **Smart Caching**: ML-based cache prediction
+3. **Progressive Enhancement**: Progressive image loading
+4. **Smart Caching**: ML-based cache prediction
 
 ## Development & Testing
 

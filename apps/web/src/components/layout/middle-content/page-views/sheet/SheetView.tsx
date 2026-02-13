@@ -12,9 +12,9 @@ import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import {
   SheetData,
   SheetExternalReferenceToken,
+  adjustFormulaReferences,
   collectExternalReferences,
   encodeCellAddress,
-  decodeCellAddress,
   evaluateSheet,
   PageType,
   parseSheetContent,
@@ -124,34 +124,6 @@ const getSelectionAddress = (selection: SelectionState): string => {
   const startAddr = encodeCellAddress(start.row, start.column);
   const endAddr = encodeCellAddress(end.row, end.column);
   return `${startAddr}:${endAddr}`;
-};
-
-// Adjust formula references when pasting
-const adjustFormulaReferences = (formula: string, rowOffset: number, colOffset: number): string => {
-  if (!formula.startsWith('=')) {
-    return formula;
-  }
-
-  // Simple regex to find cell references like A1, B2, etc.
-  const cellRefRegex = /([A-Z]+)(\d+)/g;
-
-  return formula.replace(cellRefRegex, (match, colLetters, rowNum) => {
-    try {
-      // Parse the original reference
-      const originalRef = `${colLetters}${rowNum}`;
-      const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
-
-      // Apply offset
-      const newRow = Math.max(0, origRow + rowOffset);
-      const newCol = Math.max(0, origCol + colOffset);
-
-      // Return the adjusted reference
-      return encodeCellAddress(newRow, newCol);
-    } catch {
-      // If parsing fails, return original
-      return match;
-    }
-  });
 };
 
 const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');
@@ -390,7 +362,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       const response = await fetchWithAuth(`/api/pages/${page.id}`);
       if (response.ok) {
         const updatedPage = await response.json();
-        updateContentFromServer(updatedPage.content);
+        updateContentFromServer(updatedPage.content, updatedPage.revision);
       }
     } catch (error) {
       console.error('Failed to refresh sheet:', error);
@@ -1601,7 +1573,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         if (!response.ok) return;
         const updatedPage = await response.json();
         if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
-          updateContentFromServer(updatedPage.content);
+          updateContentFromServer(updatedPage.content, updatedPage.revision);
         }
       } catch (error) {
         console.error('Failed to fetch updated sheet content:', error);

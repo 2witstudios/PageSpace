@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -102,9 +102,9 @@ describe('/api/feedback', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user, rate limit allowed
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockWebAuth('user-123'));
-    (isAuthError as unknown as Mock).mockReturnValue(false);
-    (checkDistributedRateLimit as unknown as Mock).mockResolvedValue({ allowed: true });
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('user-123'));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
   });
 
   describe('successful feedback submission', () => {
@@ -154,8 +154,8 @@ describe('/api/feedback', () => {
       await POST(request);
 
       expect(db.insert).toHaveBeenCalled();
-      const insertMock = db.insert as unknown as Mock;
-      const valuesMock = insertMock.mock.results[0].value.values as Mock;
+      const insertMock = vi.mocked(db.insert);
+      const valuesMock = (insertMock.mock.results[0].value as { values: ReturnType<typeof vi.fn> }).values;
       expect(valuesMock).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-123',
@@ -185,8 +185,8 @@ describe('/api/feedback', () => {
 
   describe('authentication errors (401)', () => {
     it('POST_withNoSession_returns401', async () => {
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockAuthError(401));
-      (isAuthError as unknown as Mock).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+      vi.mocked(isAuthError).mockReturnValue(true);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -195,8 +195,8 @@ describe('/api/feedback', () => {
     });
 
     it('POST_withInvalidSession_returns401', async () => {
-      (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockAuthError(401));
-      (isAuthError as unknown as Mock).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+      vi.mocked(isAuthError).mockReturnValue(true);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -207,7 +207,7 @@ describe('/api/feedback', () => {
 
   describe('rate limiting (429)', () => {
     it('POST_whenRateLimitExceeded_returns429', async () => {
-      (checkDistributedRateLimit as unknown as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 1800,
       });
@@ -222,7 +222,7 @@ describe('/api/feedback', () => {
     });
 
     it('POST_whenRateLimitExceeded_logsWarning', async () => {
-      (checkDistributedRateLimit as unknown as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 3600,
       });
@@ -396,10 +396,10 @@ describe('/api/feedback', () => {
 
   describe('error handling (500)', () => {
     it('POST_whenDatabaseThrows_returns500WithGenericError', async () => {
-      const insertMock = db.insert as unknown as Mock;
+      const insertMock = vi.mocked(db.insert);
       insertMock.mockReturnValue({
         values: vi.fn().mockRejectedValue(new Error('DB connection failed')),
-      });
+      } as never);
 
       const request = createRequest({ message: 'Test' });
       const response = await POST(request);
@@ -411,10 +411,10 @@ describe('/api/feedback', () => {
     });
 
     it('POST_whenUnexpectedError_logsError', async () => {
-      const insertMock = db.insert as unknown as Mock;
+      const insertMock = vi.mocked(db.insert);
       insertMock.mockReturnValue({
         values: vi.fn().mockRejectedValue(new Error('Unexpected error')),
-      });
+      } as never);
 
       const request = createRequest({ message: 'Test' });
       await POST(request);

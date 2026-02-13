@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils/index";
 import type { ToolUIPart } from "ai";
+import type { ExtendedToolState } from "@/types/ai-sdk-extensions";
 import {
   CheckCircleIcon,
   ChevronDownIcon,
@@ -30,15 +31,14 @@ export const Tool = ({ className, ...props }: ToolProps) => (
 export type ToolHeaderProps = {
   title?: string;
   type: ToolUIPart["type"];
-  state: ToolUIPart["state"];
+  state: ExtendedToolState;
   className?: string;
 };
 
-const getStatusIcon = (status: ToolUIPart["state"]): ReactNode => {
-  const icons: Record<ToolUIPart["state"], ReactNode> = {
+const getStatusIcon = (status: ExtendedToolState): ReactNode => {
+  const icons: Record<string, ReactNode> = {
     "input-streaming": <CircleIcon className="size-4 text-muted-foreground" />,
     "input-available": <ClockIcon className="size-4 text-primary animate-pulse" />,
-    // @ts-expect-error state only available in AI SDK v6
     "approval-requested": <ClockIcon className="size-4 text-yellow-600" />,
     "approval-responded": <CheckCircleIcon className="size-4 text-blue-600" />,
     "output-available": <CheckCircleIcon className="size-4 text-green-600" />,

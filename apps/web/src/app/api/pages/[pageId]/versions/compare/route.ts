@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib';
 import { getActivityById } from '@/services/api';
 import { loggers } from '@pagespace/lib/server';
@@ -99,6 +99,10 @@ export async function GET(
   const { pageId } = await context.params;
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+
+  // Check MCP token scope before page access
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   loggers.api.debug('[VersionCompare:Route] GET compare request', {
     pageId: maskIdentifier(pageId),

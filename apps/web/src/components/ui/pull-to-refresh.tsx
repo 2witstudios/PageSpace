@@ -38,7 +38,8 @@ export function PullToRefresh({
 }: PullToRefreshProps) {
   const isMobile = useMobile();
   const isTouchDevice = useTouchDevice();
-  const isEnabled = isMobile && isTouchDevice && !disabled;
+  const isSupportedDevice = isMobile && isTouchDevice;
+  const isEnabled = isSupportedDevice && !disabled;
 
   const { pullDistance, isPulling, isRefreshing, hasReachedThreshold, touchHandlers, containerRef } =
     usePullToRefresh({
@@ -54,8 +55,8 @@ export function PullToRefresh({
   const spinnerRotation = isRefreshing ? 0 : (pullDistance / threshold) * 360;
   const spinnerScale = Math.min(0.5 + (pullDistance / threshold) * 0.5, 1);
 
-  // If not enabled, just render children without wrapper
-  if (!isEnabled) {
+  // If this isn't a mobile touch device, render children unchanged.
+  if (!isSupportedDevice) {
     return <>{children}</>;
   }
 
@@ -64,26 +65,50 @@ export function PullToRefresh({
     ref?: React.Ref<HTMLElement>;
     onTouchStart?: (e: React.TouchEvent) => void;
     onTouchMove?: (e: React.TouchEvent) => void;
-    onTouchEnd?: () => void;
-    onTouchCancel?: () => void;
+    onTouchEnd?: (e: React.TouchEvent) => void;
+    onTouchCancel?: (e: React.TouchEvent) => void;
     style?: React.CSSProperties;
     className?: string;
   }>;
 
   const enhancedChild = React.cloneElement(childElement, {
     ref: containerRef as React.Ref<HTMLElement>,
-    onTouchStart: touchHandlers.onTouchStart,
-    onTouchMove: touchHandlers.onTouchMove,
-    onTouchEnd: touchHandlers.onTouchEnd,
-    onTouchCancel: touchHandlers.onTouchCancel,
+    onTouchStart: (e: React.TouchEvent) => {
+      childElement.props.onTouchStart?.(e);
+      if (isEnabled) {
+        touchHandlers.onTouchStart(e);
+      }
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      childElement.props.onTouchMove?.(e);
+      if (isEnabled) {
+        touchHandlers.onTouchMove(e);
+      }
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      childElement.props.onTouchEnd?.(e);
+      if (isEnabled) {
+        void touchHandlers.onTouchEnd();
+      }
+    },
+    onTouchCancel: (e: React.TouchEvent) => {
+      childElement.props.onTouchCancel?.(e);
+      if (isEnabled) {
+        touchHandlers.onTouchCancel();
+      }
+    },
     style: {
       ...childElement.props.style,
       // Add visual offset when pulling
-      transform: direction === 'top' && pullDistance > 0 ? `translateY(${pullDistance}px)` : undefined,
-      transition: isPulling ? 'none' : 'transform 0.2s ease-out',
+      ...(isEnabled
+        ? {
+            transform: direction === 'top' && pullDistance > 0 ? `translateY(${pullDistance}px)` : undefined,
+            transition: isPulling ? 'none' : 'transform 0.2s ease-out',
+          }
+        : {}),
       // Prevent native scroll/gesture handling while actively pulling
       // This ensures e.preventDefault() works in touch handlers
-      touchAction: isPulling ? 'none' : undefined,
+      touchAction: isEnabled && isPulling ? 'none' : undefined,
     },
   });
 

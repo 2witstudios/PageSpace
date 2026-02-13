@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
-import { verifyAdminAuth } from '@/lib/auth';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import AdminLayoutClient from './AdminLayoutClient';
 
 export default async function AdminLayout({
@@ -17,9 +17,9 @@ export default async function AdminLayout({
   });
 
   // Verify user is authenticated and is an admin
-  const adminUser = await verifyAdminAuth(request);
-  
-  if (!adminUser) {
+  const adminAuthResult = await verifyAdminAuth(request);
+
+  if (isAdminAuthError(adminAuthResult)) {
     // Redirect non-admin users to home page
     redirect('/');
   }

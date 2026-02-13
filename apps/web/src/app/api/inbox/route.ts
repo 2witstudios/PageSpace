@@ -4,17 +4,10 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers, getBatchPagePermissions } from '@pagespace/lib/server';
 import type { InboxItem, InboxResponse } from '@pagespace/lib';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { toISOTimestamp } from '@/lib/utils/timestamp';
+import type { ChannelRow, DMRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-
-// Helper to convert raw PostgreSQL timestamp strings to ISO format
-const toISOTimestamp = (timestamp: string | null): string | null => {
-  if (!timestamp) return null;
-  if (timestamp.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(timestamp)) {
-    return timestamp;
-  }
-  return new Date(timestamp + 'Z').toISOString();
-};
 
 // GET /api/inbox - Get unified inbox (DMs + channels)
 export async function GET(request: Request) {
@@ -44,7 +37,7 @@ export async function GET(request: Request) {
       const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
 
       // Drive-specific inbox: only channels from this drive
-      const channelResults = await db.execute(sql`
+      const channelResults = await db.execute<ChannelRow>(sql`
         WITH drive_channels AS (
           SELECT
             p.id,
@@ -64,7 +57,7 @@ export async function GET(request: Request) {
             cm."pageId",
             cm.content as last_message,
             cm."createdAt" as last_message_at,
-            u.name as sender_name
+            COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
           FROM channel_messages cm
           INNER JOIN drive_channels dc ON dc.id = cm."pageId"
           LEFT JOIN users u ON u.id = cm."userId"
@@ -76,7 +69,10 @@ export async function GET(request: Request) {
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
           WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
-            AND cm."userId" != ${userId}
+            AND (
+              cm."userId" != ${userId}
+              OR cm."aiMeta"->>'senderType' = 'agent'
+            )
           GROUP BY cm."pageId"
         )
         SELECT
@@ -100,38 +96,26 @@ export async function GET(request: Request) {
         LIMIT ${fetchLimit}
       `);
 
-      interface ChannelRow {
-        id: string;
-        name: string;
-        drive_id: string;
-        drive_name: string;
-        last_message: string | null;
-        last_message_at: string | null;
-        sender_name: string | null;
-        unread_count: string;
-      }
-
-      const typedChannelRows = channelResults.rows.map((row) => row as unknown as ChannelRow);
       const channelPermissions = await getBatchPagePermissions(
         userId,
-        typedChannelRows.map((row) => row.id)
+        channelResults.rows.map((row) => row.id)
       );
 
-      for (const typedRow of typedChannelRows) {
-        const permissions = channelPermissions.get(typedRow.id);
+      for (const row of channelResults.rows) {
+        const permissions = channelPermissions.get(row.id);
         if (!permissions?.canView) continue;
 
         items.push({
-          id: typedRow.id,
+          id: row.id,
           type: 'channel',
-          name: typedRow.name,
+          name: row.name,
           avatarUrl: null,
-          lastMessageAt: toISOTimestamp(typedRow.last_message_at),
-          lastMessagePreview: typedRow.last_message ? typedRow.last_message.substring(0, 100) : null,
-          lastMessageSender: typedRow.sender_name,
-          unreadCount: parseInt(typedRow.unread_count) || 0,
-          driveId: typedRow.drive_id,
-          driveName: typedRow.drive_name,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+          lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
+          lastMessageSender: row.sender_name,
+          unreadCount: parseInt(row.unread_count) || 0,
+          driveId: row.drive_id,
+          driveName: row.drive_name,
         });
       }
 
@@ -159,7 +143,7 @@ export async function GET(request: Request) {
       const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
 
       // Fetch DM conversations with cursor filtering
-      const dmResults = await db.execute(sql`
+      const dmResults = await db.execute<DMRow>(sql`
         WITH dm_data AS (
           SELECT
             c.id,
@@ -203,32 +187,21 @@ export async function GET(request: Request) {
         LIMIT ${fetchLimit}
       `);
 
-      interface DMRow {
-        id: string;
-        last_message_at: string | null;
-        last_message: string | null;
-        other_user_name: string;
-        other_user_display_name: string | null;
-        other_user_avatar_url: string | null;
-        unread_count: string;
-      }
-
       for (const row of dmResults.rows) {
-        const typedRow = row as unknown as DMRow;
         items.push({
-          id: typedRow.id,
+          id: row.id,
           type: 'dm',
-          name: typedRow.other_user_display_name || typedRow.other_user_name,
-          avatarUrl: typedRow.other_user_avatar_url,
-          lastMessageAt: toISOTimestamp(typedRow.last_message_at),
-          lastMessagePreview: typedRow.last_message,
+          name: row.other_user_display_name || row.other_user_name,
+          avatarUrl: row.other_user_avatar_url,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+          lastMessagePreview: row.last_message,
           lastMessageSender: null,
-          unreadCount: parseInt(typedRow.unread_count) || 0,
+          unreadCount: parseInt(row.unread_count) || 0,
         });
       }
 
       // Fetch channels from all drives user is member of or owns
-      const channelResults = await db.execute(sql`
+      const channelResults = await db.execute<ChannelRow>(sql`
         WITH user_channels AS (
           SELECT
             p.id,
@@ -247,7 +220,7 @@ export async function GET(request: Request) {
             cm."pageId",
             cm.content as last_message,
             cm."createdAt" as last_message_at,
-            u.name as sender_name
+            COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
           FROM channel_messages cm
           INNER JOIN user_channels uc ON uc.id = cm."pageId"
           LEFT JOIN users u ON u.id = cm."userId"
@@ -259,7 +232,10 @@ export async function GET(request: Request) {
           LEFT JOIN channel_read_status crs
             ON crs."channelId" = cm."pageId" AND crs."userId" = ${userId}
           WHERE cm."createdAt" > COALESCE(crs."lastReadAt", '1970-01-01'::timestamp)
-            AND cm."userId" != ${userId}
+            AND (
+              cm."userId" != ${userId}
+              OR cm."aiMeta"->>'senderType' = 'agent'
+            )
           GROUP BY cm."pageId"
         )
         SELECT
@@ -283,38 +259,26 @@ export async function GET(request: Request) {
         LIMIT ${fetchLimit}
       `);
 
-      interface ChannelRow {
-        id: string;
-        name: string;
-        drive_id: string;
-        drive_name: string;
-        last_message: string | null;
-        last_message_at: string | null;
-        sender_name: string | null;
-        unread_count: string;
-      }
-
-      const typedChannelRows = channelResults.rows.map((row) => row as unknown as ChannelRow);
       const channelPermissions = await getBatchPagePermissions(
         userId,
-        typedChannelRows.map((row) => row.id)
+        channelResults.rows.map((row) => row.id)
       );
 
-      for (const typedRow of typedChannelRows) {
-        const permissions = channelPermissions.get(typedRow.id);
+      for (const row of channelResults.rows) {
+        const permissions = channelPermissions.get(row.id);
         if (!permissions?.canView) continue;
 
         items.push({
-          id: typedRow.id,
+          id: row.id,
           type: 'channel',
-          name: typedRow.name,
+          name: row.name,
           avatarUrl: null,
-          lastMessageAt: toISOTimestamp(typedRow.last_message_at),
-          lastMessagePreview: typedRow.last_message ? typedRow.last_message.substring(0, 100) : null,
-          lastMessageSender: typedRow.sender_name,
-          unreadCount: parseInt(typedRow.unread_count) || 0,
-          driveId: typedRow.drive_id,
-          driveName: typedRow.drive_name,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+          lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
+          lastMessageSender: row.sender_name,
+          unreadCount: parseInt(row.unread_count) || 0,
+          driveId: row.drive_id,
+          driveName: row.drive_name,
         });
       }
 

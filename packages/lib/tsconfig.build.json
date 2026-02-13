@@ -18,8 +18,9 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "jsx": "react",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "typeRoots": ["../../node_modules/@types", "../../types"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../../types/**/*"],
   "exclude": ["**/*.test.ts", "**/__tests__/**"]
 }

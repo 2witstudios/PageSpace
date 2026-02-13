@@ -5,11 +5,21 @@
  * Handles both initial full sync and incremental updates.
  */
 
-import { db, googleCalendarConnections, calendarEvents, eq, and } from '@pagespace/db';
+import { db, googleCalendarConnections, calendarEvents, eventAttendees, users, eq, and, isNull, inArray, sql, desc } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { getValidAccessToken } from './token-refresh';
-import { listEvents, type GoogleCalendarEvent } from './api-client';
+import { maskIdentifier } from '@/lib/logging/mask';
+import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
+import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
+import { createId } from '@paralleldrive/cuid2';
+import { generateWebhookToken } from './webhook-token';
+
+type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
+type WebhookChannels = Record<string, WebhookChannel>;
+
+/** Check if a database error is a unique constraint violation (PostgreSQL error code 23505). */
+const isUniqueConstraintError = (err: unknown): boolean =>
+  err instanceof Error && 'code' in err && (err as { code: string }).code === '23505';
 
 export interface SyncResult {
   success: boolean;
@@ -82,6 +92,16 @@ export const syncGoogleCalendar = async (
     // Get connection details
     const connection = await db.query.googleCalendarConnections.findFirst({
       where: eq(googleCalendarConnections.userId, userId),
+      columns: {
+        id: true,
+        status: true,
+        selectedCalendars: true,
+        targetDriveId: true,
+        syncCursor: true,
+        googleEmail: true,
+        webhookChannels: true,
+        markAsReadOnly: true,
+      },
     });
 
     if (!connection) {
@@ -94,8 +114,21 @@ export const syncGoogleCalendar = async (
       return result;
     }
 
-    const calendarsToSync = connection.selectedCalendars || ['primary'];
+    // One-time cleanup: fix legacy read-only flags and alias mismatches
+    // Only runs for connections that still have the old markAsReadOnly=true default.
+    // After first run, cleanupLegacyData sets markAsReadOnly=false, so subsequent syncs skip it.
+    if (connection.markAsReadOnly) {
+      await cleanupLegacyData(userId, connection.googleEmail);
+    }
+
+    // Resolve 'primary' alias to actual email for storage keys (deduplication)
+    const rawCalendars = connection.selectedCalendars || ['primary'];
+    const resolvedCalendars = rawCalendars.map(id =>
+      id === 'primary' ? (connection.googleEmail || 'primary') : id
+    );
+    const calendarsToSync = [...new Set(resolvedCalendars)];
     const accessToken = tokenResult.accessToken;
+    const googleEmail = connection.googleEmail;
 
     // Determine time range for sync
     const now = new Date();
@@ -110,12 +143,16 @@ export const syncGoogleCalendar = async (
       // Use per-calendar sync token for incremental sync if available and not forcing full sync
       const calendarSyncToken = !options.fullSync ? syncCursors[calendarId] : undefined;
 
+      // Use 'primary' alias for Google API calls when the calendar matches the user's email.
+      // Some Google Workspace configurations return 404 when using the email as a calendar ID.
+      const apiCalendarId = (googleEmail && calendarId === googleEmail) ? 'primary' : calendarId;
+
       const calendarResult = await syncCalendar(
         userId,
         accessToken,
+        apiCalendarId,
         calendarId,
         connection.targetDriveId,
-        connection.markAsReadOnly,
         calendarSyncToken,
         timeMin,
         timeMax
@@ -151,35 +188,144 @@ export const syncGoogleCalendar = async (
       eventsDeleted: result.eventsDeleted,
     });
 
+    // Register/renew webhook push notification channels (non-blocking best effort)
+    registerWebhookChannels(userId, accessToken, calendarsToSync, googleEmail).catch((err) => {
+      loggers.api.warn('Failed to register webhook channels after sync', {
+        userId,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    });
+
     return result;
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    result.error = errorMessage;
+    const rawMessage = error instanceof Error ? error.message : 'Unknown error';
+    const requiresReauth = error instanceof Error && (error as Error & { requiresReauth?: boolean }).requiresReauth === true;
+    // Store a user-friendly error message, not raw API details
+    const userMessage = requiresReauth
+      ? 'Calendar permissions may have been revoked — please reconnect'
+      : 'Sync could not be completed — please try again later';
+    result.error = userMessage;
 
-    loggers.api.error('Google Calendar sync failed', error as Error, { userId });
+    loggers.api.error('Google Calendar sync failed', error as Error, { userId, rawMessage });
 
-    // Update connection with error
-    await db
-      .update(googleCalendarConnections)
-      .set({
-        lastSyncError: errorMessage,
-        updatedAt: new Date(),
-      })
-      .where(eq(googleCalendarConnections.userId, userId));
+    if (requiresReauth) {
+      // Permission or auth error — mark connection so UI can prompt reconnection
+      await updateConnectionStatus(userId, 'error', userMessage);
+      await db
+        .update(googleCalendarConnections)
+        .set({
+          lastSyncError: userMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(googleCalendarConnections.userId, userId));
+    } else {
+      // Transient or unknown error — keep connection active
+      await db
+        .update(googleCalendarConnections)
+        .set({
+          lastSyncError: userMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(googleCalendarConnections.userId, userId));
+    }
 
     return result;
   }
 };
 
 /**
+ * Fix legacy data from when read-only mode was the default.
+ * Idempotent: runs every sync but is a no-op after first run.
+ */
+const cleanupLegacyData = async (userId: string, googleEmail: string | null): Promise<void> => {
+  // 1. Fix connection: ensure markAsReadOnly is false
+  await db
+    .update(googleCalendarConnections)
+    .set({ markAsReadOnly: false, updatedAt: new Date() })
+    .where(and(
+      eq(googleCalendarConnections.userId, userId),
+      eq(googleCalendarConnections.markAsReadOnly, true)
+    ));
+
+  // 2. Fix events: ensure all synced events are editable
+  await db
+    .update(calendarEvents)
+    .set({ googleSyncReadOnly: false, updatedAt: new Date() })
+    .where(and(
+      eq(calendarEvents.createdById, userId),
+      eq(calendarEvents.googleSyncReadOnly, true)
+    ));
+
+  // 3. Deduplicate BEFORE calendarId update: find events with same googleEventId
+  //    but different googleCalendarId and soft-delete the older duplicates.
+  //    This must run before the "primary" alias fix below, otherwise the calendarId
+  //    update can violate the unique constraint when a duplicate already exists.
+  const duplicateResult = await db.execute<{
+    google_event_id: string;
+    cnt: string;
+  }>(sql`
+    SELECT "googleEventId" as google_event_id, COUNT(*) as cnt
+    FROM calendar_events
+    WHERE "createdById" = ${userId}
+      AND "googleEventId" IS NOT NULL
+      AND "isTrashed" = false
+    GROUP BY "googleEventId"
+    HAVING COUNT(*) > 1
+  `);
+
+  for (const row of duplicateResult.rows) {
+    const googleEventId = row.google_event_id;
+    // Find all copies, keep the newest one
+    const copies = await db
+      .select({ id: calendarEvents.id })
+      .from(calendarEvents)
+      .where(and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.googleEventId, googleEventId),
+        eq(calendarEvents.isTrashed, false)
+      ))
+      .orderBy(desc(calendarEvents.updatedAt));
+
+    if (copies.length > 1) {
+      const idsToTrash = copies.slice(1).map(c => c.id);
+      await db
+        .update(calendarEvents)
+        .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+        .where(inArray(calendarEvents.id, idsToTrash));
+
+      loggers.api.info('Deduplicated Google Calendar events', {
+        userId,
+        googleEventId,
+        removedCount: idsToTrash.length,
+      });
+    }
+  }
+
+  // 4. Fix "primary" alias: update to resolved email so lookups match.
+  //    Safe to run after deduplication above.
+  if (googleEmail) {
+    await db
+      .update(calendarEvents)
+      .set({ googleCalendarId: googleEmail, updatedAt: new Date() })
+      .where(and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.googleCalendarId, 'primary')
+      ));
+  }
+};
+
+/**
  * Sync a single calendar's events.
+ *
+ * @param apiCalendarId - Calendar ID for Google API calls (e.g., 'primary')
+ * @param storageCalendarId - Calendar ID for database storage (e.g., user's email)
  */
 const syncCalendar = async (
   userId: string,
   accessToken: string,
-  calendarId: string,
+  apiCalendarId: string,
+  storageCalendarId: string,
   targetDriveId: string | null,
-  markAsReadOnly: boolean,
   syncToken: string | undefined | null,
   timeMin: Date,
   timeMax: Date
@@ -196,8 +342,8 @@ const syncCalendar = async (
     syncCursor: undefined as string | undefined,
   };
 
-  // Fetch events from Google
-  const listResult = await listEvents(accessToken, calendarId, {
+  // Fetch events from Google using the API calendar ID
+  const listResult = await listEvents(accessToken, apiCalendarId, {
     syncToken: syncToken ?? undefined,
     timeMin: syncToken ? undefined : timeMin, // Don't use time range with sync token
     timeMax: syncToken ? undefined : timeMax,
@@ -206,17 +352,33 @@ const syncCalendar = async (
   if (!listResult.success) {
     // If sync token is invalid, fall back to full sync (only if we were using a sync token)
     if (listResult.statusCode === 410 && syncToken) {
-      loggers.api.info('Sync token expired, performing full sync', { userId, calendarId });
+      loggers.api.info('Sync token expired, performing full sync', { userId, calendarId: maskIdentifier(storageCalendarId) });
       return syncCalendar(
         userId,
         accessToken,
-        calendarId,
+        apiCalendarId,
+        storageCalendarId,
         targetDriveId,
-        markAsReadOnly,
         undefined, // No sync token - this guarantees no further 410 fallback
         timeMin,
         timeMax
       );
+    }
+
+    // Calendar not found — skip gracefully instead of failing the entire sync
+    if (listResult.statusCode === 404) {
+      loggers.api.warn('Calendar not found, skipping', {
+        userId,
+        calendarId: maskIdentifier(storageCalendarId),
+      });
+      return result;
+    }
+
+    // Propagate permission/auth errors so the caller can update connection status
+    if (listResult.requiresReauth) {
+      const error = new Error(listResult.error);
+      (error as Error & { requiresReauth: boolean }).requiresReauth = true;
+      throw error;
     }
 
     throw new Error(listResult.error);
@@ -225,23 +387,32 @@ const syncCalendar = async (
   const { events, nextSyncToken } = listResult.data;
   result.syncCursor = nextSyncToken;
 
-  // Process each event
+  // Process each event — isolate failures so one bad event doesn't abort the sync
+  // Use storageCalendarId for database operations (deduplication, lookups)
   for (const googleEvent of events) {
     if (!shouldSyncEvent(googleEvent)) {
       continue;
     }
 
-    const eventResult = await upsertEvent(
-      userId,
-      googleEvent,
-      calendarId,
-      targetDriveId,
-      markAsReadOnly
-    );
+    try {
+      const eventResult = await upsertEvent(
+        userId,
+        googleEvent,
+        storageCalendarId,
+        targetDriveId
+      );
 
-    if (eventResult.action === 'created') result.eventsCreated++;
-    else if (eventResult.action === 'updated') result.eventsUpdated++;
-    else if (eventResult.action === 'deleted') result.eventsDeleted++;
+      if (eventResult.action === 'created') result.eventsCreated++;
+      else if (eventResult.action === 'updated') result.eventsUpdated++;
+      else if (eventResult.action === 'deleted') result.eventsDeleted++;
+    } catch (err) {
+      loggers.api.warn('Failed to sync individual calendar event, skipping', {
+        userId,
+        calendarId: storageCalendarId,
+        googleEventId: googleEvent.id,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
   }
 
   return result;
@@ -254,11 +425,10 @@ const upsertEvent = async (
   userId: string,
   googleEvent: GoogleCalendarEvent,
   calendarId: string,
-  targetDriveId: string | null,
-  markAsReadOnly: boolean
+  targetDriveId: string | null
 ): Promise<{ action: 'created' | 'updated' | 'deleted' | 'skipped' }> => {
-  // Check if event already exists
-  const existingEvent = await db.query.calendarEvents.findFirst({
+  // Check if event already exists — two-step lookup to handle alias mismatches
+  let existingEvent = await db.query.calendarEvents.findFirst({
     where: and(
       eq(calendarEvents.createdById, userId),
       eq(calendarEvents.googleEventId, googleEvent.id),
@@ -270,8 +440,57 @@ const upsertEvent = async (
       title: true,
       startAt: true,
       endAt: true,
+      googleCalendarId: true,
     },
   });
+
+  // Fallback: match by googleEventId alone (covers old "primary" alias records)
+  if (!existingEvent) {
+    existingEvent = await db.query.calendarEvents.findFirst({
+      where: and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.googleEventId, googleEvent.id),
+        eq(calendarEvents.isTrashed, false)
+      ),
+      columns: {
+        id: true,
+        lastGoogleSync: true,
+        title: true,
+        startAt: true,
+        endAt: true,
+        googleCalendarId: true,
+      },
+    });
+
+    // Fix the stale calendarId so future lookups hit the exact match
+    if (existingEvent && existingEvent.googleCalendarId !== calendarId) {
+      try {
+        await db
+          .update(calendarEvents)
+          .set({ googleCalendarId: calendarId, updatedAt: new Date() })
+          .where(eq(calendarEvents.id, existingEvent.id));
+      } catch (err) {
+        if (isUniqueConstraintError(err)) {
+          // Another event already has (userId, calendarId, googleEventId) — this one is a stale duplicate.
+          // Trash it and re-fetch the correct event.
+          await db
+            .update(calendarEvents)
+            .set({ isTrashed: true, trashedAt: new Date(), updatedAt: new Date() })
+            .where(eq(calendarEvents.id, existingEvent.id));
+          existingEvent = await db.query.calendarEvents.findFirst({
+            where: and(
+              eq(calendarEvents.createdById, userId),
+              eq(calendarEvents.googleEventId, googleEvent.id),
+              eq(calendarEvents.googleCalendarId, calendarId)
+            ),
+            columns: { id: true, lastGoogleSync: true, title: true, startAt: true, endAt: true, googleCalendarId: true },
+          });
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
 
   // Handle cancelled/deleted events
   if (googleEvent.status === 'cancelled') {
@@ -295,7 +514,6 @@ const upsertEvent = async (
     userId,
     driveId: targetDriveId,
     googleCalendarId: calendarId,
-    markAsReadOnly,
   });
 
   if (existingEvent) {
@@ -321,12 +539,62 @@ const upsertEvent = async (
         metadata: pageSpaceEvent.metadata,
         isTrashed: pageSpaceEvent.isTrashed,
         trashedAt: pageSpaceEvent.trashedAt,
+        googleSyncReadOnly: false,
         lastGoogleSync: new Date(),
         updatedAt: new Date(),
       })
       .where(eq(calendarEvents.id, existingEvent.id));
 
+    // Map Google attendees to PageSpace users
+    await mapAttendeesToUsers(existingEvent.id, googleEvent.attendees);
+
     return { action: 'updated' };
+  }
+
+  // Near-duplicate check: catch race condition where push created the event locally
+  // but hasn't stored the googleEventId yet (webhook sync arrives first)
+  if (pageSpaceEvent.title && pageSpaceEvent.startAt) {
+    const startWindow = new Date(pageSpaceEvent.startAt.getTime() - 60_000); // 1 min before
+    const endWindow = new Date(pageSpaceEvent.startAt.getTime() + 60_000);   // 1 min after
+    const nearDuplicate = await db.query.calendarEvents.findFirst({
+      where: and(
+        eq(calendarEvents.createdById, userId),
+        eq(calendarEvents.syncedFromGoogle, false),
+        isNull(calendarEvents.googleEventId),
+        eq(calendarEvents.title, pageSpaceEvent.title),
+        eq(calendarEvents.isTrashed, false),
+        sql`${calendarEvents.startAt} >= ${startWindow}`,
+        sql`${calendarEvents.startAt} <= ${endWindow}`
+      ),
+      columns: { id: true },
+    });
+
+    if (nearDuplicate) {
+      // Link the existing local event to this Google event instead of creating a duplicate.
+      // Keep syncedFromGoogle=false so the push service continues to push local edits back.
+      try {
+        await db
+          .update(calendarEvents)
+          .set({
+            googleEventId: googleEvent.id,
+            googleCalendarId: calendarId,
+            googleSyncReadOnly: false,
+            lastGoogleSync: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(calendarEvents.id, nearDuplicate.id));
+
+        await mapAttendeesToUsers(nearDuplicate.id, googleEvent.attendees);
+        return { action: 'updated' };
+      } catch (err) {
+        // Unique constraint violation: a concurrent sync already created this event.
+        // Skip — the existing event is the correct one.
+        if (isUniqueConstraintError(err)) {
+          return { action: 'skipped' };
+        }
+        throw err;
+      }
+    }
   }
 
   // Create new event
@@ -349,7 +617,196 @@ const upsertEvent = async (
     return { action: 'skipped' };
   }
 
+  // Map Google attendees to PageSpace users for newly created event
+  await mapAttendeesToUsers(inserted[0].id, googleEvent.attendees);
+
   return { action: 'created' };
+};
+
+/**
+ * Register or renew webhook push notification channels for all selected calendars.
+ * Channels expire after ~7 days, so they need periodic renewal.
+ */
+export const registerWebhookChannels = async (
+  userId: string,
+  accessToken: string,
+  calendarsToSync: string[],
+  googleEmail?: string | null
+): Promise<void> => {
+  const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL;
+  if (!baseUrl) {
+    loggers.api.warn('Cannot register webhooks: WEB_APP_URL not configured');
+    return;
+  }
+
+  const webhookUrl = `${baseUrl}/api/integrations/google-calendar/webhook`;
+
+  // Get existing channels
+  const connection = await db.query.googleCalendarConnections.findFirst({
+    where: eq(googleCalendarConnections.userId, userId),
+    columns: { webhookChannels: true },
+  });
+
+  const existingChannels: WebhookChannels = (connection?.webhookChannels as WebhookChannels) || {};
+  const updatedChannels: WebhookChannels = {};
+  const now = Date.now();
+
+  for (const calendarId of calendarsToSync) {
+    // Skip special Google calendars (holidays, contacts, etc.) that don't support push
+    if (calendarId.includes('#') && calendarId.includes('@group.v.calendar.google.com')) {
+      loggers.api.info('Skipping webhook for special calendar', { userId, calendarId: maskIdentifier(calendarId) });
+      continue;
+    }
+
+    const existing = existingChannels[calendarId];
+
+    // Skip if channel exists and won't expire within 1 hour
+    if (existing && parseInt(existing.expiration) > now + 3600 * 1000) {
+      updatedChannels[calendarId] = existing;
+      continue;
+    }
+
+    // Stop old channel if it exists (best effort)
+    if (existing) {
+      await stopChannel(accessToken, existing.channelId, existing.resourceId).catch(() => {
+        // Ignore errors stopping old channels
+      });
+    }
+
+    // Create new watch channel with HMAC token for authentication
+    // Use 'primary' alias for the user's primary calendar (same as sync)
+    const apiCalendarId = (googleEmail && calendarId === googleEmail) ? 'primary' : calendarId;
+    const channelId = createId();
+    const webhookToken = generateWebhookToken(userId);
+    const result = await watchCalendar(accessToken, apiCalendarId, webhookUrl, channelId, 7 * 24 * 3600, webhookToken);
+
+    if (result.success) {
+      updatedChannels[calendarId] = {
+        channelId,
+        resourceId: result.data.resourceId,
+        expiration: result.data.expiration,
+      };
+      loggers.api.info('Google Calendar webhook registered', { userId, calendarId: maskIdentifier(calendarId), channelId });
+    } else {
+      loggers.api.warn('Failed to register Google Calendar webhook', {
+        userId,
+        calendarId: maskIdentifier(calendarId),
+        error: result.error,
+      });
+      // Keep old channel if registration failed but it hasn't expired
+      if (existing && parseInt(existing.expiration) > now) {
+        updatedChannels[calendarId] = existing;
+      }
+    }
+  }
+
+  // Remove channels for calendars no longer selected
+  for (const calId of Object.keys(existingChannels)) {
+    if (!calendarsToSync.includes(calId) && existingChannels[calId]) {
+      await stopChannel(accessToken, existingChannels[calId].channelId, existingChannels[calId].resourceId).catch(() => {});
+    }
+  }
+
+  // Persist updated channels
+  await db
+    .update(googleCalendarConnections)
+    .set({
+      webhookChannels: updatedChannels,
+      updatedAt: new Date(),
+    })
+    .where(eq(googleCalendarConnections.userId, userId));
+};
+
+/**
+ * Unregister all webhook channels for a user (called on disconnect).
+ */
+export const unregisterWebhookChannels = async (
+  userId: string,
+  accessToken: string
+): Promise<void> => {
+  const connection = await db.query.googleCalendarConnections.findFirst({
+    where: eq(googleCalendarConnections.userId, userId),
+    columns: { webhookChannels: true },
+  });
+
+  const channels = (connection?.webhookChannels as WebhookChannels) || {};
+
+  for (const calId of Object.keys(channels)) {
+    await stopChannel(accessToken, channels[calId].channelId, channels[calId].resourceId).catch(() => {});
+  }
+
+  await db
+    .update(googleCalendarConnections)
+    .set({
+      webhookChannels: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(googleCalendarConnections.userId, userId));
+};
+
+/**
+ * Map Google event attendees to PageSpace users by email and persist as eventAttendees.
+ * Only maps attendees that have a matching PageSpace user account.
+ */
+const mapAttendeesToUsers = async (
+  eventId: string,
+  googleAttendees: GoogleEventAttendee[] | undefined
+): Promise<void> => {
+  if (!googleAttendees || googleAttendees.length === 0) return;
+
+  // Collect unique attendee emails
+  const emails = [...new Set(googleAttendees.map((a) => a.email.toLowerCase()))];
+  if (emails.length === 0) return;
+
+  // Look up PageSpace users by email (case-insensitive batch query)
+  const matchedUsers = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(inArray(sql`lower(${users.email})`, emails));
+
+  if (matchedUsers.length === 0) return;
+
+  // Build a map of email → userId for fast lookup
+  const emailToUserId = new Map(matchedUsers.map((u) => [u.email.toLowerCase(), u.id]));
+
+  // Map Google response status to PageSpace attendee status
+  const statusMap: Record<string, 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE'> = {
+    needsAction: 'PENDING',
+    accepted: 'ACCEPTED',
+    declined: 'DECLINED',
+    tentative: 'TENTATIVE',
+  };
+
+  // Build attendee records
+  const attendeeValues = googleAttendees
+    .filter((a) => emailToUserId.has(a.email.toLowerCase()))
+    .map((a) => ({
+      id: createId(),
+      eventId,
+      userId: emailToUserId.get(a.email.toLowerCase())!,
+      status: statusMap[a.responseStatus || 'needsAction'] || ('PENDING' as const),
+      isOrganizer: a.organizer ?? false,
+      isOptional: a.optional ?? false,
+    }));
+
+  if (attendeeValues.length === 0) return;
+
+  // Upsert attendees in a single transaction to reduce connection overhead
+  await db.transaction(async (tx) => {
+    for (const attendee of attendeeValues) {
+      await tx
+        .insert(eventAttendees)
+        .values(attendee)
+        .onConflictDoUpdate({
+          target: [eventAttendees.eventId, eventAttendees.userId],
+          set: {
+            status: attendee.status,
+            isOrganizer: attendee.isOrganizer,
+            isOptional: attendee.isOptional,
+          },
+        });
+    }
+  });
 };
 
 /**

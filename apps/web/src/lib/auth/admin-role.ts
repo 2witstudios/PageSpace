@@ -37,23 +37,50 @@ export async function updateUserRole(
   return result[0];
 }
 
+export interface AdminValidationResult {
+  isValid: boolean;
+  reason?: 'user_not_found' | 'not_admin' | 'version_mismatch';
+  actualAdminRoleVersion?: number;
+  currentRole?: string;
+}
+
 /**
  * Validate that a user has admin access with the correct adminRoleVersion.
  * This prevents race conditions where a user's admin status changes between
  * token issuance and request validation.
+ *
+ * Returns detailed result for security logging purposes.
  */
 export async function validateAdminAccess(
   userId: string,
   claimedAdminVersion: number
-): Promise<boolean> {
+): Promise<AdminValidationResult> {
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
     columns: { role: true, adminRoleVersion: true },
   });
 
-  if (!user) return false;
-  if (user.role !== 'admin') return false;
-  if (user.adminRoleVersion !== claimedAdminVersion) return false;
+  if (!user) {
+    return { isValid: false, reason: 'user_not_found' };
+  }
 
-  return true;
+  if (user.role !== 'admin') {
+    return {
+      isValid: false,
+      reason: 'not_admin',
+      currentRole: user.role,
+      actualAdminRoleVersion: user.adminRoleVersion,
+    };
+  }
+
+  if (user.adminRoleVersion !== claimedAdminVersion) {
+    return {
+      isValid: false,
+      reason: 'version_mismatch',
+      currentRole: user.role,
+      actualAdminRoleVersion: user.adminRoleVersion,
+    };
+  }
+
+  return { isValid: true, actualAdminRoleVersion: user.adminRoleVersion };
 }

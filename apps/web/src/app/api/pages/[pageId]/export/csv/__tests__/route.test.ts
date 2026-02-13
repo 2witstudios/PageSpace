@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -46,6 +46,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
 import { db } from '@pagespace/db';
@@ -122,19 +123,19 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (canUserViewPage as Mock).mockResolvedValue(true);
-    (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage());
-    (parseSheetContent as Mock).mockReturnValue(mockSheetData);
-    (sanitizeSheetData as Mock).mockReturnValue(mockSheetData);
-    (evaluateSheet as Mock).mockReturnValue(mockEvaluation);
-    (generateCSV as Mock).mockReturnValue('Name,Age\nJohn,30');
-    (sanitizeFilename as Mock).mockReturnValue('Test_Sheet');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage() as never);
+    vi.mocked(parseSheetContent).mockReturnValue(mockSheetData as never);
+    vi.mocked(sanitizeSheetData).mockReturnValue(mockSheetData as never);
+    vi.mocked(evaluateSheet).mockReturnValue(mockEvaluation as never);
+    vi.mocked(generateCSV).mockReturnValue('Name,Age\nJohn,30');
+    vi.mocked(sanitizeFilename).mockReturnValue('Test_Sheet');
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -144,7 +145,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks view permission', async () => {
-      (canUserViewPage as Mock).mockResolvedValue(false);
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -154,7 +155,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
 
   describe('page validation', () => {
     it('returns 404 when page does not exist', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(null as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -162,7 +163,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('returns 400 when page is not a SHEET type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'DOCUMENT' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'DOCUMENT' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -172,7 +173,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('returns 400 for FOLDER page type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'FOLDER' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'FOLDER' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -182,7 +183,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('returns 400 for AI_CHAT page type', async () => {
-      (db.query.pages.findFirst as Mock).mockResolvedValue(mockPage({ type: 'AI_CHAT' }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPage({ type: 'AI_CHAT' }) as never);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -228,7 +229,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('uses fallback filename when title cannot be sanitized', async () => {
-      (sanitizeFilename as Mock).mockReturnValue('');
+      vi.mocked(sanitizeFilename).mockReturnValue('');
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -236,7 +237,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('includes content length header', async () => {
-      (generateCSV as Mock).mockReturnValue('Name,Age\nJohn,30');
+      vi.mocked(generateCSV).mockReturnValue('Name,Age\nJohn,30');
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -262,7 +263,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
 
   describe('error handling', () => {
     it('returns 500 when sheet parsing fails', async () => {
-      (parseSheetContent as Mock).mockImplementation(() => {
+      vi.mocked(parseSheetContent).mockImplementation(() => {
         throw new Error('Invalid sheet format');
       });
 
@@ -274,7 +275,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('returns 500 when CSV generation fails', async () => {
-      (generateCSV as Mock).mockImplementation(() => {
+      vi.mocked(generateCSV).mockImplementation(() => {
         throw new Error('Generation failed');
       });
 
@@ -286,7 +287,7 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      (db.query.pages.findFirst as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -305,13 +306,13 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
         },
         columnWidths: {},
       };
-      (parseSheetContent as Mock).mockReturnValue(specialData);
-      (sanitizeSheetData as Mock).mockReturnValue(specialData);
-      (evaluateSheet as Mock).mockReturnValue({
+      vi.mocked(parseSheetContent).mockReturnValue(specialData as never);
+      vi.mocked(sanitizeSheetData).mockReturnValue(specialData as never);
+      vi.mocked(evaluateSheet).mockReturnValue({
         display: [['Name, "Nickname"'], ['John\nDoe']],
         errors: {},
-      });
-      (generateCSV as Mock).mockReturnValue('"Name, ""Nickname"""\n"John\nDoe"');
+      } as never);
+      vi.mocked(generateCSV).mockReturnValue('"Name, ""Nickname"""\n"John\nDoe"');
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -323,13 +324,13 @@ describe('GET /api/pages/[pageId]/export/csv', () => {
         cells: {},
         columnWidths: {},
       };
-      (parseSheetContent as Mock).mockReturnValue(emptyData);
-      (sanitizeSheetData as Mock).mockReturnValue(emptyData);
-      (evaluateSheet as Mock).mockReturnValue({
+      vi.mocked(parseSheetContent).mockReturnValue(emptyData as never);
+      vi.mocked(sanitizeSheetData).mockReturnValue(emptyData as never);
+      vi.mocked(evaluateSheet).mockReturnValue({
         display: [],
         errors: {},
-      });
-      (generateCSV as Mock).mockReturnValue('');
+      } as never);
+      vi.mocked(generateCSV).mockReturnValue('');
 
       const response = await GET(createRequest(), { params: mockParams });
 

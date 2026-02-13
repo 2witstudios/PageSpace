@@ -8,6 +8,8 @@ import { ModelCapabilities } from './model-capabilities';
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
+  // User's IANA timezone (e.g., "America/New_York") for timezone-aware tool operations
+  timezone?: string;
   // AI attribution for activity logging
   aiProvider?: string;
   aiModel?: string;
@@ -34,4 +36,11 @@ export interface ToolExecutionContext {
   agentChain?: string[];            // Full chain: [rootAgentId, ...intermediates, currentAgentId]
   requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
   agentCallDepth?: number;          // Depth of agent call chain (0 = direct user request)
+
+  // Chat source identification - determines sender identity for channel messages
+  chatSource?: {
+    type: 'global' | 'page';
+    agentPageId?: string;   // For page agents: the AI_CHAT page ID
+    agentTitle?: string;    // For page agents: the agent display name
+  };
 }

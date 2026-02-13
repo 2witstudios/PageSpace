@@ -1,19 +1,14 @@
 import sharp from 'sharp';
 import { contentStore } from '../server';
-import { IMAGE_PRESETS, ImagePreset } from '../types';
+import { IMAGE_PRESETS } from '../types';
+import type { ImageOptimizeJobData, ImageProcessResult } from '../types';
 
 /** Sanitize a value for safe logging - strips control characters and newlines */
 function sanitizeLogValue(value: string): string {
   return String(value).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 200);
 }
 
-interface ImageJobData {
-  contentHash: string;
-  preset: string;
-  fileId?: string;
-}
-
-export async function processImage(data: ImageJobData): Promise<any> {
+export async function processImage(data: ImageOptimizeJobData): Promise<ImageProcessResult> {
   const { contentHash, preset: presetName } = data;
   
   // Check if already cached
@@ -110,8 +105,8 @@ export async function processImage(data: ImageJobData): Promise<any> {
 }
 
 // Batch optimize function for multiple presets
-export async function optimizeImageForAllPresets(contentHash: string): Promise<any> {
-  const results: Record<string, any> = {};
+export async function optimizeImageForAllPresets(contentHash: string): Promise<Record<string, ImageProcessResult>> {
+  const results: Record<string, ImageProcessResult> = {};
   
   // Process all standard presets in parallel
   const presets = ['ai-chat', 'ai-vision', 'thumbnail', 'preview'];
@@ -121,9 +116,10 @@ export async function optimizeImageForAllPresets(contentHash: string): Promise<a
       try {
         results[preset] = await processImage({ contentHash, preset });
       } catch (error) {
-        results[preset] = { 
-          success: false, 
-          error: error instanceof Error ? error.message : 'Unknown error' 
+        results[preset] = {
+          success: false,
+          cached: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
         };
       }
     })

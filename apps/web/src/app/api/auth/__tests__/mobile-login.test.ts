@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/login/route';
 
 // Mock dependencies
@@ -107,8 +107,8 @@ describe('/api/auth/mobile/login', () => {
     vi.clearAllMocks();
 
     // Default mocks for successful login
-    (db.query.users.findFirst as Mock).mockResolvedValue(mockUser);
-    (bcrypt.compare as Mock).mockResolvedValue(true);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockUser as never);
+    vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
   });
 
   describe('successful mobile login', () => {
@@ -292,8 +292,8 @@ describe('/api/auth/mobile/login', () => {
   describe('invalid credentials', () => {
     it('returns 401 for non-existent email', async () => {
       // Arrange
-      (db.query.users.findFirst as Mock).mockResolvedValue(null);
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -315,7 +315,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('returns 401 for incorrect password', async () => {
       // Arrange
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -337,7 +337,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('performs timing-safe comparison even for non-existent users', async () => {
       // Arrange
-      (db.query.users.findFirst as Mock).mockResolvedValue(null);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -353,7 +353,7 @@ describe('/api/auth/mobile/login', () => {
       expect(bcrypt.compare).toHaveBeenCalled();
 
       // Verify the password was passed (first argument)
-      const [password, hash] = (bcrypt.compare as Mock).mock.calls[0];
+      const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
       expect(password).toBe(validLoginPayload.password);
 
       // Verify a valid bcrypt hash was used (not null/undefined/empty)
@@ -366,7 +366,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('logs failed login attempt', async () => {
       // Arrange
-      (bcrypt.compare as Mock).mockResolvedValue(false);
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -456,7 +456,7 @@ describe('/api/auth/mobile/login', () => {
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
       // Arrange
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
 
@@ -481,7 +481,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('returns 429 when email rate limit exceeded', async () => {
       // Arrange
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
 
@@ -504,7 +504,7 @@ describe('/api/auth/mobile/login', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      (db.query.users.findFirst as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',
@@ -550,7 +550,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('returns 429 with X-RateLimit headers when distributed IP limit exceeded', async () => {
       // Arrange
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
 
@@ -574,7 +574,7 @@ describe('/api/auth/mobile/login', () => {
 
     it('returns 429 with X-RateLimit headers when distributed email limit exceeded', async () => {
       // Arrange
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
 

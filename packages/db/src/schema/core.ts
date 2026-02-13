@@ -3,7 +3,8 @@ import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
-export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST']);
+export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE']);
+export type PageTypeEnum = (typeof pageType.enumValues)[number];
 
 export const drives = pgTable('drives', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -27,6 +28,7 @@ export const pages = pgTable('pages', {
   title: text('title').notNull(),
   type: pageType('type').notNull(),
   content: text('content').default('').notNull(),
+  contentMode: text('contentMode', { enum: ['html', 'markdown'] }).default('html').notNull(),
   isPaginated: boolean('isPaginated').default(false).notNull(),
   position: real('position').notNull(),
   isTrashed: boolean('isTrashed').default(false).notNull(),

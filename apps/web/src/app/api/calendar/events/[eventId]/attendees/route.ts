@@ -9,14 +9,11 @@ import {
 } from '@pagespace/db';
 import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
 import { isUserDriveMember } from '@pagespace/lib';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-const GOOGLE_READ_ONLY_ERROR =
-  'This event is synced from Google Calendar and is read-only. Manage attendee changes in Google Calendar.';
-
 // Schema for adding attendees
 const addAttendeesSchema = z.object({
   userIds: z.array(z.string()).min(1),
@@ -62,6 +59,12 @@ export async function GET(
 
     if (!event) {
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
+    }
+
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
     }
 
     const isCreator = event.createdById === userId;
@@ -178,16 +181,18 @@ export async function POST(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Only creator can add attendees
     if (event.createdById !== userId) {
       return NextResponse.json(
         { error: 'Only the event creator can add attendees' },
         { status: 403 }
       );
-    }
-
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     // PRIVATE events cannot have additional attendees
@@ -313,6 +318,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Verify user is an attendee
     const attendee = await db.query.eventAttendees.findFirst({
       where: and(
@@ -326,10 +337,6 @@ export async function PATCH(
         { error: 'You are not an attendee of this event' },
         { status: 403 }
       );
-    }
-
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     const body = await request.json();
@@ -416,6 +423,12 @@ export async function DELETE(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Check permissions
     // Users can remove themselves, only creator can remove others
     if (targetUserId !== userId && event.createdById !== userId) {
@@ -423,10 +436,6 @@ export async function DELETE(
         { error: 'Only the event creator can remove other attendees' },
         { status: 403 }
       );
-    }
-
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     // Cannot remove the organizer/creator

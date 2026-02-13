@@ -112,6 +112,9 @@ export interface InboxEventPayload {
   unreadCount?: number;
 }
 
+// Presence types - re-export from shared lib
+export type { PresenceViewer, PresencePageViewersPayload } from '@pagespace/lib/client-safe';
+
 const realtimeLogger = loggers.realtime.child({ module: 'socket-utils' });
 
 // Safely access environment variables
@@ -165,11 +168,19 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
 }
 
 /**
- * Broadcasts a drive event to the realtime server
+ * Broadcasts a drive event to specific users' drive channels.
+ *
+ * Security: Only users in recipientUserIds receive the event.
+ * Migration note: When org layer exists, this can broadcast to
+ * org:${orgId}:drives instead of per-user channels.
+ *
  * @param payload - The event payload to broadcast
+ * @param recipientUserIds - User IDs who should receive this event
  */
-export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<void> {
-  // Only broadcast if realtime URL is configured
+export async function broadcastDriveEvent(
+  payload: DriveEventPayload,
+  recipientUserIds: string[]
+): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
     realtimeLogger.warn('Realtime URL not configured, skipping drive event broadcast', {
@@ -178,25 +189,53 @@ export async function broadcastDriveEvent(payload: DriveEventPayload): Promise<v
     return;
   }
 
-  try {
-    const requestBody = JSON.stringify({
-      channelId: 'global:drives',
-      event: `drive:${payload.operation}`,
-      payload,
+  if (recipientUserIds.length === 0) {
+    realtimeLogger.debug('No recipients for drive event broadcast', {
+      driveId: payload.driveId,
+      operation: payload.operation
     });
+    return;
+  }
 
-    await fetch(`${realtimeUrl}/api/broadcast`, {
-      method: 'POST',
-      headers: createSignedBroadcastHeaders(requestBody),
-      body: requestBody,
-    });
+  try {
+    const results = await Promise.allSettled(
+      recipientUserIds.map((userId) => {
+        const requestBody = JSON.stringify({
+          channelId: `user:${userId}:drives`,
+          event: `drive:${payload.operation}`,
+          payload,
+        });
+        return fetch(`${realtimeUrl}/api/broadcast`, {
+          method: 'POST',
+          headers: createSignedBroadcastHeaders(requestBody),
+          body: requestBody,
+        });
+      })
+    );
+
+    const failures = results.filter((r) => r.status === 'rejected');
+    if (failures.length > 0) {
+      realtimeLogger.warn('Some drive event broadcasts failed', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        failedCount: failures.length,
+        totalCount: recipientUserIds.length,
+      });
+    } else if (verboseRealtimeLogging) {
+      realtimeLogger.debug('Drive event broadcasted to users', {
+        operation: payload.operation,
+        driveId: maskIdentifier(payload.driveId),
+        recipientCount: recipientUserIds.length
+      });
+    }
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
     realtimeLogger.error(
       'Failed to broadcast drive event',
       error instanceof Error ? error : undefined,
       {
-        event: 'drive'
+        event: 'drive',
+        operation: payload.operation
       }
     );
   }

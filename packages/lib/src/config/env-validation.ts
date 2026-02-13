@@ -16,13 +16,6 @@ export const serverEnvSchema = z
         'DATABASE_URL must be a valid PostgreSQL connection string'
       ),
 
-    // JWT Authentication
-    JWT_SECRET: z
-      .string()
-      .min(32, 'JWT_SECRET must be at least 32 characters'),
-    JWT_ISSUER: z.string().min(1, 'JWT_ISSUER is required'),
-    JWT_AUDIENCE: z.string().min(1, 'JWT_AUDIENCE is required'),
-
     // CSRF Protection (required in production/development, optional in test)
     CSRF_SECRET: z.string().optional(),
 

@@ -8,7 +8,7 @@
  * - Success: 200 with rollback result
  * - Dry run: 200 with preview data
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
@@ -117,7 +117,7 @@ const mockParams = Promise.resolve({ activityId: mockActivityId });
 describe('POST /api/activities/[activityId]/rollback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
   });
 
   // ============================================
@@ -126,7 +126,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
 
@@ -136,11 +136,11 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
     it('requires CSRF token (auth options include requireCSRF: true)', async () => {
       // Mock a successful rollback so the request completes
-      (executeRollback as Mock).mockResolvedValue({
+      vi.mocked(executeRollback).mockResolvedValue({
         success: true,
         message: 'OK',
         warnings: [],
-      });
+      } as never);
 
       // Verify auth was called with CSRF requirement
       await POST(createRequest({ context: 'page' }), { params: mockParams });
@@ -192,12 +192,12 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
       for (const context of validContexts) {
         vi.clearAllMocks();
-        (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-        (executeRollback as Mock).mockResolvedValue({
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+        vi.mocked(executeRollback).mockResolvedValue({
           success: true,
           message: 'Rollback successful',
           warnings: [],
-        });
+        } as never);
 
         const response = await POST(createRequest({ context }), { params: mockParams });
 
@@ -227,7 +227,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
         affectedResources: [{ type: 'page', id: 'page_123', title: 'Test Page' }],
       });
 
-      (previewRollback as Mock).mockResolvedValue(mockPreview);
+      vi.mocked(previewRollback).mockResolvedValue(mockPreview);
 
       const response = await POST(
         createRequest({ context: 'page', dryRun: true }),
@@ -241,7 +241,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
     });
 
     it('returns preview failure reason when cannot rollback', async () => {
-      (previewRollback as Mock).mockResolvedValue(
+      vi.mocked(previewRollback).mockResolvedValue(
         createMockPreview({
           canExecute: false,
           reason: 'Activity not found',
@@ -266,13 +266,13 @@ describe('POST /api/activities/[activityId]/rollback', () => {
 
   describe('execute rollback', () => {
     it('returns success result when rollback succeeds', async () => {
-      (executeRollback as Mock).mockResolvedValue({
+      vi.mocked(executeRollback).mockResolvedValue({
         success: true,
         rollbackActivityId: 'rollback_activity_123',
         restoredValues: { title: 'Previous Title' },
         message: 'Change undone',
         warnings: [],
-      });
+      } as never);
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -284,11 +284,11 @@ describe('POST /api/activities/[activityId]/rollback', () => {
     });
 
     it('returns 400 when rollback fails', async () => {
-      (executeRollback as Mock).mockResolvedValue({
+      vi.mocked(executeRollback).mockResolvedValue({
         success: false,
         message: 'You need edit permission to rollback changes to this page',
         warnings: [],
-      });
+      } as never);
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -298,12 +298,12 @@ describe('POST /api/activities/[activityId]/rollback', () => {
     });
 
     it('includes warnings in response', async () => {
-      (executeRollback as Mock).mockResolvedValue({
+      vi.mocked(executeRollback).mockResolvedValue({
         success: true,
         message: 'Rollback completed',
         warnings: ['Resource has been modified since this change'],
         restoredValues: {},
-      });
+      } as never);
 
       const response = await POST(createRequest({ context: 'page' }), { params: mockParams });
       const body = await response.json();
@@ -313,11 +313,11 @@ describe('POST /api/activities/[activityId]/rollback', () => {
     });
 
     it('passes correct parameters to service', async () => {
-      (executeRollback as Mock).mockResolvedValue({
+      vi.mocked(executeRollback).mockResolvedValue({
         success: true,
         message: 'OK',
         warnings: [],
-      });
+      } as never);
 
       await POST(createRequest({ context: 'drive' }), { params: mockParams });
 

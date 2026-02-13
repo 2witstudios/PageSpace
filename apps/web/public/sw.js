@@ -5,8 +5,8 @@
  * Uses network-first strategy for API data, cache-first for static assets.
  */
 
-const CACHE_NAME = 'pagespace-v1';
-const STATIC_CACHE_NAME = 'pagespace-static-v1';
+const CACHE_NAME = 'pagespace-v2';
+const STATIC_CACHE_NAME = 'pagespace-static-v2';
 
 // Core pages to cache for offline access
 const OFFLINE_URLS = ['/', '/offline'];
@@ -56,9 +56,28 @@ self.addEventListener('fetch', (event) => {
   // Skip cross-origin requests
   if (url.origin !== self.location.origin) return;
 
+  // Let the browser handle Next.js build assets directly.
+  // Avoid SW-managed cache for runtime chunks to prevent stale bundle mismatches.
+  if (url.pathname.startsWith('/_next/')) return;
+
   // API requests: network-first with cache fallback
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(networkFirstWithCache(request));
+    return;
+  }
+
+  // Next.js RSC (React Server Component) flight data and prefetch requests
+  // must NEVER be cache-first — same URL serves different content based on
+  // headers, and payloads become stale after deploys.
+  if (request.headers.get('rsc') ||
+      request.headers.get('next-router-prefetch') ||
+      request.headers.get('next-router-state-tree') ||
+      request.headers.get('next-url')) {
+    event.respondWith(
+      fetch(request).catch(() =>
+        new Response('', { status: 503, statusText: 'Service Unavailable' })
+      )
+    );
     return;
   }
 
@@ -74,8 +93,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else: cache-first with network fallback
-  event.respondWith(cacheFirstWithNetwork(request));
+  // Everything else: network-first to avoid serving stale dynamic content
+  event.respondWith(networkFirstWithCache(request));
 });
 
 /**
@@ -156,8 +175,6 @@ async function networkFirstWithOfflineFallback(request) {
  */
 function isStaticAsset(pathname) {
   const staticExtensions = [
-    '.js',
-    '.css',
     '.png',
     '.jpg',
     '.jpeg',

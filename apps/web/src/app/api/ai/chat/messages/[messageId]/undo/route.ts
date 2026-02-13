@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, type AuthResult } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 
 // Request body schema for POST /undo
 const undoBodySchema = z.object({
@@ -22,6 +23,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: tr
  * Returns a NextResponse if permission denied, null if allowed
  */
 async function checkUndoPermissions(
+  auth: AuthResult,
   userId: string,
   messageId: string,
   preview: AiUndoPreview,
@@ -31,6 +33,11 @@ async function checkUndoPermissions(
     if (!preview.pageId) {
       return NextResponse.json({ error: 'Page ID missing for page chat' }, { status: 500 });
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, preview.pageId);
+    if (scopeError) return scopeError;
+
     const canEdit = await canUserEditPage(userId, preview.pageId);
     if (!canEdit) {
       loggers.api.warn(`Undo ${operationType} permission denied`, {
@@ -94,7 +101,7 @@ export async function GET(
       source: preview.source,
       pageId: preview.pageId ? maskIdentifier(preview.pageId) : null,
     });
-    const permissionError = await checkUndoPermissions(userId, messageId, preview, 'preview');
+    const permissionError = await checkUndoPermissions(auth, userId, messageId, preview, 'preview');
     if (permissionError) return permissionError;
 
     loggers.api.debug('[AiUndo:Route] Permission check passed');
@@ -160,7 +167,7 @@ export async function POST(
     }
 
     // Check permissions
-    const permissionError = await checkUndoPermissions(userId, messageId, preview, 'execution');
+    const permissionError = await checkUndoPermissions(auth, userId, messageId, preview, 'execution');
     if (permissionError) return permissionError;
 
     loggers.api.debug('[AiUndo:Route] Executing undo', {
@@ -193,9 +200,10 @@ export async function POST(
       );
     }
 
-    // Broadcast real-time updates for affected pages
+    // Broadcast real-time updates for affected pages and channels
     if (mode === 'messages_and_changes') {
       const broadcastedPages = new Set<string>();
+      const broadcastedChannels = new Set<string>();
       for (const activity of preview.activitiesAffected) {
         if (activity.resourceType === 'page' && activity.pageId && activity.driveId) {
           // Deduplicate broadcasts for same page
@@ -212,10 +220,35 @@ export async function POST(
               })
             );
           }
+        } else if (activity.resourceType === 'message' && activity.pageId) {
+          const activityMeta = activity.metadata as Record<string, unknown> | null;
+          if (activityMeta?.conversationType === 'channel' && !broadcastedChannels.has(activity.pageId)) {
+            broadcastedChannels.add(activity.pageId);
+            // Broadcast channel update so clients refresh the message list
+            if (process.env.INTERNAL_REALTIME_URL) {
+              try {
+                const requestBody = JSON.stringify({
+                  channelId: activity.pageId,
+                  event: 'message_deleted',
+                  payload: { messageId: activity.resourceId },
+                });
+                await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+                  method: 'POST',
+                  headers: createSignedBroadcastHeaders(requestBody),
+                  body: requestBody,
+                });
+              } catch (error) {
+                loggers.api.error('[AiUndo:Route] Failed to broadcast channel update', {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+          }
         }
       }
       loggers.api.debug('[AiUndo:Route] Broadcasts sent', {
         pageCount: broadcastedPages.size,
+        channelCount: broadcastedChannels.size,
       });
     }
 

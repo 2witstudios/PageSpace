@@ -1,5 +1,5 @@
 {
-  "id": "01629522-afda-4bfb-90e9-4ef8d56b96ac",
+  "id": "81ac8800-218b-43f6-b3b6-c546c07a6420",
   "prevId": "2e9a8e2d-5cfc-4fca-b5b8-4438b51c7962",
   "version": "7",
   "dialect": "postgresql",
@@ -8547,15 +8547,7 @@
           ]
         }
       },
-      "uniqueConstraints": {
-        "file_pages_page_id_key": {
-          "name": "file_pages_page_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "pageId"
-          ]
-        }
-      }
+      "uniqueConstraints": {}
     },
     "public.files": {
       "name": "files",
@@ -10080,7 +10072,7 @@
           "name": "drive_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "agent_id": {
           "name": "agent_id",

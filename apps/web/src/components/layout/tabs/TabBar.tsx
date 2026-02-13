@@ -20,6 +20,7 @@ import {
 import { Plus } from 'lucide-react';
 import { useTabsStore, selectHasMultipleTabs } from '@/stores/useTabsStore';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
+import { useIsTablet } from '@/hooks/useDeviceTier';
 import { TabItem } from './TabItem';
 import { cn } from '@/lib/utils';
 import { getEffectiveBinding, matchesKeyEvent } from '@/stores/useHotkeyStore';
@@ -32,7 +33,8 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
   const router = useRouter();
   const params = useParams();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isMobile = useBreakpoint('(max-width: 1023px)');
+  const isSmallViewport = useBreakpoint('(max-width: 1023px)');
+  const isTablet = useIsTablet();
 
   const tabs = useTabsStore((state) => state.tabs);
   const activeTabId = useTabsStore((state) => state.activeTabId);
@@ -181,8 +183,8 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
     }
   }, [activeTabId]);
 
-  // Auto-hide on mobile or when 0 or 1 tabs
-  if (isMobile || !hasMultipleTabs) {
+  // Auto-hide on mobile phones or when 0 or 1 tabs (iPad keeps the tab bar)
+  if ((isSmallViewport && !isTablet) || !hasMultipleTabs) {
     return null;
   }
 

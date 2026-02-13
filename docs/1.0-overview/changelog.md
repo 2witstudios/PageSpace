@@ -1,3 +1,99 @@
+## 2026-02-10
+
+### Voice Mode Reliability & User-Facing Error Feedback
+
+Stabilized voice-mode activation and improved failure feedback so users receive immediate, descriptive in-app guidance when microphone/STT/TTS steps fail.
+
+#### Fixed ✅
+
+- **Activation race removed**: voice settings hydration no longer force-disables `isEnabled`, preventing voice overlay from being silently reset during activation.
+- **Mic prompt reliability**: voice mode now auto-starts listening once on overlay activation, ensuring the browser permission prompt and listening indicator appear consistently.
+- **Visible failure messages**: microphone permission/device conflicts, transcription failures, and synthesis failures now present user-friendly error messages in the overlay rather than console-only logs.
+
+#### UX Outcome
+
+- Users can immediately see when voice mode is active.
+- Users are explicitly told why voice startup failed and what to do next.
+- Intermittent "TTS but no listening indicator" behavior is reduced by keeping state transitions explicit during activation.
+### Monaco Worker Stability + CSP Hardening
+
+Fixed Monaco worker bootstrapping by self-hosting Monaco `vs` runtime assets and removing CDN allowances that were only needed for Monaco loading.
+
+#### Changed ✅
+
+- Monaco loader now resolves to self-hosted assets at `/_next/static/monaco/vs`
+- Webpack build now copies `monaco-editor/min/vs` into `.next/static/monaco/vs`
+- Removed legacy `window.MonacoEnvironment.getWorkerUrl` override that pointed to non-existent worker files
+- Removed `monaco-editor-webpack-plugin` dependency from `apps/web`
+- CSP no longer allows `https://cdn.jsdelivr.net` in `script-src`, `style-src`, or `font-src`
+
+## 2026-02-05
+
+### Documentation Update - AI Memory Benchmarking Roadmap
+
+Added a new architecture and measurement roadmap for improving AI memory quality, cross-drive awareness, and request transparency.
+
+#### Added ✅
+
+- **New Guide**: `/docs/3.0-guides-and-tools/ai-memory-benchmarking-roadmap.md`
+  - Ranked value-add backlog focused on measurable quality improvements
+  - Benchmark framework with KPIs for drive selection, cross-drive recall, memory quality, and context traceability
+  - Explicit transparency contract describing what context artifacts must be auditable per request
+  - 90-day implementation sequence and hard success criteria
+## 2026-02-07
+
+### Google Calendar Sync - Full Feature Suite
+
+Comprehensive upgrade to Google Calendar integration with two-way sync, push notifications, calendar selection, attendee mapping, and enhanced settings UI.
+
+#### Two-Way Sync & Push Notifications
+- **OAuth scope upgraded** from `calendar.readonly` to full `calendar` access for bidirectional sync
+- **Webhook push notifications**: Google Calendar sends real-time change notifications to PageSpace via `POST /api/integrations/google-calendar/webhook`, triggering incremental sync automatically
+- **Webhook channel management**: Channels are registered per-calendar after each sync, renewed before expiration, and cleaned up on disconnect
+- **Background sync cron**: New `GET /api/cron/calendar-sync` endpoint processes all connections due for sync based on `syncFrequencyMinutes`. Serves as a safety net when push notifications are delayed
+- **Write-back API functions**: `createGoogleEvent`, `updateGoogleEvent`, `deleteGoogleEvent` added to api-client for pushing PageSpace changes to Google
+
+#### Calendar List & Selection
+- **New API**: `GET /api/integrations/google-calendar/calendars` lists all user's Google calendars with colors, access roles, and primary flag
+- **Calendar picker UI**: Settings page now shows checkboxes for each Google calendar with color swatches, allowing users to select which calendars to sync
+- **`listCalendars()` function** added to api-client
+
+#### Conference Link Extraction
+- **`extractConferenceLink()`**: New pure function extracts the best meeting link from `conferenceData` entry points (preferring video) with fallback to `hangoutLink`
+- **Stored in metadata**: `conferenceLink` and full `conferenceData` now persisted in event metadata JSONB
+
+#### Focus Time & Out-of-Office Events
+- **Focus time events** now sync (were already passing through, now get `focus` color by default)
+- **Out-of-office events** now sync (previously filtered) with `personal` color for availability checking
+- **`mapEventColor()`**: New function applies semantic colors based on event type when no explicit Google color is set
+
+#### Google Attendee to PageSpace User Mapping
+- **Automatic matching**: Google event attendees are matched to PageSpace users by email during sync
+- **Attendee records created/updated** in `event_attendees` table with correct RSVP status (maps Google `responseStatus` to PageSpace `AttendeeStatus`)
+- **Batch email lookup**: Uses `inArray` query for efficient bulk matching
+- **Attendee data in metadata**: Raw Google attendee info also stored in event metadata for reference
+
+#### Settings UI Enhancement
+- **Calendar picker card**: Visual calendar selection with Google color swatches and primary indicator. Changes save and sync instantly on toggle - no save button needed
+- **Event count display**: Shows total synced events count on the connection card
+- **Clean connection card**: Account, last synced, and event count - no configuration clutter
+- **Updated privacy copy**: Reflects two-way sync and conference link access
+- **No sync frequency UI**: Push notifications make sync feel instant; the background cron is invisible infrastructure, not a user setting
+
+#### API Changes
+- `GET /api/integrations/google-calendar/status` — now includes `syncedEventCount`
+- `GET /api/integrations/google-calendar/calendars` — **new**: lists available Google calendars
+- `GET /api/integrations/google-calendar/settings` — **new**: returns settings and event stats
+- `PATCH /api/integrations/google-calendar/settings` — **new**: updates selectedCalendars, syncFrequencyMinutes
+- `POST /api/integrations/google-calendar/webhook` — **new**: receives Google push notifications
+- `GET /api/cron/calendar-sync` — **new**: background sync cron endpoint
+
+#### Schema Changes
+- Added `webhookChannels` (JSONB) column to `google_calendar_connections` for per-calendar webhook channel tracking
+- Migration: `0074_wakeful_vulture.sql`
+
+---
+
 ## 2026-02-06
 
 ### Security Audit - Dependency Updates
@@ -72,6 +168,7 @@ Added browser-style back/forward navigation buttons to the main header navbar, i
 Completed comprehensive documentation of the editor architecture and state management system, solidifying the document state decoupling pattern that resolved systemic re-render issues.
 
 #### Editor Architecture Documentation ✅
+
 - **Updated**: `/docs/2.0-architecture/2.6-features/editor-architecture.md` - Complete editor system documentation (1000+ lines)
   - **Critical Role of Prettier**: Documented how Prettier formatting enables AI line-by-line editing (not cosmetic!)
   - **HTML as Source of Truth**: Complete documentation of dual-editor (Tiptap + Monaco) architecture
@@ -83,6 +180,7 @@ Completed comprehensive documentation of the editor architecture and state manag
   - **Common Patterns**: Save state indicators, navigation prevention, dirty state checking
 
 #### State Management Documentation ✅
+
 - **Updated**: `/docs/2.0-architecture/2.1-frontend/state-management.md` - Complete refactor (680+ lines)
   - **Four Types of State**: Server State (SWR), Application State (pointers), Document State (isolated), UI State (persisted)
   - **Document State Decoupling**: Comprehensive explanation of why and how document state is separated from layout
@@ -118,12 +216,14 @@ Completed comprehensive documentation of the editor architecture and state manag
    - Both with cancellation logic for continuous typing
 
 #### Verification & Consistency ✅
+
 - **Codebase Pattern Confirmed**: No files mix `useLayoutStore` with document state
 - **Single Source of Truth**: `useDocumentManagerStore` accessed only via `useDocument` hook
 - **Clean Separation**: Document editing logic isolated in 3 files (store, hook, debug panel)
 - **Historical Documentation**: SYSTEMIC-RE-RENDER-ISSUE.md explains why this architecture exists
 
 #### Impact
+
 - **Complete Reference**: Developers now have comprehensive documentation of the editor architecture
 - **Implementation Guidance**: Step-by-step guides for creating document-editing page views
 - **Best Practices**: Clear patterns for when to use each content update method
@@ -131,6 +231,7 @@ Completed comprehensive documentation of the editor architecture and state manag
 - **State Management Clarity**: Four types of state with clear separation of concerns
 
 **Documentation Files Updated**:
+
 - `/docs/2.0-architecture/2.6-features/editor-architecture.md` (completely rewritten, 1024 lines)
 - `/docs/2.0-architecture/2.1-frontend/state-management.md` (completely rewritten, 688 lines)
 - `/docs/1.0-overview/changelog.md` (this entry)
@@ -148,16 +249,19 @@ Completed comprehensive documentation of the editor architecture and state manag
 Updated all documentation to reflect the current codebase state, fixing outdated dependency versions, missing features, and incomplete API coverage.
 
 #### Core Documentation Updates ✅
+
 - **CLAUDE.md**: Updated with correct dependency versions, added processor service, added Turbo build system, comprehensive testing commands
 - **API Routes List**: Added 30+ missing endpoints including agents, bulk operations, storage, subscriptions, connections, and search routes
 - **Table of Contents**: Reorganized with proper links to all guides, features, and testing infrastructure
 
 #### Architecture Documentation ✅
+
 - **Processor Service**: Comprehensive documentation already existed at `/docs/2.0-architecture/2.2-backend/processor-service.md`
 - **Monorepo Structure**: Updated to include all 3 apps (web, realtime, processor)
 - **Testing Infrastructure**: Linked to comprehensive testing docs (90+ tests documented)
 
 #### Dependency Version Updates ✅
+
 - Vercel AI SDK: Updated from 4.3.17 → 5.0.12 (major version)
 - AI SDK Providers: Updated all to v2.0+ (@ai-sdk/google, anthropic, openai, xai)
 - Socket.IO: 4.7.5 → 4.8.1
@@ -165,34 +269,42 @@ Updated all documentation to reflect the current codebase state, fixing outdated
 - Added Turbo build system documentation
 
 #### New API Endpoints Documented ✅
+
 **Agent Management** (7 new routes):
+
 - `/api/agents/create`, `/api/agents/[agentId]/config`
 - `/api/agents/consult`, `/api/agents/multi-drive`
 - `/api/drives/[driveId]/agents`
 
 **Bulk Operations** (5 new routes):
+
 - `/api/pages/bulk/create-structure`, `/api/pages/bulk/delete`
 - `/api/pages/bulk/move`, `/api/pages/bulk/rename`
 - `/api/pages/bulk/update-content`
 
 **Storage & Subscriptions** (6 new routes):
+
 - `/api/storage/check`, `/api/storage/info`
 - `/api/subscriptions/status`, `/api/subscriptions/usage`
 - `/api/stripe/portal`, `/api/stripe/webhook`
 
 **Search & Discovery** (4 new routes):
+
 - `/api/search`, `/api/search/multi-drive`
 - `/api/drives/[driveId]/search/regex`, `/api/drives/[driveId]/search/glob`
 
 **Other** (8+ routes):
+
 - AI tasks, connections, contact, file operations, avatars
 
 #### Project Structure ✅
+
 - README.md: Added processor service to architecture diagram
 - Table of Contents: Added testing section, AI tools reference, all feature docs
 - Commands: Added complete testing suite commands (unit, e2e, coverage, security)
 
 #### Impact
+
 - Documentation now accurately reflects codebase state
 - All 100+ API routes properly documented
 - Complete development workflow coverage
@@ -211,6 +323,7 @@ Updated all documentation to reflect the current codebase state, fixing outdated
 Implemented comprehensive security fixes addressing authentication, authorization, data integrity, and XSS vulnerabilities identified in the MVP security audit.
 
 #### BLOCKER-001: Signup Rate Limiting ✅
+
 - **Issue**: No rate limiting on signup endpoint despite infrastructure existing
 - **Impact**: Unlimited account creation → CPU exhaustion via bcrypt(12)
 - **Fix**: Added dual rate limiting (IP + email) with 3 attempts/hour
@@ -218,6 +331,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - **Time**: 30 minutes
 
 #### BLOCKER-002: Channel Message HMAC Signatures ✅
+
 - **Issue**: Channel/DM message broadcasts missing HMAC signatures
 - **Impact**: Real-time messaging broken (broadcasts rejected with 401)
 - **Fix**: Added `createSignedBroadcastHeaders()` to message endpoints
@@ -227,6 +341,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - **Time**: 10 minutes
 
 #### BLOCKER-003: CSS url() Data Exfiltration ✅
+
 - **Issue**: Canvas CSS allows external `url()` → tracking pixels in shared templates
 - **Impact**: Template sharing enables data exfiltration
 - **Fix**: Block external URLs, allow data: URIs for images/fonts only
@@ -234,6 +349,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - **Time**: 2 hours
 
 #### BLOCKER-004: MCP Write Permission Validation ✅
+
 - **Issue**: MCP operations check access but never validate `canEdit`
 - **Impact**: Read-only users can modify documents via MCP API
 - **Fix**: Added permission check for write operations (replace, insert, delete)
@@ -241,6 +357,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - **Time**: 5 minutes
 
 #### BLOCKER-005: Circular Page Reference Prevention ✅
+
 - **Issue**: No validation prevents circular parent-child relationships
 - **Impact**: Stack overflow in breadcrumb computation, infinite loops
 - **Fix**:
@@ -256,6 +373,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - **Time**: 5 hours
 
 #### BLOCKER-006: Admin Endpoint Authorization ✅
+
 - **Issue**: Monitoring endpoints only check authentication, not admin role
 - **Impact**: Any user can access system metrics, AI costs, error logs
 - **Fix**: Added `verifyAdminAuth()` check to monitoring endpoints
@@ -263,6 +381,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 - **Time**: 5 minutes
 
 #### BLOCKER-007: File Security (Header Injection + XSS) ✅
+
 - **Issue**: Filename CRLF injection + XSS via HTML/SVG uploads
 - **Impact**: Header injection, session hijacking, cookie theft
 - **Fix**:
@@ -282,6 +401,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 **Total Implementation Time**: ~13 hours
 
 **Security Improvements**:
+
 - ✅ Rate limiting prevents DOS attacks and spam
 - ✅ Real-time messaging now working with proper authentication
 - ✅ Canvas templates safe from tracking pixel exfiltration
@@ -649,7 +769,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
     - **Deleted**: Icon.tsx wrapper files from drive/ and folder/ directories
     - **Replaced**: All hardcoded type comparisons with helper functions
     - **Helper functions**: isDocumentPage(), isFilePage(), isFolderPage(), isCanvasPage(), isChannelPage(), isAIChatPage()
-  - **Impact**: 
+  - **Impact**:
     - **~400 lines of duplicate code removed**
     - **Single source of truth for page type behavior**
     - **New page types now require changes in only 2 files vs 31+**
@@ -678,7 +798,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
     - **File preview overlay**: Shows "Upload files" indicator following cursor
   - **Result**: External file uploads now behave identically to native @dnd-kit draggable items
   - **Technical approach**: Hybrid system that mimics @dnd-kit behavior without modifying the library
-  - **Files modified**: 
+  - **Files modified**:
     - `apps/web/src/components/layout/left-sidebar/page-tree/PageTree.tsx`
     - `apps/web/src/components/layout/left-sidebar/page-tree/TreeNode.tsx`
     - `apps/web/src/hooks/useFileDrop.ts`
@@ -800,7 +920,6 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 
 ### 2025-07-28
 
-
 ### 2025-07-28
 
 - **Security**: Major authentication and session handling refactor for enhanced security:
@@ -819,6 +938,7 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 ### 2025-07-27
 
 - **Feature**: Implemented a new customizable user dashboard.
+
 ### 2025-07-27
 
 - Decoupled Ollama from the development environment to allow connecting to a local Ollama instance.
@@ -831,16 +951,18 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
 ### 2025-07-27
 
 # Changelog
+
 ### 2025-07-26
 
 ### 2025-07-26
 
 - **Added**: Expanded the list of available Anthropic models.
+
 ### 2025-07-26
 
 - **Added**: Expanded the list of available OpenRouter models.
-### 2025-07-26
 
+### 2025-07-26
 
 ## 2025-07-26
 
@@ -855,21 +977,28 @@ Implemented comprehensive security fixes addressing authentication, authorizatio
   - Implemented a unified content fetching system for all page types.
   - When a page is mentioned, its content will now be correctly injected into the context. This includes Canvas page content, channel messages, and a list of files for folders.
   - This resolves an issue where only document pages were being correctly processed.
+
 ## 2025-07-28
 
 - Updated landing page to remove animations and add a notice about the pre-mvp alpha status with a link to the Discord server.
+
 ---
+
 date: 2025-07-28
 changes:
-  - Created a new `@pagespace/prompts` package to handle all prompt-related logic.
-  - Added a new `ai_prompts` table to the database for storing and managing prompt templates.
-  - Refactored the `ai-page` and `ai-assistant` API routes to use the new prompt management system.
-  - Implemented basic sanitization to prevent prompt injection.
-  - Updated the system prompts documentation to reflect the new architecture.
+
+- Created a new `@pagespace/prompts` package to handle all prompt-related logic.
+- Added a new `ai_prompts` table to the database for storing and managing prompt templates.
+- Refactored the `ai-page` and `ai-assistant` API routes to use the new prompt management system.
+- Implemented basic sanitization to prevent prompt injection.
+- Updated the system prompts documentation to reflect the new architecture.
+
 ---
+
 ## 2025-08-12
 
 ### Refactor
+
 - Removed the custom navigation interceptor in favor of standard Next.js routing. This simplifies the codebase, improves performance, and eliminates navigation-related race conditions.
 - Replaced `useNavigation`, `useNavigationInterceptor`, and `useNavigationStore` with `useParams` and `usePathname` from Next.js.
 - Created a new `useDirtyStore` and `useUnsavedChanges` hook to handle unsaved changes, decoupling this logic from navigation.

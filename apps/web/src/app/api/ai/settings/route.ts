@@ -179,6 +179,18 @@ export async function POST(request: Request) {
     const sanitizedApiKey = apiKey?.trim();
     const sanitizedBaseUrl = baseUrl?.trim();
 
+    // SECURITY: Validate base URL for local providers to prevent SSRF
+    if (provider === 'ollama' || provider === 'lmstudio') {
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const urlValidation = await validateLocalProviderURL(sanitizedBaseUrl);
+      if (!urlValidation.valid) {
+        return NextResponse.json(
+          { error: `Invalid base URL: ${urlValidation.error}` },
+          { status: 400 }
+        );
+      }
+    }
+
     // Save the API key based on provider
     try {
       if (provider === 'openrouter') {

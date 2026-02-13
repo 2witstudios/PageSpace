@@ -9,6 +9,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 const DISPLAY_PREFERENCE_TYPES = [
   'SHOW_TOKEN_COUNTS',
   'SHOW_CODE_TOGGLE',
+  'DEFAULT_MARKDOWN_MODE',
 ] as const;
 
 type DisplayPreferenceType = typeof DISPLAY_PREFERENCE_TYPES[number];
@@ -33,6 +34,7 @@ export async function GET(request: Request) {
     const response = {
       showTokenCounts: preferenceMap.get('SHOW_TOKEN_COUNTS') ?? false,
       showCodeToggle: preferenceMap.get('SHOW_CODE_TOGGLE') ?? false,
+      defaultMarkdownMode: preferenceMap.get('DEFAULT_MARKDOWN_MODE') ?? false,
     };
 
     return NextResponse.json(response);

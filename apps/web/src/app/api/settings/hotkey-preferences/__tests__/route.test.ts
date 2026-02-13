@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -72,8 +72,8 @@ describe('GET /api/settings/hotkey-preferences', () => {
     mockFrom.mockReturnValue({ where: mockWhere });
     mockWhere.mockResolvedValue([]);
 
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockSessionAuth('user-1'));
-    (isAuthError as unknown as Mock).mockReturnValue(false);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
+    vi.mocked(isAuthError).mockReturnValue(false);
   });
 
   it('given authenticated user with no preferences, should return empty array', async () => {
@@ -103,8 +103,8 @@ describe('GET /api/settings/hotkey-preferences', () => {
   });
 
   it('given unauthenticated request, should return 401', async () => {
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockAuthError(401));
-    (isAuthError as unknown as Mock).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
+    vi.mocked(isAuthError).mockReturnValue(true);
 
     const request = new Request('https://example.com/api/settings/hotkey-preferences');
     const response = await GET(request);
@@ -122,8 +122,8 @@ describe('PATCH /api/settings/hotkey-preferences', () => {
     mockSet.mockReturnValue({ where: mockWhere });
     mockWhere.mockReturnValue({ returning: mockReturning });
 
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockSessionAuth('user-1'));
-    (isAuthError as unknown as Mock).mockReturnValue(false);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
+    vi.mocked(isAuthError).mockReturnValue(false);
   });
 
   it('given valid hotkeyId and binding, should create new preference', async () => {

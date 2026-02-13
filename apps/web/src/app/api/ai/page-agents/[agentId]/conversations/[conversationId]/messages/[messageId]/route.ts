@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 import {
@@ -33,6 +33,10 @@ export async function PATCH(
         { status: 400 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check if user can edit the page (agent) this message belongs to
     const canEdit = await canUserEditPage(userId, agentId);
@@ -122,6 +126,10 @@ export async function DELETE(
     const userId = auth.userId;
 
     const { agentId, conversationId, messageId } = await context.params;
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check if user can edit the page (agent) this message belongs to
     const canEdit = await canUserEditPage(userId, agentId);

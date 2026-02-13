@@ -35,6 +35,7 @@ interface ConnectionWithProvider {
   status: string;
   credentials: unknown;
   baseUrlOverride?: string | null;
+  configOverrides?: { rateLimit?: { requestsPerMinute: number } } | null;
   provider?: {
     id: string;
     slug: string;
@@ -162,7 +163,7 @@ export const executeToolSaga = async (
     // 4. Calculate and check rate limit (includes tool-specific limit)
     const effectiveRateLimit = calculateEffectiveRateLimit({
       provider: providerConfig.rateLimit,
-      connection: undefined, // TODO: Load from connection.configOverrides
+      connection: connection.configOverrides?.rateLimit ?? undefined,
       grant: request.grant?.rateLimitOverride ?? undefined,
       tool: tool.rateLimit,
     });

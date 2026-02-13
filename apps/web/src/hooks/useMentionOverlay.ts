@@ -1,13 +1,10 @@
 import { useRef, useCallback } from 'react';
 
-const MENTION_PATTERN = /@\[[^\]]+\]\([^:]+:[^)]+\)/;
-
 export function useMentionOverlay(
   textareaRef: React.RefObject<HTMLTextAreaElement | null>,
-  value: string
+  hasMentions: boolean
 ) {
   const overlayRef = useRef<HTMLDivElement>(null);
-  const hasMentions = MENTION_PATTERN.test(value);
 
   const handleScroll = useCallback(() => {
     if (textareaRef.current && overlayRef.current) {

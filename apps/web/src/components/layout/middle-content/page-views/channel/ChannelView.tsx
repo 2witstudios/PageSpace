@@ -15,17 +15,27 @@ import { Lock, FileIcon, FileText, Download } from 'lucide-react';
 import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
+import {
+  type AttachmentMeta,
+  type FileRelation,
+  isImageAttachment,
+  getFileId,
+  getAttachmentName,
+  getAttachmentMimeType,
+  getAttachmentSize,
+  formatFileSize,
+  hasAttachment,
+} from '@/lib/attachment-utils';
 
 interface ChannelViewProps {
   page: TreePage;
 }
 
-// Attachment metadata stored in the database
-interface AttachmentMeta {
-  originalName: string;
-  size: number;
-  mimeType: string;
-  contentHash: string;
+// AI sender metadata for messages posted by AI tools
+interface AiMeta {
+  senderType: 'global_assistant' | 'agent';
+  senderName: string;
+  agentPageId?: string;
 }
 
 // Extended message type with reactions and file attachment
@@ -33,11 +43,8 @@ interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
-  file?: {
-    id: string;
-    mimeType: string | null;
-    sizeBytes: number;
-  } | null;
+  file?: FileRelation | null;
+  aiMeta?: AiMeta | null;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
@@ -325,15 +332,31 @@ function ChannelView({ page }: ChannelViewProps) {
         <PullToRefresh direction="top" onRefresh={handleRefresh}>
           <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
               <div className="p-4 space-y-4 max-w-4xl mx-auto">
-                  {messages.map((m) => (
+                  {messages.map((m) => {
+                      const isAi = !!m.aiMeta;
+                      const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;
+                      const aiLabel = isAi
+                        ? m.aiMeta!.senderType === 'global_assistant'
+                          ? 'global assistant'
+                          : 'agent'
+                        : null;
+                      const avatarFallback = isAi
+                        ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]
+                        : m.user?.name?.[0];
+                      return (
                       <div key={m.id} className="group flex items-start gap-4">
                           <Avatar className="shrink-0">
-                              <AvatarImage src={m.user?.image || ''} />
-                              <AvatarFallback>{m.user?.name?.[0]}</AvatarFallback>
+                              {!isAi && <AvatarImage src={m.user?.image || ''} />}
+                              <AvatarFallback>{avatarFallback}</AvatarFallback>
                           </Avatar>
                           <div className="flex flex-col min-w-0 flex-1">
                               <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-sm">{m.user?.name}</span>
+                                  <span className="font-semibold text-sm">{displayName}</span>
+                                  {aiLabel && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">
+                                      {aiLabel}
+                                    </span>
+                                  )}
                                   <span className="text-xs text-muted-foreground">
                                       {new Date(m.createdAt).toLocaleTimeString()}
                                   </span>
@@ -347,46 +370,43 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </div>
                               )}
                               {/* File attachment */}
-                              {m.attachmentMeta && (
+                              {hasAttachment(m) && (
                                 <div className="mt-2">
-                                  {m.attachmentMeta.mimeType.startsWith('image/') ? (
+                                  {isImageAttachment(m) ? (
                                     <a
-                                      href={`/api/files/${m.fileId}/view?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                                      href={`/api/files/${getFileId(m)}/view?filename=${encodeURIComponent(getAttachmentName(m))}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="block max-w-sm"
                                     >
                                       {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated API route; processor already optimizes on upload */}
                                       <img
-                                        src={`/api/files/${m.fileId}/view`}
-                                        alt={m.attachmentMeta.originalName}
+                                        src={`/api/files/${getFileId(m)}/view`}
+                                        alt={getAttachmentName(m)}
                                         className="rounded-lg max-h-64 object-contain border border-border/50"
-                                        loading="lazy"
                                       />
                                     </a>
                                   ) : (
                                     <a
-                                      href={`/api/files/${m.fileId}/download?filename=${encodeURIComponent(m.attachmentMeta.originalName)}`}
+                                      href={`/api/files/${getFileId(m)}/download?filename=${encodeURIComponent(getAttachmentName(m))}`}
                                       className="flex items-center gap-3 p-3 bg-muted/50 hover:bg-muted rounded-lg border border-border/50 max-w-sm transition-colors"
                                     >
                                       <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0">
-                                        {m.attachmentMeta.mimeType.includes('pdf') ? (
+                                        {getAttachmentMimeType(m).includes('pdf') ? (
                                           <FileText className="h-5 w-5 text-red-500" />
-                                        ) : m.attachmentMeta.mimeType.includes('document') || m.attachmentMeta.mimeType.includes('word') ? (
+                                        ) : getAttachmentMimeType(m).includes('document') || getAttachmentMimeType(m).includes('word') ? (
                                           <FileText className="h-5 w-5 text-blue-500" />
                                         ) : (
                                           <FileIcon className="h-5 w-5 text-muted-foreground" />
                                         )}
                                       </div>
                                       <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium truncate">{m.attachmentMeta.originalName}</p>
-                                        <p className="text-xs text-muted-foreground">
-                                          {m.attachmentMeta.size < 1024
-                                            ? `${m.attachmentMeta.size} B`
-                                            : m.attachmentMeta.size < 1024 * 1024
-                                            ? `${(m.attachmentMeta.size / 1024).toFixed(1)} KB`
-                                            : `${(m.attachmentMeta.size / (1024 * 1024)).toFixed(1)} MB`}
-                                        </p>
+                                        <p className="text-sm font-medium truncate">{getAttachmentName(m)}</p>
+                                        {getAttachmentSize(m) != null && (
+                                          <p className="text-xs text-muted-foreground">
+                                            {formatFileSize(getAttachmentSize(m)!)}
+                                          </p>
+                                        )}
                                       </div>
                                       <Download className="h-4 w-4 text-muted-foreground shrink-0" />
                                     </a>
@@ -405,7 +425,8 @@ function ChannelView({ page }: ChannelViewProps) {
                               )}
                           </div>
                       </div>
-                  ))}
+                      );
+                  })}
               </div>
           </ScrollArea>
         </PullToRefresh>

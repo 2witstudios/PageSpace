@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../mcp-tokens/route';
 import { DELETE } from '../mcp-tokens/[tokenId]/route';
 import { NextRequest } from 'next/server';
@@ -83,10 +83,10 @@ import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Helper to create a mock transaction that executes callback with a mock tx
 const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
-  (db.transaction as unknown as Mock).mockImplementation(async (callback) => {
+  vi.mocked(db.transaction).mockImplementation((async (callback: (tx: Record<string, unknown>) => Promise<unknown>) => {
     const tx = { insert: insertMock };
     return callback(tx);
-  });
+  }) as never);
 };
 
 describe('/api/auth/mcp-tokens', () => {
@@ -94,14 +94,14 @@ describe('/api/auth/mcp-tokens', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue({
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
       userId: 'test-user-id',
       role: 'user',
       tokenVersion: 0,
       tokenType: 'session',
       sessionId: 'test-session-id',
-    });
-    (isAuthError as unknown as Mock).mockReturnValue(false);
+    } as never);
+    vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default transaction mock that returns a basic token
     const defaultInsertMock = vi.fn().mockReturnValue({
@@ -317,8 +317,8 @@ describe('/api/auth/mcp-tokens', () => {
         const mockError = {
           error: Response.json({ error: 'Unauthorized' }, { status: 401 }),
         };
-        (authenticateRequestWithOptions as unknown as Mock).mockResolvedValue(mockError);
-        (isAuthError as unknown as Mock).mockReturnValue(true);
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockError as never);
+        vi.mocked(isAuthError).mockReturnValue(true);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -363,7 +363,7 @@ describe('/api/auth/mcp-tokens', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     beforeEach(() => {
-      (db.query.mcpTokens.findMany as unknown as Mock).mockResolvedValue([
+      vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([
         {
           id: 'token-1',
           name: 'Token 1',
@@ -378,7 +378,7 @@ describe('/api/auth/mcp-tokens', () => {
           createdAt: new Date(),
           driveScopes: [],
         },
-      ]);
+      ] as never);
     });
 
     describe('successful listing', () => {
@@ -446,7 +446,7 @@ describe('/api/auth/mcp-tokens', () => {
     describe('empty list', () => {
       it('returns empty array when user has no tokens', async () => {
         // Arrange
-        (db.query.mcpTokens.findMany as Mock).mockResolvedValue([]);
+        vi.mocked(db.query.mcpTokens.findMany).mockResolvedValue([]);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
@@ -539,7 +539,7 @@ describe('/api/auth/mcp-tokens', () => {
             }),
           };
         });
-        (db.update as unknown as Mock).mockReturnValue({ set: mockSet });
+        vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/token-123',
@@ -567,7 +567,7 @@ describe('/api/auth/mcp-tokens', () => {
     describe('token not found', () => {
       it('returns 404 when token does not exist', async () => {
         // Arrange - findFirst returns undefined when token doesn't exist
-        (db.query.mcpTokens.findFirst as Mock).mockResolvedValueOnce(undefined);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValueOnce(undefined);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/nonexistent-token',
@@ -590,7 +590,7 @@ describe('/api/auth/mcp-tokens', () => {
 
       it('returns 404 when token belongs to different user', async () => {
         // Arrange - findFirst returns undefined when token doesn't match userId
-        (db.query.mcpTokens.findFirst as Mock).mockResolvedValueOnce(undefined);
+        vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValueOnce(undefined);
 
         const request = new NextRequest(
           'http://localhost/api/auth/mcp-tokens/other-user-token',

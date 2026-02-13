@@ -1,0 +1,1 @@
+ALTER TABLE "file_pages" DROP CONSTRAINT "file_pages_page_id_key";

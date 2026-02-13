@@ -38,7 +38,7 @@ export class SessionService {
   async createSession(options: CreateSessionOptions): Promise<string> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, options.userId),
-      columns: { id: true, tokenVersion: true, role: true },
+      columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true },
     });
 
     if (!user) {
@@ -62,6 +62,7 @@ export class SessionService {
       resourceId: options.resourceId,
       driveId: options.driveId,
       tokenVersion: user.tokenVersion,
+      adminRoleVersion: user.adminRoleVersion,
       createdByService: options.createdByService,
       createdByIp: options.createdByIp,
       expiresAt: new Date(Date.now() + options.expiresInMs),
@@ -107,6 +108,10 @@ export class SessionService {
       return null;
     }
 
+    // Note: adminRoleVersion is NOT checked here - it's validated at the auth layer
+    // by verifyAdminAuth() for admin operations. This allows demoted admins to
+    // continue using their session for non-admin operations.
+
     // Update last used (non-blocking)
     db.update(sessions)
       .set({ lastUsedAt: new Date() })
@@ -118,7 +123,7 @@ export class SessionService {
       userId: session.userId,
       userRole: session.user.role,
       tokenVersion: session.tokenVersion,
-      adminRoleVersion: session.user.adminRoleVersion,
+      adminRoleVersion: session.adminRoleVersion,
       type: session.type,
       scopes: session.scopes,
       expiresAt: session.expiresAt,

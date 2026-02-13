@@ -146,6 +146,7 @@ describe('page-write-tools', () => {
         type: 'FILE',
         content: '',
         mimeType: 'application/pdf',
+        contentMode: 'html' as const,
         driveId: 'drive-1',
         parentId: null,
         position: 1,
@@ -179,6 +180,7 @@ describe('page-write-tools', () => {
         title: 'My Sheet',
         type: 'SHEET',
         content: '',
+        contentMode: 'html' as const,
         driveId: 'drive-1',
         parentId: null,
         position: 1,
@@ -212,6 +214,7 @@ describe('page-write-tools', () => {
         title: 'Test Doc',
         type: 'DOCUMENT',
         content: 'Line 1\nLine 2\nLine 3',
+        contentMode: 'html' as const,
         driveId: 'drive-1',
         parentId: null,
         position: 1,
@@ -250,12 +253,12 @@ describe('page-write-tools', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           pageId: 'page-1',
+          operation: 'update',
           updates: { content: 'Line 1\nNew Line 2\nLine 3' },
           updatedFields: ['content'],
+          context: expect.objectContaining({ userId: 'user-123', isAiGenerated: true }),
         })
       );
-
-      // Activity logging is handled by mutation logging.
     });
   });
 
@@ -369,6 +372,7 @@ describe('page-write-tools', () => {
         title: 'Old Title',
         type: 'DOCUMENT',
         content: '',
+        contentMode: 'html' as const,
         driveId: 'drive-1',
         parentId: null,
         position: 1,
@@ -404,12 +408,12 @@ describe('page-write-tools', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           pageId: 'page-1',
+          operation: 'update',
           updates: { title: 'New Title' },
           updatedFields: ['title'],
+          context: expect.objectContaining({ userId: 'user-123', isAiGenerated: true }),
         })
       );
-
-      // Activity logging is handled by mutation logging.
     });
   });
 
@@ -505,6 +509,7 @@ describe('page-write-tools', () => {
         title: 'Document',
         type: 'DOCUMENT',
         content: '',
+        contentMode: 'html' as const,
         driveId: 'drive-1',
         parentId: null,
         position: 1,

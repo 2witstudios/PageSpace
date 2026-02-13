@@ -51,8 +51,8 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
-import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
-import { VoiceModeOverlay } from '@/components/ai/voice';
+import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
+import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
 // Shared hooks and components
@@ -75,6 +75,12 @@ import {
   type ChatLayoutRef,
 } from '@/components/ai/chat/layouts';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
+import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { parseConsentError } from '@/lib/ai/shared/error-messages';
+import { CloudProviderConsentDialog } from '@/components/ai/consent/CloudProviderConsentDialog';
+
+const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -130,8 +136,9 @@ const GlobalAssistantView: React.FC = () => {
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<string | null>(null);
+  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
+  const [consentProvider, setConsentProvider] = useState<string | null>(null);
 
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
@@ -139,11 +146,16 @@ const GlobalAssistantView: React.FC = () => {
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const voiceOwner = useVoiceModeStore((s) => s.owner);
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
+  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
+
+  // Image attachments for vision support
+  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -271,6 +283,11 @@ const GlobalAssistantView: React.FC = () => {
       transport: agentTransport,
       experimental_throttle: 100,
       onError: (error: Error) => {
+        const provider = parseConsentError(error.message);
+        if (provider) {
+          setConsentProvider(provider);
+          return;
+        }
         console.error('Agent Chat error:', error);
       },
     };
@@ -310,6 +327,15 @@ const GlobalAssistantView: React.FC = () => {
   const isStreaming = status === 'submitted' || status === 'streaming';
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
+
+  // Detect consent errors from global mode (onError is in GlobalChatContext)
+  useEffect(() => {
+    if (!error) return;
+    const provider = parseConsentError(error.message);
+    if (provider) {
+      setConsentProvider(provider);
+    }
+  }, [error]);
 
   useEffect(() => {
     latestAgentMessagesRef.current = agentMessages;
@@ -550,6 +576,12 @@ const GlobalAssistantView: React.FC = () => {
     if (error) setShowError(true);
   }, [error]);
 
+  useEffect(() => {
+    if (!isVoiceModeActive) {
+      setShowVoiceSettings(false);
+    }
+  }, [isVoiceModeActive]);
+
   // ============================================
   // HANDLERS
   // ============================================
@@ -577,7 +609,8 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !currentConversationId) return;
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
     const requestBody = selectedAgent
       ? {
@@ -599,8 +632,9 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text: input }, { body: requestBody });
+    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
     setInput('');
+    clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
@@ -644,9 +678,68 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage,
   ]);
 
+  // Handle consent grant — call API, dismiss dialog, retry last message
+  const handleConsentGrant = useCallback(async () => {
+    if (!consentProvider) return;
+    try {
+      await fetchWithAuth('/api/ai/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: consentProvider }),
+      });
+      setConsentProvider(null);
+      setShowError(false);
+      // Retry: extract last user message and resend
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+      if (lastUserMsg && currentConversationId) {
+        const textParts = lastUserMsg.parts?.filter((p) => p.type === 'text') || [];
+        const text = textParts.map((p) => (p as { text: string }).text).join(' ');
+        if (text) {
+          const requestBody = selectedAgent
+            ? {
+                chatId: selectedAgent.id,
+                conversationId: currentConversationId,
+                selectedProvider: agentSelectedProvider,
+                selectedModel: agentSelectedModel,
+                isReadOnly,
+                webSearchEnabled,
+                mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+              }
+            : {
+                isReadOnly,
+                webSearchEnabled,
+                showPageTree,
+                locationContext: locationContext || undefined,
+                selectedProvider: currentProvider,
+                selectedModel: currentModel,
+                mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+              };
+          sendMessage({ text }, { body: requestBody });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to grant consent:', err);
+    }
+  }, [
+    consentProvider,
+    messages,
+    currentConversationId,
+    selectedAgent,
+    agentSelectedProvider,
+    agentSelectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    mcpToolSchemas,
+    sendMessage,
+  ]);
+
   // Track last AI response for voice mode TTS
   useEffect(() => {
-    if (!isVoiceModeEnabled || isStreaming) return;
+    if (!isVoiceModeActive || isStreaming) return;
 
     // Get the last assistant message
     const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
@@ -654,20 +747,25 @@ const GlobalAssistantView: React.FC = () => {
       // Extract text from message parts
       const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
       const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text && text !== lastAIResponse) {
-        setLastAIResponse(text);
+      if (text.trim()) {
+        setLastAIResponse((current) =>
+          current?.id === lastAssistantMsg.id
+            ? current
+            : { id: lastAssistantMsg.id, text }
+        );
       }
     }
-  }, [messages, isStreaming, isVoiceModeEnabled, lastAIResponse]);
+  }, [messages, isStreaming, isVoiceModeActive]);
 
   // Voice mode toggle handler
   const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeEnabled) {
+    if (isVoiceModeActive) {
       disableVoiceMode();
+      setShowVoiceSettings(false);
     } else {
-      enableVoiceMode();
+      enableVoiceMode(VOICE_OWNER);
     }
-  }, [isVoiceModeEnabled, enableVoiceMode, disableVoiceMode]);
+  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // ============================================
   // RENDER
@@ -697,18 +795,6 @@ const GlobalAssistantView: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Voice Mode Overlay */}
-      {isVoiceModeEnabled && (
-        <VoiceModeOverlay
-          onClose={disableVoiceMode}
-          onSend={handleVoiceSend}
-          aiResponse={lastAIResponse}
-          isAIStreaming={isStreaming}
-          showSettings={showVoiceSettings}
-          onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-        />
-      )}
-
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
         <div className="flex items-center space-x-2">
@@ -806,31 +892,55 @@ const GlobalAssistantView: React.FC = () => {
         onMcpServerToggle={setServerEnabled}
         showMcp={isDesktop}
         renderInput={(props) => (
-          <ChatInput
-            ref={inputRef}
-            value={props.value}
-            onChange={props.onChange}
-            onSend={props.onSend}
-            onStop={props.onStop}
-            isStreaming={props.isStreaming}
-            disabled={props.disabled}
-            placeholder={props.placeholder}
-            driveId={props.driveId}
-            crossDrive={props.crossDrive}
-            mcpRunningServers={props.mcpRunningServers}
-            mcpServerNames={props.mcpServerNames}
-            mcpEnabledCount={props.mcpEnabledCount}
-            mcpAllEnabled={props.mcpAllEnabled}
-            onMcpToggleAll={props.onMcpToggleAll}
-            isMcpServerEnabled={props.isMcpServerEnabled}
-            onMcpServerToggle={props.onMcpServerToggle}
-            showMcp={props.showMcp}
-            popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
-            onVoiceModeClick={handleVoiceModeToggle}
-            isVoiceModeActive={isVoiceModeEnabled}
-            isVoiceModeAvailable={isOpenAIConfigured}
-          />
+          isVoiceModeActive ? (
+            <VoiceModeDock
+              owner={VOICE_OWNER}
+              onSend={handleVoiceSend}
+              aiResponse={lastAIResponse}
+              isAIStreaming={isStreaming}
+              showSettings={showVoiceSettings}
+              onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+              onClose={() => setShowVoiceSettings(false)}
+            />
+          ) : (
+            <ChatInput
+              ref={inputRef}
+              value={props.value}
+              onChange={props.onChange}
+              onSend={props.onSend}
+              onStop={props.onStop}
+              isStreaming={props.isStreaming}
+              disabled={props.disabled}
+              placeholder={props.placeholder}
+              driveId={props.driveId}
+              crossDrive={props.crossDrive}
+              mcpRunningServers={props.mcpRunningServers}
+              mcpServerNames={props.mcpServerNames}
+              mcpEnabledCount={props.mcpEnabledCount}
+              mcpAllEnabled={props.mcpAllEnabled}
+              onMcpToggleAll={props.onMcpToggleAll}
+              isMcpServerEnabled={props.isMcpServerEnabled}
+              onMcpServerToggle={props.onMcpServerToggle}
+              showMcp={props.showMcp}
+              popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
+              onVoiceModeClick={handleVoiceModeToggle}
+              isVoiceModeActive={isVoiceModeActive}
+              isVoiceModeAvailable={isOpenAIConfigured}
+              attachments={attachments}
+              onAddFiles={addFiles}
+              onRemoveFile={removeFile}
+              hasVision={hasVisionCapability(
+                (selectedAgent ? agentSelectedModel : currentModel) || ''
+              )}
+            />
+          )
         )}
+      />
+
+      <CloudProviderConsentDialog
+        provider={consentProvider}
+        onConsent={handleConsentGrant}
+        onCancel={() => setConsentProvider(null)}
       />
     </div>
   );

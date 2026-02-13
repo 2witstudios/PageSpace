@@ -48,12 +48,13 @@ export async function POST(req: NextRequest) {
       updatedAt: new Date(),
     }).returning();
 
-    // Broadcast drive creation event
+    // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(
       createDriveEventPayload(newDrive.id, 'created', {
         name: newDrive.name,
         slug: newDrive.slug,
-      })
+      }),
+      [userId]
     );
 
     // Log MCP drive creation for compliance (fire-and-forget)

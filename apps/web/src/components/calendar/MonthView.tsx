@@ -87,7 +87,11 @@ export function MonthView({ currentDate, events, tasks, handlers }: MonthViewPro
         {weeks.map((week, weekIndex) => (
           <div key={weekIndex} className="flex-1 min-h-24 grid grid-cols-7 border-b last:border-b-0">
             {week.map((day) => {
-              const dayEvents = getEventsForDay(events, day);
+              const dayEvents = getEventsForDay(events, day).sort((a, b) => {
+                if (a.allDay && !b.allDay) return -1;
+                if (!a.allDay && b.allDay) return 1;
+                return new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+              });
               const dayTasks = getTasksForDay(tasks, day);
               const isCurrentMonth = isSameMonth(day, currentDate);
               const isTodayDate = isToday(day);

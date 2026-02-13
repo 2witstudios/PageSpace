@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -37,6 +38,9 @@ export async function DELETE(
       return NextResponse.json({ error: 'Drive must be in trash before permanent deletion' }, { status: 400 });
     }
 
+    // Get recipients BEFORE deleting (ensures we have valid member list)
+    const recipientUserIds = await getDriveRecipientUserIds(drive.id);
+
     // Permanently delete the drive (cascade will delete all pages)
     await db
       .delete(drives)
@@ -47,7 +51,8 @@ export async function DELETE(
       createDriveEventPayload(drive.id, 'deleted', {
         name: drive.name,
         slug: drive.slug,
-      })
+      }),
+      recipientUserIds
     );
 
     return NextResponse.json({ success: true });

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope } from '@/lib/auth';
 import { db, pages, drives, eq, and, sql, inArray } from '@pagespace/db';
 import { getBatchPagePermissions, getDriveIdsForUser } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -42,7 +42,9 @@ export async function GET(request: Request) {
 
     // Get drive IDs accessible by this user without scanning all drives.
     const accessibleDriveIds = await getDriveIdsForUser(userId);
-    if (accessibleDriveIds.length === 0) {
+    // Filter drives by MCP token scope to enforce scoped token restrictions
+    const scopedDriveIds = filterDrivesByMCPScope(auth, accessibleDriveIds);
+    if (scopedDriveIds.length === 0) {
       return NextResponse.json({
         success: true,
         searchQuery,
@@ -73,7 +75,7 @@ export async function GET(request: Request) {
       .from(drives)
       .where(and(
         eq(drives.isTrashed, false),
-        inArray(drives.id, accessibleDriveIds)
+        inArray(drives.id, scopedDriveIds)
       ));
 
     if (accessibleDrives.length === 0) {

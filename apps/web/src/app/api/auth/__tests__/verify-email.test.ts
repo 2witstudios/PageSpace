@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../verify-email/route';
 import { NextRequest } from 'next/server';
 
@@ -32,7 +32,7 @@ describe('/api/auth/verify-email', () => {
     vi.clearAllMocks();
 
     // Default: valid token
-    (verifyToken as Mock).mockResolvedValue('test-user-id');
+    vi.mocked(verifyToken).mockResolvedValue('test-user-id');
   });
 
   describe('successful verification', () => {
@@ -133,7 +133,7 @@ describe('/api/auth/verify-email', () => {
   describe('invalid or expired token', () => {
     it('returns 400 for invalid token', async () => {
       // Arrange
-      (verifyToken as Mock).mockResolvedValue(null);
+      vi.mocked(verifyToken).mockResolvedValue(null);
 
       const url = new URL('http://localhost/api/auth/verify-email?token=invalid-token');
       const request = new NextRequest(url);
@@ -149,7 +149,7 @@ describe('/api/auth/verify-email', () => {
 
     it('returns 400 for expired token', async () => {
       // Arrange
-      (verifyToken as Mock).mockResolvedValue(null);
+      vi.mocked(verifyToken).mockResolvedValue(null);
 
       const url = new URL('http://localhost/api/auth/verify-email?token=expired-token');
       const request = new NextRequest(url);
@@ -165,7 +165,7 @@ describe('/api/auth/verify-email', () => {
 
     it('does not mark email as verified for invalid token', async () => {
       // Arrange
-      (verifyToken as Mock).mockResolvedValue(null);
+      vi.mocked(verifyToken).mockResolvedValue(null);
 
       const url = new URL('http://localhost/api/auth/verify-email?token=invalid-token');
       const request = new NextRequest(url);
@@ -181,7 +181,7 @@ describe('/api/auth/verify-email', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      (verifyToken as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(verifyToken).mockRejectedValue(new Error('Database error'));
 
       const url = new URL('http://localhost/api/auth/verify-email?token=valid-token');
       const request = new NextRequest(url);
@@ -198,7 +198,7 @@ describe('/api/auth/verify-email', () => {
     it('logs errors', async () => {
       // Arrange
       const error = new Error('Database error');
-      (verifyToken as Mock).mockRejectedValue(error);
+      vi.mocked(verifyToken).mockRejectedValue(error);
 
       const url = new URL('http://localhost/api/auth/verify-email?token=valid-token');
       const request = new NextRequest(url);

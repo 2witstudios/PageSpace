@@ -33,6 +33,8 @@ function toPageType(type: string): PageType | null {
       return PageType.SHEET;
     case 'TASK_LIST':
       return PageType.TASK_LIST;
+    case 'CODE':
+      return PageType.CODE;
     default:
       return null;
   }

@@ -49,7 +49,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   const tokenRef = useRef<string | null>(null);
   const hasRegisteredRef = useRef(false);
   const pushNotificationsRef = useRef<typeof import('@capacitor/push-notifications').PushNotifications | null>(null);
-  const registerTokenWithServerRef = useRef<(token: string) => Promise<void>>(async () => {});
+  const registerTokenWithServerRef = useRef<(token: string) => Promise<void>>(async () => { });
 
   // Check if push notifications are supported
   useEffect(() => {

@@ -23,9 +23,11 @@ interface TabsState {
   tabs: Tab[];
   activeTabId: string | null;
   rehydrated: boolean;
+  desktopRestoreAttempted: boolean;
 
   // Actions
   setRehydrated: () => void;
+  setDesktopRestoreAttempted: (attempted: boolean) => void;
   createTab: (options?: CreateTabOptions & { activate?: boolean }) => void;
   closeTab: (tabId: string) => void;
   closeOtherTabs: (keepTabId: string) => void;
@@ -56,8 +58,10 @@ export const useTabsStore = create<TabsState>()(
       tabs: [],
       activeTabId: null,
       rehydrated: false,
+      desktopRestoreAttempted: false,
 
       setRehydrated: () => set({ rehydrated: true }),
+      setDesktopRestoreAttempted: (attempted) => set({ desktopRestoreAttempted: attempted }),
 
       createTab: (options = {}) => {
         const { activate = true, ...tabOptions } = options;

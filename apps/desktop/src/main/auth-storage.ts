@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'path';
 import { logger } from './logger';
+import { hasErrorCode } from './error-utils';
 
 export interface StoredAuthSession {
   /** Opaque session token (ps_sess_*) for authentication */
@@ -126,8 +127,8 @@ export async function loadAuthSession(): Promise<StoredAuthSession | null> {
     }
 
     return session;
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') {
+  } catch (error: unknown) {
+    if (hasErrorCode(error, 'ENOENT')) {
       return null;
     }
     logger.error('[Auth] Failed to load session', { error });
@@ -138,8 +139,8 @@ export async function loadAuthSession(): Promise<StoredAuthSession | null> {
 export async function clearAuthSession(): Promise<void> {
   try {
     await fs.unlink(ensureAuthSessionPath());
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') {
+  } catch (error: unknown) {
+    if (!hasErrorCode(error, 'ENOENT')) {
       logger.error('[Auth] Failed to clear stored session', { error });
     }
   }

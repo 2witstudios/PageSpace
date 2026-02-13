@@ -46,6 +46,53 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
+const buildChannelTranscript = (channelMessages: unknown): string | null => {
+  if (!Array.isArray(channelMessages) || channelMessages.length === 0) {
+    return null;
+  }
+
+  const lines = channelMessages.flatMap((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      return [];
+    }
+
+    const message = entry as Record<string, unknown>;
+    const lineNumber = typeof message.lineNumber === 'number' ? message.lineNumber : index + 1;
+    const createdAt = typeof message.createdAt === 'string' ? message.createdAt : '';
+    const senderName = typeof message.senderName === 'string' ? message.senderName : 'Unknown';
+    const senderType = typeof message.senderType === 'string' ? message.senderType : 'user';
+    const content = typeof message.content === 'string' ? message.content : '';
+
+    const senderPrefix = senderType === 'agent'
+      ? '[agent]'
+      : senderType === 'global_assistant'
+        ? '[assistant]'
+        : '[user]';
+
+    const timestamp = createdAt ? ` (${createdAt})` : '';
+    return [`${lineNumber}→${senderPrefix} ${senderName}${timestamp}: ${content}`];
+  });
+
+  return lines.length > 0 ? lines.join('\n') : null;
+};
+
+const getSendChannelMessagePreview = (
+  parsedInput: Record<string, unknown> | null,
+  parsedOutput: Record<string, unknown>
+): string | null => {
+  const outputPreview = parsedOutput.messagePreview;
+  if (typeof outputPreview === 'string' && outputPreview.trim().length > 0) {
+    return outputPreview.trim();
+  }
+
+  const inputContent = parsedInput?.content;
+  if (typeof inputContent === 'string' && inputContent.trim().length > 0) {
+    return inputContent.trim();
+  }
+
+  return null;
+};
+
 // Helper to parse list_pages paths format into tree structure
 // Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
 const parsePathsToTree = (paths: string[], _driveId?: string): TreeItem[] => {
@@ -138,6 +185,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'list_trash': 'Trash',
   'list_conversations': 'Conversations',
   'read_conversation': 'Conversation',
+  'send_channel_message': 'Send Message',
   // Page write tools
   'replace_lines': 'Edit Document',
   'create_page': 'Create Page',
@@ -317,15 +365,25 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
       );
     }
 
-    if (toolName === 'read_page' && (parsedOutput.rawContent || parsedOutput.content)) {
-      return (
-        <RichContentRenderer
-          title={(parsedOutput.title as string | undefined) || 'Document'}
-          content={(parsedOutput.rawContent || parsedOutput.content) as string}
-          pageId={parsedOutput.pageId as string | undefined}
-          pageType={parsedOutput.type as string | undefined}
-        />
-      );
+    if (toolName === 'read_page') {
+      const directContentValue = parsedOutput.rawContent ?? parsedOutput.content;
+      const directContent = typeof directContentValue === 'string' && directContentValue.length > 0
+        ? directContentValue
+        : undefined;
+      const channelTranscript = buildChannelTranscript(parsedOutput.channelMessages);
+      const hasChannelMessagesArray = Array.isArray(parsedOutput.channelMessages);
+      const content = directContent ?? channelTranscript ?? (hasChannelMessagesArray ? 'Channel has no messages yet.' : undefined);
+
+      if (content !== undefined) {
+        return (
+          <RichContentRenderer
+            title={(parsedOutput.title as string | undefined) || 'Document'}
+            content={content}
+            pageId={parsedOutput.pageId as string | undefined}
+            pageType={parsedOutput.type as string | undefined}
+          />
+        );
+      }
     }
 
     if (toolName === 'list_conversations' && parsedOutput.conversations) {
@@ -476,6 +534,38 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
           message={(parsedOutput.summary as string | undefined) || `${(parsedOutput.updatedCount as number | undefined) || 0} cells updated`}
           errorMessage={parsedOutput.error as string | undefined}
         />
+      );
+    }
+
+    // === CHANNEL TOOLS ===
+    if (toolName === 'send_channel_message') {
+      const messagePreview = getSendChannelMessagePreview(parsedInput, parsedOutput);
+      const channelTitle = parsedOutput.channelTitle;
+      const previewTitle = typeof channelTitle === 'string' && channelTitle.length > 0
+        ? `Message Preview · #${channelTitle}`
+        : 'Message Preview';
+
+      return (
+        <div>
+          <ActionResultRenderer
+            actionType="update"
+            success={parsedOutput.success !== false}
+            title={channelTitle as string | undefined}
+            pageId={parsedOutput.channelId as string | undefined}
+            pageType="CHANNEL"
+            message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+            errorMessage={parsedOutput.error as string | undefined}
+          />
+          {messagePreview && (
+            <RichContentRenderer
+              title={previewTitle}
+              content={messagePreview}
+              pageId={parsedOutput.channelId as string | undefined}
+              pageType="CHANNEL"
+              maxHeight={220}
+            />
+          )}
+        </div>
       );
     }
 

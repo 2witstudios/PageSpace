@@ -28,11 +28,8 @@ class AuthFetch {
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
   private csrfToken: string | null = null;
   private csrfTokenPromise: Promise<string | null> | null = null;
-  private sessionCache: { token: string | null; timestamp: number } | null = null;
-  // Desktop session cache TTL reduced from 30s to 5s to minimize staleness risk
-  // This is critical for desktop where token rotation after refresh was causing
-  // stale token usage when the cache held old tokens
-  private readonly SESSION_CACHE_TTL = 5000; // 5 seconds - prioritize freshness over IPC overhead
+  private sessionCache: { token: string } | null = null;
+  private sessionFetchPromise: Promise<string | null> | null = null;
   private readonly SESSION_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
   private authClearedCleanup: (() => void) | null = null;
   private initialized = false;
@@ -47,6 +44,9 @@ class AuthFetch {
   // try to refresh after the main refresh already completed and rotated the device token
   private lastSuccessfulRefresh: number | null = null;
   private readonly REFRESH_COOLDOWN_MS = 5000; // 5 seconds cooldown after successful refresh
+
+  // Timeout for bearer token retrieval (IPC/Keychain) to prevent hung requests on cold start
+  private readonly TOKEN_RETRIEVAL_TIMEOUT_MS = 3000;
 
   // Platform storage abstraction for cross-platform auth
   private storage: PlatformStorage | null = null;
@@ -265,9 +265,7 @@ class AuthFetch {
     if (storage.usesBearer()) {
       // Bearer token authentication (Desktop, iOS, Android)
       try {
-        const sessionToken = storage.platform === 'desktop'
-          ? await this.getSessionFromElectron()
-          : await storage.getSessionToken();
+        const sessionToken = await this.getSessionTokenWithTimeout(storage, url);
         if (sessionToken) {
           headers = {
             ...headers,
@@ -437,7 +435,7 @@ class AuthFetch {
     // This prevents the race condition where:
     // 1. doRefresh() completes and stores new session
     // 2. Original request retries with getSessionFromElectron()
-    // 3. Cache still contains OLD session token (5s TTL)
+    // 3. Cache still contains OLD session token
     // 4. Retry uses stale token → 401 → infinite loop
     // By clearing cache here, retry will read fresh session from storage
     this.clearSessionCache();
@@ -921,36 +919,92 @@ class AuthFetch {
   }
 
   /**
-   * Gets session token from Electron with caching to avoid excessive IPC calls.
-   * Cache is valid for 5 seconds to balance performance and freshness.
-   * @returns Session token string or null if not authenticated
+   * Gets session token with a timeout to prevent hung requests on cold start.
+   * On Desktop, IPC calls to Electron can hang if the main process is busy.
+   * On iOS, Keychain access can hang during app launch.
+   * If timeout fires, returns null so the request proceeds without auth → 401 → SWR retry handles recovery.
    */
-  private async getSessionFromElectron(): Promise<string | null> {
-    const now = Date.now();
-
-    // Return cached token if still valid
-    if (this.sessionCache && (now - this.sessionCache.timestamp) < this.SESSION_CACHE_TTL) {
+  private async getSessionTokenWithTimeout(storage: PlatformStorage, url: string): Promise<string | null> {
+    // Fast path: return cached token for ANY bearer platform (desktop, iOS, Android)
+    // Desktop already gets this via getSessionFromElectron(), but iOS/Android skip
+    // that method and go straight to storage.getSessionToken() which has no cache.
+    if (this.sessionCache) {
       return this.sessionCache.token;
     }
 
-    if (!window.electron) return null;
+    const tokenPromise = storage.platform === 'desktop'
+      ? this.getSessionFromElectron()
+      : storage.getSessionToken();
 
-    // Fetch fresh token from Electron
-    let token = await window.electron.auth.getSessionToken();
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => {
+        this.logger.warn(`${storage.platform}: Session token retrieval timed out after ${this.TOKEN_RETRIEVAL_TIMEOUT_MS}ms`, { url });
+        resolve(null);
+      }, this.TOKEN_RETRIEVAL_TIMEOUT_MS);
+    });
 
-    // DEFENSIVE FIX: If null, retry once after brief delay
-    // This handles async timing issues where storage hasn't completed yet
-    if (!token) {
-      await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
-      token = await window.electron.auth.getSessionToken();
-
+    try {
+      const token = await Promise.race([tokenPromise, timeoutPromise]);
+      // Cache the token after slow-path resolution so subsequent calls are instant
       if (token) {
-        this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
+        this.sessionCache = { token };
       }
+      return token;
+    } finally {
+      clearTimeout(timeoutId!);
+    }
+  }
+
+  /**
+   * Gets session token from Electron with permanent caching.
+   * Cache is invalidated explicitly via clearSessionCache() (called on logout,
+   * token refresh, suspend/resume, auth:cleared IPC). No TTL - identical to
+   * how cookies work on web (present until explicitly removed).
+   * Concurrent IPC calls are deduplicated via sessionFetchPromise.
+   * @returns Session token string or null if not authenticated
+   */
+  private async getSessionFromElectron(): Promise<string | null> {
+    // Return cached token if available (no TTL - invalidated explicitly)
+    if (this.sessionCache) {
+      return this.sessionCache.token;
     }
 
-    this.sessionCache = { token, timestamp: now };
-    return token;
+    const electron = window.electron;
+    if (!electron) return null;
+
+    // Deduplicate concurrent IPC calls (e.g., multiple SWR hooks firing at once)
+    if (this.sessionFetchPromise) {
+      return this.sessionFetchPromise;
+    }
+
+    this.sessionFetchPromise = (async () => {
+      try {
+        let token = await electron.auth.getSessionToken();
+
+        // DEFENSIVE FIX: If null, retry once after brief delay
+        // This handles async timing issues where storage hasn't completed yet
+        if (!token) {
+          await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
+          token = await electron.auth.getSessionToken();
+
+          if (token) {
+            this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
+          }
+        }
+
+        if (token) {
+          this.sessionCache = { token };
+        } else {
+          this.logger.debug('Session token is null after IPC — not caching to allow future re-checks');
+        }
+        return token;
+      } finally {
+        this.sessionFetchPromise = null;
+      }
+    })();
+
+    return this.sessionFetchPromise;
   }
 
   /**
@@ -959,6 +1013,15 @@ class AuthFetch {
    */
   clearSessionCache(): void {
     this.sessionCache = null;
+  }
+
+  /**
+   * Pre-populates the session cache with a known-good token.
+   * Call this after loadSession() successfully retrieves a desktop token via IPC
+   * to avoid a redundant IPC roundtrip when fetchWithAuth runs shortly after.
+   */
+  warmSessionCache(token: string): void {
+    this.sessionCache = { token };
   }
 
   /**
@@ -1103,6 +1166,9 @@ export const clearCSRFToken = () =>
 
 export const clearSessionCache = () =>
   getAuthFetch().clearSessionCache();
+
+export const warmSessionCache = (token: string) =>
+  getAuthFetch().warmSessionCache(token);
 
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();

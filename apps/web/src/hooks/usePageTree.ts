@@ -40,37 +40,70 @@ export type TreePage = Page & {
   hasChanges?: boolean;
 };
 
+const FETCH_TIMEOUT_MS = 15000; // 15 second timeout for page tree requests
+
 const fetcher = async (url: string) => {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch: ${response.status}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetchWithAuth(url, { signal: controller.signal });
+    if (!response.ok) {
+      const error = new Error(`Failed to fetch: ${response.status}`);
+      (error as Error & { status: number }).status = response.status;
+      throw error;
+    }
+    return response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Page tree request timed out');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 };
 
 export function usePageTree(driveId?: string, trashView?: boolean) {
-  // Track if initial data has been loaded to avoid blocking first fetch
-  const hasLoadedRef = useRef(false);
-
-  // Reset loaded status when driveId or trashView changes to ensure fresh pages can load even during editing
-  useEffect(() => {
-    hasLoadedRef.current = false;
-  }, [driveId, trashView]);
-
   const swrKey = driveId ? (trashView ? `/api/drives/${encodeURIComponent(driveId)}/trash` : `/api/drives/${encodeURIComponent(driveId)}/pages`) : null;
-  const { data, error, mutate } = useSWR<TreePage[]>(
+  const { data, error, mutate, isValidating } = useSWR<TreePage[]>(
     swrKey,
     fetcher,
     {
-      // Only pause revalidation after initial load - never block the first fetch
-      // Use isAnyEditing() to allow tree updates during AI streaming (not just isEditingActive/isAnyActive)
-      isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
-      onSuccess: () => {
-        hasLoadedRef.current = true;
-      },
+      // Retry failed requests up to 3 times with increasing delay
+      errorRetryCount: 3,
+      errorRetryInterval: 2000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: true,
     }
   );
   const { cache } = useSWRConfig();
+  const hasTreeSnapshotRef = useRef(!!data);
+  hasTreeSnapshotRef.current = !!data;
+
+  // Self-healing: detect when SWR gets stuck (valid key, no data, no error, not fetching).
+  // On desktop/Capacitor, async token retrieval in fetchWithAuth can cause SWR to lose track
+  // of in-flight fetches during React re-renders from auth state settling. When stuck, we
+  // perform the same cache.delete + mutate that the manual retry button does.
+  const stuckRetryCount = useRef(0);
+
+  useEffect(() => {
+    stuckRetryCount.current = 0;
+  }, [swrKey]);
+
+  useEffect(() => {
+    if (!swrKey || data || error || isValidating) return;
+    if (stuckRetryCount.current >= 2) return;
+
+    const timeoutId = setTimeout(() => {
+      stuckRetryCount.current += 1;
+      console.log(`[usePageTree] SWR appears stuck — auto-retrying (${stuckRetryCount.current}/2)`);
+      cache.delete(swrKey);
+      mutate();
+    }, 3000);
+
+    return () => clearTimeout(timeoutId);
+  }, [swrKey, data, error, isValidating, cache, mutate]);
 
   const [childLoadingMap, setChildLoadingMap] = useState<Record<string, boolean>>({});
 
@@ -106,6 +139,11 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
   }, [swrKey, cache, mutate]);
 
   const updateNode = useCallback((nodeId: string, updates: Partial<TreePage>) => {
+    // Avoid optimistic mutation before the first tree snapshot exists.
+    // A no-op mutate on undefined data can stamp SWR mutation state and drop
+    // the in-flight initial fetch result, leaving the tree in a stuck skeleton state.
+    if (!hasTreeSnapshotRef.current) return;
+
     mutate((currentData) => {
       if (!currentData) return currentData;
 
@@ -136,14 +174,25 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     }, { revalidate: false });
   }, [mutate]);
 
+  // User-initiated retry: bypasses the editing guard (unlike invalidateTree)
+  // because the user explicitly chose to retry, so we should always honor it.
+  const retry = useCallback(() => {
+    if (swrKey) {
+      cache.delete(swrKey);
+      mutate();
+    }
+  }, [swrKey, cache, mutate]);
+
   return {
     tree: data ?? [],
     isLoading: !error && !data && !!driveId,
     isError: error,
+    isValidating,
     mutate,
     updateNode,
     fetchAndMergeChildren,
     childLoadingMap,
     invalidateTree,
+    retry,
   };
 }

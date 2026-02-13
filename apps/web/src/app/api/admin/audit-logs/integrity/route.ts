@@ -6,7 +6,7 @@ import {
   verifyEntry,
 } from '@pagespace/lib/monitoring/hash-chain-verifier';
 import { isValidId } from '@pagespace/lib/validators';
-import { verifyAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 /**
@@ -30,17 +30,8 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
  * - stopOnFirstBreak: Stop at first break point (default: true)
  * - batchSize: Batch size for full verification (default: 1000)
  */
-export async function GET(request: Request) {
+export const GET = withAdminAuth(async (_adminUser, request) => {
   try {
-    // Verify user is authenticated and is an admin
-    const adminUser = await verifyAdminAuth(request);
-
-    if (!adminUser) {
-      return Response.json(
-        { error: 'Unauthorized: Admin access required' },
-        { status: 403 }
-      );
-    }
 
     // Parse query parameters
     const url = new URL(request.url);
@@ -218,4 +209,4 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});

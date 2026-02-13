@@ -189,7 +189,7 @@ describe('page-type-validators', () => {
       })
 
       expect(result.valid).toBe(false)
-      expect(result.errors).toContain('Content must be a string for document/canvas pages')
+      expect(result.errors).toContain('Content must be a string for document/canvas/code pages')
     })
 
     it('validates string content for CANVAS', () => {

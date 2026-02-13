@@ -324,6 +324,52 @@ describe('executeToolSaga', () => {
     }));
   });
 
+  it('given connection with configOverrides.rateLimit, should pass it to calculateEffectiveRateLimit', async () => {
+    mockLoadConnection.mockResolvedValue(
+      createTestConnection({
+        configOverrides: { rateLimit: { requestsPerMinute: 10 } },
+      })
+    );
+
+    const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
+      connectionId: 'conn-123',
+      agentId: 'agent-1',
+      toolName: 'list_repos',
+      input: {},
+    };
+
+    await executeToolSaga(request, mockDeps);
+
+    expect(calculateEffectiveRateLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connection: { requestsPerMinute: 10 },
+      })
+    );
+  });
+
+  it('given connection without configOverrides, should pass undefined as connection rate limit', async () => {
+    mockLoadConnection.mockResolvedValue(createTestConnection());
+
+    const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
+      connectionId: 'conn-123',
+      agentId: 'agent-1',
+      toolName: 'list_repos',
+      input: {},
+    };
+
+    await executeToolSaga(request, mockDeps);
+
+    expect(calculateEffectiveRateLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connection: undefined,
+      })
+    );
+  });
+
   it('given connection with authMethod none and null credentials, should execute without crash', async () => {
     const noneAuthProvider = createTestProvider({
       authMethod: { type: 'none' },

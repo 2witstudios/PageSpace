@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, mcpTokens, eq, and, isNull } from '@pagespace/db';
 import { hashToken, sessionService, type SessionClaims } from '@pagespace/lib/auth';
-import { EnforcedAuthContext } from '@pagespace/lib/server';
+import { EnforcedAuthContext, logSecurityEvent } from '@pagespace/lib/server';
 import { getSessionFromCookies } from './cookie-config';
 
 const BEARER_PREFIX = 'Bearer ';
@@ -82,6 +82,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
             role: true,
             tokenVersion: true,
             adminRoleVersion: true,
+            suspendedAt: true,
           },
         },
         driveScopes: {
@@ -94,6 +95,25 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
 
     const user = tokenRecord?.user;
     if (!tokenRecord || !user) {
+      return null;
+    }
+
+    // Revoke previously issued MCP tokens when a suspended user attempts to authenticate.
+    // This makes suspension enforcement sticky for future requests.
+    if (user.suspendedAt) {
+      logSecurityEvent('unauthorized', {
+        reason: 'mcp_token_user_suspended',
+        userId: tokenRecord.userId,
+        tokenId: tokenRecord.id,
+        authType: 'mcp',
+        action: 'revoke_and_deny',
+      });
+
+      await db
+        .update(mcpTokens)
+        .set({ revokedAt: new Date() })
+        .where(eq(mcpTokens.id, tokenRecord.id));
+
       return null;
     }
 
@@ -545,7 +565,7 @@ export function checkMCPCreateScope(
 }
 
 // Re-export from other auth modules
-export { verifyAuth, verifyAdminAuth, type VerifiedUser } from './auth';
+export { verifyAuth, verifyAdminAuth, isAdminAuthError, withAdminAuth, type VerifiedUser, type AdminRouteContext } from './auth';
 export { validateCSRF } from './csrf-validation';
 export {
   validateOrigin,

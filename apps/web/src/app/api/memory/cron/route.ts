@@ -14,8 +14,8 @@
  *
  * Paying users only: 'pro', 'founder', 'business' subscription tiers
  *
- * Security: Localhost-only access (zero trust - no secret comparison)
- * Trigger via: curl http://localhost:3000/api/memory/cron
+ * Security: HMAC-signed cron requests (via cron-curl) + internal network origin check
+ * Trigger via: cron-curl POST http://web:3000/api/memory/cron
  */
 
 import { NextResponse } from 'next/server';
@@ -31,7 +31,7 @@ import {
   isNull,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   evaluateAndIntegrate,
@@ -45,8 +45,8 @@ const PAYING_TIERS = ['pro', 'founder', 'business'];
 const DELAY_BETWEEN_USERS_MS = 1000;
 
 export async function POST(request: Request) {
-  // Zero trust: only allow requests from localhost (no secret comparison)
-  const authError = validateCronRequest(request);
+  // Validate cron secret + internal network origin
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

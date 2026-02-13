@@ -108,6 +108,67 @@ describe('useDashboardContext', () => {
   });
 
   // ============================================
+  // Full-page routes (isDashboardContext = false)
+  // ============================================
+  describe('full-page routes (false)', () => {
+    it('should return false for /dashboard/calendar', () => {
+      vi.mocked(useParams).mockReturnValue({});
+      vi.mocked(usePathname).mockReturnValue('/dashboard/calendar');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for /dashboard/tasks', () => {
+      vi.mocked(useParams).mockReturnValue({});
+      vi.mocked(usePathname).mockReturnValue('/dashboard/tasks');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for /dashboard/inbox', () => {
+      vi.mocked(useParams).mockReturnValue({});
+      vi.mocked(usePathname).mockReturnValue('/dashboard/inbox');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for drive-level calendar /dashboard/[driveId]/calendar', () => {
+      vi.mocked(useParams).mockReturnValue({ driveId: 'drive-123' });
+      vi.mocked(usePathname).mockReturnValue('/dashboard/drive-123/calendar');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for drive-level tasks /dashboard/[driveId]/tasks', () => {
+      vi.mocked(useParams).mockReturnValue({ driveId: 'drive-123' });
+      vi.mocked(usePathname).mockReturnValue('/dashboard/drive-123/tasks');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for drive-level inbox /dashboard/[driveId]/inbox', () => {
+      vi.mocked(useParams).mockReturnValue({ driveId: 'drive-123' });
+      vi.mocked(usePathname).mockReturnValue('/dashboard/drive-123/inbox');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
+    it('should return false for nested inbox route /dashboard/inbox/dm/[conversationId]', () => {
+      vi.mocked(useParams).mockReturnValue({ conversationId: 'conv-789' });
+      vi.mocked(usePathname).mockReturnValue('/dashboard/inbox/dm/conv-789');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+  });
+
+  // ============================================
   // Edge Cases
   // ============================================
   describe('edge cases', () => {

@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { useFavorites } from "@/hooks/useFavorites";
+import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +36,6 @@ export default function DriveSwitcher() {
   const currentDriveId = useDriveStore((state) => state.currentDriveId);
   const setCurrentDrive = useDriveStore((state) => state.setCurrentDrive);
 
-  // Favorites store - subscribe to driveIds directly so useMemo recomputes when favorites change
   const { isFavorite, addFavorite, removeFavorite, fetchFavorites, isSynced, driveIds } = useFavorites();
 
   const { driveId } = params;
@@ -78,29 +78,39 @@ export default function DriveSwitcher() {
       : activeDrives;
 
     // Favorite drives
-    const favorites = filtered.filter((d) => isFavorite(d.id, 'drive'));
+    const favorites = filtered.filter((d) => driveIds.has(d.id));
 
     // Sort all drives alphabetically
     const sortedAll = [...filtered].sort((a, b) =>
       a.name.toLowerCase().localeCompare(b.name.toLowerCase())
     );
 
-    // Recent drives - use most recently accessed (for now just take first 5 non-favorites)
-    // TODO: Track actual recent drive access
-    const recent = sortedAll.filter((d) => !isFavorite(d.id, 'drive')).slice(0, 5);
+    // Recent drives - sorted by last accessed time (most recent first)
+    const recent = sortedAll
+      .filter((d) => !driveIds.has(d.id))
+      .sort((a, b) => {
+        const aTime = a.lastAccessedAt ? new Date(a.lastAccessedAt).getTime() : 0;
+        const bTime = b.lastAccessedAt ? new Date(b.lastAccessedAt).getTime() : 0;
+        return bTime - aTime;
+      })
+      .slice(0, 5);
 
     return {
       favoriteDrives: favorites,
       recentDrives: recent,
       allDrives: sortedAll,
     };
-  }, [drives, searchQuery, isFavorite, driveIds]);
+  }, [drives, searchQuery, driveIds]);
 
   const handleSelectDrive = (drive: Drive) => {
     setCurrentDrive(drive.id);
     router.push(`/dashboard/${drive.id}`);
     setIsOpen(false);
     setSearchQuery("");
+    // Optimistically update local state so "Recent" ordering reflects immediately
+    useDriveStore.getState().updateDrive(drive.id, { lastAccessedAt: new Date().toISOString() });
+    // Fire-and-forget: persist drive access for recent ordering
+    fetchWithAuth(`/api/drives/${drive.id}/access`, { method: 'POST' }).catch(() => {});
   };
 
   const handleToggleFavorite = async (e: React.MouseEvent, drive: Drive) => {

@@ -51,6 +51,7 @@ import {
   generateCSRFToken,
   validateOrCreateDeviceToken,
 } from '@pagespace/lib/server';
+import { db, users, eq } from '@pagespace/db';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -62,6 +63,8 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
 import { getClientIP } from '@/lib/auth';
+import { createSessionCookie } from '@/lib/auth/cookie-config';
+import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -82,7 +85,7 @@ export async function POST(req: Request) {
     const validation = oauthExchangeSchema.safeParse(body);
 
     if (!validation.success) {
-      loggers.auth.warn('Invalid mobile OAuth request', validation.error);
+      loggers.auth.warn('Invalid mobile OAuth request', { errors: validation.error.flatten().fieldErrors });
       return Response.json(
         { errors: validation.error.flatten().fieldErrors },
         { status: 400 }
@@ -213,7 +216,24 @@ export async function POST(req: Request) {
       provider: userInfo.provider,
     });
 
-    const user = await createOrLinkOAuthUser(userInfo);
+    const googlePictureUrl = userInfo.picture;
+    let user = await createOrLinkOAuthUser({
+      ...userInfo,
+      picture: undefined,
+    });
+
+    const resolvedImage = await resolveGoogleAvatarImage({
+      userId: user.id,
+      pictureUrl: googlePictureUrl,
+      existingImage: user.image,
+    });
+
+    if (resolvedImage !== (user.image ?? null)) {
+      await db.update(users)
+        .set({ image: resolvedImage })
+        .where(eq(users.id, user.id));
+      user = { ...user, image: resolvedImage };
+    }
 
     loggers.auth.info('OAuth user created/linked', {
       userId: user.id,
@@ -307,7 +327,13 @@ export async function POST(req: Request) {
       provider: 'google',
     });
 
-    return Response.json(response, { status: 200 });
+    const headers = new Headers();
+    // Desktop needs a session cookie so Next.js middleware allows page route requests
+    if (platform === 'desktop') {
+      headers.append('Set-Cookie', createSessionCookie(sessionToken));
+    }
+
+    return Response.json(response, { status: 200, headers });
   } catch (error) {
     loggers.auth.error('Mobile Google OAuth error', error as Error);
 

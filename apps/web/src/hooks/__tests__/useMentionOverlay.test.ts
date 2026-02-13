@@ -8,45 +8,25 @@ describe('useMentionOverlay', () => {
   });
 
   describe('hasMentions', () => {
-    it('given plain text, should return false', () => {
+    it('given false, should return false', () => {
       const ref = createTextareaRef();
-      const { result } = renderHook(() => useMentionOverlay(ref, 'hello world'));
+      const { result } = renderHook(() => useMentionOverlay(ref, false));
 
       expect(result.current.hasMentions).toBe(false);
     });
 
-    it('given text with page mention, should return true', () => {
+    it('given true, should return true', () => {
       const ref = createTextareaRef();
-      const { result } = renderHook(() =>
-        useMentionOverlay(ref, 'Hi @[Doc](id:page)')
-      );
+      const { result } = renderHook(() => useMentionOverlay(ref, true));
 
       expect(result.current.hasMentions).toBe(true);
-    });
-
-    it('given text with user mention, should return true', () => {
-      const ref = createTextareaRef();
-      const { result } = renderHook(() =>
-        useMentionOverlay(ref, 'Hi @[Alice](user1:user)')
-      );
-
-      expect(result.current.hasMentions).toBe(true);
-    });
-
-    it('given incomplete mention syntax, should return false', () => {
-      const ref = createTextareaRef();
-      const { result } = renderHook(() =>
-        useMentionOverlay(ref, '@[incomplete](missing)')
-      );
-
-      expect(result.current.hasMentions).toBe(false);
     });
   });
 
   describe('overlayRef', () => {
     it('given initial render, should return a ref with current null', () => {
       const ref = createTextareaRef();
-      const { result } = renderHook(() => useMentionOverlay(ref, 'test'));
+      const { result } = renderHook(() => useMentionOverlay(ref, false));
 
       expect(result.current.overlayRef).toHaveProperty('current', null);
     });
@@ -56,7 +36,7 @@ describe('useMentionOverlay', () => {
     it('given textarea with scrollTop, should sync to overlay scrollTop', () => {
       const textareaRef = createTextareaRef(100);
       const { result } = renderHook(() =>
-        useMentionOverlay(textareaRef, 'test')
+        useMentionOverlay(textareaRef, false)
       );
 
       // Simulate an overlay element being attached to the ref
@@ -73,7 +53,7 @@ describe('useMentionOverlay', () => {
     it('given no overlay element, should not throw', () => {
       const textareaRef = createTextareaRef(50);
       const { result } = renderHook(() =>
-        useMentionOverlay(textareaRef, 'test')
+        useMentionOverlay(textareaRef, false)
       );
 
       // overlayRef.current is null by default - should not throw

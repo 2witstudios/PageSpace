@@ -4,7 +4,7 @@
  * enabling proper unit testing of routes without ORM chain mocking.
  */
 
-import { db, chatMessages, pages, userActivities, eq, and, sql } from '@pagespace/db';
+import { db, chatMessages, pages, userActivities, conversations, eq, and, sql } from '@pagespace/db';
 
 // Types for repository operations
 export interface AiAgent {
@@ -228,6 +228,38 @@ export const conversationRepository = {
         eq(chatMessages.pageId, agentId),
         eq(chatMessages.conversationId, conversationId)
       ));
+  },
+
+  /**
+   * Upsert a conversation title: update if the conversations record exists, insert if not.
+   * For page-agent conversations, type='page' and contextId=agentId.
+   */
+  async upsertConversationTitle(
+    conversationId: string,
+    userId: string,
+    agentId: string,
+    title: string
+  ): Promise<{ id: string; title: string | null }> {
+    const [result] = await db
+      .insert(conversations)
+      .values({
+        id: conversationId,
+        userId,
+        type: 'page',
+        contextId: agentId,
+        title,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: conversations.id,
+        set: {
+          title,
+          updatedAt: new Date(),
+        },
+      })
+      .returning({ id: conversations.id, title: conversations.title });
+
+    return result;
   },
 
   /**

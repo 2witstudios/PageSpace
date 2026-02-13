@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, eq, and, desc, gte, lt } from '@pagespace/db';
+import { db, activityLogs, eq, and, desc, gte, lt, inArray } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { generateCSV } from '@pagespace/lib';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib';
 import { format } from 'date-fns';
 
@@ -71,6 +71,10 @@ export async function GET(request: Request) {
 
         // Optional drive filter for user context
         if (params.driveId) {
+          // Check MCP token scope before drive access
+          const scopeError = checkMCPDriveScope(auth, params.driveId);
+          if (scopeError) return scopeError;
+
           const canViewDrive = await isUserDriveMember(userId, params.driveId);
           if (!canViewDrive) {
             return NextResponse.json(
@@ -79,6 +83,12 @@ export async function GET(request: Request) {
             );
           }
           userConditions.push(eq(activityLogs.driveId, params.driveId));
+        } else {
+          // Filter by MCP token scope when no driveId provided
+          const allowedDriveIds = getAllowedDriveIds(auth);
+          if (allowedDriveIds.length > 0) {
+            userConditions.push(inArray(activityLogs.driveId, allowedDriveIds));
+          }
         }
 
         whereCondition = and(...userConditions);
@@ -92,6 +102,10 @@ export async function GET(request: Request) {
             { status: 400 }
           );
         }
+
+        // Check MCP token scope before drive access
+        const scopeError = checkMCPDriveScope(auth, params.driveId);
+        if (scopeError) return scopeError;
 
         const canViewDrive = await isUserDriveMember(userId, params.driveId);
         if (!canViewDrive) {
@@ -115,6 +129,10 @@ export async function GET(request: Request) {
             { status: 400 }
           );
         }
+
+        // Check MCP token scope before page access
+        const scopeError = await checkMCPPageScope(auth, params.pageId);
+        if (scopeError) return scopeError;
 
         const canViewPage = await canUserViewPage(userId, params.pageId);
         if (!canViewPage) {

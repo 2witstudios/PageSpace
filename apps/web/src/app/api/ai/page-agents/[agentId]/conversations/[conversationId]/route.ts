@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -10,8 +10,8 @@ const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: tr
 /**
  * PATCH /api/ai/page-agents/[agentId]/conversations/[conversationId]
  *
- * Updates conversation metadata such as title. This is currently a placeholder endpoint
- * that validates the conversation exists but does not persist custom titles.
+ * Updates conversation metadata such as title. Persists the title to the
+ * conversations table via upsert (insert or update).
  */
 export async function PATCH(
   request: Request,
@@ -33,6 +33,10 @@ export async function PATCH(
       );
     }
 
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
+
     // Check permissions (need edit to modify conversations)
     const canEdit = await canUserEditPage(auth.userId, agentId);
     if (!canEdit) {
@@ -46,7 +50,21 @@ export async function PATCH(
     const body = await request.json();
     const { title } = body;
 
-    // Validate that the conversation exists
+    if (typeof title !== 'string' || title.trim().length === 0) {
+      return NextResponse.json(
+        { error: 'Title is required and must be a non-empty string' },
+        { status: 400 }
+      );
+    }
+
+    if (title.length > 255) {
+      return NextResponse.json(
+        { error: 'Title must be 255 characters or fewer' },
+        { status: 400 }
+      );
+    }
+
+    // Validate that the conversation exists (has at least one active message)
     const exists = await conversationRepository.conversationExists(agentId, conversationId);
 
     if (!exists) {
@@ -56,13 +74,18 @@ export async function PATCH(
       );
     }
 
-    // Note: Currently we don't persist custom titles
-    // This could be extended to update a separate conversations table
+    // Persist the title via upsert into the conversations table
+    const persisted = await conversationRepository.upsertConversationTitle(
+      conversationId,
+      auth.userId,
+      agentId,
+      title
+    );
+
     return NextResponse.json({
       success: true,
-      conversationId,
-      title,
-      message: 'Custom titles will be supported in a future update',
+      conversationId: persisted.id,
+      title: persisted.title,
     });
 
   } catch (error) {
@@ -98,6 +121,10 @@ export async function DELETE(
         { status: 404 }
       );
     }
+
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
 
     // Check permissions (need edit to delete conversations)
     const canEdit = await canUserEditPage(auth.userId, agentId);

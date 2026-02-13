@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import {
   db,
@@ -8,14 +8,13 @@ import {
   and,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isUserDriveMember } from '@pagespace/lib';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-const GOOGLE_READ_ONLY_ERROR =
-  'This event is synced from Google Calendar and is read-only. Manage it in Google Calendar.';
 
 // Schema for updating an event
 const updateEventSchema = z.object({
@@ -72,9 +71,9 @@ async function canAccessEvent(userId: string, event: typeof calendarEvents.$infe
  * Check if user can edit an event (only creator or drive admin)
  */
 async function canEditEvent(userId: string, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  // Only creator can edit for now
-  // TODO: Add drive admin check
-  return event.createdById === userId;
+  if (event.createdById === userId) return true;
+  if (event.driveId) return isDriveOwnerOrAdmin(userId, event.driveId);
+  return false;
 }
 
 /**
@@ -124,6 +123,12 @@ export async function GET(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Check access
     const hasAccess = await canAccessEvent(userId, event);
     if (!hasAccess) {
@@ -170,17 +175,19 @@ export async function PATCH(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Check edit permission
     const canEdit = await canEditEvent(userId, event);
     if (!canEdit) {
       return NextResponse.json(
-        { error: 'Only the event creator can edit this event' },
+        { error: 'You do not have permission to edit this event' },
         { status: 403 }
       );
-    }
-
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     const body = await request.json();
@@ -260,6 +267,13 @@ export async function PATCH(
       attendeeIds: attendees.map(a => a.userId),
     });
 
+    // Push update to Google Calendar (fire-and-forget)
+    after(() => {
+      pushEventUpdateToGoogle(userId, eventId).catch(err =>
+        loggers.api.warn('Push update to Google failed', { eventId, error: err?.message })
+      );
+    });
+
     return NextResponse.json(completeEvent);
   } catch (error) {
     loggers.api.error('Error updating calendar event:', error as Error);
@@ -300,17 +314,19 @@ export async function DELETE(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
+    // Check MCP drive scope if event is drive-associated
+    if (event.driveId) {
+      const scopeError = checkMCPDriveScope(auth, event.driveId);
+      if (scopeError) return scopeError;
+    }
+
     // Check edit permission
     const canEdit = await canEditEvent(userId, event);
     if (!canEdit) {
       return NextResponse.json(
-        { error: 'Only the event creator can delete this event' },
+        { error: 'You do not have permission to delete this event' },
         { status: 403 }
       );
-    }
-
-    if (event.syncedFromGoogle && event.googleSyncReadOnly) {
-      return NextResponse.json({ error: GOOGLE_READ_ONLY_ERROR }, { status: 403 });
     }
 
     // Get all attendee IDs before deletion for broadcasting
@@ -318,6 +334,13 @@ export async function DELETE(
       .select({ userId: eventAttendees.userId })
       .from(eventAttendees)
       .where(eq(eventAttendees.eventId, eventId));
+
+    // Delete from Google Calendar before soft-deleting locally (fire-and-forget)
+    after(() => {
+      pushEventDeleteToGoogle(userId, eventId).catch(err =>
+        loggers.api.warn('Push delete to Google failed', { eventId, error: err?.message })
+      );
+    });
 
     // Soft delete the event
     await db

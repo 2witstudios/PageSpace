@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage } from 'ai';
+import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
@@ -31,6 +31,7 @@ import {
   parseMCPToolName,
   sanitizeToolNamesForProvider,
   getUserPersonalization,
+  getUserTimezone,
 } from '@/lib/ai/core';
 import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
@@ -47,6 +48,8 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
+import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -217,6 +220,13 @@ export async function POST(
       }, { status: 404 });
     }
 
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
+
     // Parse request body
     const requestBody = await request.json();
     loggers.api.debug('📦 Global Assistant Chat API: Request body received:', {
@@ -252,6 +262,25 @@ export async function POST(
     }
     
     loggers.api.debug('✅ Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+
+    // Image security validation — validate file parts in the user message
+    const userMessageForValidation = requestMessages[requestMessages.length - 1];
+    if (userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation)) {
+      const imageValidation = validateUserMessageFileParts(userMessageForValidation);
+      if (!imageValidation.valid) {
+        loggers.api.warn('Global Assistant Chat API: Image validation failed', { error: imageValidation.error });
+        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+      }
+
+      // Vision capability gate — reject images sent to non-vision models
+      if (selectedModel && !hasVisionCapability(selectedModel)) {
+        loggers.api.warn('Global Assistant Chat API: Images sent to non-vision model', { model: selectedModel });
+        return NextResponse.json(
+          { error: `The selected model "${selectedModel}" does not support image attachments. Please choose a vision-capable model.` },
+          { status: 400 }
+        );
+      }
+    }
 
     // Parse read-only mode early (needed for message saving)
     const readOnlyMode = isReadOnly === true;
@@ -484,8 +513,11 @@ export async function POST(
     
     const modelMessages = convertToModelMessages(processedMessages);
 
-    // Fetch user personalization for AI system prompt injection
-    const personalization = await getUserPersonalization(userId);
+    // Fetch user personalization and timezone for AI system prompt injection
+    const [personalization, userTimezone] = await Promise.all([
+      getUserPersonalization(userId),
+      getUserTimezone(userId),
+    ]);
     if (personalization) {
       loggers.api.debug('Global Assistant: User personalization loaded', {
         hasPersonalization: true,
@@ -514,8 +546,8 @@ export async function POST(
       personalization ?? undefined
     );
 
-    // Build timestamp system prompt for temporal awareness
-    const timestampSystemPrompt = buildTimestampSystemPrompt();
+    // Build timestamp system prompt for temporal awareness (using user's timezone)
+    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
 
     // Fetch drive prompt if user is within a drive
     let drivePromptSection = '';
@@ -644,7 +676,7 @@ MENTION PROCESSING:
     // Filter tools based on read-only mode and web search toggle
     const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
     // Apply web search filtering (exclude web_search if disabled)
-    let finalTools = filterToolsForWebSearch(postReadOnlyTools, webSearchMode);
+    let finalTools: ToolSet = filterToolsForWebSearch(postReadOnlyTools, webSearchMode) as ToolSet;
 
     loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
@@ -725,8 +757,7 @@ MENTION PROCESSING:
 
         // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
         // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute }) as any;
+        finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
 
         loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
           totalTools: Object.keys(finalTools).length,
@@ -801,11 +832,13 @@ MENTION PROCESSING:
           abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
           experimental_context: {
             userId,
+            timezone: userTimezone,
             aiProvider: currentProvider,
             aiModel: currentModel,
             conversationId,
             locationContext,
-            modelCapabilities: getModelCapabilities(currentModel, currentProvider)
+            modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
+            chatSource: { type: 'global' as const },
           },
           maxRetries: 20,
           onAbort: () => {

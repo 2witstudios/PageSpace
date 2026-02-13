@@ -183,14 +183,14 @@ router.post('/single', upload.single('file'), async (req, res) => {
         });
       }
 
-      await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
+      const jobs = await queueProcessingJobs(contentHash, originalname, mimetype, pageId);
 
       return res.json({
         success: true,
         contentHash,
         deduplicated: true,
         size,
-        jobs: await getQueuedJobs(contentHash, mimetype)
+        jobs
       });
     }
 
@@ -411,13 +411,6 @@ router.post('/multiple', upload.array('files', 10), async (req, res) => {
   }
 });
 
-// Chunked upload endpoint for large files
-router.post('/chunk', async (req, res) => {
-  // This would handle chunked uploads for very large files
-  // Implementation depends on frontend chunking strategy
-  res.status(501).json({ error: 'Chunked upload not yet implemented' });
-});
-
 // Helper function to queue appropriate processing jobs (unified ingestion)
 async function queueProcessingJobs(
   contentHash: string,
@@ -434,11 +427,6 @@ async function queueProcessingJobs(
   });
   jobIds.push(jobId);
   return jobIds;
-}
-
-async function getQueuedJobs(contentHash: string, mimeType: string): Promise<any> {
-  const jobs: any = { ingest: true };
-  return jobs;
 }
 
 export const uploadRouter: ExpressRouter = router;

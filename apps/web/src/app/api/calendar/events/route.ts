@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import {
   db,
@@ -11,12 +11,13 @@ import {
   lte,
   inArray,
   isNull,
-  desc,
+  asc,
 } from '@pagespace/db';
 import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -97,6 +98,10 @@ export async function GET(request: Request) {
         );
       }
 
+      // Check MCP drive scope
+      const scopeError = checkMCPDriveScope(auth, params.driveId);
+      if (scopeError) return scopeError;
+
       const canView = await isUserDriveMember(userId, params.driveId);
       if (!canView) {
         return NextResponse.json(
@@ -163,14 +168,16 @@ export async function GET(request: Request) {
             columns: { id: true, title: true, type: true },
           },
         },
-        orderBy: [desc(calendarEvents.startAt)],
+        orderBy: [asc(calendarEvents.startAt)],
       });
 
       return NextResponse.json({ events });
     }
 
     // User context: aggregate events from all sources
-    const driveIds = await getDriveIdsForUser(userId);
+    const allDriveIds = await getDriveIdsForUser(userId);
+    // Filter drives by MCP token scope
+    const driveIds = filterDrivesByMCPScope(auth, allDriveIds);
 
     // Build conditions for user's visible events:
     // 1. Personal events (driveId is null, created by user)
@@ -238,7 +245,7 @@ export async function GET(request: Request) {
           columns: { id: true, name: true, slug: true },
         },
       },
-      orderBy: [desc(calendarEvents.startAt)],
+      orderBy: [asc(calendarEvents.startAt)],
     });
 
     return NextResponse.json({ events });
@@ -276,6 +283,10 @@ export async function POST(request: Request) {
     }
 
     const data = parseResult.data;
+
+    // Check MCP create scope (scoped tokens can only create in their allowed drives)
+    const createScopeError = checkMCPCreateScope(auth, data.driveId ?? null);
+    if (createScopeError) return createScopeError;
 
     // Validate drive access if driveId is provided
     if (data.driveId) {
@@ -394,6 +405,13 @@ export async function POST(request: Request) {
       operation: 'created',
       userId,
       attendeeIds: [userId, ...(data.attendeeIds ?? [])],
+    });
+
+    // Push to Google Calendar (fire-and-forget)
+    after(() => {
+      pushEventToGoogle(userId, event.id).catch(err =>
+        loggers.api.warn('Push to Google failed', { eventId: event.id, error: err?.message })
+      );
     });
 
     return NextResponse.json(completeEvent, { status: 201 });

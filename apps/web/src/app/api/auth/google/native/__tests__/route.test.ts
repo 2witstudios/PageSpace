@@ -14,7 +14,7 @@
  * - Error handling
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mockVerifyIdToken = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
@@ -197,55 +197,55 @@ describe('POST /api/auth/google/native', () => {
     });
 
     // Default mocks for successful flow
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (resetDistributedRateLimit as Mock).mockResolvedValue(undefined);
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
 
     // Default session mocks
-    (sessionService.createSession as Mock).mockResolvedValue('ps_sess_mock_session_token');
-    (sessionService.validateSession as Mock).mockResolvedValue({
+    vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_mock_session_token');
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
       userId: 'user-123',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-    });
-    (sessionService.revokeAllUserSessions as Mock).mockResolvedValue(0);
-    (generateCSRFToken as Mock).mockReturnValue('mock-csrf-token');
+    } as never);
+    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
     // Default device token mock
-    (validateOrCreateDeviceToken as Mock).mockResolvedValue({
+    vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
       deviceTokenRecordId: 'device-record-id',
-    });
+    } as never);
 
     // Default provisioning mock
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({ driveId: 'drive-123' });
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123' });
 
     // Default getClientIP mock
-    (getClientIP as Mock).mockReturnValue('127.0.0.1');
+    vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
 
     // Default to new user flow
-    (db.query.users.findFirst as Mock).mockResolvedValue(null);
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
 
-    (db.insert as Mock).mockImplementation((table: unknown) => {
+    vi.mocked(db.insert).mockImplementation((table: unknown) => {
       if (table === users) {
         return {
           values: vi.fn(() => ({
             returning: vi.fn(() => Promise.resolve([mockNewUser])),
           })),
-        };
+        } as never;
       }
       return {
         values: vi.fn(() => Promise.resolve(undefined)),
-      };
+      } as never;
     });
 
-    (db.update as Mock).mockReturnValue({
+    vi.mocked(db.update).mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
       }),
-    });
+    } as never);
   });
 
   afterEach(() => {
@@ -267,7 +267,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given valid idToken for existing user, should return tokens without creating user', async () => {
-      (db.query.users.findFirst as Mock).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -288,7 +288,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given existing user, should not provision Getting Started drive', async () => {
-      (db.query.users.findFirst as Mock).mockResolvedValue(mockExistingUser);
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -502,7 +502,7 @@ describe('POST /api/auth/google/native', () => {
 
   describe('rate limiting', () => {
     it('given rate limit exceeded, should return 429', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         attemptsRemaining: 0,
         retryAfter: 900,
@@ -518,7 +518,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given rate limit exceeded, should include Retry-After header', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         attemptsRemaining: 0,
         retryAfter: 900,
@@ -533,7 +533,7 @@ describe('POST /api/auth/google/native', () => {
 
   describe('session management', () => {
     it('should revoke existing sessions before creating new one (session fixation prevention)', async () => {
-      (sessionService.revokeAllUserSessions as Mock).mockResolvedValue(2);
+      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -545,7 +545,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given session validation fails, should return 500', async () => {
-      (sessionService.validateSession as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -590,7 +590,7 @@ describe('POST /api/auth/google/native', () => {
 
   describe('error handling', () => {
     it('given unexpected error, should return 500', async () => {
-      (db.query.users.findFirst as Mock).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -601,7 +601,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
         new Error('Provisioning failed')
       );
 
@@ -614,7 +614,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given rate limit reset fails, should still succeed', async () => {
-      (resetDistributedRateLimit as Mock).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -628,9 +628,9 @@ describe('POST /api/auth/google/native', () => {
   describe('user update scenarios', () => {
     it('given existing user without googleId, should update with googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      (db.query.users.findFirst as Mock)
-        .mockResolvedValueOnce(userWithoutGoogleId)
-        .mockResolvedValueOnce(mockExistingUser);
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(userWithoutGoogleId as never)
+        .mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -640,9 +640,9 @@ describe('POST /api/auth/google/native', () => {
 
     it('given existing user with password, should set provider to both', async () => {
       const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      (db.query.users.findFirst as Mock)
-        .mockResolvedValueOnce(userWithPassword)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' });
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(userWithPassword as never)
+        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);

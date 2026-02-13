@@ -5,7 +5,7 @@
  * Route handlers should call these service functions rather than accessing the database directly.
  */
 
-import { db, pages, drives, eq, and, inArray, sql } from '@pagespace/db';
+import { db, pages, drives, eq, and, inArray, sql, type PageTypeEnum } from '@pagespace/db';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
 
 // ============================================================================
@@ -22,7 +22,7 @@ export interface DriveSearchInfo {
 }
 
 export interface GlobSearchOptions {
-  includeTypes?: Array<'FOLDER' | 'DOCUMENT' | 'AI_CHAT' | 'CHANNEL' | 'CANVAS' | 'SHEET'>;
+  includeTypes?: PageTypeEnum[];
   maxResults?: number;
 }
 
@@ -80,6 +80,24 @@ export interface RegexSearchResponse {
   };
   nextSteps: string[];
 }
+
+/**
+ * Security constants for regex search to prevent ReDoS attacks.
+ *
+ * MAX_REGEX_PATTERN_LENGTH: Limits user input length to bound worst-case matching time.
+ * REGEX_QUERY_TIMEOUT_MS: PostgreSQL statement timeout to abort runaway regex queries.
+ *   Set to 3 seconds as a balance between allowing complex legitimate searches and
+ *   preventing denial-of-service from pathological patterns.
+ * REGEX_META_CHARS: Identifies patterns containing regex metacharacters; only literal
+ *   patterns are safe for JavaScript-side line extraction.
+ */
+const MAX_REGEX_PATTERN_LENGTH = 500;
+const MAX_REGEX_RESULTS = 100;
+const MAX_REGEX_LINE_PREVIEWS = 5;
+const MAX_REGEX_LINE_CONTENT_LENGTH = 200;
+const REGEX_QUERY_TIMEOUT_MS = '3000';
+const POSTGRES_STATEMENT_TIMEOUT_CODE = '57014';
+const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
 
 // ============================================================================
 // Service Functions
@@ -229,16 +247,91 @@ export async function globSearchPages(
     nextSteps:
       results.length > 0
         ? [
-            'Use read_page with the pageId to examine content',
-            'Use the semantic paths to understand the structure',
-            'Consider using regex_search for content-based searching',
-          ]
+          'Use read_page with the pageId to examine content',
+          'Use the semantic paths to understand the structure',
+          'Consider using regex_search for content-based searching',
+        ]
         : [
-            'Try a broader pattern (e.g., "**/*" for all pages)',
-            'Check if your pattern syntax is correct',
-            'Verify the pages exist with list_pages',
-          ],
+          'Try a broader pattern (e.g., "**/*" for all pages)',
+          'Check if your pattern syntax is correct',
+          'Verify the pages exist with list_pages',
+        ],
   };
+}
+
+function isRegexQueryTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code === POSTGRES_STATEMENT_TIMEOUT_CODE) {
+    return true;
+  }
+
+  return typeof candidate.message === 'string'
+    && candidate.message.toLowerCase().includes('statement timeout');
+}
+
+function isLiteralRegexPattern(pattern: string): boolean {
+  return !REGEX_META_CHARS.test(pattern);
+}
+
+function buildRegexTimeoutResponse(
+  driveSlug: string | null,
+  pattern: string,
+  searchIn: 'content' | 'title' | 'both'
+): RegexSearchResponse {
+  return {
+    driveSlug,
+    pattern,
+    searchIn,
+    results: [],
+    totalResults: 0,
+    summary: 'Regex search timed out. Try a simpler pattern.',
+    stats: {
+      pagesScanned: 0,
+      pagesWithAccess: 0,
+      documentTypes: [],
+    },
+    nextSteps: [
+      'Use a less complex regex pattern',
+      `Keep patterns short (under ${MAX_REGEX_PATTERN_LENGTH} characters)`,
+      'Narrow your search scope with searchIn=title',
+    ],
+  };
+}
+
+function extractLiteralMatchingLines(
+  content: string,
+  literalPattern: string
+): { matchingLines: Array<{ lineNumber: number; content: string }>; totalMatches: number } {
+  if (literalPattern.length === 0) {
+    return { matchingLines: [], totalMatches: 0 };
+  }
+
+  // Case-sensitive matching to align with PostgreSQL ~ operator
+  const needle = literalPattern;
+  const matchingLines: Array<{ lineNumber: number; content: string }> = [];
+  let totalMatches = 0;
+
+  const lines = content.split('\n');
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line.includes(needle)) {
+      continue;
+    }
+
+    totalMatches += 1;
+    if (matchingLines.length < MAX_REGEX_LINE_PREVIEWS) {
+      matchingLines.push({
+        lineNumber: index + 1,
+        content: line.substring(0, MAX_REGEX_LINE_CONTENT_LENGTH),
+      });
+    }
+  }
+
+  return { matchingLines, totalMatches };
 }
 
 /**
@@ -252,19 +345,19 @@ export async function regexSearchPages(
   options: RegexSearchOptions = {}
 ): Promise<RegexSearchResponse> {
   const { searchIn = 'content', maxResults = 50 } = options;
-  const effectiveMaxResults = Math.min(maxResults, 100);
+  const effectiveMaxResults = Math.min(maxResults, MAX_REGEX_RESULTS);
 
   // Validate and limit pattern length to prevent ReDoS
-  if (pattern.length > 500) {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
     return {
       driveSlug,
       pattern,
       searchIn,
       results: [],
       totalResults: 0,
-      summary: 'Pattern too long (max 500 characters)',
+      summary: `Pattern too long (max ${MAX_REGEX_PATTERN_LENGTH} characters)`,
       stats: { pagesScanned: 0, pagesWithAccess: 0, documentTypes: [] },
-      nextSteps: ['Shorten your regex pattern to under 500 characters'],
+      nextSteps: [`Shorten your regex pattern to under ${MAX_REGEX_PATTERN_LENGTH} characters`],
     };
   }
 
@@ -289,31 +382,49 @@ export async function regexSearchPages(
     whereConditions = and(
       eq(pages.driveId, driveId),
       eq(pages.isTrashed, false),
-      sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+      sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`
     );
   }
 
-  // Build and execute query
-  const matchingPages = await db
-    .select({
-      id: pages.id,
-      title: pages.title,
-      type: pages.type,
-      parentId: pages.parentId,
-      content: pages.content,
-    })
-    .from(pages)
-    .where(whereConditions)
-    .limit(effectiveMaxResults);
+  let matchingPages: Array<{
+    id: string;
+    title: string;
+    type: string;
+    parentId: string | null;
+    content: string;
+  }>;
 
-  // Use original pattern for line-level matching — consistent with PG regex semantics.
-  // Pattern is length-checked (≤500 chars) and applied per-line (not concatenated).
-  let lineRegex: RegExp | null = null;
   try {
-    lineRegex = new RegExp(pattern, 'gi');
-  } catch {
-    // PG regex syntax may differ from JS — skip line extraction
+    matchingPages = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT set_config('statement_timeout', ${REGEX_QUERY_TIMEOUT_MS}, true)`
+      );
+      return tx
+        .select({
+          id: pages.id,
+          title: pages.title,
+          type: pages.type,
+          parentId: pages.parentId,
+          content: pages.content,
+        })
+        .from(pages)
+        .where(whereConditions)
+        .limit(effectiveMaxResults);
+    });
+  } catch (error) {
+    if (isRegexQueryTimeoutError(error)) {
+      console.warn('[drive-search] Regex query timed out', {
+        driveId,
+        patternLength: pattern.length,
+        searchIn,
+      });
+      return buildRegexTimeoutResponse(driveSlug, pattern, searchIn);
+    }
+    throw error;
   }
+
+  // Only perform line previews for literal patterns to avoid user-controlled regex execution.
+  const canExtractLiteralLineMatches = searchIn !== 'title' && isLiteralRegexPattern(pattern);
 
   // Filter by permissions and build results
   const results: RegexSearchResult[] = [];
@@ -350,28 +461,17 @@ export async function regexSearchPages(
     const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
 
     // Extract matching lines if searching content
-    const matchingLines: Array<{ lineNumber: number; content: string }> = [];
-    if (searchIn !== 'title' && lineRegex) {
-      const lines = page.content.split('\n');
-      lines.forEach((line, index) => {
-        // Reset lastIndex for global regex on each line
-        lineRegex!.lastIndex = 0;
-        if (lineRegex!.test(line)) {
-          matchingLines.push({
-            lineNumber: index + 1,
-            content: line.substring(0, 200), // Truncate long lines
-          });
-        }
-      });
-    }
+    const { matchingLines, totalMatches } = canExtractLiteralLineMatches
+      ? extractLiteralMatchingLines(page.content, pattern)
+      : { matchingLines: [], totalMatches: 0 };
 
     results.push({
       pageId: page.id,
       title: page.title,
       type: page.type,
       semanticPath,
-      matchingLines: matchingLines.slice(0, 5), // Limit to first 5 matches
-      totalMatches: matchingLines.length,
+      matchingLines,
+      totalMatches,
     });
   }
 
@@ -390,13 +490,13 @@ export async function regexSearchPages(
     nextSteps:
       results.length > 0
         ? [
-            'Use read_page with the pageId to examine full content',
-            'Use edit tools to modify matching pages',
-            'Refine your regex pattern for more specific results',
-          ]
+          'Use read_page with the pageId to examine full content',
+          'Use edit tools to modify matching pages',
+          'Refine your regex pattern for more specific results',
+        ]
         : [
-            'Try a different pattern or search in a different location',
-            'Check if the pattern syntax is correct for PostgreSQL regex',
-          ],
+          'Try a different pattern or search in a different location',
+          'Check if the pattern syntax is correct for PostgreSQL regex',
+        ],
   };
 }

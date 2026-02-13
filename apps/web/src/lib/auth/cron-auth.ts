@@ -1,21 +1,23 @@
 /**
  * Cron Authentication Utility
  *
- * Zero-trust approach: Cron endpoints only accessible from internal network.
- * No secret comparison needed - requests must not come through external proxy.
+ * Two-layer security model:
+ *   1. Primary: Cryptographic CRON_SECRET validation (timing-safe comparison)
+ *   2. Defense-in-depth: Internal network header checks
  *
- * Security model:
- *   - External requests go through reverse proxy → adds x-forwarded-for → REJECTED
- *   - Internal docker network requests → no x-forwarded-for → ALLOWED
- *   - Localhost requests (dev/testing) → no x-forwarded-for → ALLOWED
+ * When CRON_SECRET is configured (production):
+ *   - Requests MUST include valid Authorization: Bearer <secret>
+ *   - Internal network checks still apply as additional layer
  *
- * Usage:
- *   1. Cron service (inside docker) hits http://web:3000/api/cron/...
- *   2. Route calls validateCronRequest(request)
- *   3. No secrets needed, no timing attacks, request stays internal
+ * When CRON_SECRET is not configured (development):
+ *   - Falls back to internal network checks only
+ *   - Logs a warning on first request
  */
 
+import { createHmac, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
+
+let cronSecretWarningLogged = false;
 
 /**
  * Check if request originates from internal network (not proxied from outside)
@@ -56,15 +58,228 @@ export function isInternalRequest(request: Request): boolean {
 export const isLocalhostRequest = isInternalRequest;
 
 /**
+ * Validate the Authorization header against CRON_SECRET using timing-safe comparison.
+ * Expects: Authorization: Bearer <CRON_SECRET>
+ */
+export function hasValidCronSecret(request: Request): boolean {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return false;
+  }
+
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader) {
+    return false;
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/);
+  if (!match) {
+    return false;
+  }
+
+  const provided = match[1];
+
+  // Timing-safe comparison: both buffers must be same length
+  const expectedBuffer = Buffer.from(cronSecret, 'utf-8');
+  const providedBuffer = Buffer.from(provided, 'utf-8');
+
+  if (expectedBuffer.length !== providedBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
+/**
  * Validate cron request and return error response if invalid
  * Returns null if request is valid, error response if invalid
+ *
+ * When CRON_SECRET is configured: requires valid secret AND internal network origin
+ * When CRON_SECRET is not configured: falls back to internal network check only (dev mode)
  */
 export function validateCronRequest(request: Request): NextResponse | null {
-  if (!isInternalRequest(request)) {
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (!cronSecret) {
+    if (!cronSecretWarningLogged) {
+      console.warn(
+        '[cron-auth] CRON_SECRET is not configured. Falling back to network-only auth. Set CRON_SECRET in production.'
+      );
+      cronSecretWarningLogged = true;
+    }
+    // Dev fallback: internal network check only
+    if (!isInternalRequest(request)) {
+      return NextResponse.json(
+        { error: 'Forbidden - cron endpoints only accessible from internal network' },
+        { status: 403 }
+      );
+    }
+    return null;
+  }
+
+  // Production: require valid secret
+  if (!hasValidCronSecret(request)) {
     return NextResponse.json(
-      { error: 'Forbidden - cron endpoints only accessible from localhost' },
+      { error: 'Forbidden - invalid or missing cron secret' },
       { status: 403 }
     );
   }
+
+  // Defense-in-depth: also check internal network origin
+  if (!isInternalRequest(request)) {
+    return NextResponse.json(
+      { error: 'Forbidden - cron endpoints only accessible from internal network' },
+      { status: 403 }
+    );
+  }
+
+  return null;
+}
+
+// ============================================================
+// HMAC-Signed Request Validation (anti-replay upgrade)
+// ============================================================
+
+const TIMESTAMP_MAX_AGE_SECONDS = 300; // 5 minutes
+const NONCE_CLEANUP_INTERVAL_MS = 600_000; // 10 minutes
+
+const usedNonces = new Map<string, number>(); // nonce → epoch ms when recorded
+let lastNonceCleanup = Date.now();
+
+/**
+ * Compute HMAC-SHA256 signature for cron request validation.
+ * Message format: `${timestamp}:${nonce}:${method}:${path}`
+ */
+export function computeCronSignature(
+  secret: string,
+  timestamp: string,
+  nonce: string,
+  method: string,
+  path: string
+): string {
+  const message = `${timestamp}:${nonce}:${method}:${path}`;
+  return createHmac('sha256', secret).update(message).digest('hex');
+}
+
+/**
+ * Check if a nonce has been seen before and record it.
+ * Periodically prunes nonces older than the timestamp acceptance window,
+ * preventing the race condition where a blanket clear could evict still-valid nonces.
+ */
+export function checkAndRecordNonce(nonce: string): boolean {
+  const now = Date.now();
+  if (now - lastNonceCleanup > NONCE_CLEANUP_INTERVAL_MS) {
+    const cutoffMs = now - TIMESTAMP_MAX_AGE_SECONDS * 1000;
+    for (const [n, ts] of usedNonces) {
+      if (ts < cutoffMs) usedNonces.delete(n);
+    }
+    lastNonceCleanup = now;
+  }
+
+  if (usedNonces.has(nonce)) {
+    return false; // Replay detected
+  }
+
+  usedNonces.set(nonce, now);
+  return true;
+}
+
+/** Exported for testing only */
+export function _resetNonceStore(): void {
+  usedNonces.clear();
+  lastNonceCleanup = Date.now();
+}
+
+/**
+ * Validate an HMAC-signed cron request.
+ *
+ * Expected headers:
+ *   X-Cron-Timestamp: Unix epoch seconds
+ *   X-Cron-Nonce: Random UUID per request
+ *   X-Cron-Signature: HMAC-SHA256(CRON_SECRET, `${timestamp}:${nonce}:${method}:${path}`)
+ *
+ * Validation:
+ *   1. Reject if CRON_SECRET not configured
+ *   2. Reject if any required header is missing
+ *   3. Reject if timestamp older than 5 minutes (anti-replay)
+ *   4. Reject if nonce already seen (anti-replay)
+ *   5. Recompute signature and timing-safe compare
+ *   6. Defense-in-depth: require internal network origin
+ *
+ * Returns null on success, 403 NextResponse on failure.
+ */
+export function validateSignedCronRequest(request: Request): NextResponse | null {
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (!cronSecret) {
+    if (!cronSecretWarningLogged) {
+      console.warn(
+        '[cron-auth] CRON_SECRET is not configured. Falling back to network-only auth. Set CRON_SECRET in production.'
+      );
+      cronSecretWarningLogged = true;
+    }
+    if (!isInternalRequest(request)) {
+      return NextResponse.json(
+        { error: 'Forbidden - cron endpoints only accessible from internal network' },
+        { status: 403 }
+      );
+    }
+    return null;
+  }
+
+  const timestamp = request.headers.get('x-cron-timestamp');
+  const nonce = request.headers.get('x-cron-nonce');
+  const signature = request.headers.get('x-cron-signature');
+
+  if (!timestamp || !nonce || !signature) {
+    return NextResponse.json(
+      { error: 'Forbidden - missing cron authentication headers' },
+      { status: 403 }
+    );
+  }
+
+  // Anti-replay: check timestamp freshness
+  const requestTime = parseInt(timestamp, 10);
+  const now = Math.floor(Date.now() / 1000);
+  if (isNaN(requestTime) || Math.abs(now - requestTime) >= TIMESTAMP_MAX_AGE_SECONDS) {
+    return NextResponse.json(
+      { error: 'Forbidden - cron request timestamp expired' },
+      { status: 403 }
+    );
+  }
+
+  // Anti-replay: check nonce uniqueness
+  if (!checkAndRecordNonce(nonce)) {
+    return NextResponse.json(
+      { error: 'Forbidden - cron request nonce already used' },
+      { status: 403 }
+    );
+  }
+
+  // Recompute and compare signature
+  const url = new URL(request.url);
+  const method = request.method.toUpperCase();
+  const path = url.pathname;
+
+  const expectedSignature = computeCronSignature(cronSecret, timestamp, nonce, method, path);
+
+  const expectedBuffer = Buffer.from(expectedSignature, 'utf-8');
+  const providedBuffer = Buffer.from(signature, 'utf-8');
+
+  if (expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+    return NextResponse.json(
+      { error: 'Forbidden - invalid cron signature' },
+      { status: 403 }
+    );
+  }
+
+  // Defense-in-depth: require internal network origin
+  if (!isInternalRequest(request)) {
+    return NextResponse.json(
+      { error: 'Forbidden - cron endpoints only accessible from internal network' },
+      { status: 403 }
+    );
+  }
+
   return null;
 }

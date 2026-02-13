@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
-import MonacoWebpackPlugin from "monaco-editor-webpack-plugin";
+import path from "path";
+import CopyPlugin from "copy-webpack-plugin";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -16,10 +17,20 @@ const nextConfig: NextConfig = {
         process: false,
         os: false,
       };
+      const outputPath = config.output.path ?? path.join(__dirname, ".next");
+
       config.plugins.push(
-        new MonacoWebpackPlugin({
-          languages: ["javascript", "typescript", "html", "css", "json"],
-          filename: "static/[name].worker.js",
+        new CopyPlugin({
+          patterns: [
+            {
+              from: path.dirname(require.resolve("monaco-editor/min/vs/loader.js")),
+              to: path.join(outputPath, "static", "monaco", "vs"),
+            },
+            {
+              from: require.resolve("pdfjs-dist/build/pdf.worker.min.mjs"),
+              to: path.join(__dirname, "public", "pdf.worker.min.mjs"),
+            },
+          ],
         })
       );
     }

@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { drives, db, eq, and } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -17,6 +18,10 @@ export async function POST(
     if (isAuthError(auth)) {
       return auth.error;
     }
+
+    // Check MCP token scope before drive access
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
 
     const drive = await db.query.drives.findFirst({
       where: and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId)),
@@ -39,20 +44,24 @@ export async function POST(
       })
       .where(eq(drives.id, drive.id));
 
+    const recipientUserIds = await getDriveRecipientUserIds(drive.id);
     await broadcastDriveEvent(
       createDriveEventPayload(drive.id, 'updated', {
         name: drive.name,
         slug: drive.slug,
       }),
+      recipientUserIds
     );
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(auth.userId);
+    const isMCP = isMCPAuthResult(auth);
     logDriveActivity(auth.userId, 'restore', {
       id: driveId,
       name: drive.name,
     }, {
       ...actorInfo,
+      metadata: isMCP ? { source: 'mcp' } : undefined,
       previousValues: { isTrashed: true },
       newValues: { isTrashed: false },
     });

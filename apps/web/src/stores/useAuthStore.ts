@@ -80,7 +80,7 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       // Initial state
       user: null,
-      isLoading: false,
+      isLoading: true,
       isAuthenticated: false,
       lastAuthCheck: null,
       hasHydrated: false,
@@ -240,6 +240,12 @@ export const useAuthStore = create<AuthState>()(
           return state._authPromise;
         }
 
+        // Mark this app boot as session-initialized after the first loadSession attempt.
+        // This prevents every future useAuth mount from forcing another immediate load.
+        if (!state._serverSessionInitialized) {
+          set({ _serverSessionInitialized: true });
+        }
+
         // CRITICAL: Check for permanent auth failure BEFORE attempting any auth
         // This breaks the rehydration loop where Zustand restores stale isAuthenticated: true
         if (state.authFailedPermanently && !force) {
@@ -296,11 +302,8 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
 
-        // Set loading state to prevent premature redirects (critical for OAuth flow)
-        set({ isLoading: true });
-
-        // Create new auth promise
-        const authPromise = (async () => {
+        // Create and publish promise before async work starts to avoid races.
+        const authPromise = Promise.resolve().then(async () => {
           try {
             const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
             const headers: Record<string, string> = {};
@@ -348,6 +351,9 @@ export const useAuthStore = create<AuthState>()(
                   const newSessionToken = await window.electron.auth.getSessionToken();
                   if (newSessionToken) {
                     headers['Authorization'] = `Bearer ${newSessionToken}`;
+                    // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip IPC
+                    const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
+                    warmSessionCache(newSessionToken);
                   }
                 } else {
                   // No device token either - not logged in
@@ -361,6 +367,9 @@ export const useAuthStore = create<AuthState>()(
                 }
               } else {
                 headers['Authorization'] = `Bearer ${sessionToken}`;
+                // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip IPC
+                const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
+                warmSessionCache(sessionToken);
               }
             } else if (isIOS) {
               // iOS: Get session token from Keychain
@@ -378,6 +387,9 @@ export const useAuthStore = create<AuthState>()(
               }
 
               headers['Authorization'] = `Bearer ${sessionToken}`;
+              // Pre-warm auth-fetch cache so subsequent fetchWithAuth calls skip Keychain
+              const { warmSessionCache } = await import('@/lib/auth/auth-fetch');
+              warmSessionCache(sessionToken);
             }
 
             const response = await fetch('/api/auth/me', {
@@ -527,13 +539,19 @@ export const useAuthStore = create<AuthState>()(
               lastFailedAuthCheck: Date.now(),
             });
           } finally {
-            // Clear loading state and promise when done
-            set({ isLoading: false, _authPromise: null });
-          }
-        })();
+            // Clear loading state. Only clear _authPromise if this request is still current.
+            set((currentState) => {
+              if (currentState._authPromise !== authPromise) {
+                return { isLoading: false };
+              }
 
-        // Store promise for deduplication
-        set({ _authPromise: authPromise });
+              return { isLoading: false, _authPromise: null };
+            });
+          }
+        });
+
+        // Set loading and store promise for deduplication.
+        set({ isLoading: true, _authPromise: authPromise });
         return authPromise;
       },
     }),
@@ -554,7 +572,6 @@ export const useAuthStore = create<AuthState>()(
         user: state.user ? {
           id: state.user.id,
           name: state.user.name,
-          email: state.user.email,
           image: state.user.image,
           emailVerified: state.user.emailVerified,
         } : null,
@@ -577,7 +594,18 @@ export const authStoreHelpers = {
   // Check if auth data is stale and needs refresh
   needsAuthCheck: (): boolean => {
     const state = useAuthStore.getState();
-    if (!state.lastAuthCheck) return true;
+    if (!state.lastAuthCheck) {
+      // After this boot has already performed an auth load and determined no active session,
+      // avoid re-checking on every component mount.
+      if (state._serverSessionInitialized && !state.isAuthenticated) {
+        // If the last attempt failed transiently, allow another retry on subsequent mounts.
+        if (state.lastFailedAuthCheck && !state.authFailedPermanently) {
+          return true;
+        }
+        return false;
+      }
+      return true;
+    }
     
     return Date.now() - state.lastAuthCheck > AUTH_CHECK_INTERVAL;
   },
@@ -639,13 +667,14 @@ export const authStoreHelpers = {
       return true;
     }
 
-    // If server session was initialized, only reload if stale
-    if (state._serverSessionInitialized) {
-      return authStoreHelpers.needsAuthCheck();
+    // If server session was not initialized this app boot, force one revalidation.
+    // Persisted auth state (user/isAuthenticated/lastAuthCheck) can be stale.
+    if (!state._serverSessionInitialized) {
+      return true;
     }
 
-    // No server data and no recent check - load session
-    return !state.lastAuthCheck || authStoreHelpers.needsAuthCheck();
+    // Server session initialized on this boot, so normal staleness policy applies.
+    return authStoreHelpers.needsAuthCheck();
   },
 
   // Initialize store from server session (called during app startup)

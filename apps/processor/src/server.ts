@@ -9,8 +9,11 @@ import { cacheRouter } from './api/serve';
 import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
 import avatarRouter from './api/avatar';
+import { deleteFileRouter } from './api/delete-file';
 import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
+import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
+import { loggers } from '@pagespace/lib/logger-config';
 
 // Load environment variables
 dotenv.config();
@@ -25,8 +28,86 @@ const FILE_STORAGE_PATH = process.env.FILE_STORAGE_PATH || '/data/files';
 export const contentStore = new ContentStore(CACHE_PATH, FILE_STORAGE_PATH);
 export const queueManager = new QueueManager();
 
+// Origin normalization (consistent URL comparison)
+function normalizeOrigin(origin: string): string {
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return '';
+  }
+}
+
+// Build allowed origins list from environment
+function getAllowedOrigins(): string[] {
+  const origins: string[] = [];
+
+  const corsOrigin = process.env.CORS_ORIGIN;
+  const webAppUrl = process.env.WEB_APP_URL;
+
+  if (corsOrigin) {
+    const normalized = normalizeOrigin(corsOrigin);
+    if (normalized) origins.push(normalized);
+  } else if (webAppUrl) {
+    const normalized = normalizeOrigin(webAppUrl);
+    if (normalized) origins.push(normalized);
+  }
+
+  const additional = process.env.ADDITIONAL_ALLOWED_ORIGINS;
+  if (additional) {
+    origins.push(
+      ...additional
+        .split(',')
+        .map((o) => normalizeOrigin(o.trim()))
+        .filter((o) => o.length > 0)
+    );
+  }
+
+  return origins;
+}
+
+// CORS configuration
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // No origin = non-browser client (curl, MCP, mobile) - allow
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    const allowedOrigins = getAllowedOrigins();
+
+    // No config in production = fail closed
+    if (allowedOrigins.length === 0) {
+      const isProduction = process.env.NODE_ENV === 'production';
+      if (isProduction) {
+        loggers.processor.error('CORS rejected: no allowed origins configured', {
+          origin,
+          severity: 'security',
+        });
+        return callback(new Error('CORS not configured'), false);
+      }
+      loggers.processor.warn('CORS: no allowed origins configured (allowing in dev)', { origin });
+      return callback(null, true);
+    }
+
+    // Check origin against allowed list
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.includes(normalized)) {
+      return callback(null, true);
+    }
+
+    // Reject unknown origin
+    loggers.processor.warn('CORS rejected: origin not in allowed list', {
+      origin,
+      allowedOrigins,
+      severity: 'security',
+    });
+    callback(new Error('Origin not allowed'), false);
+  },
+  credentials: true,
+};
+
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
 // Health check
@@ -45,10 +126,11 @@ app.get('/health', (req, res) => {
 
 // API Routes
 app.use('/api/upload', authenticateService, requireScope('files:write'), uploadRouter);
-app.use('/api/optimize', authenticateService, requireScope('files:optimize'), imageRouter);
-app.use('/api/ingest', authenticateService, requireScope('files:ingest'), ingestRouter);
+app.use('/api/optimize', authenticateService, requireScope('files:optimize'), requireResourceBinding('body'), imageRouter);
+app.use('/api/ingest', authenticateService, requireScope('files:ingest'), requirePageBinding(), ingestRouter);
 app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
-app.use('/cache', authenticateService, requireScope('files:read'), cacheRouter);
+app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
+app.use('/cache', authenticateService, requireScope('files:read'), requireResourceBinding('params'), cacheRouter);
 
 // Queue status endpoint
 app.get(

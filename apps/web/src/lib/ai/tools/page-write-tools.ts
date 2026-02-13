@@ -26,6 +26,7 @@ import {
 import { createChangeGroupId } from '@pagespace/lib/monitoring';
 import { applyPageMutation, type PageMutationContext } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
@@ -295,10 +296,16 @@ async function trashDrive(
     throw new Error('Drive is already in trash');
   }
 
+  // Get recipients BEFORE trashing (ensures we have valid member list)
+  const trashRecipientUserIds = await getDriveRecipientUserIds(drive.id);
+
   // Use repository seam for drive trash
   await driveRepository.trash(drive.id);
 
-  await broadcastDriveEvent(createDriveEventPayload(drive.id, 'deleted', { name: drive.name, slug: drive.slug }));
+  await broadcastDriveEvent(
+    createDriveEventPayload(drive.id, 'deleted', { name: drive.name, slug: drive.slug }),
+    trashRecipientUserIds
+  );
 
   return { id: drive.id, name: drive.name, slug: drive.slug };
 }
@@ -363,7 +370,11 @@ async function restoreDrive(
   // Use repository seam for drive restore
   const restoredDrive = await driveRepository.restore(drive.id);
 
-  await broadcastDriveEvent(createDriveEventPayload(restoredDrive.id, 'updated', { name: restoredDrive.name, slug: restoredDrive.slug }));
+  const restoreRecipientUserIds = await getDriveRecipientUserIds(restoredDrive.id);
+  await broadcastDriveEvent(
+    createDriveEventPayload(restoredDrive.id, 'updated', { name: restoredDrive.name, slug: restoredDrive.slug }),
+    restoreRecipientUserIds
+  );
 
   return { id: restoredDrive.id, name: restoredDrive.name, slug: restoredDrive.slug };
 }
@@ -433,8 +444,11 @@ export const pageWriteTools = {
         }
 
         // Format content for AI line-based editing, then split into lines
-        // addLineBreaksForAI adds newlines between block tags without removing any content
-        const formattedContent = addLineBreaksForAI(page.content || '');
+        // Markdown pages already have natural line structure; HTML pages need addLineBreaksForAI
+        const isMarkdown = page.contentMode === 'markdown';
+        const formattedContent = isMarkdown
+          ? (page.content || '')
+          : addLineBreaksForAI(page.content || '');
         const lines = formattedContent.split('\n');
         
         // Validate line numbers
@@ -482,6 +496,7 @@ export const pageWriteTools = {
           pageId: page.id,
           title: page.title,
           type: page.type,
+          contentMode: page.contentMode || 'html',
           oldContent: page.content,
           newContent,
           linesReplaced: endLine - startLine + 1,
@@ -517,14 +532,15 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
+    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management), CODE (code editor with syntax highlighting). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
-      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST']).describe('The type of page to create'),
+      type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']).describe('The type of page to create'),
+      contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
     }),
-    execute: async ({ driveId, parentId, title, type }, { experimental_context: context }) => {
+    execute: async ({ driveId, parentId, title, type, contentMode }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -582,6 +598,7 @@ export const pageWriteTools = {
           title,
           type,
           content: initialContent,
+          contentMode: type === 'DOCUMENT' && contentMode ? contentMode : 'html',
           position: nextPosition,
           driveId: drive.id,
           parentId: parentId || null,
@@ -648,6 +665,7 @@ export const pageWriteTools = {
           id: newPage.id,
           title: newPage.title,
           type: newPage.type,
+          contentMode: isDocumentPage(type as PageType) && contentMode ? contentMode : 'html',
           parentId: parentId || 'root',
           message: `Successfully created ${type.toLowerCase()} page "${title}"`,
           summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,

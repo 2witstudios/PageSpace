@@ -1120,6 +1120,31 @@ function tokenize(formula: string): Token[] {
       continue;
     }
 
+    if (char === '$') {
+      let end = index + 1;
+      while (end < formula.length && /[A-Za-z]/.test(formula[end])) {
+        end += 1;
+      }
+      if (end > index + 1) {
+        if (end < formula.length && formula[end] === '$') {
+          end += 1;
+        }
+        const digitStart = end;
+        while (end < formula.length && /[0-9]/.test(formula[end])) {
+          end += 1;
+        }
+        if (end > digitStart) {
+          const stripped = formula.slice(index, end).replace(/\$/g, '').toUpperCase();
+          if (cellRegex.test(stripped)) {
+            tokens.push({ type: 'cell', value: stripped });
+            index = end;
+            continue;
+          }
+        }
+      }
+      throw new Error(`Unexpected character '${char}' in formula`);
+    }
+
     if (/[A-Za-z_]/.test(char)) {
       let end = index + 1;
       while (end < formula.length && /[A-Za-z0-9_]/.test(formula[end])) {
@@ -1127,6 +1152,22 @@ function tokenize(formula: string): Token[] {
       }
       const raw = formula.slice(index, end);
       const upper = raw.toUpperCase();
+
+      if (!cellRegex.test(upper) && /^[A-Z]+$/.test(upper) && end < formula.length && formula[end] === '$') {
+        let absEnd = end + 1;
+        while (absEnd < formula.length && /[0-9]/.test(formula[absEnd])) {
+          absEnd += 1;
+        }
+        if (absEnd > end + 1) {
+          const stripped = upper + formula.slice(end + 1, absEnd);
+          if (cellRegex.test(stripped)) {
+            tokens.push({ type: 'cell', value: stripped });
+            index = absEnd;
+            continue;
+          }
+        }
+      }
+
       if (cellRegex.test(upper)) {
         tokens.push({ type: 'cell', value: upper });
       } else if (upper === 'TRUE' || upper === 'FALSE') {
@@ -2539,6 +2580,103 @@ export interface SheetCellUpdate {
 export function isValidCellAddress(address: string): boolean {
   const normalized = address.trim().toUpperCase();
   return cellRegex.test(normalized);
+}
+
+function isUpperAsciiLetter(charCode: number): boolean {
+  return charCode >= 65 && charCode <= 90;
+}
+
+function isAsciiDigit(charCode: number): boolean {
+  return charCode >= 48 && charCode <= 57;
+}
+
+function splitEncodedCellAddress(address: string): {
+  columnLetters: string;
+  rowNumber: string;
+} {
+  let index = 0;
+  while (index < address.length && isUpperAsciiLetter(address.charCodeAt(index))) {
+    index += 1;
+  }
+
+  return {
+    columnLetters: address.slice(0, index),
+    rowNumber: address.slice(index),
+  };
+}
+
+export function adjustFormulaReferences(
+  formula: string,
+  rowOffset: number,
+  colOffset: number
+): string {
+  if (!formula.startsWith('=')) {
+    return formula;
+  }
+
+  let result = '';
+  let index = 0;
+
+  while (index < formula.length) {
+    const start = index;
+    let colDollar = '';
+    let rowDollar = '';
+
+    if (formula.charCodeAt(index) === 36) {
+      colDollar = '$';
+      index += 1;
+    }
+
+    const colStart = index;
+    while (index < formula.length && isUpperAsciiLetter(formula.charCodeAt(index))) {
+      index += 1;
+    }
+    const colEnd = index;
+
+    if (colStart === colEnd) {
+      result += formula[start];
+      index = start + 1;
+      continue;
+    }
+
+    if (formula.charCodeAt(index) === 36) {
+      rowDollar = '$';
+      index += 1;
+    }
+
+    const rowStart = index;
+    while (index < formula.length && isAsciiDigit(formula.charCodeAt(index))) {
+      index += 1;
+    }
+    const rowEnd = index;
+
+    if (rowStart === rowEnd) {
+      const consumedEnd = rowDollar === '$' ? rowStart : colEnd;
+      result += formula.slice(start, consumedEnd);
+      index = consumedEnd;
+      continue;
+    }
+
+    const colLetters = formula.slice(colStart, colEnd);
+    const rowNum = formula.slice(rowStart, rowEnd);
+    const originalToken = formula.slice(start, rowEnd);
+
+    try {
+      const originalRef = `${colLetters}${rowNum}`;
+      const { row: origRow, column: origCol } = decodeCellAddress(originalRef);
+
+      const newRow = rowDollar === '$' ? origRow : Math.max(0, origRow + rowOffset);
+      const newCol = colDollar === '$' ? origCol : Math.max(0, origCol + colOffset);
+
+      const adjusted = encodeCellAddress(newRow, newCol);
+      const { columnLetters, rowNumber } = splitEncodedCellAddress(adjusted);
+      result += `${colDollar}${columnLetters}${rowDollar}${rowNumber}`;
+    } catch {
+      result += originalToken;
+    }
+  }
+
+  return result;
 }
 
 /**

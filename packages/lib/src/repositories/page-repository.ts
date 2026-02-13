@@ -5,18 +5,9 @@
  * Tests should mock this repository, not the ORM chains.
  */
 
-import { db, pages, eq, and, desc, isNull, inArray } from '@pagespace/db';
+import { db, pages, eq, and, desc, isNull, inArray, type PageTypeEnum } from '@pagespace/db';
 
-// Page type enum values that match the database schema
-export type PageTypeValue =
-  | 'FOLDER'
-  | 'DOCUMENT'
-  | 'CHANNEL'
-  | 'AI_CHAT'
-  | 'CANVAS'
-  | 'FILE'
-  | 'SHEET'
-  | 'TASK_LIST';
+export type PageTypeValue = PageTypeEnum;
 
 // Types for repository operations
 export interface PageRecord {
@@ -24,6 +15,7 @@ export interface PageRecord {
   title: string;
   type: PageTypeValue;
   content: string;
+  contentMode: 'html' | 'markdown';
   driveId: string;
   parentId: string | null;
   position: number;
@@ -48,6 +40,7 @@ export interface CreatePageInput {
   title: string;
   type: PageTypeValue;
   content: string;
+  contentMode?: 'html' | 'markdown';
   driveId: string;
   parentId: string | null;
   position: number;
@@ -173,6 +166,7 @@ export const pageRepository = {
         title: data.title,
         type: data.type,
         content: data.content,
+        contentMode: data.contentMode ?? 'html',
         driveId: data.driveId,
         parentId: data.parentId,
         position: data.position,

@@ -3,6 +3,25 @@
  */
 
 import { logger, LogContext } from './logger';
+import type { LogInput, HttpMethod } from './logger-types';
+
+interface NextLikeRequest {
+  nextUrl: { pathname: string; searchParams: URLSearchParams };
+  method: string;
+  headers: { get(name: string): string | null };
+}
+
+interface ExpressLikeRequest {
+  path?: string;
+  url?: string;
+  method: string;
+  ip?: string;
+  socket?: { remoteAddress?: string };
+  headers: Record<string, string | string[] | undefined>;
+  query?: Record<string, string>;
+}
+
+type LoggableRequest = NextLikeRequest | ExpressLikeRequest;
 
 // Category-specific loggers
 export const loggers = {
@@ -21,7 +40,7 @@ export const loggers = {
  * Extract context from HTTP request
  * Accepts Express Request or Next.js NextRequest
  */
-export function extractRequestContext(req: any): LogContext {
+export function extractRequestContext(req: LoggableRequest): LogContext {
   const context: LogContext = {};
 
   // Handle Next.js request
@@ -44,7 +63,8 @@ export function extractRequestContext(req: any): LogContext {
     context.endpoint = req.path || req.url;
     context.method = req.method;
     context.ip = req.ip || req.socket?.remoteAddress;
-    context.userAgent = req.headers['user-agent'];
+    const ua = req.headers['user-agent'];
+    context.userAgent = Array.isArray(ua) ? ua[0] : ua;
     
     if (req.query && Object.keys(req.query).length > 0) {
       context.query = req.query;
@@ -58,7 +78,7 @@ export function extractRequestContext(req: any): LogContext {
  * Log API request with automatic context extraction
  */
 export function logRequest(
-  req: any,
+  req: LoggableRequest,
   additionalContext?: LogContext
 ): void {
   const context = {
@@ -73,7 +93,7 @@ export function logRequest(
  * Log API response with timing
  */
 export function logResponse(
-  req: any,
+  req: LoggableRequest,
   statusCode: number,
   startTime: number,
   additionalContext?: LogContext
@@ -181,8 +201,8 @@ export function logSecurityEvent(
          'login_csrf_missing' | 'login_csrf_mismatch' | 'login_csrf_invalid' |
          'signup_csrf_missing' | 'signup_csrf_mismatch' | 'signup_csrf_invalid' |
          'origin_validation_failed' | 'origin_validation_warning' |
-         'account_locked_login_attempt',
-  details: Record<string, any>
+         'account_locked_login_attempt' | 'admin_role_version_mismatch',
+  details: LogInput
 ): void {
   loggers.security.warn(`Security event: ${event}`, details);
 }
@@ -194,7 +214,7 @@ export function logPerformance(
   metric: string,
   value: number,
   unit: 'ms' | 'bytes' | 'count' | 'percent' = 'ms',
-  metadata?: Record<string, any>
+  metadata?: LogInput
 ): void {
   loggers.performance.info(`Performance: ${metric}`, {
     metric,
@@ -214,7 +234,7 @@ export function createRequestLogger(requestId: string): typeof logger {
 /**
  * Async error handler wrapper
  */
-export function withLogging<T extends (...args: any[]) => Promise<any>>(
+export function withLogging<T extends (...args: unknown[]) => Promise<unknown>>(
   fn: T,
   name: string
 ): T {
@@ -241,10 +261,9 @@ export function setupErrorHandlers(): void {
     process.exit(1);
   });
 
-  process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+  process.on('unhandledRejection', (reason: unknown) => {
     loggers.system.error('Unhandled rejection', undefined, {
-      reason: reason?.toString(),
-      promise: promise.toString()
+      reason: String(reason),
     });
   });
 }
@@ -252,10 +271,10 @@ export function setupErrorHandlers(): void {
 /**
  * Performance monitoring decorator
  */
-export function logPerformanceDecorator(target: any, propertyName: string, descriptor: PropertyDescriptor) {
+export function logPerformanceDecorator(target: object, propertyName: string, descriptor: PropertyDescriptor) {
   const originalMethod = descriptor.value;
 
-  descriptor.value = async function (...args: any[]) {
+  descriptor.value = async function (...args: unknown[]) {
     const timer = logger.startTimer(`${target.constructor.name}.${propertyName}`);
     try {
       const result = await originalMethod.apply(this, args);

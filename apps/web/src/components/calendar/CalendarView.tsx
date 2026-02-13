@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { useMobile } from '@/hooks/useMobile';
+import { useDeviceTier } from '@/hooks/useDeviceTier';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useCalendarData } from './useCalendarData';
 import { MonthView } from './MonthView';
@@ -52,7 +52,8 @@ const googleCalendarStatusFetcher = async (url: string): Promise<GoogleCalendarS
 };
 
 export function CalendarView({ context, driveId, driveName: _driveName, className }: CalendarViewProps) {
-  const isMobile = useMobile();
+  const { tier } = useDeviceTier();
+  const shouldUseMobileCalendar = tier === 'mobile';
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [showTasks, setShowTasks] = useState(true);
@@ -200,7 +201,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   }
 
   // Render mobile-optimized view on small screens
-  if (isMobile) {
+  if (shouldUseMobileCalendar) {
     return (
       <div className={cn('flex flex-col h-full', className)}>
         <MobileCalendarView

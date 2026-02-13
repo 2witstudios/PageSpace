@@ -516,8 +516,78 @@
     {
       "idx": 73,
       "version": "7",
+      "when": 1770406537095,
+      "tag": "0073_open_gorilla_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1770440353809,
+      "tag": "0074_wakeful_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1770504232853,
+      "tag": "0075_opposite_starhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1770527313627,
+      "tag": "0076_lively_rocket_raccoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1770571269141,
+      "tag": "0077_groovy_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1770580207497,
+      "tag": "0078_fat_fallen_one",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1770580207498,
+      "tag": "0079_sturdy_the_enforcers",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1770647957414,
+      "tag": "0080_tan_silver_sable",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1770658470954,
+      "tag": "0081_glorious_stepford_cuckoos",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1770925609174,
+      "tag": "0082_common_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
       "when": 1770392153668,
-      "tag": "0073_lonely_johnny_blaze",
+      "tag": "0083_lonely_johnny_blaze",
       "breakpoints": true
     }
   ]

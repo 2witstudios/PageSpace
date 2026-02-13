@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { db, activityLogs, users, eq, and, sql } from '@pagespace/db';
+import { db, activityLogs, users, eq, and, sql, inArray } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth';
 import { isUserDriveMember } from '@pagespace/lib';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -49,10 +49,18 @@ export async function GET(request: Request) {
     switch (params.context) {
       case 'user': {
         // For user context, only show the current user as the actor
-        whereCondition = and(
+        const userConditions = [
           eq(activityLogs.userId, userId),
           eq(activityLogs.isArchived, false)
-        );
+        ];
+
+        // Filter by MCP token scope when no driveId provided
+        const allowedDriveIds = getAllowedDriveIds(auth);
+        if (allowedDriveIds.length > 0) {
+          userConditions.push(inArray(activityLogs.driveId, allowedDriveIds));
+        }
+
+        whereCondition = and(...userConditions);
         break;
       }
 
@@ -63,6 +71,10 @@ export async function GET(request: Request) {
             { status: 400 }
           );
         }
+
+        // Check MCP token scope before drive access
+        const scopeError = checkMCPDriveScope(auth, params.driveId);
+        if (scopeError) return scopeError;
 
         // Verify user can view drive
         const canViewDrive = await isUserDriveMember(userId, params.driveId);

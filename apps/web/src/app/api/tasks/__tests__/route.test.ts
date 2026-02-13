@@ -72,6 +72,8 @@ vi.mock('@pagespace/lib', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(() => null),
+  filterDrivesByMCPScope: vi.fn((_auth: unknown, driveIds: string[]) => driveIds),
 }));
 
 import { db } from '@pagespace/db';
@@ -130,6 +132,7 @@ const createPageFixture = (overrides: Partial<{
   extractionMethod: null,
   extractionMetadata: null,
   contentHash: null,
+  contentMode: 'html' as const,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
   revision: 0,

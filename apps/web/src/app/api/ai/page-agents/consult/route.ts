@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs } from 'ai';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 
@@ -11,6 +11,7 @@ import {
   type ProviderRequest,
   pageSpaceTools,
   buildTimestampSystemPrompt,
+  getUserTimezone,
   type ToolExecutionContext,
 } from '@/lib/ai/core';
 import { db, pages, drives, eq, chatMessages } from '@pagespace/db';
@@ -174,6 +175,10 @@ export async function POST(request: Request) {
       );
     }
 
+    // Check MCP page scope
+    const scopeError = await checkMCPPageScope(auth, agentId);
+    if (scopeError) return scopeError;
+
     // Check view permissions
     const canView = await canUserViewPage(userId, agentId);
     if (!canView) {
@@ -239,9 +244,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // Fetch user timezone for timezone-aware tool execution
+    const userTimezone = await getUserTimezone(userId);
+
     // Build execution context for tool execution
     const executionContext: ToolExecutionContext = {
       userId,
+      timezone: userTimezone,
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId: `agent-consult-${agentId}-${Date.now()}`,
@@ -273,7 +282,7 @@ export async function POST(request: Request) {
     let responseText = '';
     try {
       // Build enhanced system prompt with drive context awareness
-      let enhancedSystemPrompt = `${systemPrompt}\n\n${buildTimestampSystemPrompt()}`;
+      let enhancedSystemPrompt = `${systemPrompt}\n\n${buildTimestampSystemPrompt(userTimezone)}`;
 
       if (drive) {
         enhancedSystemPrompt += `\n\nCONTEXT AWARENESS:\n`;

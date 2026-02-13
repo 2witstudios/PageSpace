@@ -1,18 +1,9 @@
 import { db, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
-import { verifyAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 
-export async function GET(request: Request) {
+export const GET = withAdminAuth(async (_adminUser) => {
   try {
-    // Verify user is authenticated and is an admin
-    const adminUser = await verifyAdminAuth(request);
-    
-    if (!adminUser) {
-      return Response.json(
-        { error: 'Unauthorized: Admin access required' },
-        { status: 403 }
-      );
-    }
     // Get all table information from PostgreSQL information_schema
     const tablesQuery = sql`
       SELECT 
@@ -72,20 +63,13 @@ export async function GET(request: Request) {
       ORDER BY tablename, indexname;
     `;
 
-    const [tables, columns, constraints, indexes] = await Promise.all([
-      db.execute(tablesQuery),
-      db.execute(columnsQuery),
-      db.execute(constraintsQuery),
-      db.execute(indexesQuery)
-    ]);
-
-    interface TableRow {
+    interface TableRow extends Record<string, unknown> {
       table_name: string;
       table_type: string;
       table_comment: string | null;
     }
 
-    interface ColumnRow {
+    interface ColumnRow extends Record<string, unknown> {
       table_name: string;
       column_name: string;
       data_type: string;
@@ -98,7 +82,7 @@ export async function GET(request: Request) {
       column_comment: string | null;
     }
 
-    interface ConstraintRow {
+    interface ConstraintRow extends Record<string, unknown> {
       table_name: string;
       constraint_name: string;
       constraint_type: string;
@@ -107,17 +91,24 @@ export async function GET(request: Request) {
       foreign_column_name: string | null;
     }
 
-    interface IndexRow {
+    interface IndexRow extends Record<string, unknown> {
       tablename: string;
       indexname: string;
       indexdef: string;
     }
 
+    const [tables, columns, constraints, indexes] = await Promise.all([
+      db.execute<TableRow>(tablesQuery),
+      db.execute<ColumnRow>(columnsQuery),
+      db.execute<ConstraintRow>(constraintsQuery),
+      db.execute<IndexRow>(indexesQuery)
+    ]);
+
     // Group data by table
-    const schemaData = (tables.rows as unknown as TableRow[]).map((table) => {
+    const schemaData = tables.rows.map((table) => {
       const tableName = table.table_name;
       
-      const tableColumns = (columns.rows as unknown as ColumnRow[])
+      const tableColumns = columns.rows
         .filter((col) => col.table_name === tableName)
         .map((col) => ({
           name: col.column_name,
@@ -131,7 +122,7 @@ export async function GET(request: Request) {
           comment: col.column_comment
         }));
 
-      const tableConstraints = (constraints.rows as unknown as ConstraintRow[])
+      const tableConstraints = constraints.rows
         .filter((constraint) => constraint.table_name === tableName)
         .map((constraint) => ({
           name: constraint.constraint_name,
@@ -141,7 +132,7 @@ export async function GET(request: Request) {
           foreignColumn: constraint.foreign_column_name
         }));
 
-      const tableIndexes = (indexes.rows as unknown as IndexRow[])
+      const tableIndexes = indexes.rows
         .filter((index) => index.tablename === tableName)
         .map((index) => ({
           name: index.indexname,
@@ -166,4 +157,4 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
-}
+});

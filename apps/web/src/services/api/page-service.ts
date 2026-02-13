@@ -31,6 +31,7 @@ function toPageData(dbPage: {
   title: string | null;
   type: string;
   content: string | null;
+  contentMode: string;
   parentId: string | null;
   driveId: string;
   position: number;
@@ -51,6 +52,7 @@ function toPageData(dbPage: {
     title: dbPage.title,
     type: dbPage.type as PageType,
     content: dbPage.content,
+    contentMode: (dbPage.contentMode as 'html' | 'markdown') || 'html',
     parentId: dbPage.parentId,
     driveId: dbPage.driveId,
     position: dbPage.position,
@@ -111,7 +113,7 @@ function sanitizeEmptyContent(content: string): string {
 /**
  * Page types
  */
-export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST';
+export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST' | 'CODE';
 
 /**
  * Message with user info for page details
@@ -136,6 +138,7 @@ export interface PageData {
   title: string | null;
   type: PageType;
   content: string | null;
+  contentMode: 'html' | 'markdown';
   parentId: string | null;
   driveId: string;
   position: number;
@@ -236,6 +239,7 @@ export interface CreatePageParams {
   driveId: string;
   parentId?: string | null;
   content?: string;
+  contentMode?: 'html' | 'markdown';
   systemPrompt?: string;
   enabledTools?: string[];
   aiProvider?: string;
@@ -369,7 +373,7 @@ export const pageService = {
       }),
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: true },
+        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
       })
     ]);
@@ -381,7 +385,7 @@ export const pageService = {
         ...pageData,
         content: sanitizeEmptyContent(pageData.content || ''),
         children: children.map(toPageData),
-        messages: messages as unknown as MessageWithUser[],
+        messages,
       },
       driveId: page.driveId,
     };
@@ -397,7 +401,7 @@ export const pageService = {
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
     // Check authorization
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
     if (!canEdit) {
       return { success: false, error: 'You need edit permission to modify this page', status: 403 };
     }
@@ -474,7 +478,7 @@ export const pageService = {
       }),
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
-        with: { user: true },
+        with: { user: { columns: { id: true, name: true, email: true, image: true } } },
         orderBy: (messages, { asc }) => [asc(messages.createdAt)],
       })
     ]);
@@ -489,7 +493,7 @@ export const pageService = {
       page: {
         ...pageData,
         children: children.map(toPageData),
-        messages: messages as unknown as MessageWithUser[],
+        messages,
       },
       driveId: updatedPage.driveId,
       updatedFields,
@@ -500,9 +504,9 @@ export const pageService = {
   /**
    * Trash a page (soft delete)
    */
-  async trashPage(pageId: string, userId: string, options: { trashChildren: boolean }): Promise<TrashPageResult> {
+  async trashPage(pageId: string, userId: string, options: { trashChildren: boolean; metadata?: Record<string, unknown> }): Promise<TrashPageResult> {
     // Check authorization
-    const canDelete = await canUserDeletePage(userId, pageId);
+    const canDelete = await canUserDeletePage(userId, pageId, { bypassCache: true });
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
     }
@@ -530,7 +534,7 @@ export const pageService = {
       actorDisplayName: actorInfo.actorDisplayName ?? undefined,
       changeGroupId,
       changeGroupType,
-      metadata: { trashChildren: options.trashChildren },
+      metadata: { ...options.metadata, trashChildren: options.trashChildren },
     };
 
     await db.transaction(async (tx) => {
@@ -674,6 +678,7 @@ export const pageService = {
         parentId: string | null;
         driveId: string;
         content: string;
+        contentMode: 'html' | 'markdown';
         position: number;
         updatedAt: Date;
         revision: number;
@@ -691,6 +696,7 @@ export const pageService = {
         parentId: params.parentId ?? null,
         driveId: drive.id,
         content: params.content || getDefaultContent(params.type as PageTypeEnum),
+        contentMode: params.contentMode || 'html',
         position: newPosition,
         updatedAt: new Date(),
         revision: 0,

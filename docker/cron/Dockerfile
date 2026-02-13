@@ -9,8 +9,10 @@ RUN apk add --no-cache curl
 # Create log directory
 RUN mkdir -p /var/log/cron
 
-# Copy crontab
+# Copy crontab and entrypoint
 COPY crontab /etc/crontabs/root
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# Run crond in foreground with log level 8 (default)
-CMD ["crond", "-f", "-d", "8"]
+# Entrypoint substitutes CRON_SECRET into crontab, then starts crond
+ENTRYPOINT ["/entrypoint.sh"]

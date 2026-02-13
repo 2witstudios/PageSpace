@@ -1,6 +1,6 @@
 import { cleanupExpiredDeviceTokens } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
  * Cron endpoint to cleanup expired device tokens
@@ -11,15 +11,14 @@ import { validateCronRequest } from '@/lib/auth/cron-auth';
  * the database tidy and prevents unbounded growth.
  *
  * Authentication:
- * - Zero-trust: only accessible from localhost (no secret comparison)
- * - Must be called from within the same machine (docker network)
+ * - Primary: HMAC-signed cron requests (via cron-curl)
+ * - Defense-in-depth: internal network origin check
  *
  * Trigger via:
- * curl http://localhost:3000/api/cron/cleanup-tokens
+ * cron-curl GET http://web:3000/api/cron/cleanup-tokens
  */
 export async function GET(request: Request) {
-  // Zero trust: only allow requests from localhost (no secret comparison)
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

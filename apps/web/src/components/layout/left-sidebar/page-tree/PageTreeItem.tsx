@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useCapacitor } from "@/hooks/useCapacitor";
+import { useIsTablet } from "@/hooks/useDeviceTier";
 import { TreePage } from "@/hooks/usePageTree";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
 import {
@@ -41,6 +42,7 @@ import { Projection } from "@/lib/tree/sortable-tree";
 import { cn } from "@/lib/utils";
 import { useSortable } from "@dnd-kit/sortable";
 import { useMultiSelectStore, SelectedPageInfo } from "@/stores/useMultiSelectStore";
+import { PageViewersInline } from "@/components/common/PageViewers";
 
 export type DropPosition = "before" | "after" | "inside" | null;
 
@@ -110,6 +112,8 @@ export function PageTreeItem({
   const createTab = useTabsStore((state) => state.createTab);
   const isTouchDevice = useTouchDevice();
   const { isNative } = useCapacitor();
+  const isTablet = useIsTablet();
+  const hideTabActions = isNative && !isTablet;
   const hasChildren = item.children && item.children.length > 0;
   const driveId = params.driveId as string;
 
@@ -341,13 +345,16 @@ export function PageTreeItem({
               <Link
                 href={linkHref}
                 onClick={handleLinkClick}
-                onMouseDown={isNative ? undefined : handleMouseDown}
+                onMouseDown={hideTabActions ? undefined : handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}
                 onTouchEnd={(e) => e.stopPropagation()}
                 className="flex-1 min-w-0 ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100 hover:underline cursor-pointer touch-manipulation"
               >
                 {item.title}
               </Link>
+
+              {/* Currently viewing indicators */}
+              <PageViewersInline pageId={item.id} />
 
               {/* Action Button - Add child */}
               <div
@@ -394,7 +401,7 @@ export function PageTreeItem({
               </>
             ) : (
               <>
-                {!isNative && (
+                {!hideTabActions && (
                   <ContextMenuItem onSelect={handleOpenInNewTab}>
                     <ExternalLink className="mr-2 h-4 w-4" />
                     <span>Open in new tab</span>

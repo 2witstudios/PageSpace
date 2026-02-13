@@ -18,6 +18,8 @@ import {
   kickUserFromPageActivity,
 } from '@/lib/websocket';
 import { db } from '@pagespace/db';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -127,10 +129,12 @@ export async function POST(
         })
       );
     } else if (activity.resourceType === 'drive' && activity.driveId) {
+      const recipientUserIds = await getDriveRecipientUserIds(activity.driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(activity.driveId, 'updated', {
           name: activity.resourceTitle ?? undefined,
-        })
+        }),
+        recipientUserIds
       );
     } else if (activity.resourceType === 'member' && activity.driveId) {
       // Broadcast member updates on rollback
@@ -184,11 +188,39 @@ export async function POST(
       }
     } else if (activity.resourceType === 'role' && activity.driveId) {
       // Fix 16: Role changes affect all drive members - broadcast drive update
+      const roleRecipientUserIds = await getDriveRecipientUserIds(activity.driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(activity.driveId, 'updated', {
           name: activity.resourceTitle ?? undefined,
-        })
+        }),
+        roleRecipientUserIds
       );
+    } else if (activity.resourceType === 'message' && activity.pageId) {
+      const activityMeta = activity.metadata as Record<string, unknown> | null;
+      if (activityMeta?.conversationType === 'channel' && process.env.INTERNAL_REALTIME_URL) {
+        // Rolling back a create → the message was deactivated, notify deletion
+        // Rolling back an update or delete → content changed, clients should refetch
+        const event = activity.operation === 'create' ? 'message_deleted' : 'channel_refresh';
+        const payload = activity.operation === 'create'
+          ? { messageId: activity.resourceId }
+          : { channelId: activity.pageId };
+        try {
+          const requestBody = JSON.stringify({
+            channelId: activity.pageId,
+            event,
+            payload,
+          });
+          await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+            method: 'POST',
+            headers: createSignedBroadcastHeaders(requestBody),
+            body: requestBody,
+          });
+        } catch (error) {
+          loggers.api.error('[Rollback:Route] Failed to broadcast channel update', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     }
     loggers.api.debug('[Rollback:Route] Broadcast sent', {
       resourceType: activity.resourceType,

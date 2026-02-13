@@ -10,7 +10,7 @@
  * - Logging
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../logout/route';
 
 // Mock session service from @pagespace/lib/auth
@@ -70,16 +70,16 @@ describe('/api/auth/logout', () => {
     vi.clearAllMocks();
 
     // Default: valid session
-    (getSessionFromCookies as unknown as Mock).mockReturnValue('ps_sess_mock_session_token');
-    (sessionService.validateSession as unknown as Mock).mockResolvedValue({
+    vi.mocked(getSessionFromCookies).mockReturnValue('ps_sess_mock_session_token');
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'test-session-id',
       userId: 'test-user-id',
       userRole: 'user',
       tokenVersion: 0,
       type: 'user',
       scopes: ['*'],
-    });
-    (getClientIP as Mock).mockReturnValue('unknown');
+    } as never);
+    vi.mocked(getClientIP).mockReturnValue('unknown');
   });
 
   describe('successful logout', () => {
@@ -131,7 +131,7 @@ describe('/api/auth/logout', () => {
     });
 
     it('logs logout event', async () => {
-      (getClientIP as Mock).mockReturnValue('192.168.1.1');
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -162,7 +162,7 @@ describe('/api/auth/logout', () => {
 
   describe('edge cases', () => {
     it('handles missing session cookie gracefully', async () => {
-      (getSessionFromCookies as unknown as Mock).mockReturnValue(null);
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -184,7 +184,7 @@ describe('/api/auth/logout', () => {
     });
 
     it('handles invalid session gracefully', async () => {
-      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',
@@ -207,7 +207,7 @@ describe('/api/auth/logout', () => {
     });
 
     it('handles session revocation failure gracefully', async () => {
-      (sessionService.revokeSession as unknown as Mock).mockRejectedValue(
+      vi.mocked(sessionService.revokeSession).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -230,7 +230,7 @@ describe('/api/auth/logout', () => {
     });
 
     it('does not log logout event when no user ID', async () => {
-      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/logout', {
         method: 'POST',

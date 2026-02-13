@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, db, eq, asc, files, pages, driveMembers, sql } from '@pagespace/db';
+import { channelMessages, channelReadStatus, db, eq, and, asc, files, pages, driveMembers } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -34,7 +34,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   const messages = await db.query.channelMessages.findMany({
-    where: eq(channelMessages.pageId, pageId),
+    where: and(eq(channelMessages.pageId, pageId), eq(channelMessages.isActive, true)),
     with: {
       user: {
         columns: {
@@ -74,9 +74,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const userId = auth.userId;
 
   // Check if user has edit permission to post messages in this channel
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
   if (!canEdit) {
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: 'You need edit permission to send messages in this channel',
       details: 'Only channel members with edit access can send messages'
     }, { status: 403 });
@@ -87,6 +87,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     fileId?: string;
     attachmentMeta?: AttachmentMeta;
   };
+  const messageContent = typeof content === 'string' ? content : '';
 
   // Debug: Check what content type is being received
   loggers.realtime.debug('API received content type:', { type: typeof content });
@@ -105,18 +106,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const [createdMessage] = await db.insert(channelMessages).values({
     pageId: pageId,
     userId: userId,
-    content,
+    content: messageContent,
     fileId: fileId || null,
     attachmentMeta: attachmentMeta || null,
   }).returning();
 
   // Update sender's read status - sending a message means they've read the channel
-  await db.execute(sql`
-    INSERT INTO channel_read_status ("userId", "channelId", "lastReadAt")
-    VALUES (${userId}, ${pageId}, NOW())
-    ON CONFLICT ("userId", "channelId")
-    DO UPDATE SET "lastReadAt" = NOW()
-  `);
+  await db
+    .insert(channelReadStatus)
+    .values({ userId, channelId: pageId, lastReadAt: new Date() })
+    .onConflictDoUpdate({
+      target: [channelReadStatus.userId, channelReadStatus.channelId],
+      set: { lastReadAt: new Date() },
+    });
 
   const newMessage = await db.query.channelMessages.findFirst({
       where: eq(channelMessages.id, createdMessage.id),
@@ -179,10 +181,30 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       columns: { driveId: true, title: true },
       with: {
         drive: {
-          columns: { ownerId: true },
+          columns: { ownerId: true, name: true, slug: true },
         },
       },
     });
+
+    if (messageContent.trim().length > 0) {
+      void import('@/lib/channels/agent-mention-responder')
+        .then(({ triggerMentionedAgentResponses }) =>
+          triggerMentionedAgentResponses({
+            userId,
+            channelId: pageId,
+            channelTitle: channel?.title || 'Channel',
+            channelType: 'CHANNEL',
+            sourceMessageId: createdMessage.id,
+            content: messageContent,
+            driveId: channel?.driveId || null,
+            driveName: channel?.drive?.name || null,
+            driveSlug: channel?.drive?.slug || null,
+          })
+        )
+        .catch((error) => {
+          loggers.realtime.error('Failed to load channel mention responder module:', error as Error);
+        });
+    }
 
     if (channel?.driveId) {
       // Get all drive members
@@ -199,9 +221,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       }
 
       // Create message preview
-      const messagePreview = content.length > 100
-        ? content.substring(0, 100) + '...'
-        : content;
+      const messagePreview = messageContent.length > 100
+        ? messageContent.substring(0, 100) + '...'
+        : messageContent;
 
       // Filter to members with view permission and broadcast
       // Check permissions in parallel for efficiency
@@ -224,7 +246,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             driveId: channel.driveId,
             lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
             lastMessagePreview: messagePreview,
-            lastMessageSender: newMessage?.user?.name || undefined,
+            lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
           })
         );
 

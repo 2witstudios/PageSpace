@@ -7,7 +7,7 @@
  * - Response mapping → function results mapped to HTTP responses
  * - Side effects → notifications with correct payload essentials
  */
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, DELETE } from '../route';
 import type { SessionAuthResult, AuthError, EnforcedAuthError, EnforcedAuthSuccess } from '@/lib/auth';
@@ -148,14 +148,14 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockWebAuth(mockUserId));
-    (permissionManagementService.canUserViewPermissions as Mock).mockResolvedValue(true);
-    (permissionManagementService.getPagePermissions as Mock).mockResolvedValue(successResult);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(permissionManagementService.canUserViewPermissions).mockResolvedValue(true);
+    vi.mocked(permissionManagementService.getPagePermissions).mockResolvedValue(successResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateRequestWithOptions as Mock).mockResolvedValue(mockAuthError(401));
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -166,7 +166,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   describe('authorization', () => {
     it('returns 403 when user lacks share permission', async () => {
-      (permissionManagementService.canUserViewPermissions as Mock).mockResolvedValue(false);
+      vi.mocked(permissionManagementService.canUserViewPermissions).mockResolvedValue(false);
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -179,7 +179,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   describe('permission retrieval', () => {
     it('returns 404 when page does not exist', async () => {
-      (permissionManagementService.getPagePermissions as Mock).mockResolvedValue({
+      vi.mocked(permissionManagementService.getPagePermissions).mockResolvedValue({
         success: false,
         error: 'Page not found',
         status: 404,
@@ -203,7 +203,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns empty permissions array when no permissions exist', async () => {
-      (permissionManagementService.getPagePermissions as Mock).mockResolvedValue({
+      vi.mocked(permissionManagementService.getPagePermissions).mockResolvedValue({
         success: true,
         owner: mockOwner,
         permissions: [],
@@ -219,7 +219,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      (permissionManagementService.canUserViewPermissions as Mock).mockRejectedValue(new Error('Service error'));
+      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValue(new Error('Service error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -248,13 +248,13 @@ describe('POST /api/pages/[pageId]/permissions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateWithEnforcedContext as Mock).mockResolvedValue(mockEnforcedAuth(mockUserId));
-    (grantPagePermission as Mock).mockResolvedValue(grantSuccessResult);
+    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(mockEnforcedAuth(mockUserId));
+    vi.mocked(grantPagePermission).mockResolvedValue(grantSuccessResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateWithEnforcedContext as Mock).mockResolvedValue(mockEnforcedAuthError(401));
+      vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(mockEnforcedAuthError(401));
 
       const response = await POST(
         createRequest({ userId: mockTargetUserId, canView: true }),
@@ -288,7 +288,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
 
   describe('authorization', () => {
     it('returns 403 when user cannot share page (PAGE_NOT_ACCESSIBLE)', async () => {
-      (grantPagePermission as Mock).mockResolvedValue({
+      vi.mocked(grantPagePermission).mockResolvedValue({
         ok: false,
         error: { code: 'PAGE_NOT_ACCESSIBLE', pageId: mockPageId },
       });
@@ -344,7 +344,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 200 when updating existing permission', async () => {
-      (grantPagePermission as Mock).mockResolvedValue({
+      vi.mocked(grantPagePermission).mockResolvedValue({
         ok: true,
         data: { permissionId: 'perm_123', isUpdate: true },
       });
@@ -381,7 +381,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('sends updated notification when updating existing permission', async () => {
-      (grantPagePermission as Mock).mockResolvedValue({
+      vi.mocked(grantPagePermission).mockResolvedValue({
         ok: true,
         data: { permissionId: 'perm_123', isUpdate: true },
       });
@@ -401,7 +401,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('does NOT send notification when authorization fails', async () => {
-      (grantPagePermission as Mock).mockResolvedValue({
+      vi.mocked(grantPagePermission).mockResolvedValue({
         ok: false,
         error: { code: 'PAGE_NOT_ACCESSIBLE', pageId: mockPageId },
       });
@@ -417,7 +417,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
 
   describe('error handling', () => {
     it('returns 404 when target user not found', async () => {
-      (grantPagePermission as Mock).mockResolvedValue({
+      vi.mocked(grantPagePermission).mockResolvedValue({
         ok: false,
         error: { code: 'USER_NOT_FOUND', userId: mockTargetUserId },
       });
@@ -431,7 +431,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 500 when function throws', async () => {
-      (grantPagePermission as Mock).mockRejectedValue(new Error('Service error'));
+      vi.mocked(grantPagePermission).mockRejectedValue(new Error('Service error'));
 
       const response = await POST(
         createRequest({ userId: mockTargetUserId, canView: true }),
@@ -463,13 +463,13 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (authenticateWithEnforcedContext as Mock).mockResolvedValue(mockEnforcedAuth(mockUserId));
-    (revokePagePermission as Mock).mockResolvedValue(revokeSuccessResult);
+    vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(mockEnforcedAuth(mockUserId));
+    vi.mocked(revokePagePermission).mockResolvedValue(revokeSuccessResult);
   });
 
   describe('authentication', () => {
     it('returns 401 when user is not authenticated', async () => {
-      (authenticateWithEnforcedContext as Mock).mockResolvedValue(mockEnforcedAuthError(401));
+      vi.mocked(authenticateWithEnforcedContext).mockResolvedValue(mockEnforcedAuthError(401));
 
       const response = await DELETE(
         createRequest({ userId: mockTargetUserId }),
@@ -483,7 +483,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
 
   describe('authorization', () => {
     it('returns 403 when user cannot manage page (PAGE_NOT_ACCESSIBLE)', async () => {
-      (revokePagePermission as Mock).mockResolvedValue({
+      vi.mocked(revokePagePermission).mockResolvedValue({
         ok: false,
         error: { code: 'PAGE_NOT_ACCESSIBLE', pageId: mockPageId },
       });
@@ -529,7 +529,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 200 even when permission did not exist (idempotent)', async () => {
-      (revokePagePermission as Mock).mockResolvedValue({
+      vi.mocked(revokePagePermission).mockResolvedValue({
         ok: true,
         data: { revoked: false, reason: 'not_found' },
       });
@@ -562,7 +562,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     });
 
     it('does NOT send notification when permission did not exist', async () => {
-      (revokePagePermission as Mock).mockResolvedValue({
+      vi.mocked(revokePagePermission).mockResolvedValue({
         ok: true,
         data: { revoked: false, reason: 'not_found' },
       });
@@ -576,7 +576,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     });
 
     it('does NOT send notification when authorization fails', async () => {
-      (revokePagePermission as Mock).mockResolvedValue({
+      vi.mocked(revokePagePermission).mockResolvedValue({
         ok: false,
         error: { code: 'PAGE_NOT_ACCESSIBLE', pageId: mockPageId },
       });
@@ -592,7 +592,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
 
   describe('error handling', () => {
     it('returns 500 when function throws', async () => {
-      (revokePagePermission as Mock).mockRejectedValue(new Error('Service error'));
+      vi.mocked(revokePagePermission).mockRejectedValue(new Error('Service error'));
 
       const response = await DELETE(
         createRequest({ userId: mockTargetUserId }),

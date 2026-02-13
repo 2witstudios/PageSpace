@@ -3,11 +3,13 @@ import { create } from 'zustand';
 export interface DocumentState {
   id: string;
   content: string;
+  contentMode: 'html' | 'markdown';
   isDirty: boolean;
   version: number;
   lastSaved: number;
   lastUpdateTime: number; // Timestamp of last content update
   saveTimeout?: NodeJS.Timeout;
+  revision?: number; // Server revision for optimistic locking
 }
 
 export interface DocumentManagerState {
@@ -19,7 +21,7 @@ export interface DocumentManagerState {
   savingDocuments: Set<string>;
   
   // Actions
-  createDocument: (pageId: string, initialContent?: string) => void;
+  createDocument: (pageId: string, initialContent?: string, contentMode?: 'html' | 'markdown') => void;
   updateDocument: (pageId: string, updates: Partial<DocumentState>) => void;
   getDocument: (pageId: string) => DocumentState | undefined;
   setActiveDocument: (pageId: string | null) => void;
@@ -37,7 +39,7 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
   savingDocuments: new Set(),
   
   // Actions
-  createDocument: (pageId: string, initialContent = '') => {
+  createDocument: (pageId: string, initialContent = '', contentMode: 'html' | 'markdown' = 'html') => {
     const state = get();
     const newDocuments = new Map(state.documents);
 
@@ -46,6 +48,7 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
       newDocuments.set(pageId, {
         id: pageId,
         content: initialContent,
+        contentMode,
         isDirty: false,
         version: 0,
         lastSaved: now,

@@ -22,6 +22,7 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock permissions (boundary)

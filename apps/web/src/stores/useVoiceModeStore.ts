@@ -17,6 +17,7 @@ const VOICE_INTERACTION_MODE_KEY = 'pagespace:voice:interactionMode';
 const VOICE_TTS_VOICE_KEY = 'pagespace:voice:ttsVoice';
 const VOICE_AUTO_SEND_KEY = 'pagespace:voice:autoSend';
 
+export type VoiceModeOwner = 'global-assistant' | 'ai-page' | 'sidebar-chat';
 export type VoiceInteractionMode = 'barge-in' | 'tap-to-speak';
 
 export type VoiceState =
@@ -32,7 +33,9 @@ export type TTSVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
 interface VoiceModeState {
   // Core state
   isEnabled: boolean;
+  owner: VoiceModeOwner | null;
   voiceState: VoiceState;
+  hasLoadedSettings: boolean;
   interactionMode: VoiceInteractionMode;
 
   // TTS settings
@@ -52,9 +55,8 @@ interface VoiceModeState {
   currentAudioId: string | null;
 
   // Actions
-  enable: () => void;
+  enable: (owner?: VoiceModeOwner) => void;
   disable: () => void;
-  toggle: () => void;
 
   setInteractionMode: (mode: VoiceInteractionMode) => void;
   setTTSVoice: (voice: TTSVoice) => void;
@@ -83,7 +85,9 @@ interface VoiceModeState {
 export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   // Initial state
   isEnabled: false,
+  owner: null,
   voiceState: 'idle',
+  hasLoadedSettings: false,
   interactionMode: 'tap-to-speak',
   ttsVoice: 'nova',
   ttsSpeed: 1.0,
@@ -93,8 +97,16 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   currentAudioId: null,
 
   // Enable/disable voice mode
-  enable: () => {
-    set({ isEnabled: true, voiceState: 'idle', error: null });
+  enable: (owner) => {
+    const requestedOwner = owner ?? get().owner;
+    set({
+      isEnabled: true,
+      owner: requestedOwner || null,
+      voiceState: 'idle',
+      currentTranscript: '',
+      error: null,
+      currentAudioId: null,
+    });
     if (typeof window !== 'undefined') {
       localStorage.setItem(VOICE_MODE_KEY, 'true');
     }
@@ -103,6 +115,7 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   disable: () => {
     set({
       isEnabled: false,
+      owner: null,
       voiceState: 'idle',
       currentTranscript: '',
       error: null,
@@ -110,14 +123,6 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     });
     if (typeof window !== 'undefined') {
       localStorage.setItem(VOICE_MODE_KEY, 'false');
-    }
-  },
-
-  toggle: () => {
-    if (get().isEnabled) {
-      get().disable();
-    } else {
-      get().enable();
     }
   },
 
@@ -183,21 +188,20 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
   },
 
   bargeIn: () => {
-    // Called when user starts speaking during TTS playback
+    // Called when user starts speaking during TTS playback.
+    // Sets state to 'paused' - the consumer (useVoiceMode hook) is responsible
+    // for transitioning to 'listening' after stopping audio playback.
     if (get().voiceState === 'speaking') {
       set({ voiceState: 'paused', currentAudioId: null });
-      // Immediately transition to listening
-      setTimeout(() => {
-        if (get().voiceState === 'paused') {
-          set({ voiceState: 'listening' });
-        }
-      }, 100);
     }
   },
 
   // Load settings from localStorage
   loadSettings: () => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') {
+      set({ hasLoadedSettings: true });
+      return;
+    }
 
     // Note: We intentionally don't restore isEnabled - user should explicitly enable voice mode each session
     const interactionMode = localStorage.getItem(VOICE_INTERACTION_MODE_KEY) as VoiceInteractionMode | null;
@@ -205,16 +209,17 @@ export const useVoiceModeStore = create<VoiceModeState>()((set, get) => ({
     const autoSend = localStorage.getItem(VOICE_AUTO_SEND_KEY);
 
     set({
-      isEnabled: false,
       interactionMode: interactionMode || 'tap-to-speak',
       ttsVoice: ttsVoice || 'nova',
       autoSend: autoSend !== 'false', // Default true
+      hasLoadedSettings: true,
     });
   },
 }));
 
 // Selector helpers
 export const selectIsVoiceModeEnabled = (state: VoiceModeState) => state.isEnabled;
+export const selectVoiceOwner = (state: VoiceModeState) => state.owner;
 export const selectVoiceState = (state: VoiceModeState) => state.voiceState;
 export const selectIsListening = (state: VoiceModeState) => state.voiceState === 'listening';
 export const selectIsSpeaking = (state: VoiceModeState) => state.voiceState === 'speaking';

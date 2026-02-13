@@ -51,13 +51,14 @@ export const buildCSPPolicy = (nonce: string): string => {
       "'strict-dynamic'",
       "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
       'https://accounts.google.com', // Google One Tap authentication
-      'https://cdn.jsdelivr.net', // Monaco editor CDN
     ],
-    'style-src': ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net', 'https://accounts.google.com'],
+    'style-src': ["'self'", "'unsafe-inline'", 'https://accounts.google.com'],
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
-    'font-src': ["'self'", 'data:', 'https://cdn.jsdelivr.net'],
-    'frame-src': ['https://accounts.google.com'], // Google One Tap iframe
+    'font-src': ["'self'", 'data:'],
+    // Monaco and other browser tooling may initialize workers from blob URLs.
+    'worker-src': ["'self'", 'blob:'],
+    'frame-src': ['https://accounts.google.com', 'https://js.stripe.com'], // Google One Tap + Stripe Elements iframes
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
@@ -80,11 +81,12 @@ type SecurityHeadersOptions = {
   nonce: string;
   isProduction: boolean;
   isAPIRoute?: boolean;
+  disableCOEP?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isAPIRoute = false }: SecurityHeadersOptions
+  { nonce, isProduction, isAPIRoute = false, disableCOEP = false }: SecurityHeadersOptions
 ): NextResponse => {
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
@@ -96,9 +98,10 @@ export const applySecurityHeaders = (
     'Permissions-Policy',
     'geolocation=(), microphone=(), camera=()'
   );
-  // Allow cross-origin resources (e.g. Google profile images) without requiring
-  // CORP headers, while still stripping credentials on no-cors requests.
-  if (!isAPIRoute) {
+  // COEP 'credentialless' is set for all page routes except Stripe-dependent
+  // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
+  // via no-cors without Cross-Origin-Resource-Policy headers.
+  if (!isAPIRoute && !disableCOEP) {
     response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }
 
@@ -112,11 +115,26 @@ export const applySecurityHeaders = (
   return response;
 };
 
+export const isPublicPageRoute = (pathname: string): boolean =>
+  pathname === '/auth' || pathname.startsWith('/auth/');
+
+export const shouldDisableCOEP = (pathname: string): boolean =>
+  pathname.startsWith('/settings/plan') ||
+  pathname.startsWith('/settings/billing') ||
+  pathname === '/auth' ||
+  pathname.startsWith('/auth/');
+
+type CreateSecureResponseOptions = {
+  isAPIRoute?: boolean;
+  disableCOEP?: boolean;
+};
+
 export const createSecureResponse = (
   isProduction: boolean,
   request?: Request,
-  isAPIRoute: boolean = false
+  options: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
+  const { isAPIRoute = false, disableCOEP = false } = options;
   const nonce = generateNonce();
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
@@ -136,7 +154,7 @@ export const createSecureResponse = (
   });
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute });
+  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute, disableCOEP });
 
   return { response, nonce };
 };

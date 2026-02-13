@@ -1,5 +1,6 @@
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 
 export async function GET(req: Request) {
   const auth = await requireAuth(req);
@@ -17,11 +18,13 @@ export async function GET(req: Request) {
     console.log(`[AUTH] User profile loaded: ${user.email} (provider: ${user.provider}, id: ${user.id})`);
   }
 
+  const safeImage = isExternalHttpUrl(user.image) ? null : user.image;
+
   return Response.json({
     id: user.id,
     name: user.name,
     email: user.email,
-    image: user.image,
+    image: safeImage,
     role: user.role,
     emailVerified: user.emailVerified,
   });

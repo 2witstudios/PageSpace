@@ -10,7 +10,7 @@
  * - Error handling
  */
 
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../mobile/oauth/google/exchange/route';
 
 // Mock dependencies
@@ -70,6 +70,18 @@ vi.mock('@pagespace/lib/security', () => ({
   },
 }));
 
+vi.mock('@pagespace/db', () => ({
+  users: { id: 'id', image: 'image' },
+  db: {
+    update: vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    }),
+  },
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+}));
+
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
@@ -120,22 +132,22 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     vi.clearAllMocks();
 
     // Reset all mocks to their default implementations
-    (checkDistributedRateLimit as Mock).mockResolvedValue({
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({
       allowed: true,
       attemptsRemaining: 4,
       retryAfter: undefined,
     });
-    (resetDistributedRateLimit as Mock).mockResolvedValue(undefined);
-    (verifyOAuthIdToken as Mock).mockResolvedValue({
+    vi.mocked(resetDistributedRateLimit).mockResolvedValue(undefined);
+    vi.mocked(verifyOAuthIdToken).mockResolvedValue({
       success: true,
       userInfo: mockUserInfo,
-    });
-    (createOrLinkOAuthUser as Mock).mockResolvedValue(mockUser);
-    (validateOrCreateDeviceToken as Mock).mockResolvedValue({
+    } as never);
+    vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser as never);
+    vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
-    });
-    (sessionService.createSession as Mock).mockResolvedValue('ps_sess_oauth-token');
-    (sessionService.validateSession as Mock).mockResolvedValue({
+    } as never);
+    vi.mocked(sessionService.createSession).mockResolvedValue('ps_sess_oauth-token');
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'sfh0haxfpzowht3oi213oas1',
       userId: 'ofh0haxfpzowht3oi213oau1',
       userRole: 'user',
@@ -143,7 +155,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       type: 'user',
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-    });
+    } as never);
   });
 
   describe('successful OAuth exchange', () => {
@@ -191,7 +203,10 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
       await POST(request);
 
-      expect(createOrLinkOAuthUser).toHaveBeenCalledWith(mockUserInfo);
+      expect(createOrLinkOAuthUser).toHaveBeenCalledWith({
+        ...mockUserInfo,
+        picture: undefined,
+      });
     });
 
     it('creates device token for mobile platform', async () => {
@@ -328,7 +343,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
   describe('ID token verification', () => {
     it('returns 401 for invalid ID token', async () => {
-      (verifyOAuthIdToken as Mock).mockResolvedValue({
+      vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
         error: 'Invalid token signature',
       });
@@ -347,7 +362,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('returns 401 for expired ID token', async () => {
-      (verifyOAuthIdToken as Mock).mockResolvedValue({
+      vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
         error: 'Token expired',
       });
@@ -366,7 +381,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('returns 401 for wrong audience in ID token', async () => {
-      (verifyOAuthIdToken as Mock).mockResolvedValue({
+      vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
         error: 'Invalid audience',
       });
@@ -385,7 +400,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('tracks failed OAuth attempt on verification failure', async () => {
-      (verifyOAuthIdToken as Mock).mockResolvedValue({
+      vi.mocked(verifyOAuthIdToken).mockResolvedValue({
         success: false,
         error: 'Verification failed',
       });
@@ -481,7 +496,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
   describe('rate limiting', () => {
     it('returns 429 when IP rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
         .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
 
@@ -500,7 +515,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('returns 429 when OAuth verification rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 }) // IP check
         .mockResolvedValueOnce({ allowed: false, retryAfter: 300, attemptsRemaining: 0 }); // OAuth verify check
 
@@ -518,7 +533,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('returns 429 when email rate limit exceeded', async () => {
-      (checkDistributedRateLimit as Mock)
+      vi.mocked(checkDistributedRateLimit)
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 }) // IP check
         .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 9 }) // OAuth verify check
         .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 }); // Email check
@@ -537,7 +552,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('includes X-RateLimit headers on rate limit response', async () => {
-      (checkDistributedRateLimit as Mock).mockResolvedValue({
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
         allowed: false,
         retryAfter: 900,
         attemptsRemaining: 0,
@@ -599,7 +614,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('returns 500 when session validation fails', async () => {
-      (sessionService.validateSession as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null as never);
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -617,7 +632,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      (verifyOAuthIdToken as Mock).mockRejectedValue(new Error('Network error'));
+      vi.mocked(verifyOAuthIdToken).mockRejectedValue(new Error('Network error'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -633,7 +648,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('tracks failed OAuth on unexpected error', async () => {
-      (verifyOAuthIdToken as Mock).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(verifyOAuthIdToken).mockRejectedValue(new Error('Unexpected'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -654,7 +669,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('handles rate limit reset failures gracefully', async () => {
-      (resetDistributedRateLimit as Mock).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -670,7 +685,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
     it('logs rate limit reset failures', async () => {
       const { loggers } = await import('@pagespace/lib/server');
-      (resetDistributedRateLimit as Mock).mockRejectedValue(new Error('Reset failed'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Reset failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -737,7 +752,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       const response = await POST(request);
       const body = await response.json();
 
-      expect(body.user.picture).toBe(mockUser.image);
+      expect(body.user.picture).toBeNull();
     });
 
     it('returns user role', async () => {

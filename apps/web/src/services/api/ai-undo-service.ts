@@ -39,6 +39,7 @@ export interface AiUndoPreview {
     resourceTitle: string | null;
     pageId?: string | null;
     driveId?: string | null;
+    metadata?: Record<string, unknown> | null;
     preview: ActivityActionPreview;
   }[];
   warnings: string[];
@@ -315,6 +316,7 @@ export async function previewAiUndo(
         resourceTitle: activity.resourceTitle,
         pageId: activity.pageId,
         driveId: activity.driveId,
+        metadata: activity.metadata as Record<string, unknown> | null,
         preview,
       });
 
@@ -393,8 +395,12 @@ export async function executeAiUndo(
       };
     }
 
-    // Idempotency check: if message is already inactive, return success
-    // This prevents duplicate rollbacks on network retries or double-clicks
+    /**
+     * Idempotency contract: an inactive message represents an already-achieved
+     * end-state. Returning success with zero counts lets callers (route handlers,
+     * retries, double-click guards) treat repeated calls as no-ops rather than
+     * errors — matching standard HTTP idempotency semantics.
+     */
     if (!message) {
       loggers.api.debug('[AiUndo:Execute] Aborting - message not found');
       return {
@@ -461,8 +467,8 @@ export async function executeAiUndo(
               activityId: activity.id,
               reason: activityPreview.reason,
             });
-            if (!force || !activityPreview.requiresForce) {
-              // Non-rollbackable items abort the entire transaction
+            const canForceOverride = force && activityPreview.requiresForce;
+            if (!canForceOverride) {
               throw new Error(`Cannot undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${activityPreview.reason}`);
             }
           }
@@ -528,6 +534,10 @@ export async function executeAiUndo(
       // Also update secondary table to catch any orphaned messages
       // This handles edge cases where conversationId exists in both tables
       const secondaryTable = preview.source === 'page_chat' ? messages : chatMessages;
+      loggers.api.debug('[AiUndo:Execute] Soft-deleting from secondary table', {
+        secondaryTable: preview.source === 'page_chat' ? 'messages' : 'chatMessages',
+        conversationId,
+      });
       await tx
         .update(secondaryTable)
         .set({ isActive: false })

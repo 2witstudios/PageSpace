@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers, agentAwarenessCache, pageTreeCache } from '@pagespace/lib/server';
 import { trackPageOperation } from '@pagespace/lib/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
 import { pageService } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -11,10 +11,11 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 // Zod schema for page creation request
 const createPageSchema = z.object({
   title: z.string().min(1, 'Title is required'),
-  type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST']),
+  type: z.enum(['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
   driveId: z.string().min(1, 'Drive ID is required'),
   parentId: z.string().nullable().optional(),
   content: z.string().optional(),
+  contentMode: z.enum(['html', 'markdown']).optional(),
   systemPrompt: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   aiProvider: z.string().optional(),
@@ -49,17 +50,24 @@ export async function POST(request: Request) {
       return scopeError;
     }
 
+    // Track MCP source so the unread indicator (blue dot) shows for MCP-created pages.
+    // Without this, MCP-created pages are filtered out as "the user's own changes" since
+    // MCP tokens authenticate as the owning user.
+    const isMCP = isMCPAuthResult(auth);
+    const createOptions = isMCP ? { context: { metadata: { source: 'mcp' } } } : undefined;
+
     const result = await pageService.createPage(userId, {
       title: validatedData.title,
       type: validatedData.type,
       driveId: validatedData.driveId,
       parentId: validatedData.parentId,
       content: validatedData.content,
+      contentMode: validatedData.contentMode,
       systemPrompt: validatedData.systemPrompt,
       enabledTools: validatedData.enabledTools,
       aiProvider: validatedData.aiProvider,
       aiModel: validatedData.aiModel,
-    });
+    }, createOptions);
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });

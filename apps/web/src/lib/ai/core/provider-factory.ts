@@ -35,7 +35,7 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
 } from './ai-utils';
-import { resolvePageSpaceModel } from './ai-providers-config';
+import { resolvePageSpaceModel, requiresConsent } from './ai-providers-config';
 
 export interface ProviderRequest {
   selectedProvider?: string;
@@ -92,6 +92,18 @@ export async function createAIProvider(
   // Resolve model aliases for PageSpace provider (e.g., 'standard' -> 'glm-4.5-air')
   if (currentProvider === 'pagespace') {
     currentModel = resolvePageSpaceModel(currentModel);
+  }
+
+  // Check consent for cloud providers
+  if (requiresConsent(currentProvider)) {
+    const { aiConsentRepository } = await import('@/lib/repositories/ai-consent-repository');
+    const hasConsent = await aiConsentRepository.hasConsent(userId, currentProvider);
+    if (!hasConsent) {
+      return {
+        error: `consent_required:${currentProvider}`,
+        status: 403,
+      };
+    }
   }
 
   try {
@@ -288,6 +300,16 @@ export async function createAIProvider(
         };
       }
 
+      // SECURITY: Validate URL before use
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const ollamaUrlValidation = await validateLocalProviderURL(ollamaSettings.baseUrl);
+      if (!ollamaUrlValidation.valid) {
+        return {
+          error: `Ollama base URL blocked: ${ollamaUrlValidation.error}`,
+          status: 400,
+        };
+      }
+
       // Create Ollama provider instance with base URL
       // Add /api suffix for ollama-ai-provider-v2 which expects full API endpoint
       const ollamaApiUrl = `${ollamaSettings.baseUrl}/api`;
@@ -308,6 +330,16 @@ export async function createAIProvider(
       if (!lmstudioSettings) {
         return {
           error: 'LM Studio base URL not configured. Please provide a base URL for your local LM Studio server.',
+          status: 400,
+        };
+      }
+
+      // SECURITY: Validate URL before use
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const lmstudioUrlValidation = await validateLocalProviderURL(lmstudioSettings.baseUrl);
+      if (!lmstudioUrlValidation.valid) {
+        return {
+          error: `LM Studio base URL blocked: ${lmstudioUrlValidation.error}`,
           status: 400,
         };
       }

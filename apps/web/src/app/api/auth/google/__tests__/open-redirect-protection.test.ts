@@ -5,7 +5,7 @@
  * redirecting OAuth callbacks to external domains.
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { POST } from '../signin/route';
 import { GET } from '../callback/route';
 
@@ -186,7 +186,7 @@ describe('Open Redirect Protection', () => {
     process.env.NEXTAUTH_URL = 'http://localhost';
 
     // Reset rate limiting mock
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
   });
 
   afterEach(() => {

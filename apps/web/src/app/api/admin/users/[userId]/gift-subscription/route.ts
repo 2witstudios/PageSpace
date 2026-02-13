@@ -1,40 +1,25 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { db, eq, users, subscriptions, and, inArray, desc } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { stripeConfig } from '@/lib/stripe-config';
 import { loggers } from '@pagespace/lib/server';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
-
 type GiftTier = 'pro' | 'founder' | 'business';
+
+type RouteContext = { params: Promise<{ userId: string }> };
 
 /**
  * POST /api/admin/users/[userId]/gift-subscription
  * Gift a subscription to a user with a 100% discount coupon.
  * The subscription is created in Stripe, and the webhook updates the user tier.
  */
-export async function POST(
-  request: NextRequest,
-  context: { params: Promise<{ userId: string }> }
-) {
+export const POST = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
   try {
     const { userId: targetUserId } = await context.params;
-
-    // Verify admin auth
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
-
-    if (auth.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Forbidden: Admin access required' },
-        { status: 403 }
-      );
-    }
-
-    const adminUserId = auth.userId;
+    const adminUserId = adminUser.id;
 
     // Parse request body
     const body = await request.json();
@@ -162,32 +147,17 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+});
 
 /**
  * DELETE /api/admin/users/[userId]/gift-subscription
  * Revoke a gifted subscription immediately.
  * The subscription is deleted in Stripe, and the webhook reverts the user to free tier.
  */
-export async function DELETE(
-  request: NextRequest,
-  context: { params: Promise<{ userId: string }> }
-) {
+export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
   try {
     const { userId: targetUserId } = await context.params;
-
-    // Verify admin auth
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
-
-    if (auth.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Forbidden: Admin access required' },
-        { status: 403 }
-      );
-    }
-
-    const adminUserId = auth.userId;
+    const adminUserId = adminUser.id;
 
     // Get target user
     const [targetUser] = await db
@@ -256,4 +226,4 @@ export async function DELETE(
       { status: 500 }
     );
   }
-}
+});

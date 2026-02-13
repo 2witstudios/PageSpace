@@ -1,15 +1,32 @@
 # PageSpace Cron Jobs
 # All times are in UTC
 # Jobs run inside Docker network, hitting internal web service
+# Authentication: HMAC-signed requests via cron-curl helper (set up by entrypoint.sh)
 
 # Memory processing - Daily at 6am UTC
 # Discovers patterns from user conversations and updates personalization
-0 6 * * * curl -s -X POST http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
+0 6 * * * cron-curl POST http://web:3000/api/memory/cron >> /var/log/cron/memory.log 2>&1
 
 # Pulse summaries - Every 6 hours
 # Generates workspace activity summaries for active users
-0 */6 * * * curl -s -X POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
+0 */6 * * * cron-curl POST http://web:3000/api/pulse/cron >> /var/log/cron/pulse.log 2>&1
 
 # Token cleanup - Hourly
 # Removes expired device tokens from database
-0 * * * * curl -s http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
+0 * * * * cron-curl GET http://web:3000/api/cron/cleanup-tokens >> /var/log/cron/cleanup.log 2>&1
+
+# Calendar sync - Every 5 minutes
+# Syncs Google Calendar connections that are due based on their sync frequency
+*/5 * * * * cron-curl GET http://web:3000/api/cron/calendar-sync >> /var/log/cron/calendar-sync.log 2>&1
+
+# Security audit chain verification - Daily at 2am UTC
+# Verifies hash chain integrity of security audit log
+0 2 * * * cron-curl GET http://web:3000/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
+
+# AI usage log purge - Daily at 3am UTC
+# Anonymizes prompt/completion text >30 days, purges rows >90 days
+0 3 * * * cron-curl POST http://web:3000/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
+
+# Deleted message purge - Daily at 4am UTC
+# Hard-deletes soft-deleted messages and conversations older than 30 days
+0 4 * * * cron-curl POST http://web:3000/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1

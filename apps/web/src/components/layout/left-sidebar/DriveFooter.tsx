@@ -26,6 +26,7 @@ import {
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useCapacitor } from "@/hooks/useCapacitor";
+import { useIsTablet } from "@/hooks/useDeviceTier";
 import { useTabsStore } from "@/stores/useTabsStore";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,8 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const createTab = useTabsStore((state) => state.createTab);
   const { isNative } = useCapacitor();
+  const isTablet = useIsTablet();
+  const hideTabActions = isNative && !isTablet;
 
   const { driveId: driveIdParams } = params;
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
@@ -118,7 +121,7 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
               <Link
                 href={action.href}
                 onClick={(e) => handleLinkClick(e, action.href)}
-                onAuxClick={isNative ? undefined : (e) => {
+                onAuxClick={hideTabActions ? undefined : (e) => {
                   if (e.button === 1) {
                     e.preventDefault();
                     handleOpenInNewTab(action.href);
@@ -135,8 +138,8 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
               </Link>
             );
 
-            // On native apps, don't show the context menu with "Open in new tab"
-            if (isNative) {
+            // On native phone apps, don't show the context menu with "Open in new tab"
+            if (hideTabActions) {
               return <div key={action.label}>{linkElement}</div>;
             }
 

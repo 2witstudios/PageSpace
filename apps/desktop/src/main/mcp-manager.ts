@@ -19,6 +19,7 @@ import {
 } from '../shared/mcp-types';
 import { validateMCPConfig } from '../shared/mcp-validation';
 import { logger } from './logger';
+import { hasErrorCode, getErrorMessage } from './error-utils';
 
 interface MCPServerProcess {
   config: MCPServerConfig;
@@ -168,15 +169,15 @@ export class MCPManager {
       }
 
       logger.info('Config loaded successfully', { serverCount: Object.keys(this.config.mcpServers).length });
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
+    } catch (error: unknown) {
+      if (hasErrorCode(error, 'ENOENT')) {
         // Config file doesn't exist yet - create default
         logger.info('Config file does not exist, creating default empty config', { configPath: this.configPath });
         this.config = { mcpServers: {} };
         await this.saveConfig();
       } else {
         logger.error('Failed to load MCP config', { error, configPath: this.configPath });
-        logger.error('Error details', { errorCode: error.code, errorMessage: error.message });
+        logger.error('Error details', { errorMessage: getErrorMessage(error) });
         throw error;
       }
     }

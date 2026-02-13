@@ -18,7 +18,7 @@ import { loadAuthSession } from './auth-storage';
 
 interface WebSocketMessage {
   type: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 interface ToolExecutionRequest {
@@ -243,7 +243,7 @@ export class WSClient {
 
         case 'tool_execute':
           await this.handleToolExecutionRequest(
-            message as ToolExecutionRequest
+            message as unknown as ToolExecutionRequest
           );
           break;
 

@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import useSWR from 'swr';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useTabsStore, type Tab } from '@/stores/useTabsStore';
-import { isEditingActive } from '@/stores/useEditingStore';
 import { PageType } from '@pagespace/lib/client-safe';
 
 interface PageMetaResponse {
@@ -35,6 +34,7 @@ const PAGE_ICON_MAP: Record<PageType, string> = {
   SHEET: 'Table',
   TASK_LIST: 'CheckSquare',
   CHANNEL: 'MessageSquare',
+  CODE: 'Code',
 };
 
 const fetcher = async <T>(url: string): Promise<T> => {
@@ -80,30 +80,20 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   const needsDmFetch = parsed.type === 'inbox-dm' && parsed.conversationId && !tab.title;
   const dmKey = needsDmFetch ? `/api/messages/conversations/${parsed.conversationId}` : null;
 
-  // UI refresh protection: pause revalidation during editing after initial load
-  const hasLoadedRef = useRef(false);
-
   const { data: pageData, isLoading: isPageLoading, error: pageError } = useSWR<PageMetaResponse>(
     pageKey,
     fetcher,
     {
-      isPaused: () => hasLoadedRef.current && isEditingActive(),
-      onSuccess: () => { hasLoadedRef.current = true; },
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
       dedupingInterval: 60000,
     }
   );
 
-  // UI refresh protection for DM fetch
-  const hasDmLoadedRef = useRef(false);
-
   const { data: dmData, isLoading: isDmLoading, error: dmError } = useSWR<ConversationMetaResponse>(
     dmKey,
     fetcher,
     {
-      isPaused: () => hasDmLoadedRef.current && isEditingActive(),
-      onSuccess: () => { hasDmLoadedRef.current = true; },
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
       dedupingInterval: 60000,

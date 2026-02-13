@@ -2,7 +2,7 @@
  * Tests for login redirect functionality to Getting Started drive
  */
 
-import { describe, expect, test, beforeEach, vi, type Mock } from 'vitest';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
 import { POST } from '../login/route';
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
@@ -109,9 +109,9 @@ describe('/api/auth/login redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    (checkDistributedRateLimit as Mock).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    (bcrypt.compare as Mock).mockResolvedValue(true);
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue({
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
+    vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
     });
 
@@ -168,7 +168,7 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given user already has drives, should not include redirectTo', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockResolvedValue(null);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',
@@ -191,7 +191,7 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given provisioning throws error, should still return 200 without redirectTo', async () => {
-    (provisionGettingStartedDriveIfNeeded as Mock).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',

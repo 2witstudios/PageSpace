@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../csrf/route';
 
 /**
@@ -56,8 +56,8 @@ describe('/api/auth/csrf', () => {
     vi.clearAllMocks();
 
     // Default: valid session
-    (getSessionFromCookies as unknown as Mock).mockReturnValue('valid-session-token');
-    (sessionService.validateSession as unknown as Mock).mockResolvedValue(mockSessionClaims);
+    vi.mocked(getSessionFromCookies).mockReturnValue('valid-session-token');
+    vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims as never);
   });
 
   describe('successful CSRF token generation', () => {
@@ -100,7 +100,7 @@ describe('/api/auth/csrf', () => {
   describe('authentication errors (401)', () => {
     it('GET_withNoSessionCookie_returns401', async () => {
       // Arrange: No session cookie
-      (getSessionFromCookies as unknown as Mock).mockReturnValue(null);
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -117,7 +117,7 @@ describe('/api/auth/csrf', () => {
 
     it('GET_withInvalidSession_returns401', async () => {
       // Arrange: Session validation fails
-      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -137,7 +137,7 @@ describe('/api/auth/csrf', () => {
 
     it('GET_withExpiredSession_returns401', async () => {
       // Arrange: Session has expired
-      (sessionService.validateSession as unknown as Mock).mockResolvedValue(null);
+      vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/auth/csrf', {
         method: 'GET',
@@ -159,7 +159,7 @@ describe('/api/auth/csrf', () => {
   describe('error handling (500)', () => {
     it('GET_whenTokenGenerationThrows_returns500WithGenericError', async () => {
       // Arrange: Token generation throws an error
-      (generateCSRFToken as unknown as Mock).mockImplementation(() => {
+      vi.mocked(generateCSRFToken).mockImplementation(() => {
         throw new Error('CSRF_SECRET not configured');
       });
 
@@ -181,7 +181,7 @@ describe('/api/auth/csrf', () => {
 
     it('GET_whenSessionValidationThrows_returns500', async () => {
       // Arrange: Session validation throws an error
-      (sessionService.validateSession as unknown as Mock).mockRejectedValue(
+      vi.mocked(sessionService.validateSession).mockRejectedValue(
         new Error('Database connection failed')
       );
 

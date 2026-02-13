@@ -1,0 +1,1 @@
+ALTER TABLE "channel_messages" ADD COLUMN "aiMeta" jsonb;

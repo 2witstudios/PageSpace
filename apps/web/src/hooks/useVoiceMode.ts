@@ -1,9 +1,48 @@
 'use client';
 
 import { useRef, useCallback, useEffect } from 'react';
-import { useVoiceModeStore, type TTSVoice } from '@/stores/useVoiceModeStore';
+import { useVoiceModeStore, type TTSVoice, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { createId } from '@paralleldrive/cuid2';
+
+function getMicPermissionErrorMessage(err: unknown): string {
+  const isDesktop = typeof window !== 'undefined' && !!window.electron?.isDesktop;
+
+  if (err instanceof DOMException) {
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      if (isDesktop) {
+        return 'Microphone access was blocked. Allow PageSpace in System Settings > Privacy & Security > Microphone, then try again.';
+      }
+      return 'Microphone access was blocked. Please allow microphone permissions in your browser settings and try again.';
+    }
+    if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      return 'No microphone was detected. Connect a microphone and try again.';
+    }
+    if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+      return 'Your microphone is busy in another app. Close other apps using the mic and try again.';
+    }
+  }
+
+  if (err instanceof TypeError) {
+    return 'This browser does not support microphone capture for voice mode.';
+  }
+
+  return 'Unable to start voice mode because microphone access failed. Please try again.';
+}
+
+function getTranscriptionErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return `Could not transcribe your speech: ${err.message}`;
+  }
+  return 'Could not transcribe your speech. Please try again.';
+}
+
+function getSynthesisErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return `Could not play AI voice response: ${err.message}`;
+  }
+  return 'Could not play AI voice response. Please try again.';
+}
 
 export interface UseVoiceModeOptions {
   /** Callback when transcript is available */
@@ -21,6 +60,7 @@ export interface UseVoiceModeOptions {
 export interface UseVoiceModeReturn {
   // State
   isEnabled: boolean;
+  hasLoadedSettings: boolean;
   isListening: boolean;
   isProcessing: boolean;
   isSpeaking: boolean;
@@ -29,9 +69,8 @@ export interface UseVoiceModeReturn {
   error: string | null;
 
   // Actions
-  enable: () => void;
+  enable: (owner?: VoiceModeOwner) => void;
   disable: () => void;
-  toggle: () => void;
   startListening: () => Promise<void>;
   stopListening: () => void;
   speak: (text: string) => Promise<void>;
@@ -45,6 +84,31 @@ export interface UseVoiceModeReturn {
   setTTSVoice: (voice: TTSVoice) => void;
   autoSend: boolean;
   setAutoSend: (autoSend: boolean) => void;
+}
+
+// Ref interfaces - grouped by concern for clarity and maintainability
+interface RecordingRefs {
+  mediaRecorder: MediaRecorder | null;
+  audioChunks: Blob[];
+  stream: MediaStream | null;
+}
+
+interface PlaybackRefs {
+  audioContext: AudioContext | null;
+  audioSource: AudioBufferSourceNode | null;
+  autoListenTimer: ReturnType<typeof setTimeout> | null;
+}
+
+interface VadRefs {
+  analyser: AnalyserNode | null;
+  animationFrame: number | null;
+  silenceTimeout: NodeJS.Timeout | null;
+}
+
+interface BargeInRefs {
+  analyser: AnalyserNode | null;
+  stream: MediaStream | null;
+  animationFrame: number | null;
 }
 
 /**
@@ -67,6 +131,7 @@ export function useVoiceMode({
   // Store state
   const isEnabled = useVoiceModeStore((s) => s.isEnabled);
   const voiceState = useVoiceModeStore((s) => s.voiceState);
+  const hasLoadedSettings = useVoiceModeStore((s) => s.hasLoadedSettings);
   const interactionMode = useVoiceModeStore((s) => s.interactionMode);
   const ttsVoice = useVoiceModeStore((s) => s.ttsVoice);
   const ttsSpeed = useVoiceModeStore((s) => s.ttsSpeed);
@@ -77,11 +142,11 @@ export function useVoiceMode({
   // Store actions
   const enable = useVoiceModeStore((s) => s.enable);
   const disable = useVoiceModeStore((s) => s.disable);
-  const toggle = useVoiceModeStore((s) => s.toggle);
   const setInteractionMode = useVoiceModeStore((s) => s.setInteractionMode);
   const setTTSVoice = useVoiceModeStore((s) => s.setTTSVoice);
   const setAutoSend = useVoiceModeStore((s) => s.setAutoSend);
   const setVoiceState = useVoiceModeStore((s) => s.setVoiceState);
+  const setCurrentAudioId = useVoiceModeStore((s) => s.setCurrentAudioId);
   const setCurrentTranscript = useVoiceModeStore((s) => s.setCurrentTranscript);
   const setError = useVoiceModeStore((s) => s.setError);
   const startListeningStore = useVoiceModeStore((s) => s.startListening);
@@ -90,15 +155,34 @@ export function useVoiceMode({
   const stopSpeakingStore = useVoiceModeStore((s) => s.stopSpeaking);
   const bargeInStore = useVoiceModeStore((s) => s.bargeIn);
 
-  // Refs
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
+  // Grouped refs for related functionality
+  const recordingRefs = useRef<RecordingRefs>({
+    mediaRecorder: null,
+    audioChunks: [],
+    stream: null,
+  });
+  const playbackRefs = useRef<PlaybackRefs>({
+    audioContext: null,
+    audioSource: null,
+    autoListenTimer: null,
+  });
+  const vadRefs = useRef<VadRefs>({
+    analyser: null,
+    animationFrame: null,
+    silenceTimeout: null,
+  });
+  const bargeInRefs = useRef<BargeInRefs>({
+    analyser: null,
+    stream: null,
+    animationFrame: null,
+  });
+
+  // State tracking refs
+  const isStartingListeningRef = useRef(false);
+  const voiceStateRef = useRef(voiceState);
+
+  // Function ref to break circular dependency between setupVAD and stopListening
+  const stopListeningRef = useRef<(() => void) | null>(null);
 
   // Callbacks ref to avoid stale closures
   const callbacksRef = useRef({ onTranscript, onSend, onSpeakComplete, onError });
@@ -109,26 +193,46 @@ export function useVoiceMode({
   const isProcessing = voiceState === 'processing';
   const isSpeaking = voiceState === 'speaking';
 
+  useEffect(() => {
+    voiceStateRef.current = voiceState;
+  }, [voiceState]);
+
   // Initialize audio context lazily
   const getAudioContext = useCallback(() => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new AudioContext();
+    if (!playbackRefs.current.audioContext) {
+      playbackRefs.current.audioContext = new AudioContext();
     }
-    return audioContextRef.current;
+    return playbackRefs.current.audioContext;
   }, []);
 
-  // Stop any ongoing audio playback
+  // Stop barge-in speech detection that listens while TTS is playing.
+  const stopBargeInMonitoring = useCallback(() => {
+    if (bargeInRefs.current.animationFrame) {
+      cancelAnimationFrame(bargeInRefs.current.animationFrame);
+      bargeInRefs.current.animationFrame = null;
+    }
+
+    if (bargeInRefs.current.stream) {
+      bargeInRefs.current.stream.getTracks().forEach((track) => { track.stop(); });
+      bargeInRefs.current.stream = null;
+    }
+
+    bargeInRefs.current.analyser = null;
+  }, []);
+
+  // Stop audio playback without changing voice state.
+  // Callers choose whether this should be treated as a normal stop or a barge-in transition.
   const stopAudioPlayback = useCallback(() => {
-    if (audioSourceRef.current) {
+    stopBargeInMonitoring();
+    if (playbackRefs.current.audioSource) {
       try {
-        audioSourceRef.current.stop();
+        playbackRefs.current.audioSource.stop();
       } catch {
         // Ignore if already stopped
       }
-      audioSourceRef.current = null;
+      playbackRefs.current.audioSource = null;
     }
-    stopSpeakingStore();
-  }, [stopSpeakingStore]);
+  }, [stopBargeInMonitoring]);
 
   // Transcribe audio blob
   const transcribeAudio = useCallback(
@@ -154,7 +258,7 @@ export function useVoiceMode({
         const result = await response.json();
         return result.text as string;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Transcription failed';
+        const message = getTranscriptionErrorMessage(err);
         setError(message);
         callbacksRef.current.onError?.(message);
         return null;
@@ -163,7 +267,8 @@ export function useVoiceMode({
     [language, setError]
   );
 
-  // Voice Activity Detection for barge-in mode
+  // Voice Activity Detection while actively recording (silence auto-stop).
+  // Uses stopListeningRef to access stopListening without circular dependency.
   const setupVAD = useCallback(
     (stream: MediaStream) => {
       if (interactionMode !== 'barge-in') return;
@@ -171,29 +276,29 @@ export function useVoiceMode({
       const audioContext = getAudioContext();
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
-      analyserRef.current = analyser;
+      vadRefs.current.analyser = analyser;
 
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       let silenceStart: number | null = null;
-      const SILENCE_THRESHOLD = 10; // Adjust based on testing
-      const SILENCE_DURATION = 1500; // 1.5 seconds of silence to stop
+      const SILENCE_THRESHOLD = 12;
+      const SILENCE_DURATION = 1400;
 
       const checkAudio = () => {
-        if (!analyserRef.current) return;
+        if (!vadRefs.current.analyser) return;
 
         analyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
 
         if (average < SILENCE_THRESHOLD) {
           if (!silenceStart) {
             silenceStart = Date.now();
           } else if (Date.now() - silenceStart > SILENCE_DURATION) {
-            // Silence detected - stop recording
-            if (voiceState === 'listening') {
-              stopListening();
+            // Silence detected - stop recording via ref to break circular dependency
+            if (voiceStateRef.current === 'listening' && stopListeningRef.current) {
+              stopListeningRef.current();
             }
             return;
           }
@@ -201,54 +306,69 @@ export function useVoiceMode({
           silenceStart = null;
         }
 
-        animationFrameRef.current = requestAnimationFrame(checkAudio);
+        vadRefs.current.animationFrame = requestAnimationFrame(checkAudio);
       };
 
-      animationFrameRef.current = requestAnimationFrame(checkAudio);
+      vadRefs.current.animationFrame = requestAnimationFrame(checkAudio);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stopListening is defined after this hook and would cause circular dependency
-    [interactionMode, getAudioContext, voiceState]
+    [interactionMode, getAudioContext]
   );
 
   // Stop listening and process audio
   const stopListening = useCallback(() => {
+    stopBargeInMonitoring();
+
     // Cancel VAD
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
+    if (vadRefs.current.animationFrame) {
+      cancelAnimationFrame(vadRefs.current.animationFrame);
+      vadRefs.current.animationFrame = null;
     }
-    if (silenceTimeoutRef.current) {
-      clearTimeout(silenceTimeoutRef.current);
-      silenceTimeoutRef.current = null;
+    if (vadRefs.current.silenceTimeout) {
+      clearTimeout(vadRefs.current.silenceTimeout);
+      vadRefs.current.silenceTimeout = null;
     }
 
     // Stop media recorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    const recorder = recordingRefs.current.mediaRecorder;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
     }
 
     // Stop media stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
+    if (recordingRefs.current.stream) {
+      recordingRefs.current.stream.getTracks().forEach((track) => { track.stop(); });
+      recordingRefs.current.stream = null;
     }
 
     stopListeningStore();
-  }, [stopListeningStore]);
+  }, [stopBargeInMonitoring, stopListeningStore]);
+
+  // Keep stopListeningRef in sync with stopListening
+  useEffect(() => {
+    stopListeningRef.current = stopListening;
+  }, [stopListening]);
 
   // Start listening
   const startListening = useCallback(async () => {
-    if (!isEnabled) return;
+    if (!isEnabled || !hasLoadedSettings) return;
+    if (isStartingListeningRef.current || isListening || isProcessing) return;
+    const recorder = recordingRefs.current.mediaRecorder;
+    if (recorder && recorder.state === 'recording') return;
 
-    // If speaking, barge in first
-    if (voiceState === 'speaking') {
-      stopAudioPlayback();
-      bargeInStore();
-    }
+    isStartingListeningRef.current = true;
 
+    // If speaking, barge in first and transition to listening
     try {
+      if (voiceStateRef.current === 'speaking') {
+        bargeInStore();
+        stopAudioPlayback();
+        setCurrentAudioId(null);
+        // Transition from paused to listening (store.bargeIn sets to paused)
+        setVoiceState('listening');
+      }
+
       setError(null);
-      audioChunksRef.current = [];
+      recordingRefs.current.audioChunks = [];
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -258,7 +378,12 @@ export function useVoiceMode({
         },
       });
 
-      streamRef.current = stream;
+      if (!useVoiceModeStore.getState().isEnabled) {
+        stream.getTracks().forEach((track) => { track.stop(); });
+        return;
+      }
+
+      recordingRefs.current.stream = stream;
 
       // Determine the best supported format
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -268,23 +393,23 @@ export function useVoiceMode({
           : 'audio/mp4';
 
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
+      recordingRefs.current.mediaRecorder = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+          recordingRefs.current.audioChunks.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
-        if (audioChunksRef.current.length === 0) {
+        if (recordingRefs.current.audioChunks.length === 0) {
           setVoiceState('idle');
           return;
         }
 
         setVoiceState('processing');
 
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const audioBlob = new Blob(recordingRefs.current.audioChunks, { type: mimeType });
         const transcript = await transcribeAudio(audioBlob);
 
         if (transcript) {
@@ -307,23 +432,112 @@ export function useVoiceMode({
       // Setup VAD for barge-in mode
       setupVAD(stream);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Microphone access denied';
+      const message = getMicPermissionErrorMessage(err);
       setError(message);
       callbacksRef.current.onError?.(message);
       setVoiceState('idle');
+    } finally {
+      isStartingListeningRef.current = false;
     }
   }, [
     isEnabled,
-    voiceState,
+    hasLoadedSettings,
+    isListening,
+    isProcessing,
     stopAudioPlayback,
     bargeInStore,
+    setCurrentAudioId,
+    setVoiceState,
     setError,
     transcribeAudio,
     setCurrentTranscript,
     autoSend,
-    setVoiceState,
     startListeningStore,
     setupVAD,
+  ]);
+
+  // Voice Activity Detection while TTS is speaking (real barge-in).
+  const startBargeInMonitoring = useCallback(async () => {
+    if (!isEnabled || interactionMode !== 'barge-in') return;
+
+    stopBargeInMonitoring();
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      if (voiceStateRef.current !== 'speaking') {
+        stream.getTracks().forEach((track) => { track.stop(); });
+        return;
+      }
+
+      const audioContext = getAudioContext();
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      bargeInRefs.current.stream = stream;
+      bargeInRefs.current.analyser = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const SPEECH_THRESHOLD = 22;
+      const REQUIRED_SPEECH_FRAMES = 7;
+      let speechFrames = 0;
+
+      const checkSpeech = () => {
+        const currentAnalyser = bargeInRefs.current.analyser;
+        if (!currentAnalyser) return;
+        if (voiceStateRef.current !== 'speaking') {
+          stopBargeInMonitoring();
+          return;
+        }
+
+        currentAnalyser.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+
+        if (average >= SPEECH_THRESHOLD) {
+          speechFrames += 1;
+        } else if (speechFrames > 0) {
+          speechFrames -= 1;
+        }
+
+        if (speechFrames >= REQUIRED_SPEECH_FRAMES) {
+          stopBargeInMonitoring();
+          bargeInStore();
+          stopAudioPlayback();
+          setCurrentAudioId(null);
+          void startListening();
+          return;
+        }
+
+        bargeInRefs.current.animationFrame = requestAnimationFrame(checkSpeech);
+      };
+
+      bargeInRefs.current.animationFrame = requestAnimationFrame(checkSpeech);
+    } catch {
+      // Keep speaking even if we cannot monitor for interruption.
+      stopBargeInMonitoring();
+    }
+  }, [
+    isEnabled,
+    interactionMode,
+    stopBargeInMonitoring,
+    getAudioContext,
+    bargeInStore,
+    stopAudioPlayback,
+    setCurrentAudioId,
+    startListening,
   ]);
 
   // Speak text using TTS
@@ -364,21 +578,25 @@ export function useVoiceMode({
 
         // Stop any existing playback
         stopAudioPlayback();
+        stopSpeakingStore();
 
         // Create and play new source
         const source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(audioContext.destination);
-        audioSourceRef.current = source;
+        playbackRefs.current.audioSource = source;
 
         source.onended = () => {
-          if (audioSourceRef.current === source) {
+          stopBargeInMonitoring();
+          if (playbackRefs.current.audioSource === source) {
+            playbackRefs.current.audioSource = null;
             stopSpeakingStore();
             callbacksRef.current.onSpeakComplete?.();
 
             // In barge-in mode, start listening after speaking
             if (interactionMode === 'barge-in' && isEnabled) {
-              setTimeout(() => {
+              playbackRefs.current.autoListenTimer = setTimeout(() => {
+                playbackRefs.current.autoListenTimer = null;
                 startListening();
               }, 300);
             }
@@ -387,10 +605,15 @@ export function useVoiceMode({
 
         startSpeakingStore(audioId);
         source.start();
+
+        if (interactionMode === 'barge-in' && isEnabled) {
+          void startBargeInMonitoring();
+        }
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Speech synthesis failed';
+        const message = getSynthesisErrorMessage(err);
         setError(message);
         callbacksRef.current.onError?.(message);
+        stopBargeInMonitoring();
         stopSpeakingStore();
       }
     },
@@ -399,58 +622,76 @@ export function useVoiceMode({
       ttsSpeed,
       getAudioContext,
       stopAudioPlayback,
+      stopBargeInMonitoring,
       startSpeakingStore,
       stopSpeakingStore,
       setError,
       interactionMode,
       isEnabled,
+      startBargeInMonitoring,
       startListening,
     ]
   );
 
   // Barge-in: interrupt TTS and start listening
   const bargeIn = useCallback(() => {
-    stopAudioPlayback();
     bargeInStore();
+    stopAudioPlayback();
+    setCurrentAudioId(null);
+    // Transition from paused to listening
+    setVoiceState('listening');
     startListening();
-  }, [stopAudioPlayback, bargeInStore, startListening]);
+  }, [bargeInStore, stopAudioPlayback, setCurrentAudioId, setVoiceState, startListening]);
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
     stopAudioPlayback();
-  }, [stopAudioPlayback]);
+    stopSpeakingStore();
+    setCurrentAudioId(null);
+  }, [stopAudioPlayback, stopSpeakingStore, setCurrentAudioId]);
 
   // Cleanup on unmount
   useEffect(() => {
+    // Capture ref values at effect start to use in cleanup (React hooks lint rule)
+    const recording = recordingRefs.current;
+    const playback = playbackRefs.current;
+    const vad = vadRefs.current;
+
     return () => {
       // Stop recording
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
+      if (recording.mediaRecorder && recording.mediaRecorder.state !== 'inactive') {
+        recording.mediaRecorder.stop();
       }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
+      if (recording.stream) {
+        recording.stream.getTracks().forEach((track) => { track.stop(); });
       }
       // Stop playback
-      if (audioSourceRef.current) {
+      if (playback.autoListenTimer) {
+        clearTimeout(playback.autoListenTimer);
+        playback.autoListenTimer = null;
+      }
+      if (playback.audioSource) {
         try {
-          audioSourceRef.current.stop();
+          playback.audioSource.stop();
         } catch {
           // Ignore
         }
+        playback.audioSource = null;
       }
+      stopBargeInMonitoring();
       // Cancel animations
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+      if (vad.animationFrame) {
+        cancelAnimationFrame(vad.animationFrame);
       }
-      if (silenceTimeoutRef.current) {
-        clearTimeout(silenceTimeoutRef.current);
+      if (vad.silenceTimeout) {
+        clearTimeout(vad.silenceTimeout);
       }
       // Close audio context
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+      if (playback.audioContext) {
+        playback.audioContext.close();
       }
     };
-  }, []);
+  }, [stopBargeInMonitoring]);
 
   // Load settings on mount
   useEffect(() => {
@@ -460,6 +701,7 @@ export function useVoiceMode({
   return {
     // State
     isEnabled,
+    hasLoadedSettings,
     isListening,
     isProcessing,
     isSpeaking,
@@ -470,7 +712,6 @@ export function useVoiceMode({
     // Actions
     enable,
     disable,
-    toggle,
     startListening,
     stopListening,
     speak,

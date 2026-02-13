@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, agentAwarenessCache } from '@pagespace/lib/server';
 import { db, pages, drives, eq } from '@pagespace/db';
 import { pageSpaceTools } from '@/lib/ai/core';
@@ -24,6 +24,10 @@ export async function GET(
 
     const { pageId } = await context.params;
 
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
+
     // Check if user has permission to view this page
     const canView = await canUserEditPage(userId, pageId);
     if (!canView) {
@@ -43,11 +47,9 @@ export async function GET(
     }
 
     // Get available tools for the UI
-    const availableTools = Object.keys(pageSpaceTools).map(toolName => ({
+    const availableTools = Object.entries(pageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      description: (pageSpaceTools as any)[toolName].description || `${toolName} tool`,
-      // You could add more metadata here like categories, etc.
+      description: tool.description || `${toolName} tool`,
     }));
 
     // Fetch the drive's prompt for reference in UI
@@ -114,8 +116,12 @@ export async function PATCH(
       expectedRevision,
     } = body;
 
+    // Check MCP token scope before page access
+    const scopeError = await checkMCPPageScope(auth, pageId);
+    if (scopeError) return scopeError;
+
     // Check if user has permission to edit this page
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
     if (!canEdit) {
       return NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },

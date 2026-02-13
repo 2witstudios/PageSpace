@@ -8,6 +8,7 @@ import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -97,15 +98,26 @@ export async function POST(req: Request) {
 
     let isNewUser = false;
     if (user) {
+      const resolvedImage = await resolveGoogleAvatarImage({
+        userId: user.id,
+        pictureUrl: picture,
+        existingImage: user.image,
+      });
+
       // Update existing user if needed
-      if (!user.googleId || !user.name || user.image !== picture) {
+      if (
+        !user.googleId ||
+        !user.name ||
+        user.image !== resolvedImage ||
+        (email_verified && !user.emailVerified)
+      ) {
         loggers.auth.info('Updating existing user via native Google OAuth', { email, platform });
         await db.update(users)
           .set({
             googleId: googleId || user.googleId,
             provider: user.password ? 'both' : 'google',
             name: user.name || name || email.split('@')[0],
-            image: picture || user.image,
+            image: resolvedImage,
             emailVerified: email_verified ? new Date() : user.emailVerified,
           })
           .where(eq(users.id, user.id));
@@ -122,7 +134,7 @@ export async function POST(req: Request) {
         name: name || email.split('@')[0],
         email,
         emailVerified: email_verified ? new Date() : null,
-        image: picture || null,
+        image: null,
         googleId,
         provider: 'google',
         tokenVersion: 0,
@@ -131,6 +143,20 @@ export async function POST(req: Request) {
         subscriptionTier: 'free',
       }).returning();
       user = newUser;
+
+      const resolvedImage = await resolveGoogleAvatarImage({
+        userId: user.id,
+        pictureUrl: picture,
+        existingImage: user.image,
+      });
+
+      if (resolvedImage !== (user.image ?? null)) {
+        await db.update(users)
+          .set({ image: resolvedImage })
+          .where(eq(users.id, user.id));
+        user = { ...user, image: resolvedImage };
+      }
+
       loggers.auth.info('New user created via native Google OAuth', { userId: user.id, platform });
     }
 

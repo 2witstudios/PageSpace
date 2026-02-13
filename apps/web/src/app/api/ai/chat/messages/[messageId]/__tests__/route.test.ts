@@ -24,6 +24,7 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPPageScope: vi.fn(),
 }));
 
 // Mock permissions (boundary)
@@ -65,11 +66,11 @@ vi.mock('@pagespace/db', () => ({
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, loggers } from '@pagespace/lib/server';
 
 // Type for page lookup mock (matches Drizzle schema)
-type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST';
+type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
 type PageTreeScope = 'children' | 'drive';
 type ProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
@@ -109,6 +110,7 @@ type PageLookupResult = {
   contentHash: string | null;
   trashedAt: Date | null;
   originalParentId: string | null;
+  contentMode: 'html' | 'markdown';
 };
 
 const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupResult => ({
@@ -147,6 +149,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   contentHash: null,
   trashedAt: null,
   originalParentId: null,
+  contentMode: 'html',
   ...overrides,
 });
 
@@ -206,6 +209,9 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: MCP scope check passes (null = no error)
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
@@ -502,6 +508,9 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+
+    // Default: MCP scope check passes (null = no error)
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, taskStatusConfigs, taskAssignees, pages, eq, and } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -22,6 +22,10 @@ export async function PATCH(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   // Check edit permission
   const canEdit = await canUserEditPage(userId, pageId);
@@ -389,6 +393,10 @@ export async function DELETE(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   // Check edit permission
   const canEdit = await canUserEditPage(userId, pageId);
