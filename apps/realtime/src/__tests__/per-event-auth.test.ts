@@ -370,7 +370,7 @@ describe('Zero-Trust: Revoked-But-Connected Attack', () => {
 
   it('given user had edit access downgraded to view-only, edit events should be denied', async () => {
     const handler = vi.fn();
-    const { socket } = createMockSocket('user-1');
+    const { socket, emitFn } = createMockSocket('user-1');
 
     const wrapped = withPerEventAuth(socket, 'document_update', handler, {
       pageIdExtractor: (p: unknown) => (p as { pageId?: string })?.pageId,
@@ -397,6 +397,10 @@ describe('Zero-Trust: Revoked-But-Connected Attack', () => {
 
     await wrapped({ pageId: 'page-1' });
     expect(handler).toHaveBeenCalledTimes(1); // NOT called again
+    expect(emitFn).toHaveBeenCalledWith('error', expect.objectContaining({
+      event: 'document_update',
+      message: expect.stringContaining('denied'),
+    }));
   });
 
   it('given intermittent DB failure during re-auth, event should be denied (fail-closed)', async () => {

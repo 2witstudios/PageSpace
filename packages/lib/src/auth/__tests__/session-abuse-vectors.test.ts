@@ -131,6 +131,8 @@ describe('Session Abuse Vectors', () => {
       const result = await service.validateSession('ps_sess_valid-token');
 
       expect(result).toBeNull();
+      // Verify the session was revoked (update with revokedAt was called)
+      expect(mockUpdateSetWhere).toHaveBeenCalled();
     });
 
     it('given a suspended admin user, should reject session regardless of admin role', async () => {
@@ -191,6 +193,8 @@ describe('Session Abuse Vectors', () => {
       const result = await service.validateSession('ps_sess_stale-version');
 
       expect(result).toBeNull();
+      // Verify the session was revoked (update with revokedAt was called)
+      expect(mockUpdateSetWhere).toHaveBeenCalled();
     });
 
     it('given session with matching tokenVersion, should succeed', async () => {
