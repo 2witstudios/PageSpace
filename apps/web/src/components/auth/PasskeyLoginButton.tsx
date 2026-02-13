@@ -1,0 +1,268 @@
+'use client';
+
+import { useState, useCallback, useEffect } from 'react';
+import { startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
+import { Button } from '@/components/ui/button';
+import { Fingerprint, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
+
+interface PasskeyLoginButtonProps {
+  csrfToken: string;
+  email?: string;
+  onSuccess?: (redirectUrl: string) => void;
+  className?: string;
+  variant?: 'default' | 'outline' | 'secondary';
+}
+
+export function PasskeyLoginButton({
+  csrfToken,
+  email,
+  onSuccess,
+  className,
+  variant = 'outline',
+}: PasskeyLoginButtonProps) {
+  const [isSupported, setIsSupported] = useState<boolean | null>(null);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  useEffect(() => {
+    setIsSupported(browserSupportsWebAuthn());
+  }, []);
+
+  const handleLogin = useCallback(async () => {
+    if (!csrfToken) {
+      toast.error('Please wait for security token to load');
+      return;
+    }
+
+    setIsAuthenticating(true);
+
+    try {
+      // Get authentication options
+      const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          csrfToken,
+        }),
+      });
+
+      if (!optionsRes.ok) {
+        const error = await optionsRes.json();
+        toast.error(error.error || 'Failed to start authentication');
+        return;
+      }
+
+      const { options } = await optionsRes.json();
+
+      // Check if there are any credentials to authenticate with
+      if (email && (!options.allowCredentials || options.allowCredentials.length === 0)) {
+        toast.error('No passkeys found for this email');
+        return;
+      }
+
+      // Start WebAuthn ceremony
+      const authResponse = await startAuthentication({ optionsJSON: options });
+
+      // Verify authentication
+      const verifyRes = await fetch('/api/auth/passkey/authenticate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          response: authResponse,
+          expectedChallenge: options.challenge,
+          csrfToken,
+        }),
+      });
+
+      if (!verifyRes.ok) {
+        const error = await verifyRes.json();
+        if (error.code === 'USER_SUSPENDED') {
+          toast.error('Your account has been suspended');
+        } else if (error.code === 'CREDENTIAL_NOT_FOUND') {
+          toast.error('Passkey not found. It may have been deleted.');
+        } else if (error.code === 'COUNTER_REPLAY_DETECTED') {
+          toast.error('Security error: Please try again or use a different sign-in method');
+        } else {
+          toast.error(error.error || 'Authentication failed');
+        }
+        return;
+      }
+
+      const { redirectUrl } = await verifyRes.json();
+
+      // Read the CSRF token from cookie (set by server)
+      const csrfCookie = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrf_token='));
+
+      if (csrfCookie) {
+        const newCsrfToken = csrfCookie.split('=')[1];
+        localStorage.setItem('csrfToken', newCsrfToken);
+      }
+
+      toast.success('Signed in successfully');
+
+      if (onSuccess) {
+        onSuccess(redirectUrl);
+      } else {
+        window.location.href = redirectUrl;
+      }
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === 'NotAllowedError') {
+          toast.error('Authentication was cancelled');
+        } else if (err.name === 'InvalidStateError') {
+          toast.error('No matching passkey found');
+        } else {
+          toast.error(`Authentication failed: ${err.message}`);
+        }
+      } else {
+        toast.error('Authentication failed');
+      }
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }, [csrfToken, email, onSuccess]);
+
+  // Don't render if browser doesn't support WebAuthn
+  if (isSupported === false) {
+    return null;
+  }
+
+  return (
+    <Button
+      variant={variant}
+      onClick={handleLogin}
+      disabled={isAuthenticating || isSupported === null}
+      className={cn('w-full', className)}
+    >
+      {isAuthenticating ? (
+        <>
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Authenticating...
+        </>
+      ) : (
+        <>
+          <Fingerprint className="mr-2 h-4 w-4" />
+          Sign in with Passkey
+        </>
+      )}
+    </Button>
+  );
+}
+
+/**
+ * Hook for conditional UI support (passkey autofill).
+ * Call this on page load to start conditional UI in the background.
+ */
+export function useConditionalPasskeyUI(
+  csrfToken: string,
+  onSuccess?: (redirectUrl: string) => void
+) {
+  const [isAvailable, setIsAvailable] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  useEffect(() => {
+    const checkAvailability = async () => {
+      if (typeof window === 'undefined') return;
+
+      // Check if conditional mediation is available
+      const available = await (
+        window.PublicKeyCredential?.isConditionalMediationAvailable?.() ??
+        Promise.resolve(false)
+      );
+
+      setIsAvailable(available);
+    };
+
+    checkAvailability();
+  }, []);
+
+  const startConditionalUI = useCallback(async () => {
+    if (!isAvailable || !csrfToken) return;
+
+    try {
+      // Get authentication options for conditional UI
+      const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          csrfToken,
+        }),
+      });
+
+      if (!optionsRes.ok) return;
+
+      const { options } = await optionsRes.json();
+
+      setIsAuthenticating(true);
+
+      // Start conditional UI authentication
+      const authResponse = await startAuthentication({
+        optionsJSON: options,
+        useBrowserAutofill: true,
+      });
+
+      // Verify authentication
+      const verifyRes = await fetch('/api/auth/passkey/authenticate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          response: authResponse,
+          expectedChallenge: options.challenge,
+          csrfToken,
+        }),
+      });
+
+      if (!verifyRes.ok) {
+        const error = await verifyRes.json();
+        toast.error(error.error || 'Authentication failed');
+        return;
+      }
+
+      const { redirectUrl } = await verifyRes.json();
+
+      // Read the CSRF token from cookie
+      const csrfCookie = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrf_token='));
+
+      if (csrfCookie) {
+        const newCsrfToken = csrfCookie.split('=')[1];
+        localStorage.setItem('csrfToken', newCsrfToken);
+      }
+
+      toast.success('Signed in successfully');
+
+      if (onSuccess) {
+        onSuccess(redirectUrl);
+      } else {
+        window.location.href = redirectUrl;
+      }
+    } catch (err) {
+      // Conditional UI was cancelled or failed - this is expected behavior
+      // Don't show error toast for AbortError (user cancelled)
+      if (err instanceof Error && err.name !== 'AbortError') {
+        console.debug('Conditional UI authentication failed:', err.message);
+      }
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }, [isAvailable, csrfToken, onSuccess]);
+
+  return {
+    isAvailable,
+    isAuthenticating,
+    startConditionalUI,
+  };
+}

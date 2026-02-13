@@ -54,6 +54,7 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@radix-ui/react-use-controllable-state": "^1.2.2",
+    "@simplewebauthn/browser": "^13.2.2",
     "@stripe/react-stripe-js": "^5.4.1",
     "@stripe/stripe-js": "^8.5.3",
     "@tanstack/react-virtual": "^3.13.18",

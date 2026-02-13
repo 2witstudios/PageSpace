@@ -220,6 +220,31 @@ export const socketTokensRelations = relations(socketTokens, ({ one }) => ({
   }),
 }));
 
+// Passkeys for WebAuthn authentication
+export const passkeys = pgTable('passkeys', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  credentialId: text('credential_id').notNull().unique(),
+  publicKey: text('public_key').notNull(),
+  counter: integer('counter').notNull().default(0),
+  deviceType: text('device_type'),
+  transports: text('transports').array(),
+  backedUp: boolean('backed_up').default(false),
+  name: text('name'),
+  lastUsedAt: timestamp('last_used_at', { mode: 'date' }),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index('passkeys_user_id_idx').on(table.userId),
+  credentialIdx: index('passkeys_credential_id_idx').on(table.credentialId),
+}));
+
+export const passkeysRelations = relations(passkeys, ({ one }) => ({
+  user: one(users, {
+    fields: [passkeys.userId],
+    references: [users.id],
+  }),
+}));
+
 // Email unsubscribe tokens for one-click email unsubscribe links
 // Replaces JWT-based tokens for Legacy JWT Deprecation (P5-T5)
 export const emailUnsubscribeTokens = pgTable('email_unsubscribe_tokens', {
