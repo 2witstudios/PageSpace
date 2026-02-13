@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
@@ -96,17 +97,7 @@ export function PasskeyLoginButton({
 
       const { redirectUrl } = await verifyRes.json();
 
-      // Read the CSRF token from cookie (set by server)
-      // Use substring after first '=' to preserve any '=' chars in the token value
-      const csrfCookie = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('csrf_token='));
-
-      if (csrfCookie) {
-        const eqIndex = csrfCookie.indexOf('=');
-        const newCsrfToken = csrfCookie.substring(eqIndex + 1);
-        localStorage.setItem('csrfToken', newCsrfToken);
-      }
+      persistCsrfToken();
 
       toast.success('Signed in successfully');
 
@@ -234,17 +225,7 @@ export function useConditionalPasskeyUI(
 
       const { redirectUrl } = await verifyRes.json();
 
-      // Read the CSRF token from cookie
-      // Use substring after first '=' to preserve any '=' chars in the token value
-      const csrfCookie = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('csrf_token='));
-
-      if (csrfCookie) {
-        const eqIndex = csrfCookie.indexOf('=');
-        const newCsrfToken = csrfCookie.substring(eqIndex + 1);
-        localStorage.setItem('csrfToken', newCsrfToken);
-      }
+      persistCsrfToken();
 
       toast.success('Signed in successfully');
 

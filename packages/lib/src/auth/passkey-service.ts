@@ -42,7 +42,7 @@ const generateRegOptionsSchema = z.object({
 
 const verifyRegSchema = z.object({
   userId: z.string().min(1),
-  response: z.any(), // RegistrationResponseJSON validated by simplewebauthn
+  response: z.record(z.string(), z.unknown()), // RegistrationResponseJSON validated by simplewebauthn
   expectedChallenge: z.string().min(1),
   name: z.string().max(PASSKEY_CONFIG.maxNameLength).optional(),
 });
@@ -52,7 +52,7 @@ const generateAuthOptionsSchema = z.object({
 });
 
 const verifyAuthSchema = z.object({
-  response: z.any(), // AuthenticationResponseJSON validated by simplewebauthn
+  response: z.record(z.string(), z.unknown()), // AuthenticationResponseJSON validated by simplewebauthn
   expectedChallenge: z.string().min(1),
 });
 
@@ -79,7 +79,7 @@ const generateSignupRegOptionsSchema = z.object({
 const verifySignupRegSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1).max(255),
-  response: z.any(), // RegistrationResponseJSON validated by simplewebauthn
+  response: z.record(z.string(), z.unknown()), // RegistrationResponseJSON validated by simplewebauthn
   expectedChallenge: z.string().min(1),
   passkeyName: z.string().max(PASSKEY_CONFIG.maxNameLength).optional(),
   acceptedTos: z.boolean().refine((val) => val === true, {
@@ -293,7 +293,7 @@ export async function verifyRegistration(input: unknown): Promise<VerifyRegistra
   let verification;
   try {
     verification = await verifyRegistrationResponse({
-      response: response as RegistrationResponseJSON,
+      response: response as unknown as RegistrationResponseJSON,
       expectedChallenge,
       expectedOrigin: PASSKEY_CONFIG.origin,
       expectedRPID: PASSKEY_CONFIG.rpId,
@@ -323,7 +323,7 @@ export async function verifyRegistration(input: unknown): Promise<VerifyRegistra
     counter: credential.counter,
     deviceType: credentialDeviceType,
     backedUp: credentialBackedUp,
-    transports: (response as RegistrationResponseJSON).response.transports || null,
+    transports: (response as unknown as RegistrationResponseJSON).response.transports || null,
     name: name || null,
   });
 
@@ -438,7 +438,7 @@ export async function verifyAuthentication(input: unknown): Promise<VerifyAuthRe
   }
 
   const { response, expectedChallenge } = parsed.data;
-  const authResponse = response as AuthenticationResponseJSON;
+  const authResponse = response as unknown as AuthenticationResponseJSON;
 
   // Look up the passkey by credential ID
   const passkey = await db.query.passkeys.findFirst({
@@ -806,7 +806,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
   let verification;
   try {
     verification = await verifyRegistrationResponse({
-      response: response as RegistrationResponseJSON,
+      response: response as unknown as RegistrationResponseJSON,
       expectedChallenge,
       expectedOrigin: PASSKEY_CONFIG.origin,
       expectedRPID: PASSKEY_CONFIG.rpId,
@@ -830,30 +830,32 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
   const publicKeyBase64 = Buffer.from(credential.publicKey).toString('base64url');
 
   try {
-    // Create user (no password - passwordless signup)
-    // Provider is 'email' since passkey auth is email-based (similar to magic link)
-    await db.insert(users).values({
-      id: userId,
-      name,
-      email: normalizedEmail,
-      provider: 'email',
-      role: 'user',
-      tokenVersion: 1,
-      emailVerified: new Date(), // Passkey signup = verified (device ownership proven)
-      tosAcceptedAt: new Date(),
-    });
+    await db.transaction(async (tx) => {
+      // Create user (no password - passwordless signup)
+      // Provider is 'email' since passkey auth is email-based (similar to magic link)
+      await tx.insert(users).values({
+        id: userId,
+        name,
+        email: normalizedEmail,
+        provider: 'email',
+        role: 'user',
+        tokenVersion: 1,
+        emailVerified: new Date(), // Passkey signup = verified (device ownership proven)
+        tosAcceptedAt: new Date(),
+      });
 
-    // Create passkey
-    await db.insert(passkeys).values({
-      id: passkeyId,
-      userId,
-      credentialId: credential.id,
-      publicKey: publicKeyBase64,
-      counter: credential.counter,
-      deviceType: credentialDeviceType,
-      backedUp: credentialBackedUp,
-      transports: (response as RegistrationResponseJSON).response.transports || null,
-      name: passkeyName || null,
+      // Create passkey
+      await tx.insert(passkeys).values({
+        id: passkeyId,
+        userId,
+        credentialId: credential.id,
+        publicKey: publicKeyBase64,
+        counter: credential.counter,
+        deviceType: credentialDeviceType,
+        backedUp: credentialBackedUp,
+        transports: (response as unknown as RegistrationResponseJSON).response.transports || null,
+        name: passkeyName || null,
+      });
     });
   } catch (error: unknown) {
     // Handle unique constraint violation - email was taken during our verification

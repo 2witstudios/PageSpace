@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -116,16 +117,7 @@ export function PasskeySignupButton({
 
       const { redirectUrl } = await verifyRes.json();
 
-      // Read the CSRF token from cookie (set by server)
-      const csrfCookie = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('csrf_token='));
-
-      if (csrfCookie) {
-        const eqIndex = csrfCookie.indexOf('=');
-        const newCsrfToken = csrfCookie.substring(eqIndex + 1);
-        localStorage.setItem('csrfToken', newCsrfToken);
-      }
+      persistCsrfToken();
 
       toast.success('Account created successfully!');
 
