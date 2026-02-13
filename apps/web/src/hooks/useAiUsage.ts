@@ -75,12 +75,16 @@ const fetcher = async (url: string) => {
 };
 
 /**
- * Hook for fetching AI usage data for a specific conversation
+ * Hook for fetching AI usage data for a specific conversation.
+ *
+ * Usage data only changes when a message completes, so polling is disabled
+ * by default. Updates are driven by Socket.IO `usage:updated` events which
+ * trigger SWR `mutate()` in AiUsageMonitor.
  *
  * @param conversationId - The conversation ID to fetch usage for
- * @param refreshInterval - Optional refresh interval in milliseconds (default: 15000ms)
+ * @param refreshInterval - Optional refresh interval in milliseconds (default: 0 = disabled)
  */
-export function useAiUsage(conversationId: string | null | undefined, refreshInterval = 15000) {
+export function useAiUsage(conversationId: string | null | undefined, refreshInterval = 0) {
   const swrKey = conversationId
     ? `/api/ai/global/${encodeURIComponent(conversationId)}/usage`
     : null;
@@ -135,9 +139,11 @@ export function useAiUsage(conversationId: string | null | undefined, refreshInt
 }
 
 /**
- * Hook for fetching AI usage data for a specific page (across all conversations)
+ * Hook for fetching AI usage data for a specific page (across all conversations).
+ *
+ * Updates are driven by Socket.IO events; polling is disabled by default.
  */
-export function usePageAiUsage(pageId: string | null | undefined, refreshInterval = 15000) {
+export function usePageAiUsage(pageId: string | null | undefined, refreshInterval = 0) {
   const swrKey = pageId
     ? `/api/pages/${encodeURIComponent(pageId)}/ai-usage`
     : null;
