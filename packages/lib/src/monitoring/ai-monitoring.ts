@@ -65,6 +65,8 @@ export const AI_PRICING = {
   'qwen/qwen3-coder': { input: 0.50, output: 2.00 },
   'moonshotai/kimi-k2': { input: 0.48, output: 2.00 },
   'minimax/minimax-m1': { input: 0.44, output: 1.76 },
+  'z-ai/glm-5': { input: 0.80, output: 2.56 },
+  'minimax/minimax-m2.5': { input: 0.30, output: 1.20 },
 
   // OpenRouter Paid Models - DeepSeek (openrouter.ai, Dec 2025)
   'deepseek/deepseek-v3.1-terminus': { input: 0.21, output: 0.32 },
@@ -165,8 +167,12 @@ export const AI_PRICING = {
   'MiniMax-M2-Stable': { input: 0.30, output: 1.20 },
 
   // GLM Direct Models (openrouter.ai, Dec 2025)
+  'glm-5': { input: 1.00, output: 3.20 },
   'glm-4.7': { input: 0.39, output: 1.90 },
   'glm-4.6': { input: 0.39, output: 1.90 },
+
+  // MiniMax Direct Models (Native)
+  'MiniMax-M2.5': { input: 0.30, output: 1.20 },
 
   // Ollama (local) - no cost
   'llama3.2': { input: 0, output: 0 },
@@ -244,6 +250,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'qwen/qwen3-coder': 128000,
   'moonshotai/kimi-k2': 128000,
   'minimax/minimax-m1': 128000,
+  'z-ai/glm-5': 202752,
+  'minimax/minimax-m2.5': 204800,
 
   // OpenRouter Models - DeepSeek
   'deepseek/deepseek-v3.1-terminus': 128000,
@@ -340,11 +348,13 @@ export const MODEL_CONTEXT_WINDOWS = {
   'grok-vision-beta': 128000,
 
   // MiniMax Direct Models
+  'MiniMax-M2.5': 1000000,
   'MiniMax-M2.1': 128000,
   'MiniMax-M2': 128000,
   'MiniMax-M2-Stable': 128000,
 
   // PageSpace/GLM Models
+  'glm-5': 200000,
   'glm-4.7': 200000,
   'glm-4.6': 200000,
   'glm-4.5': 128000,
