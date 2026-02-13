@@ -1,0 +1,168 @@
+name: Fix Migration Collisions
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'packages/db/drizzle/**'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  fix-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for migration collision
+        id: check
+        run: |
+          # Detect collision by checking for duplicate prevIds in snapshots
+          # A collision occurs when two different migrations both claim the same parent (prevId)
+          COLLISION=$(node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const metaDir = 'packages/db/drizzle/meta';
+            const journalPath = path.join(metaDir, '_journal.json');
+
+            if (!fs.existsSync(journalPath)) {
+              console.log('false');
+              process.exit(0);
+            }
+
+            const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8'));
+            const seenPrevIds = new Map(); // prevId -> entry.idx that uses it
+
+            for (const entry of journal.entries) {
+              const num = entry.tag.split('_')[0];
+              const snapPath = path.join(metaDir, num + '_snapshot.json');
+
+              if (!fs.existsSync(snapPath)) continue;
+
+              const snap = JSON.parse(fs.readFileSync(snapPath, 'utf-8'));
+              const prevId = snap.prevId;
+
+              // Skip the initial migration (has null/zero prevId)
+              if (prevId === '00000000-0000-0000-0000-000000000000' || !prevId) continue;
+
+              // Check if another migration already claims this same parent
+              if (seenPrevIds.has(prevId)) {
+                console.log('true');
+                process.exit(0);
+              }
+              seenPrevIds.set(prevId, entry.idx);
+            }
+            console.log('false');
+          ")
+
+          echo "collision=$COLLISION" >> $GITHUB_OUTPUT
+
+          if [ "$COLLISION" = "true" ]; then
+            echo "::warning::Migration collision detected - will auto-fix"
+          else
+            echo "No migration collision detected"
+          fi
+
+      - name: Fix collision
+        if: steps.check.outputs.collision == 'true'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const metaDir = 'packages/db/drizzle/meta';
+            const drizzleDir = 'packages/db/drizzle';
+            const journalPath = path.join(metaDir, '_journal.json');
+
+            const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8'));
+            const seenPrevIds = new Map(); // prevId -> entry.idx that uses it
+            let collisionIdx = -1;
+
+            // Find the first collision point (where two migrations share the same parent)
+            for (const entry of journal.entries) {
+              const num = entry.tag.split('_')[0];
+              const snapPath = path.join(metaDir, num + '_snapshot.json');
+
+              if (!fs.existsSync(snapPath)) continue;
+
+              const snap = JSON.parse(fs.readFileSync(snapPath, 'utf-8'));
+              const prevId = snap.prevId;
+
+              if (prevId === '00000000-0000-0000-0000-000000000000' || !prevId) {
+                continue;
+              }
+
+              // Check if another migration already claims this same parent
+              if (seenPrevIds.has(prevId)) {
+                collisionIdx = entry.idx;
+                console.log('Collision found at migration index:', collisionIdx);
+                console.log('  This migration and idx', seenPrevIds.get(prevId), 'both have prevId:', prevId);
+                break;
+              }
+              seenPrevIds.set(prevId, entry.idx);
+            }
+
+            if (collisionIdx === -1) {
+              console.log('No collision found (race condition resolved)');
+              process.exit(0);
+            }
+
+            // Delete migrations from collision point onwards
+            const toDelete = journal.entries.filter(e => e.idx >= collisionIdx);
+            console.log('Migrations to regenerate:', toDelete.map(e => e.tag).join(', '));
+
+            toDelete.forEach(e => {
+              const num = e.tag.split('_')[0];
+              const sqlPath = path.join(drizzleDir, e.tag + '.sql');
+              const snapPath = path.join(metaDir, num + '_snapshot.json');
+
+              try { fs.unlinkSync(sqlPath); console.log('Deleted:', sqlPath); } catch {}
+              try { fs.unlinkSync(snapPath); console.log('Deleted:', snapPath); } catch {}
+            });
+
+            // Update journal to remove deleted entries
+            journal.entries = journal.entries.filter(e => e.idx < collisionIdx);
+            fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + '\n');
+            console.log('Updated journal, remaining entries:', journal.entries.length);
+          "
+
+          # Regenerate clean migrations
+          echo "Regenerating migrations..."
+          pnpm db:generate
+
+          echo "Migrations regenerated successfully"
+
+      - name: Commit fix
+        if: steps.check.outputs.collision == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add packages/db/drizzle/
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "fix: auto-resolve migration collision [skip ci]"
+          git push
+
+          echo "Migration collision fixed and pushed"
