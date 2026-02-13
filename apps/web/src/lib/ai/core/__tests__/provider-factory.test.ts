@@ -68,20 +68,12 @@ vi.mock('@pagespace/lib/security', () => ({
   validateLocalProviderURL: vi.fn(),
 }));
 
-// Mock ai-providers-config - provide real resolvePageSpaceModel + mockable requiresConsent
+// Mock ai-providers-config - provide real resolvePageSpaceModel
 vi.mock('../ai-providers-config', () => ({
   resolvePageSpaceModel: vi.fn((m: string) => {
     const aliases: Record<string, string> = { standard: 'glm-4.7', pro: 'glm-5' };
     return aliases[m?.toLowerCase()] || m;
   }),
-  requiresConsent: vi.fn(),
-}));
-
-// Mock consent repository (dynamically imported by provider-factory)
-vi.mock('@/lib/repositories/ai-consent-repository', () => ({
-  aiConsentRepository: {
-    hasConsent: vi.fn(),
-  },
 }));
 
 // Mock ai-utils
@@ -137,8 +129,6 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 import { validateLocalProviderURL } from '@pagespace/lib/security';
-import { requiresConsent } from '../ai-providers-config';
-import { aiConsentRepository } from '@/lib/repositories/ai-consent-repository';
 
 const mockDb = vi.mocked(db);
 const mockDbMock = mockDb as unknown as MockDb;
@@ -176,8 +166,6 @@ describe('provider-factory', () => {
       url: new URL('http://localhost:11434'),
       resolvedIPs: ['127.0.0.1'],
     });
-    // Default mock: no consent required (so existing tests are unaffected)
-    vi.mocked(requiresConsent).mockReturnValue(false);
   });
 
   describe('createAIProvider', () => {
@@ -660,62 +648,6 @@ describe('provider-factory', () => {
       });
     });
 
-    describe('consent enforcement', () => {
-      it('returns consent_required error when cloud provider lacks consent', async () => {
-        mockDbMock.where.mockResolvedValue([
-          { id: 'user-123', currentAiProvider: 'openai', currentAiModel: 'gpt-4o' },
-        ]);
-        vi.mocked(requiresConsent).mockReturnValue(true);
-        vi.mocked(aiConsentRepository.hasConsent).mockResolvedValue(false);
-
-        const result = await createAIProvider('user-123', {
-          selectedProvider: 'openai',
-          selectedModel: 'gpt-4o',
-        });
-
-        expect(isProviderError(result)).toBe(true);
-        if (isProviderError(result)) {
-          expect(result.status).toBe(403);
-          expect(result.error).toBe('consent_required:openai');
-        }
-      });
-
-      it('proceeds when cloud provider has consent', async () => {
-        mockDbMock.where.mockResolvedValue([
-          { id: 'user-123', currentAiProvider: 'openai', currentAiModel: 'gpt-4o' },
-        ]);
-        vi.mocked(requiresConsent).mockReturnValue(true);
-        vi.mocked(aiConsentRepository.hasConsent).mockResolvedValue(true);
-        mockGetUserOpenAISettings.mockResolvedValue({ apiKey: 'test-key', isConfigured: true });
-
-        const result = await createAIProvider('user-123', {
-          selectedProvider: 'openai',
-          selectedModel: 'gpt-4o',
-        });
-
-        expect(isProviderError(result)).toBe(false);
-      });
-
-      it('skips consent check for exempt providers', async () => {
-        mockDbMock.where.mockResolvedValue([
-          { id: 'user-123', currentAiProvider: 'pagespace', currentAiModel: 'glm-4.7' },
-        ]);
-        vi.mocked(requiresConsent).mockReturnValue(false);
-        mockGetDefaultPageSpaceSettings.mockResolvedValue({
-          provider: 'glm',
-          apiKey: 'test-key',
-          isConfigured: true,
-        });
-
-        const result = await createAIProvider('user-123', {
-          selectedProvider: 'pagespace',
-          selectedModel: 'glm-4.7',
-        });
-
-        expect(aiConsentRepository.hasConsent).not.toHaveBeenCalled();
-        expect(isProviderError(result)).toBe(false);
-      });
-    });
   });
 
   describe('updateUserProviderSettings', () => {
