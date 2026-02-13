@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { incrementUsage } from './usage-service';
 import { getTomorrowMidnightUTC, type ProviderType } from '@pagespace/lib';
+import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -17,9 +18,10 @@ export async function checkAIRateLimit(
   provider: string,
   model?: string
 ): Promise<RateLimitResult> {
-  // Determine provider type based on model name for PageSpace provider
-  const isProModel = provider === 'pagespace' && model === 'glm-4.7';
-  const providerType: ProviderType = isProModel ? 'pro' : 'standard';
+  // Determine provider type based on PageSpace tier (standard/pro)
+  // Uses centralized alias config so model changes don't require code updates
+  const modelTier = provider === 'pagespace' && model ? getPageSpaceModelTier(model) : null;
+  const providerType: ProviderType = modelTier === 'pro' ? 'pro' : 'standard';
 
   try {
     const result = await incrementUsage(userId, providerType);
@@ -90,8 +92,9 @@ export function createRateLimitResponse(
  * Check if provider requires Pro subscription
  */
 export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
-  const isProModel = provider === 'pagespace' && model === 'glm-4.7';
-  if (!isProModel) {
+  // Check if model is a Pro tier model using centralized alias config
+  const modelTier = provider === 'pagespace' && model ? getPageSpaceModelTier(model) : null;
+  if (modelTier !== 'pro') {
     return false;
   }
 

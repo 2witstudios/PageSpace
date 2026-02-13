@@ -1,6 +1,6 @@
 {
-  "id": "6531b377-a474-4320-aaf6-d2823fe996ed",
-  "prevId": "32b3ebc0-7488-47d3-a637-c9e5991a0584",
+  "id": "d0e9b8e0-006d-490e-bbe6-793308354b36",
+  "prevId": "6531b377-a474-4320-aaf6-d2823fe996ed",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -813,7 +813,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'glm-4.5-air'"
+          "default": "'glm-4.7'"
         },
         "storageUsedBytes": {
           "name": "storageUsedBytes",

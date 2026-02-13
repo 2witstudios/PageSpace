@@ -1,6 +1,6 @@
 {
-  "id": "6531b377-a474-4320-aaf6-d2823fe996ed",
-  "prevId": "32b3ebc0-7488-47d3-a637-c9e5991a0584",
+  "id": "01629522-afda-4bfb-90e9-4ef8d56b96ac",
+  "prevId": "d0e9b8e0-006d-490e-bbe6-793308354b36",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1126,13 +1126,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "admin_role_version": {
-          "name": "admin_role_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "created_by_service": {
           "name": "created_by_service",
           "type": "text",
@@ -1971,13 +1964,6 @@
           "notNull": true,
           "default": "''"
         },
-        "contentMode": {
-          "name": "contentMode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'html'"
-        },
         "isPaginated": {
           "name": "isPaginated",
           "type": "boolean",
@@ -2657,6 +2643,194 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
+    },
+    "public.drive_invitations": {
+      "name": "drive_invitations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invitedBy": {
+          "name": "invitedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "InvitationStatus",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "respondedAt": {
+          "name": "respondedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "drive_invitations_drive_id_idx": {
+          "name": "drive_invitations_drive_id_idx",
+          "columns": [
+            {
+              "expression": "driveId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_invitations_email_idx": {
+          "name": "drive_invitations_email_idx",
+          "columns": [
+            {
+              "expression": "email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_invitations_status_idx": {
+          "name": "drive_invitations_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "drive_invitations_token_idx": {
+          "name": "drive_invitations_token_idx",
+          "columns": [
+            {
+              "expression": "token",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "drive_invitations_driveId_drives_id_fk": {
+          "name": "drive_invitations_driveId_drives_id_fk",
+          "tableFrom": "drive_invitations",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_invitations_userId_users_id_fk": {
+          "name": "drive_invitations_userId_users_id_fk",
+          "tableFrom": "drive_invitations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drive_invitations_invitedBy_users_id_fk": {
+          "name": "drive_invitations_invitedBy_users_id_fk",
+          "tableFrom": "drive_invitations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "invitedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "drive_invitations_token_unique": {
+          "name": "drive_invitations_token_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "token"
+          ]
+        }
+      }
     },
     "public.drive_members": {
       "name": "drive_members",
@@ -3398,19 +3572,6 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
-        },
-        "isActive": {
-          "name": "isActive",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "aiMeta": {
-          "name": "aiMeta",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -3583,70 +3744,6 @@
         }
       },
       "uniqueConstraints": {}
-    },
-    "public.ai_provider_consents": {
-      "name": "ai_provider_consents",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "consentedAt": {
-          "name": "consentedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "revokedAt": {
-          "name": "revokedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "ai_provider_consents_userId_users_id_fk": {
-          "name": "ai_provider_consents_userId_users_id_fk",
-          "tableFrom": "ai_provider_consents",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "user_provider_consent_unique": {
-          "name": "user_provider_consent_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "userId",
-            "provider"
-          ]
-        }
-      }
     },
     "public.user_ai_settings": {
       "name": "user_ai_settings",
@@ -5332,12 +5429,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
         "context_messages": {
           "name": "context_messages",
           "type": "jsonb",
@@ -5508,21 +5599,6 @@
           "columns": [
             {
               "expression": "context_size",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_ai_usage_expires_at": {
-          "name": "idx_ai_usage_expires_at",
-          "columns": [
-            {
-              "expression": "expires_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -8471,7 +8547,15 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {
+        "file_pages_page_id_key": {
+          "name": "file_pages_page_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "pageId"
+          ]
+        }
+      }
     },
     "public.files": {
       "name": "files",
@@ -9996,7 +10080,7 @@
           "name": "drive_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "agent_id": {
           "name": "agent_id",
@@ -10987,7 +11071,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": false,
-          "default": false
+          "default": true
         },
         "createdAt": {
           "name": "createdAt",
@@ -11472,7 +11556,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": false
+          "default": true
         },
         "lastSyncAt": {
           "name": "lastSyncAt",
@@ -11489,12 +11573,6 @@
         "syncCursor": {
           "name": "syncCursor",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "webhookChannels": {
-          "name": "webhookChannels",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -11647,8 +11725,7 @@
         "CANVAS",
         "FILE",
         "SHEET",
-        "TASK_LIST",
-        "CODE"
+        "TASK_LIST"
       ]
     },
     "public.PermissionAction": {
@@ -11666,6 +11743,16 @@
       "schema": "public",
       "values": [
         "USER"
+      ]
+    },
+    "public.InvitationStatus": {
+      "name": "InvitationStatus",
+      "schema": "public",
+      "values": [
+        "PENDING",
+        "ACCEPTED",
+        "REJECTED",
+        "EXPIRED"
       ]
     },
     "public.MemberRole": {
@@ -11712,8 +11799,7 @@
       "schema": "public",
       "values": [
         "SHOW_TOKEN_COUNTS",
-        "SHOW_CODE_TOGGLE",
-        "DEFAULT_MARKDOWN_MODE"
+        "SHOW_CODE_TOGGLE"
       ]
     },
     "public.activity_change_group_type": {

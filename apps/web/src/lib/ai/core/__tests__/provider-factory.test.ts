@@ -71,7 +71,7 @@ vi.mock('@pagespace/lib/security', () => ({
 // Mock ai-providers-config - provide real resolvePageSpaceModel + mockable requiresConsent
 vi.mock('../ai-providers-config', () => ({
   resolvePageSpaceModel: vi.fn((m: string) => {
-    const aliases: Record<string, string> = { standard: 'glm-4.5-air', pro: 'glm-4.7' };
+    const aliases: Record<string, string> = { standard: 'glm-4.7', pro: 'glm-5' };
     return aliases[m?.toLowerCase()] || m;
   }),
   requiresConsent: vi.fn(),
@@ -698,7 +698,7 @@ describe('provider-factory', () => {
 
       it('skips consent check for exempt providers', async () => {
         mockDbMock.where.mockResolvedValue([
-          { id: 'user-123', currentAiProvider: 'pagespace', currentAiModel: 'glm-4.5-air' },
+          { id: 'user-123', currentAiProvider: 'pagespace', currentAiModel: 'glm-4.7' },
         ]);
         vi.mocked(requiresConsent).mockReturnValue(false);
         mockGetDefaultPageSpaceSettings.mockResolvedValue({
@@ -709,7 +709,7 @@ describe('provider-factory', () => {
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'pagespace',
-          selectedModel: 'glm-4.5-air',
+          selectedModel: 'glm-4.7',
         });
 
         expect(aiConsentRepository.hasConsent).not.toHaveBeenCalled();
