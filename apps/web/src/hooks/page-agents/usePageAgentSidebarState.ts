@@ -186,6 +186,8 @@ export interface UseSidebarAgentStateReturn {
   createNewConversation: () => Promise<string | null>;
   /** Refresh the current agent conversation (reload messages from server) */
   refreshConversation: () => Promise<void>;
+  /** Load a specific conversation by ID */
+  loadConversation: (conversationId: string) => Promise<void>;
   /** Update messages (for optimistic UI updates) */
   updateMessages: (messages: UIMessage[]) => void;
 }
@@ -318,6 +320,21 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   }, [selectedAgent, conversationId, updateMessages]);
 
   // ============================================
+  // Action: Load Specific Conversation
+  // ============================================
+  const loadConversation = useCallback(async (conversationId: string): Promise<void> => {
+    if (!selectedAgent) return;
+
+    try {
+      const result = await fetchAgentConversationMessages(selectedAgent.id, conversationId, { limit: 50 });
+      setConversationLoaded(conversationId, result.messages, selectedAgent.id);
+    } catch (error) {
+      console.error('Failed to load agent conversation:', error);
+      toast.error('Failed to load conversation');
+    }
+  }, [selectedAgent, setConversationLoaded]);
+
+  // ============================================
   // Return hook interface
   // ============================================
   return {
@@ -328,6 +345,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
     selectAgent,
     createNewConversation,
     refreshConversation,
+    loadConversation,
     updateMessages,
   };
 }
