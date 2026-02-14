@@ -300,4 +300,141 @@ describe('useEditingStore', () => {
       });
     });
   });
+
+  describe('pending sends', () => {
+    beforeEach(() => {
+      // Reset pending sends before each test
+      useEditingStore.setState({ pendingSends: new Set() });
+    });
+
+    describe('startPendingSend', () => {
+      it('given a conversation ID, should add it to pendingSends', () => {
+        const { startPendingSend, hasPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-123');
+
+        expect(hasPendingSend('conv-123')).toBe(true);
+      });
+
+      it('given multiple conversation IDs, should track all of them', () => {
+        const { startPendingSend, hasPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-1');
+        startPendingSend('conv-2');
+        startPendingSend('conv-3');
+
+        expect(hasPendingSend('conv-1')).toBe(true);
+        expect(hasPendingSend('conv-2')).toBe(true);
+        expect(hasPendingSend('conv-3')).toBe(true);
+      });
+
+      it('given same ID added twice, should only have one entry', () => {
+        const { startPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-123');
+        startPendingSend('conv-123');
+
+        const { pendingSends } = useEditingStore.getState();
+        expect(pendingSends.size).toBe(1);
+      });
+    });
+
+    describe('endPendingSend', () => {
+      it('given a tracked conversation ID, should remove it', () => {
+        const { startPendingSend, endPendingSend, hasPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-123');
+        expect(hasPendingSend('conv-123')).toBe(true);
+
+        endPendingSend('conv-123');
+
+        expect(hasPendingSend('conv-123')).toBe(false);
+      });
+
+      it('given a non-existent conversation ID, should not throw', () => {
+        const { endPendingSend } = useEditingStore.getState();
+
+        expect(() => endPendingSend('non-existent')).not.toThrow();
+      });
+
+      it('given multiple pending sends, should only remove the specified one', () => {
+        const { startPendingSend, endPendingSend, hasPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-1');
+        startPendingSend('conv-2');
+        startPendingSend('conv-3');
+
+        endPendingSend('conv-2');
+
+        expect(hasPendingSend('conv-1')).toBe(true);
+        expect(hasPendingSend('conv-2')).toBe(false);
+        expect(hasPendingSend('conv-3')).toBe(true);
+      });
+    });
+
+    describe('hasPendingSend', () => {
+      it('given conversation ID in pending sends, should return true', () => {
+        const { startPendingSend, hasPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-123');
+
+        expect(hasPendingSend('conv-123')).toBe(true);
+      });
+
+      it('given conversation ID not in pending sends, should return false', () => {
+        const { hasPendingSend } = useEditingStore.getState();
+
+        expect(hasPendingSend('non-existent')).toBe(false);
+      });
+    });
+
+    describe('isAnyActive with pending sends', () => {
+      it('given pending send active, should return true', () => {
+        const { startPendingSend, isAnyActive } = useEditingStore.getState();
+
+        startPendingSend('conv-123');
+
+        expect(isAnyActive()).toBe(true);
+      });
+
+      it('given both sessions and pending sends, should return true', () => {
+        const { startEditing, startPendingSend, isAnyActive } = useEditingStore.getState();
+
+        startEditing('doc-123');
+        startPendingSend('conv-456');
+
+        expect(isAnyActive()).toBe(true);
+      });
+
+      it('given pending send ended but session active, should return true', () => {
+        const { startEditing, startPendingSend, endPendingSend, isAnyActive } = useEditingStore.getState();
+
+        startEditing('doc-123');
+        startPendingSend('conv-456');
+        endPendingSend('conv-456');
+
+        expect(isAnyActive()).toBe(true);
+      });
+
+      it('given session ended but pending send active, should return true', () => {
+        const { startEditing, endEditing, startPendingSend, isAnyActive } = useEditingStore.getState();
+
+        startEditing('doc-123');
+        startPendingSend('conv-456');
+        endEditing('doc-123');
+
+        expect(isAnyActive()).toBe(true);
+      });
+    });
+
+    describe('isEditingActive with pending sends', () => {
+      it('given only pending send active, should return true', () => {
+        const { startPendingSend } = useEditingStore.getState();
+
+        startPendingSend('conv-123');
+
+        expect(isEditingActive()).toBe(true);
+      });
+    });
+  });
 });

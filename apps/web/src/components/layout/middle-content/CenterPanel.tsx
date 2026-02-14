@@ -164,8 +164,8 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
       </div>
     );
   } else if (componentName === 'DocumentView') {
-    // DocumentView accepts only pageId (new pattern)
-    pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} />;
+    // DocumentView accepts pageId and optional driveId for cross-drive socket updates
+    pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} driveId={page.driveId} />;
   } else if (componentName === 'CodePageView') {
     // CodePageView accepts only pageId (new pattern)
     pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;

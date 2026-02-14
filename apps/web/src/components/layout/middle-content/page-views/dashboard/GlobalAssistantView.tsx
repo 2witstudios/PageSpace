@@ -67,6 +67,7 @@ import {
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { useEditingStore, isEditingActive } from '@/stores/useEditingStore';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -432,7 +433,8 @@ const GlobalAssistantView: React.FC = () => {
   // This catches completed AI responses that finished while the app was backgrounded
   useAppStateRecovery({
     onResume: handlePullUpRefresh,
-    enabled: !isStreaming && currentConversationId !== null,
+    // Block recovery if streaming OR pending send OR any editing active
+    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
   });
 
   // Clean up stream tracking on unmount
@@ -594,6 +596,11 @@ const GlobalAssistantView: React.FC = () => {
     const files = getFilesForSend();
     if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
+    // SYNC: Block refreshes before calling sendMessage
+    // This prevents useAppStateRecovery from triggering during the window
+    // between clicking send and streaming state being registered
+    useEditingStore.getState().startPendingSend(currentConversationId);
+
     const requestBody = selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -617,12 +624,20 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
     setInput('');
     clearFiles();
+
+    // Clear after streaming state takes over (useStreamingRegistration handles it)
+    setTimeout(() => {
+      useEditingStore.getState().endPendingSend(currentConversationId);
+    }, 500);
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
   // Voice mode: Send message from voice transcript
   const handleVoiceSend = useCallback((text: string) => {
     if (!text.trim() || !currentConversationId) return;
+
+    // SYNC: Block refreshes before calling sendMessage
+    useEditingStore.getState().startPendingSend(currentConversationId);
 
     const requestBody = selectedAgent
       ? {
@@ -645,6 +660,11 @@ const GlobalAssistantView: React.FC = () => {
         };
 
     sendMessage({ text }, { body: requestBody });
+
+    // Clear after streaming state takes over
+    setTimeout(() => {
+      useEditingStore.getState().endPendingSend(currentConversationId);
+    }, 500);
   }, [
     currentConversationId,
     selectedAgent,

@@ -27,6 +27,7 @@ import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { useEditingStore, isEditingActive } from '@/stores/useEditingStore';
 
 // Shared hooks and components
 import {
@@ -410,16 +411,30 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     if (!input.trim() && attachments.length === 0) return;
+    if (!currentConversationId) return;
+
+    // SYNC: Block refreshes before calling sendMessage
+    // This prevents useAppStateRecovery from triggering during the window
+    // between clicking send and streaming state being registered
+    useEditingStore.getState().startPendingSend(currentConversationId);
 
     void sendMessageWithContext(input);
     setInput('');
     clearFiles();
     inputRef.current?.clear();
+
+    // Clear after streaming state takes over (useStreamingRegistration handles it)
+    setTimeout(() => {
+      if (currentConversationId) {
+        useEditingStore.getState().endPendingSend(currentConversationId);
+      }
+    }, 500);
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     isReadOnly,
     input,
     attachments.length,
+    currentConversationId,
     sendMessageWithContext,
     clearFiles,
   ]);
@@ -431,10 +446,22 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     if (!text.trim()) return;
+    if (!currentConversationId) return;
+
+    // SYNC: Block refreshes before calling sendMessage
+    useEditingStore.getState().startPendingSend(currentConversationId);
 
     void sendMessageWithContext(text);
+
+    // Clear after streaming state takes over
+    setTimeout(() => {
+      if (currentConversationId) {
+        useEditingStore.getState().endPendingSend(currentConversationId);
+      }
+    }, 500);
   }, [
     isReadOnly,
+    currentConversationId,
     sendMessageWithContext,
   ]);
 
@@ -483,7 +510,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // This catches completed AI responses that finished while the app was backgrounded
   useAppStateRecovery({
     onResume: handlePullUpRefresh,
-    enabled: !isStreaming && currentConversationId !== null,
+    // Block recovery if streaming OR pending send OR any editing active
+    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
   });
 
   // Clean up stream tracking when conversation changes or on unmount

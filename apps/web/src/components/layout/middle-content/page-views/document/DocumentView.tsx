@@ -7,7 +7,7 @@ import { Editor } from '@tiptap/react';
 import Toolbar from '@/components/editors/Toolbar';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDocumentStore } from '@/stores/useDocumentStore';
-import { useSocket } from '@/hooks/useSocket';
+import { usePageContentSocket } from '@/hooks/usePageContentSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
@@ -19,13 +19,14 @@ import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 
 interface DocumentViewProps {
   pageId: string;
+  driveId?: string;
 }
 
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 const RichEditor = dynamic(() => import('@/components/editors/RichEditor'), { ssr: false });
 
 
-const DocumentView = ({ pageId }: DocumentViewProps) => {
+const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
   const activeView = useDocumentStore((state) => state.activeView);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
@@ -33,7 +34,6 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
   const hasInitializedRef = useRef(false);
-  const socket = useSocket();
   const { user } = useAuth();
 
   // Use the new document hook - will fetch content if not cached
@@ -149,58 +149,47 @@ const DocumentView = ({ pageId }: DocumentViewProps) => {
     checkPermissions();
   }, [user?.id, pageId]);
 
-  // Listen for content updates from other sources (AI, other users)
-  useEffect(() => {
-    if (!socket) return;
+  // Handle content updates from other sources (AI, other users)
+  // Uses usePageContentSocket to ensure we receive updates even when
+  // the page is in a different drive than the currently-viewed tree
+  const handleContentUpdate = useCallback(async (eventData: PageEventPayload) => {
+    // Note: pageId and socketId filtering is handled by usePageContentSocket
+    try {
+      // Fetch the latest content from the server
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
 
-    const handleContentUpdate = async (eventData: PageEventPayload) => {
-      // Filter out self-triggered events to prevent refetch loop
-      if (eventData.socketId && eventData.socketId === socket.id) {
-        return;
-      }
+        // Only update if content actually changed and we're not currently editing
+        // IMPORTANT: contentMode must be updated atomically with content to prevent
+        // mode/content mismatch when another user converts while we have unsaved edits
+        if (!documentState?.isDirty) {
+          const contentChanged = updatedPage.content !== documentState?.content;
+          const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
 
-      // Only update if it's for the current page
-      if (eventData.pageId === pageId) {
-
-        try {
-          // Fetch the latest content from the server
-          const response = await fetchWithAuth(`/api/pages/${pageId}`);
-          if (response.ok) {
-            const updatedPage = await response.json();
-
-            // Only update if content actually changed and we're not currently editing
-            // Note: This uses closure over documentState, which is acceptable here
-            // IMPORTANT: contentMode must be updated atomically with content to prevent
-            // mode/content mismatch when another user converts while we have unsaved edits
-            if (!documentState?.isDirty) {
-              const contentChanged = updatedPage.content !== documentState?.content;
-              const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
-
-              if (contentChanged || modeChanged) {
-                useDocumentManagerStore.getState().updateDocument(pageId, {
-                  content: updatedPage.content,
-                  contentMode: updatedPage.contentMode,
-                  revision: updatedPage.revision,
-                  isDirty: false,
-                  lastSaved: Date.now(),
-                  lastUpdateTime: Date.now(),
-                });
-              }
-            }
+          if (contentChanged || modeChanged) {
+            useDocumentManagerStore.getState().updateDocument(pageId, {
+              content: updatedPage.content,
+              contentMode: updatedPage.contentMode,
+              revision: updatedPage.revision,
+              isDirty: false,
+              lastSaved: Date.now(),
+              lastUpdateTime: Date.now(),
+            });
           }
-        } catch (error) {
-          console.error('Failed to fetch updated content:', error);
         }
       }
-    };
+    } catch (error) {
+      console.error('Failed to fetch updated content:', error);
+    }
+  }, [pageId, documentState?.isDirty, documentState?.content, documentState?.contentMode]);
 
-    // Listen for content update events
-    socket.on('page:content-updated', handleContentUpdate);
-
-    return () => {
-      socket.off('page:content-updated', handleContentUpdate);
-    };
-  }, [socket, pageId, documentState]);
+  // Subscribe to page content updates via Socket.IO
+  // This ensures we receive updates even when the page is in a different drive
+  usePageContentSocket(pageId, driveId, {
+    onContentUpdated: handleContentUpdate,
+    enabled: !!driveId, // Only enable if driveId is provided
+  });
 
 
   // Handle content changes
