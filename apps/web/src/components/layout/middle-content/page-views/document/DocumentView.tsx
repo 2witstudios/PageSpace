@@ -152,7 +152,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
   // Handle content updates from other sources (AI, other users)
   // Uses usePageContentSocket to ensure we receive updates even when
   // the page is in a different drive than the currently-viewed tree
-  const handleContentUpdate = useCallback(async (eventData: PageEventPayload) => {
+  const handleContentUpdate = useCallback(async (_eventData: PageEventPayload) => {
     // Note: pageId and socketId filtering is handled by usePageContentSocket
     try {
       // Fetch the latest content from the server
