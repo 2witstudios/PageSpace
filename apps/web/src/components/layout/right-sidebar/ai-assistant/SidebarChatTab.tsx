@@ -25,13 +25,13 @@ import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
-import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { InputCard } from '@/components/ui/floating-input';
-import { useEditingStore, isEditingActive } from '@/stores/useEditingStore';
+import { isEditingActive } from '@/stores/useEditingStore';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
@@ -233,6 +233,9 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
     : (isStreaming || contextIsStreaming);
+
+  // Effect-based handoff for pending send → streaming transition
+  const { wrapSend } = useSendHandoff(currentConversationId, isStreaming);
 
   // ============================================
   // Centralized Assistant Settings (from store)
@@ -558,11 +561,6 @@ const SidebarChatTab: React.FC = () => {
     const files = getFilesForSend();
     if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
-    // SYNC: Block refreshes before calling sendMessage
-    // This prevents useAppStateRecovery from triggering during the window
-    // between clicking send and streaming state being registered
-    useEditingStore.getState().startPendingSend(currentConversationId);
-
     // Derive isReadOnly from writeMode (inverted)
     const isReadOnly = !writeMode;
 
@@ -587,14 +585,10 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body }));
     setInput('');
     clearFiles();
-
-    // Clear after streaming state takes over (useStreamingRegistration handles it)
-    setTimeout(() => {
-      useEditingStore.getState().endPendingSend(currentConversationId);
-    }, 500);
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -610,6 +604,7 @@ const SidebarChatTab: React.FC = () => {
     sendMessage,
     getFilesForSend,
     clearFiles,
+    wrapSend,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -639,7 +634,8 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ text }, { body });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text }, { body }));
   }, [
     currentConversationId,
     selectedAgent,
@@ -651,6 +647,7 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
+    wrapSend,
   ]);
 
   // Voice mode toggle handler

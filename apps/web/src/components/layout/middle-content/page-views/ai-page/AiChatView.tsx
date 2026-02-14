@@ -27,7 +27,7 @@ import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { useEditingStore, isEditingActive } from '@/stores/useEditingStore';
+import { isEditingActive } from '@/stores/useEditingStore';
 
 // Shared hooks and components
 import {
@@ -38,6 +38,7 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useChatStop,
+  useSendHandoff,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -182,6 +183,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const { wrapSend } = useSendHandoff(currentConversationId, isStreaming);
   const stop = useChatStop(streamTrackingId, chatStop);
   const isLoading = !isInitialized;
 
@@ -413,22 +415,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!input.trim() && attachments.length === 0) return;
     if (!currentConversationId) return;
 
-    // SYNC: Block refreshes before calling sendMessage
-    // This prevents useAppStateRecovery from triggering during the window
-    // between clicking send and streaming state being registered
-    useEditingStore.getState().startPendingSend(currentConversationId);
-
-    void sendMessageWithContext(input);
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessageWithContext(input));
     setInput('');
     clearFiles();
     inputRef.current?.clear();
-
-    // Clear after streaming state takes over (useStreamingRegistration handles it)
-    setTimeout(() => {
-      if (currentConversationId) {
-        useEditingStore.getState().endPendingSend(currentConversationId);
-      }
-    }, 500);
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     isReadOnly,
@@ -437,6 +428,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     currentConversationId,
     sendMessageWithContext,
     clearFiles,
+    wrapSend,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -448,21 +440,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!text.trim()) return;
     if (!currentConversationId) return;
 
-    // SYNC: Block refreshes before calling sendMessage
-    useEditingStore.getState().startPendingSend(currentConversationId);
-
-    void sendMessageWithContext(text);
-
-    // Clear after streaming state takes over
-    setTimeout(() => {
-      if (currentConversationId) {
-        useEditingStore.getState().endPendingSend(currentConversationId);
-      }
-    }, 500);
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessageWithContext(text));
   }, [
     isReadOnly,
     currentConversationId,
     sendMessageWithContext,
+    wrapSend,
   ]);
 
   // Voice mode toggle handler

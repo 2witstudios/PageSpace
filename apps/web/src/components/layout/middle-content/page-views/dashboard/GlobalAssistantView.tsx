@@ -63,11 +63,12 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useChatStop,
+  useSendHandoff,
   LocationContext,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { useEditingStore, isEditingActive } from '@/stores/useEditingStore';
+import { isEditingActive } from '@/stores/useEditingStore';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -317,6 +318,7 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const { wrapSend } = useSendHandoff(currentConversationId, isStreaming);
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
 
@@ -596,11 +598,6 @@ const GlobalAssistantView: React.FC = () => {
     const files = getFilesForSend();
     if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
-    // SYNC: Block refreshes before calling sendMessage
-    // This prevents useAppStateRecovery from triggering during the window
-    // between clicking send and streaming state being registered
-    useEditingStore.getState().startPendingSend(currentConversationId);
-
     const requestBody = selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -621,14 +618,10 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody }));
     setInput('');
     clearFiles();
-
-    // Clear after streaming state takes over (useStreamingRegistration handles it)
-    setTimeout(() => {
-      useEditingStore.getState().endPendingSend(currentConversationId);
-    }, 500);
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
@@ -636,9 +629,6 @@ const GlobalAssistantView: React.FC = () => {
   const handleVoiceSend = useCallback((text: string) => {
     if (!text.trim() || !currentConversationId) return;
 
-    // SYNC: Block refreshes before calling sendMessage
-    useEditingStore.getState().startPendingSend(currentConversationId);
-
     const requestBody = selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -659,12 +649,8 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text }, { body: requestBody });
-
-    // Clear after streaming state takes over
-    setTimeout(() => {
-      useEditingStore.getState().endPendingSend(currentConversationId);
-    }, 500);
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text }, { body: requestBody }));
   }, [
     currentConversationId,
     selectedAgent,
@@ -678,6 +664,7 @@ const GlobalAssistantView: React.FC = () => {
     currentModel,
     mcpToolSchemas,
     sendMessage,
+    wrapSend,
   ]);
 
   // Track last AI response for voice mode TTS
