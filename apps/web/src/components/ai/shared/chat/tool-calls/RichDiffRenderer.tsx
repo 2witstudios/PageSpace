@@ -2,7 +2,6 @@
 
 import React, { memo, useMemo } from 'react';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
-import DOMPurify from 'dompurify';
 import { FileEdit, ExternalLink, Plus, Minus, MoreHorizontal } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { stripLineNumbers, markdownToHtml, sanitizeHtmlAllowlist, DIFF_STYLES } from './content-utils';
@@ -247,50 +246,52 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
     </div>
   );
 
-  // Render a hunk with its lines
+  // Render a hunk with its lines.
+  // Groups consecutive lines of the same diff type so multi-line HTML structure is
+  // preserved. Without grouping, individual lines (e.g. `<ul>`, `<li>…`, `</ul>`)
+  // are sanitized in isolation, producing broken fragments and raw tags.
   const renderHunk = (lines: LineDiff[], key: string) => {
-    const htmlParts = lines.map((line, idx) => {
-      const lineKey = `${key}-line-${idx}`;
-
-      // Preserve rich text HTML fragments so tool call output matches editor/read_page rendering.
-      // Fallback to markdown rendering for plain text lines.
-      const contentIsHtml = /<[a-z][\s\S]*>/i.test(line.content);
-      const renderedContent = contentIsHtml
-        ? sanitizeHtmlAllowlist(line.content)
-        : markdownToHtml(line.content);
-      const safeRenderedContent = renderedContent || '&nbsp;';
-
-      if (line.type === 'unchanged') {
-        return `<div key="${lineKey}" class="pl-2 border-l-2 border-transparent">${safeRenderedContent}</div>`;
+    const groups: Array<{ type: LineDiff['type']; content: string[] }> = [];
+    for (const line of lines) {
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.type === line.type) {
+        lastGroup.content.push(line.content);
+      } else {
+        groups.push({ type: line.type, content: [line.content] });
       }
-
-      if (line.type === 'add') {
-        return `<div key="${lineKey}" class="pl-2 border-l-2 border-green-500 ${DIFF_STYLES.add}">${safeRenderedContent}</div>`;
-      }
-
-      if (line.type === 'remove') {
-        return `<div key="${lineKey}" class="pl-2 border-l-2 border-red-500 ${DIFF_STYLES.remove}">${safeRenderedContent}</div>`;
-      }
-
-      return `<div key="${lineKey}">${safeRenderedContent}</div>`;
-    });
-
-    const html = htmlParts.join('');
-
-    // Sanitize HTML (SSR safety) - allow markdown-rendered elements
-    const sanitizedHtml = typeof window === 'undefined'
-      ? ''
-      : DOMPurify.sanitize(html, {
-          ALLOWED_TAGS: ['div', 'span', 'p', 'h1', 'h2', 'h3', 'strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'br'],
-          ALLOWED_ATTR: ['class', 'key', 'href', 'target', 'rel'],
-        });
+    }
 
     return (
       <div
         key={key}
         className="prose prose-sm max-w-none text-sm leading-relaxed dark:prose-invert"
-        dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
-      />
+      >
+        {groups.map((group, groupIdx) => {
+          const groupKey = `${key}-group-${groupIdx}`;
+          const combined = group.content.join('\n');
+
+          const contentIsHtml = /<[a-z][\s\S]*>/i.test(combined);
+          const renderedHtml = contentIsHtml
+            ? sanitizeHtmlAllowlist(combined)
+            : markdownToHtml(combined);
+          const safeHtml = renderedHtml || '&nbsp;';
+
+          const borderClass =
+            group.type === 'add'
+              ? `border-green-500 ${DIFF_STYLES.add}`
+              : group.type === 'remove'
+                ? `border-red-500 ${DIFF_STYLES.remove}`
+                : 'border-transparent';
+
+          return (
+            <div
+              key={groupKey}
+              className={`pl-2 border-l-2 ${borderClass}`}
+              dangerouslySetInnerHTML={{ __html: safeHtml }}
+            />
+          );
+        })}
+      </div>
     );
   };
 
