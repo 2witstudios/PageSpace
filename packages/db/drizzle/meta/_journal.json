@@ -603,6 +603,13 @@
       "when": 1771010885052,
       "tag": "0085_marvelous_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1771014877066,
+      "tag": "0086_icy_slyde",
+      "breakpoints": true
     }
   ]
 }

@@ -16,10 +16,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleOneTap, MagicLinkForm } from "@/components/auth";
-import { PasskeyLoginButton, useConditionalPasskeyUI } from "@/components/auth/PasskeyLoginButton";
 import { useLoginCSRF } from "@/hooks/useLoginCSRF";
 
-type AuthMethod = 'passkey' | 'magic-link' | 'password';
+type AuthMethod = 'magic-link' | 'password';
 
 interface SocialSignInButtonsProps {
   disabled: boolean;
@@ -104,20 +103,7 @@ function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { actions, isLoading } = useAuth();
-  const { csrfToken } = useLoginCSRF();
-
-  // Initialize conditional UI for passkey autofill
-  const { isAvailable: isConditionalUIAvailable, startConditionalUI } = useConditionalPasskeyUI(
-    csrfToken || '',
-    (redirectUrl) => router.replace(redirectUrl)
-  );
-
-  // Start conditional UI when available
-  useEffect(() => {
-    if (csrfToken && isConditionalUIAvailable) {
-      startConditionalUI();
-    }
-  }, [csrfToken, isConditionalUIAvailable, startConditionalUI]);
+  useLoginCSRF();
 
   useEffect(() => {
     const error = searchParams.get('error');
@@ -387,16 +373,6 @@ function SignInForm() {
         <CardContent>
           {authMethod === 'magic-link' ? (
             <div className="grid gap-4">
-              {/* Passkey login - prominently displayed */}
-              {csrfToken && (
-                <PasskeyLoginButton
-                  csrfToken={csrfToken}
-                  email={email || undefined}
-                  onSuccess={(redirectUrl) => router.replace(redirectUrl)}
-                  variant="default"
-                />
-              )}
-
               <MagicLinkForm
                 onSwitchToPassword={() => setAuthMethod('password')}
               />
@@ -444,17 +420,6 @@ function SignInForm() {
                     "Sign In"
                   )}
                 </Button>
-
-                {/* Passkey login option */}
-                {csrfToken && (
-                  <PasskeyLoginButton
-                    csrfToken={csrfToken}
-                    email={email || undefined}
-                    onSuccess={(redirectUrl) => router.replace(redirectUrl)}
-                    variant="outline"
-                    className="mt-2"
-                  />
-                )}
 
                 <Button
                   type="button"

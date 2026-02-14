@@ -25,14 +25,14 @@ export async function POST(req: Request) {
     const clientIP = getClientIP(req);
 
     // Rate limiting by IP
-    const rateLimitKey = `passkey_auth:${clientIP}`;
+    const rateLimitKey = `passkey_options:${clientIP}`;
     const rateLimitResult = await checkDistributedRateLimit(
       rateLimitKey,
-      DISTRIBUTED_RATE_LIMITS.PASSKEY_AUTH
+      DISTRIBUTED_RATE_LIMITS.PASSKEY_OPTIONS
     );
 
     if (!rateLimitResult.allowed) {
-      logSecurityEvent('passkey_rate_limit_auth', {
+      logSecurityEvent('passkey_rate_limit_options', {
         ip: clientIP,
         retryAfter: rateLimitResult.retryAfter,
       });

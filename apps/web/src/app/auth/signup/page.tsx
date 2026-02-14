@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getOrCreateDeviceId, getDeviceName } from "@/lib/analytics";
-import { GoogleOneTap, PasskeySignupButton, useWebAuthnSupport } from "@/components/auth";
+import { GoogleOneTap } from "@/components/auth";
 import { ChevronDown, ChevronUp, Mail } from "lucide-react";
 
 export default function SignUp() {
@@ -32,7 +32,6 @@ export default function SignUp() {
   const [loginCsrfToken, setLoginCsrfToken] = useState<string | null>(null);
   const [showPasswordSignup, setShowPasswordSignup] = useState(false);
   const router = useRouter();
-  const webAuthnSupported = useWebAuthnSupport();
 
   // Fetch login CSRF token on mount (prevents Login CSRF attacks)
   useEffect(() => {
@@ -51,14 +50,6 @@ export default function SignUp() {
     };
     fetchCsrfToken();
   }, []);
-
-  const handlePasskeySuccess = (redirectUrl: string) => {
-    window.location.href = redirectUrl;
-  };
-
-  const handleEmailExists = () => {
-    router.push('/auth/signin?email=' + encodeURIComponent(email));
-  };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -394,27 +385,6 @@ export default function SignUp() {
             </div>
 
             {error && <p className="text-red-500 text-sm">{error}</p>}
-
-            {/* Primary CTA: Passkey signup */}
-            {webAuthnSupported !== false && loginCsrfToken && (
-              <PasskeySignupButton
-                csrfToken={loginCsrfToken}
-                email={email}
-                name={name}
-                acceptedTos={acceptedTos}
-                onSuccess={handlePasskeySuccess}
-                onEmailExists={handleEmailExists}
-                disabled={isAnyLoading || !name || !email || !acceptedTos}
-              />
-            )}
-
-            {/* Fallback for browsers without WebAuthn */}
-            {webAuthnSupported === false && (
-              <div className="text-center text-sm text-muted-foreground p-4 bg-muted rounded-lg">
-                <p>Your browser doesn&apos;t support passkeys.</p>
-                <p>Use one of the options below to sign up.</p>
-              </div>
-            )}
 
             <div className="relative">
               <div className="absolute inset-0 flex items-center">

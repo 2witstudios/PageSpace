@@ -204,7 +204,7 @@ export function logSecurityEvent(
          'account_locked_login_attempt' | 'admin_role_version_mismatch' |
          'magic_link_csrf_missing' | 'magic_link_csrf_mismatch' | 'magic_link_csrf_invalid' |
          'magic_link_rate_limit_ip' | 'magic_link_rate_limit_email' | 'magic_link_suspended_user' |
-         'passkey_csrf_invalid' | 'passkey_rate_limit_auth' | 'passkey_rate_limit_register' |
+         'passkey_csrf_invalid' | 'passkey_rate_limit_auth' | 'passkey_rate_limit_options' | 'passkey_rate_limit_register' |
          'passkey_rate_limit_signup_ip' | 'passkey_rate_limit_signup_email',
   details: LogInput
 ): void {
