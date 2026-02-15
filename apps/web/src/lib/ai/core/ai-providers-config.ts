@@ -439,15 +439,9 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
 
   // For PageSpace provider, show tier-based naming
   if (provider === 'pagespace') {
-    // Resolve alias to actual model for comparison
     const resolvedModel = resolvePageSpaceModel(model);
-    if (resolvedModel === 'glm-5') {
-      return 'PageSpace Pro';
-    }
-    if (resolvedModel === 'glm-4.7') {
-      return 'PageSpace Standard';
-    }
-    // Any other PageSpace model defaults to Standard
+    const tier = getPageSpaceModelTier(resolvedModel);
+    if (tier === 'pro') return 'PageSpace Pro';
     return 'PageSpace Standard';
   }
 

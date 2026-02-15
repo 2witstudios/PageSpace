@@ -85,11 +85,10 @@ function VirtualizedMessageListInner<T extends UIMessage = UIMessage>({
 
   // Re-measure when messages change (important for streaming content growth)
   useEffect(() => {
-    // Small delay to let content render before measuring
-    const timeoutId = setTimeout(() => {
+    const rafId = requestAnimationFrame(() => {
       virtualizer.measure();
-    }, 50);
-    return () => clearTimeout(timeoutId);
+    });
+    return () => cancelAnimationFrame(rafId);
   }, [messages, virtualizer]);
 
   // Empty state - just return null and let parent handle

@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle, XCircle, Key, ExternalLink, Zap, Bot, Wrench, FolderTree } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { AI_PROVIDERS, getBackendProvider, getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
+import { AI_PROVIDERS, getBackendProvider, getUserFacingModelName, getPageSpaceModelTier, PAGESPACE_MODEL_ALIASES } from '@/lib/ai/core/ai-providers-config';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
@@ -157,7 +157,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
         setSelectedModel(data.currentModel);
 
         // Check if current model is accessible to user, if not, reset to default
-        if (uiProvider === 'pagespace' && data.currentModel === 'glm-4.7') {
+        if (uiProvider === 'pagespace' && getPageSpaceModelTier(data.currentModel) === 'pro') {
           const userTier = data.userSubscriptionTier;
           if (userTier !== 'pro' && userTier !== 'business') {
             // Free user has restricted model selected, reset to default
@@ -262,7 +262,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
 
   // Check if a model requires Pro/Business subscription
   const requiresSubscription = (provider: string, model: string): boolean => {
-    return provider === 'pagespace' && model === 'glm-4.7';
+    return provider === 'pagespace' && getPageSpaceModelTier(model) === 'pro';
   };
 
   // Check if user has access to a model
@@ -646,7 +646,7 @@ const SidebarSettingsTab: React.FC<SidebarSettingsTabProps> = ({
           {/* Upgrade notification for restricted models (hidden on iOS) */}
           {showBilling &&
            selectedProvider === 'pagespace' &&
-           !hasModelAccess('pagespace', 'glm-4.7') && (
+           !hasModelAccess('pagespace', PAGESPACE_MODEL_ALIASES.pro) && (
             <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10">
               <CardContent className="pt-6">
                 <div className="text-center space-y-3">

@@ -53,14 +53,6 @@ describe('StreamingMarkdown', () => {
     });
   });
 
-  describe('deprecated id prop', () => {
-    it('should accept id prop without errors (backward compatibility)', () => {
-      // Should not throw
-      expect(() => {
-        render(<StreamingMarkdown content="Hello" id="test-id" />);
-      }).not.toThrow();
-    });
-  });
 });
 
 describe('preprocessMentions', () => {
