@@ -24,22 +24,12 @@ interface RouterLike {
 }
 
 /**
- * Regex pattern for mention preprocessing
- * Matches @[Label](id:type) format
- * Moved to module scope to avoid recreation on every function call
- */
-const MENTION_REGEX = /@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g;
-
-/**
  * Pre-process content to convert @mentions into markdown links with special protocol
  * Converts @[Label](id:type) format to [mention:@Label](mention://id/type)
  * which Streamdown will render as a link that we handle specially
  */
 function preprocessMentions(content: string): string {
-  // Reset lastIndex since we're reusing the regex (it's stateful with /g flag)
-  MENTION_REGEX.lastIndex = 0;
-  return content.replace(MENTION_REGEX, (_, label, id, type) => {
-    // Convert to a special link format that we'll intercept in the component
+  return content.replace(/@\[([^\]]+)\]\(([^:]+):([^)]+)\)/g, (_, label, id, type) => {
     return `[mention:${label}](mention://${id}/${type})`;
   });
 }
@@ -274,8 +264,6 @@ function createStreamdownComponents(router: RouterLike) {
 
 interface StreamingMarkdownProps {
   content: string;
-  /** @deprecated id is no longer used - kept for backward compatibility */
-  id?: string;
   /** Whether to use streaming mode (progressive formatting) or static mode */
   isStreaming?: boolean;
   /** Additional CSS class */

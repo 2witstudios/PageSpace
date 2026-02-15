@@ -110,6 +110,16 @@ interface GlobalAssistantMessage {
   messageType?: 'standard' | 'todo_list';
 }
 
+interface ReconstructableMessage {
+  id: string;
+  role: string;
+  toolCalls: unknown;
+  toolResults: unknown;
+  createdAt: Date;
+  editedAt?: Date | null;
+  messageType?: string;
+}
+
 interface StructuredContentData {
   textParts: string[];
   fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>;
@@ -201,7 +211,8 @@ function parseToolCalls(raw: unknown): ToolCall[] {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed as ToolCall[] : [];
-  } catch {
+  } catch (error) {
+    loggers.ai.warn('Failed to parse tool calls from database', { error, rawLength: typeof raw === 'string' ? raw.length : 0 });
     return [];
   }
 }
@@ -213,7 +224,8 @@ function parseToolResults(raw: unknown): ToolResult[] {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed as ToolResult[] : [];
-  } catch {
+  } catch (error) {
+    loggers.ai.warn('Failed to parse tool results from database', { error, rawLength: typeof raw === 'string' ? raw.length : 0 });
     return [];
   }
 }
@@ -252,10 +264,11 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
 }
 
 /**
- * Reconstruct message from structured content (new format with chronological ordering)
+ * Shared helper: reconstruct a UIMessage from structured content data and
+ * the common fields present on both DatabaseMessage and GlobalAssistantMessage.
  */
-function reconstructMessageFromStructuredContent(
-  dbMessage: DatabaseMessage,
+function reconstructFromStructuredContent(
+  msg: ReconstructableMessage,
   structuredData: StructuredContentData
 ): UIMessage {
   const parts: Array<TextUIPart | ToolPart | FileUIPart> = [];
@@ -266,10 +279,10 @@ function reconstructMessageFromStructuredContent(
   const toolCallsMap = new Map<string, ToolCall>();
   const toolResultsMap = new Map<string, ToolResult>();
 
-  for (const tc of parseToolCalls(dbMessage.toolCalls)) {
+  for (const tc of parseToolCalls(msg.toolCalls)) {
     toolCallsMap.set(tc.toolCallId, tc);
   }
-  for (const tr of parseToolResults(dbMessage.toolResults)) {
+  for (const tr of parseToolResults(msg.toolResults)) {
     toolResultsMap.set(tr.toolCallId, tr);
   }
 
@@ -323,13 +336,23 @@ function reconstructMessageFromStructuredContent(
     : [{ type: 'text' as const, text: structuredData.originalContent || '' }];
 
   return {
-    id: dbMessage.id,
-    role: dbMessage.role as 'user' | 'assistant' | 'system',
+    id: msg.id,
+    role: msg.role as 'user' | 'assistant' | 'system',
     parts: resolvedParts,
-    createdAt: dbMessage.createdAt,
-    editedAt: dbMessage.editedAt,
-    messageType: dbMessage.messageType || 'standard',
+    createdAt: msg.createdAt,
+    editedAt: msg.editedAt,
+    messageType: msg.messageType || 'standard',
   } as ExtendedUIMessage;
+}
+
+/**
+ * Reconstruct message from structured content (new format with chronological ordering)
+ */
+function reconstructMessageFromStructuredContent(
+  dbMessage: DatabaseMessage,
+  structuredData: StructuredContentData
+): UIMessage {
+  return reconstructFromStructuredContent(dbMessage, structuredData);
 }
 
 /**
@@ -445,7 +468,7 @@ export async function saveMessageToDatabase({
       loggers.ai.warn('Failed to append message to conversation cache', { error: err });
     }
   } catch (error) {
-    console.error('Error saving message to database:', error);
+    loggers.ai.error('Failed to save message to database', error as Error);
     throw error;
   }
 }
@@ -490,78 +513,7 @@ function reconstructGlobalAssistantMessageFromStructuredContent(
   dbMessage: GlobalAssistantMessage,
   structuredData: StructuredContentData
 ): UIMessage {
-  const parts: Array<TextUIPart | ToolPart | FileUIPart> = [];
-  let textPartIndex = 0;
-  let filePartIndex = 0;
-
-  // Parse tool calls and results for lookup
-  const toolCallsMap = new Map<string, ToolCall>();
-  const toolResultsMap = new Map<string, ToolResult>();
-
-  for (const tc of parseToolCalls(dbMessage.toolCalls)) {
-    toolCallsMap.set(tc.toolCallId, tc);
-  }
-  for (const tr of parseToolResults(dbMessage.toolResults)) {
-    toolResultsMap.set(tr.toolCallId, tr);
-  }
-
-  const fileParts = structuredData.fileParts || [];
-
-  // Reconstruct parts in original order
-  structuredData.partsOrder.forEach(partOrder => {
-    if (partOrder.type === 'text') {
-      if (textPartIndex < structuredData.textParts.length) {
-        const textContent = structuredData.textParts[textPartIndex];
-        if (textContent && textContent.trim()) {
-          parts.push({
-            type: 'text',
-            text: textContent,
-          });
-        }
-        textPartIndex++;
-      }
-    } else if (partOrder.type === 'file') {
-      if (filePartIndex < fileParts.length) {
-        const fp = fileParts[filePartIndex];
-        parts.push({
-          type: 'file',
-          url: fp.url,
-          mediaType: fp.mediaType || 'application/octet-stream',
-          filename: fp.filename,
-        });
-        filePartIndex++;
-      }
-    } else if (partOrder.type.startsWith('tool-') && partOrder.toolCallId) {
-      const toolCall = toolCallsMap.get(partOrder.toolCallId);
-      const toolResult = toolResultsMap.get(partOrder.toolCallId);
-
-      if (toolCall) {
-        parts.push({
-          type: partOrder.type,
-          toolCallId: toolCall.toolCallId,
-          toolName: toolCall.toolName,
-          input: toolCall.input,
-          output: toolResult?.output,
-          state: toolResult ? 'output-available' : 'input-available',
-        });
-      }
-    } else if (partOrder.type === 'step-start') {
-      // Skip step-start parts for now - they're AI SDK internal
-    }
-  });
-
-  const resolvedParts: UIMessage['parts'] = parts.length > 0
-    ? parts as UIMessage['parts']
-    : [{ type: 'text' as const, text: structuredData.originalContent || '' }];
-
-  return {
-    id: dbMessage.id,
-    role: dbMessage.role as 'user' | 'assistant' | 'system',
-    parts: resolvedParts,
-    createdAt: dbMessage.createdAt,
-    editedAt: dbMessage.editedAt,
-    messageType: dbMessage.messageType || 'standard',
-  } as ExtendedUIMessage;
+  return reconstructFromStructuredContent(dbMessage, structuredData);
 }
 
 
@@ -625,7 +577,7 @@ export async function saveGlobalAssistantMessageToDatabase({
 
     debugLogAI('Global Assistant: Message saved to database with tools');
   } catch (error) {
-    console.error('Error saving global assistant message to database:', error);
+    loggers.ai.error('Failed to save global assistant message to database', error as Error);
     throw error;
   }
 }

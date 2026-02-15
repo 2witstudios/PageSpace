@@ -17,7 +17,6 @@ import styles from './CompactMessageRenderer.module.css';
 interface CompactTextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
-  messageId: string;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
@@ -38,7 +37,6 @@ interface CompactTextBlockProps {
 const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   parts,
   role,
-  messageId,
   createdAt,
   editedAt,
   onEdit,
@@ -81,7 +79,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
       ) : (
         <>
           <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert min-w-0 max-w-full break-words ${styles.compactProseContent}`}>
-            <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
+            <StreamingMarkdown content={content} isStreaming={isStreaming} />
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-1">
@@ -349,7 +347,6 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 key={`${message.id}-text-${index}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
-                messageId={message.id}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}

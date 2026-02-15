@@ -17,7 +17,6 @@ import { ImageMessageContent } from './ImageMessageContent';
 interface TextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
-  messageId: string;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
@@ -37,7 +36,6 @@ interface TextBlockProps {
 const TextBlock: React.FC<TextBlockProps> = React.memo(({
   parts,
   role,
-  messageId,
   createdAt,
   editedAt,
   onEdit,
@@ -78,7 +76,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
         <>
           <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
             <div className="[overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]">
-              <StreamingMarkdown content={content} id={`${messageId}-text`} isStreaming={isStreaming} />
+              <StreamingMarkdown content={content} isStreaming={isStreaming} />
             </div>
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
@@ -349,7 +347,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 key={`${message.id}-text-${index}`}
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
-                messageId={message.id}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}
