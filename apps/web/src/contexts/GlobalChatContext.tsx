@@ -8,46 +8,22 @@ import { getAgentId, getConversationId, setConversationId } from '@/lib/url-stat
 import { useChatTransport } from '@/lib/ai/shared';
 
 /**
- * Global Chat Context - ONLY for Global Assistant state
+ * Global Chat Context - Split into three tiers to minimize re-render noise:
  *
- * This context manages the Global Assistant chat that appears in the sidebar.
- * It does NOT manage agent selection or agent conversations.
+ * 1. GlobalChatConversationContext — conversation controls, rarely changes
+ * 2. GlobalChatStreamContext — messages, isStreaming, stopStreaming (changes during streaming)
+ * 3. GlobalChatConfigContext — chatConfig, setMessages, setIsStreaming, setStopStreaming (stable)
  *
- * Agent selection is managed by usePageAgentDashboardStore (Zustand store).
- * Agent conversations are managed locally by GlobalAssistantView when in agent mode.
+ * Components subscribe only to what they need:
+ * - SidebarChatTab: config + stream (streaming indicators + chatConfig)
+ * - GlobalAssistantView: config + stream (chatConfig + setters + streaming)
+ * - History panel: conversation only
+ * - Other UI: conversation only
  */
-interface GlobalChatContextValue {
-  // Chat configuration for Global Assistant
-  chatConfig: {
-    id: string | undefined;
-    messages: UIMessage[];
-    transport: DefaultChatTransport<UIMessage>;
-    onError: (error: Error) => void;
-  } | null;
 
-  // Global message state - shared between sidebar and middle view when in global mode
-  messages: UIMessage[];
-  setMessages: (messages: UIMessage[]) => void;
-
-  // Global streaming status
-  isStreaming: boolean;
-  setIsStreaming: (streaming: boolean) => void;
-
-  // Global stop function
-  stopStreaming: (() => void) | null;
-  setStopStreaming: (fn: (() => void) | null) => void;
-
-  // Current conversation state
-  currentConversationId: string | null;
-  initialMessages: UIMessage[];
-  isInitialized: boolean;
-
-  // Methods to manage conversation state
-  setCurrentConversationId: (id: string | null) => void;
-  loadConversation: (id: string) => Promise<void>;
-  createNewConversation: () => Promise<void>;
-  refreshConversation: () => Promise<void>;
-}
+// ============================================
+// Context Types
+// ============================================
 
 interface GlobalChatConversationContextValue {
   currentConversationId: string | null;
@@ -59,8 +35,40 @@ interface GlobalChatConversationContextValue {
   refreshConversation: () => Promise<void>;
 }
 
-const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
+interface GlobalChatStreamContextValue {
+  messages: UIMessage[];
+  isStreaming: boolean;
+  stopStreaming: (() => void) | null;
+}
+
+interface GlobalChatConfigContextValue {
+  chatConfig: {
+    id: string | undefined;
+    messages: UIMessage[];
+    transport: DefaultChatTransport<UIMessage>;
+    onError: (error: Error) => void;
+  } | null;
+  setMessages: (messages: UIMessage[]) => void;
+  setIsStreaming: (streaming: boolean) => void;
+  setStopStreaming: (fn: (() => void) | null) => void;
+}
+
+// Legacy combined interface for backward compatibility
+interface GlobalChatContextValue extends GlobalChatConversationContextValue, GlobalChatStreamContextValue, GlobalChatConfigContextValue {}
+
+// ============================================
+// Contexts
+// ============================================
+
 const GlobalChatConversationContext = createContext<GlobalChatConversationContextValue | undefined>(undefined);
+const GlobalChatStreamContext = createContext<GlobalChatStreamContextValue | undefined>(undefined);
+const GlobalChatConfigContext = createContext<GlobalChatConfigContextValue | undefined>(undefined);
+// Legacy combined context — kept for backward compatibility
+const GlobalChatContext = createContext<GlobalChatContextValue | undefined>(undefined);
+
+// ============================================
+// Provider
+// ============================================
 
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // Conversation management state
@@ -240,36 +248,11 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     };
   }, [currentConversationId, transport, initialMessages]);
 
-  // Context value
-  const contextValue: GlobalChatContextValue = useMemo(() => ({
-    chatConfig,
-    messages,
-    setMessages,
-    isStreaming,
-    setIsStreaming,
-    stopStreaming,
-    setStopStreaming,
-    currentConversationId,
-    initialMessages,
-    isInitialized,
-    setCurrentConversationId,
-    loadConversation,
-    createNewConversation,
-    refreshConversation,
-  }), [
-    chatConfig,
-    messages,
-    isStreaming,
-    stopStreaming,
-    currentConversationId,
-    initialMessages,
-    isInitialized,
-    loadConversation,
-    createNewConversation,
-    refreshConversation,
-  ]);
+  // ============================================
+  // Context Values — separate memo for each tier
+  // ============================================
 
-  // Conversation-only context value for consumers that should not re-render on message stream updates
+  // Tier 1: Conversation controls — rarely changes
   const conversationContextValue: GlobalChatConversationContextValue = useMemo(() => ({
     currentConversationId,
     initialMessages,
@@ -287,17 +270,48 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     refreshConversation,
   ]);
 
+  // Tier 2: Stream state — changes during streaming (messages on every token, isStreaming on start/stop)
+  const streamContextValue: GlobalChatStreamContextValue = useMemo(() => ({
+    messages,
+    isStreaming,
+    stopStreaming,
+  }), [messages, isStreaming, stopStreaming]);
+
+  // Tier 3: Config — stable, only changes on conversation switch
+  const configContextValue: GlobalChatConfigContextValue = useMemo(() => ({
+    chatConfig,
+    setMessages,
+    setIsStreaming,
+    setStopStreaming,
+  }), [chatConfig]);
+
+  // Legacy combined value — for backward compatibility with useGlobalChat()
+  const legacyContextValue: GlobalChatContextValue = useMemo(() => ({
+    ...conversationContextValue,
+    ...streamContextValue,
+    ...configContextValue,
+  }), [conversationContextValue, streamContextValue, configContextValue]);
+
   return (
     <GlobalChatConversationContext.Provider value={conversationContextValue}>
-      <GlobalChatContext.Provider value={contextValue}>
-        {children}
-      </GlobalChatContext.Provider>
+      <GlobalChatConfigContext.Provider value={configContextValue}>
+        <GlobalChatStreamContext.Provider value={streamContextValue}>
+          <GlobalChatContext.Provider value={legacyContextValue}>
+            {children}
+          </GlobalChatContext.Provider>
+        </GlobalChatStreamContext.Provider>
+      </GlobalChatConfigContext.Provider>
     </GlobalChatConversationContext.Provider>
   );
 }
 
+// ============================================
+// Hooks
+// ============================================
+
 /**
- * Hook to access the shared global chat context
+ * Hook to access the full global chat context (backward compatible).
+ * Subscribes to ALL tiers — use selective hooks below to reduce re-renders.
  */
 export function useGlobalChat() {
   const context = useContext(GlobalChatContext);
@@ -308,12 +322,38 @@ export function useGlobalChat() {
 }
 
 /**
- * Hook to access global conversation controls without subscribing to live message stream state.
+ * Hook to access global conversation controls without subscribing to streaming state.
+ * Best for: history panels, navigation, conversation management.
  */
 export function useGlobalChatConversation() {
   const context = useContext(GlobalChatConversationContext);
   if (!context) {
     throw new Error('useGlobalChatConversation must be used within a GlobalChatProvider');
+  }
+  return context;
+}
+
+/**
+ * Hook to access streaming state (messages, isStreaming, stopStreaming).
+ * Re-renders on every streaming token — only use if you display messages from context.
+ */
+export function useGlobalChatStream() {
+  const context = useContext(GlobalChatStreamContext);
+  if (!context) {
+    throw new Error('useGlobalChatStream must be used within a GlobalChatProvider');
+  }
+  return context;
+}
+
+/**
+ * Hook to access chat configuration and setters.
+ * Stable — only changes on conversation switch.
+ * Best for: useChat consumers that need chatConfig + setters.
+ */
+export function useGlobalChatConfig() {
+  const context = useContext(GlobalChatConfigContext);
+  if (!context) {
+    throw new Error('useGlobalChatConfig must be used within a GlobalChatProvider');
   }
   return context;
 }

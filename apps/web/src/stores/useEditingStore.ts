@@ -55,6 +55,7 @@ interface EditingState {
 
   // Cleanup
   clearAllSessions: () => void;
+  clearStaleSessions: () => void;
 }
 
 export const useEditingStore = create<EditingState>((set, get) => ({
@@ -167,6 +168,26 @@ export const useEditingStore = create<EditingState>((set, get) => ({
       console.log('[EDITING] Clearing all sessions');
     }
     set({ activeSessions: new Map(), pendingSends: new Set() });
+  },
+
+  clearStaleSessions: () => {
+    const MAX_SESSION_AGE = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    set((state) => {
+      const newSessions = new Map(state.activeSessions);
+      let cleaned = 0;
+      for (const [id, session] of newSessions) {
+        if (now - session.startedAt > MAX_SESSION_AGE) {
+          newSessions.delete(id);
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) {
+        console.warn(`[EDITING] Cleared ${cleaned} stale sessions`);
+        return { activeSessions: newSessions };
+      }
+      return state;
+    });
   },
 }));
 

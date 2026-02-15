@@ -91,6 +91,15 @@ function Layout({ children }: LayoutProps) {
     useEditingStore.getState().clearAllSessions();
   }, []);
 
+  // Periodic cleanup of stale editing sessions (defense against orphaned sessions
+  // from errors, unmount failures, or force-killed streaming)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      useEditingStore.getState().clearStaleSessions();
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     if (!isSheetBreakpoint) {
       setLeftSheetOpen(false);

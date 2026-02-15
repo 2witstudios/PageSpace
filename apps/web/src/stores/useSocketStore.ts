@@ -92,9 +92,9 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         },
         withCredentials: true, // This sends cookies including httpOnly ones
         reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnectionAttempts: 15,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 30000,
         randomizationFactor: 0.5,
         autoConnect: true,
       });
@@ -108,22 +108,17 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       newSocket.on('connect_error', (error) => {
         console.error('🚨 Socket.IO connection error:', error.message);
         set({ connectionStatus: 'error' });
-        
-        // Handle auth errors differently - don't spam reconnect
+
+        // Handle auth errors differently - pause reconnect during token refresh
         if (error.message.includes('Authentication error')) {
           console.log('🔄 Auth error detected, will retry after token refresh...');
-          // Stop automatic reconnection for auth errors
+          // Pause automatic reconnection during token refresh attempt
           newSocket.io.opts.reconnection = false;
 
           // Attempt token refresh after a delay using the unified auth-fetch mechanism
           // CRITICAL: Use refreshAuthSession() to share deduplication with other refresh paths
-          // Previously this called the endpoint directly, causing race conditions when:
-          // - Multiple 401s triggered concurrent refreshes
-          // - Device token was rotated by one refresh, invalidating others
           setTimeout(async () => {
             try {
-              // Use the unified refresh mechanism from auth-fetch
-              // This shares deduplication with all other refresh paths
               const { refreshAuthSession, clearSessionCache } = await import('@/lib/auth/auth-fetch');
               const result = await refreshAuthSession();
 
@@ -143,7 +138,6 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
                 if (isDesktopNow) {
                   newToken = await window.electron?.auth.getSessionToken() ?? undefined;
                 } else {
-                  // Fetch new socket token from server
                   newToken = await getSocketToken() ?? undefined;
                 }
 
@@ -152,17 +146,23 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
                   newSocket.auth = { token: newToken };
                 }
 
+                // Re-enable reconnection and reset attempt counter
                 newSocket.io.opts.reconnection = true;
+                newSocket.io.opts.reconnectionAttempts = 15;
                 newSocket.connect();
               } else {
                 // Don't log error if shouldLogout is true - user will be redirected
                 if (!result.shouldLogout) {
                   console.error('🚨 Failed to refresh token for Socket.IO (will retry)');
                 }
+                // Re-enable reconnection so socket can retry later
+                newSocket.io.opts.reconnection = true;
                 set({ connectionStatus: 'error' });
               }
             } catch (error) {
               console.error('🚨 Error refreshing token:', error);
+              // Re-enable reconnection so socket can retry later
+              newSocket.io.opts.reconnection = true;
               set({ connectionStatus: 'error' });
             }
           }, 2000); // Wait 2 seconds before retry

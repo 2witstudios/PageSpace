@@ -183,7 +183,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
-  const { wrapSend } = useSendHandoff(currentConversationId, isStreaming);
+  const { wrapSend } = useSendHandoff(currentConversationId, status);
   const stop = useChatStop(streamTrackingId, chatStop);
   const isLoading = !isInitialized;
 

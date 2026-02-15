@@ -19,7 +19,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useGlobalChatConversation, useGlobalChatConfig, useGlobalChatStream } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
@@ -148,20 +148,24 @@ const SidebarChatTab: React.FC = () => {
   const { isOpen: isKeyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   // ============================================
-  // Global Chat Context (for global mode sync)
+  // Global Chat Context (split into selective hooks to minimize re-renders)
   // ============================================
   const {
-    chatConfig: globalChatConfig,
-    isStreaming: contextIsStreaming,
-    stopStreaming: contextStopStreaming,
-    setMessages: setGlobalContextMessages,
-    setIsStreaming: setGlobalIsStreaming,
-    setStopStreaming: setGlobalStopStreaming,
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
     createNewConversation: createGlobalConversation,
     refreshConversation: refreshGlobalConversation,
-  } = useGlobalChat();
+  } = useGlobalChatConversation();
+
+  const {
+    chatConfig: globalChatConfig,
+    setMessages: setGlobalContextMessages,
+  } = useGlobalChatConfig();
+
+  const {
+    isStreaming: contextIsStreaming,
+    stopStreaming: contextStopStreaming,
+  } = useGlobalChatStream();
 
   // ============================================
   // Sidebar Agent State (custom hook)
@@ -208,9 +212,6 @@ const SidebarChatTab: React.FC = () => {
     setMessages,
     stop,
     isStreaming,
-    globalStatus,
-    globalStop,
-    globalMessages,
     setGlobalMessages,
   } = usePageAgentSidebarChat({
     selectedAgent,
@@ -235,7 +236,7 @@ const SidebarChatTab: React.FC = () => {
     : (isStreaming || contextIsStreaming);
 
   // Effect-based handoff for pending send → streaming transition
-  const { wrapSend } = useSendHandoff(currentConversationId, isStreaming);
+  const { wrapSend } = useSendHandoff(currentConversationId, status);
 
   // ============================================
   // Centralized Assistant Settings (from store)
@@ -276,7 +277,6 @@ const SidebarChatTab: React.FC = () => {
 
   // Refs
   const chatInputRef = useRef<ChatInputRef>(null);
-  const prevGlobalStatusRef = useRef<string>('ready');
 
   // ============================================
   // Effects: Drive Loading
@@ -392,52 +392,9 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Global Mode Sync to Context
   // ============================================
-  // Only sync when initialized to prevent race conditions during conversation loading.
-  // This ensures we don't overwrite context with stale messages from a previous conversation.
-  useEffect(() => {
-    if (!selectedAgent && globalIsInitialized) {
-      setGlobalContextMessages(globalMessages);
-    }
-  }, [selectedAgent, globalMessages, setGlobalContextMessages, globalIsInitialized]);
-
-  useEffect(() => {
-    if (selectedAgent) return;
-
-    const isCurrentlyStreaming = globalStatus === 'submitted' || globalStatus === 'streaming';
-    const wasStreaming = prevGlobalStatusRef.current === 'submitted' || prevGlobalStatusRef.current === 'streaming';
-
-    if (isCurrentlyStreaming && !wasStreaming) {
-      setGlobalIsStreaming(true);
-    } else if (!isCurrentlyStreaming && wasStreaming) {
-      setGlobalIsStreaming(false);
-    }
-
-    prevGlobalStatusRef.current = globalStatus;
-  }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
-
-  // Register stop function to global context (global mode only)
-  // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  useEffect(() => {
-    if (selectedAgent) return;
-
-    const streaming = globalStatus === 'submitted' || globalStatus === 'streaming';
-    if (streaming) {
-      setGlobalStopStreaming(() => async () => {
-        try {
-          // Call abort endpoint to stop server-side processing
-          if (globalConversationId) {
-            await abortActiveStream({ chatId: globalConversationId });
-          }
-        } finally {
-          // Call useChat's stop to abort client-side fetch
-          globalStop();
-        }
-      });
-    } else {
-      setGlobalStopStreaming(null);
-    }
-  }, [selectedAgent, globalStatus, globalStop, globalConversationId, setGlobalStopStreaming]);
+  // GlobalAssistantView is the PRIMARY syncer for global mode state (messages,
+  // streaming status, stop function). The sidebar READS from context but does
+  // not write back, preventing duplicate sync effects and race conditions.
 
   // ============================================
   // Effects: Editing Store Registration

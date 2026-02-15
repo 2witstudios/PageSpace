@@ -318,7 +318,7 @@ const GlobalAssistantView: React.FC = () => {
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
-  const { wrapSend } = useSendHandoff(currentConversationId, isStreaming);
+  const { wrapSend } = useSendHandoff(currentConversationId, status);
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
 
