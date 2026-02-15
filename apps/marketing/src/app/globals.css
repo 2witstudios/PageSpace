@@ -54,41 +54,52 @@
   --radius: 0.625rem;
 
   /* Canvas */
+  --background: oklch(0.995 0.002 240);
+  --foreground: oklch(0.15 0.01 220);
+
   /* UI Chrome & Controls */
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --sidebar: hsl(0 0% 98%);
-  --sidebar-foreground: hsl(240 5.3% 26.1%);
+  --card: oklch(0.985 0.003 230);
+  --card-foreground: oklch(0.15 0.01 220);
+  --popover: oklch(0.985 0.003 230);
+  --popover-foreground: oklch(0.15 0.01 220);
+
   /* Actions & Accents */
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  /* Other */
+  --primary: oklch(0.50 0.16 235);
+  --primary-foreground: oklch(0.98 0.005 235);
+  --secondary: oklch(0.90 0.025 35);
+  --secondary-foreground: oklch(0.15 0.01 220);
+  --muted: oklch(0.94 0.003 230);
+  --muted-foreground: oklch(0.48 0.015 220);
+  --accent: oklch(0.94 0.003 230);
+  --accent-foreground: oklch(0.15 0.01 220);
+
+  /* Status */
   --destructive: oklch(0.577 0.245 27.325);
   --success: oklch(0.62 0.19 145);
   --warning: oklch(0.75 0.18 75);
   --info: oklch(0.55 0.18 235);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar-primary: hsl(240 5.9% 10%);
-  --sidebar-primary-foreground: hsl(0 0% 98%);
-  --sidebar-accent: hsl(240 4.8% 95.9%);
-  --sidebar-accent-foreground: hsl(240 5.9% 10%);
-  --sidebar-border: hsl(220 13% 91%);
-  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+
+  /* Borders & Inputs */
+  --border: oklch(0.90 0.005 230);
+  --input: oklch(0.90 0.005 230);
+  --ring: oklch(0.50 0.16 235);
+
+  /* Charts */
+  --chart-1: oklch(0.7 0.2 30);
+  --chart-2: oklch(0.6 0.25 90);
+  --chart-3: oklch(0.75 0.2 180);
+  --chart-4: oklch(0.65 0.22 240);
+  --chart-5: oklch(0.8 0.2 300);
+
+  /* Sidebar */
+  --sidebar: oklch(0.98 0.003 230);
+  --sidebar-foreground: oklch(0.15 0.01 220);
+  --sidebar-primary: oklch(0.50 0.16 235);
+  --sidebar-primary-foreground: oklch(0.98 0.005 235);
+  --sidebar-accent: oklch(0.94 0.003 230);
+  --sidebar-accent-foreground: oklch(0.15 0.01 220);
+  --sidebar-border: oklch(0.90 0.005 230);
+  --sidebar-ring: oklch(0.50 0.16 235);
 
   /* Liquid Glass Material System */
   --material-thin: oklch(0.985 0.002 230 / 0.92);
@@ -104,46 +115,58 @@
 
   /* Separators (hairline) */
   --separator: oklch(0.90 0.005 230 / 0.08);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
 }
 
 .dark {
   --radius: 0.625rem;
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+
+  /* Canvas */
+  --background: oklch(0.15 0 0);
+  --foreground: oklch(0.94 0 0);
+
+  /* UI Chrome */
+  --card: oklch(0.19 0 0);
+  --card-foreground: oklch(0.94 0 0);
+  --popover: oklch(0.19 0 0);
+  --popover-foreground: oklch(0.94 0 0);
+
+  /* Actions & Accents */
+  --primary: oklch(0.62 0.16 235);
+  --primary-foreground: oklch(0.15 0 0);
   --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
+  --secondary-foreground: oklch(0.94 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
   --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
+  --accent-foreground: oklch(0.94 0 0);
+
+  /* Status */
+  --destructive: oklch(0.6 0.2 15);
   --success: oklch(0.55 0.16 145);
   --warning: oklch(0.68 0.16 75);
   --info: oklch(0.60 0.16 235);
+
+  /* Borders & Inputs */
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --ring: oklch(0.62 0.16 235);
+
+  /* Charts */
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: hsl(240 5.9% 10%);
-  --sidebar-foreground: hsl(240 4.8% 95.9%);
-  --sidebar-primary: hsl(224.3 76.3% 48%);
-  --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(240 3.7% 15.9%);
-  --sidebar-accent-foreground: hsl(240 4.8% 95.9%);
-  --sidebar-border: hsl(240 3.7% 15.9%);
-  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+
+  /* Sidebar */
+  --sidebar: oklch(0.155 0 0);
+  --sidebar-foreground: oklch(0.94 0 0);
+  --sidebar-primary: oklch(0.62 0.16 235);
+  --sidebar-primary-foreground: oklch(0.15 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.94 0 0);
+  --sidebar-border: oklch(0.26 0 0);
+  --sidebar-ring: oklch(0.62 0.16 235);
 
   /* Liquid Glass Material System (Dark Mode) */
   --material-thin: oklch(0.16 0 0 / 0.88);
@@ -156,6 +179,10 @@
 
   /* Separators (Dark Mode) */
   --separator: oklch(0.94 0 0 / 0.08);
+
+  /* Sidebar divider */
+  --sidebar-divider: oklch(0.26 0 0);
+  --sidebar-section-bg: oklch(1 0 0 / 0.035);
 }
 
 @layer base {
@@ -228,4 +255,159 @@
 .screenshot-ipad-13 {
   --screenshot-width: 2064px;
   --screenshot-height: 2752px;
+}
+
+/* =============================================================================
+   VISUAL PARITY UTILITIES
+   Matching real app patterns from apps/web/src/lib/task-status-config.ts
+   and apps/web/src/components/calendar/calendar-types.ts
+   ============================================================================= */
+
+@layer components {
+  /* Task Status Badges - from DEFAULT_STATUS_CONFIG */
+  .badge-pending {
+    @apply bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300;
+  }
+  .badge-in-progress {
+    @apply bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300;
+  }
+  .badge-completed {
+    @apply bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300;
+  }
+  .badge-blocked {
+    @apply bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300;
+  }
+
+  /* Priority Badges */
+  .badge-priority-low {
+    @apply bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400;
+  }
+  .badge-priority-medium {
+    @apply bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-400;
+  }
+  .badge-priority-high {
+    @apply bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400;
+  }
+
+  /* Calendar Event Colors - from EVENT_COLORS (left-border accent pattern) */
+  .event-default {
+    @apply bg-primary/10 border-l-2 border-l-primary text-primary rounded-r;
+  }
+  .event-meeting {
+    @apply bg-purple-500/10 border-l-2 border-l-purple-500 text-purple-600 rounded-r;
+  }
+  .event-deadline {
+    @apply bg-red-500/10 border-l-2 border-l-red-500 text-red-600 rounded-r;
+  }
+  .event-personal {
+    @apply bg-green-500/10 border-l-2 border-l-green-500 text-green-600 rounded-r;
+  }
+  .event-travel {
+    @apply bg-amber-500/10 border-l-2 border-l-amber-500 text-amber-600 rounded-r;
+  }
+  .event-focus {
+    @apply bg-slate-500/10 border-l-2 border-l-slate-500 text-slate-600 rounded-r;
+  }
+
+  /* Sidebar Navigation - matching PageTreeItem.tsx patterns */
+  .nav-item-active {
+    @apply bg-gray-200 dark:bg-gray-700;
+  }
+  .nav-item-hover {
+    @apply hover:bg-gray-200 dark:hover:bg-gray-700;
+  }
+
+  /* AI Message Container - matching ChannelView patterns */
+  .ai-message-container {
+    @apply border border-primary/20 bg-primary/5 rounded-lg;
+  }
+  .ai-label-badge {
+    @apply bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300;
+  }
+}
+
+/* Auth Page Utilities */
+@layer components {
+  .auth-input {
+    @apply h-12 w-full rounded-xl border border-border bg-background px-4 text-base text-foreground
+      placeholder:text-muted-foreground
+      focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40
+      transition-all duration-200;
+  }
+}
+
+/* TipTap Editor Typography — matches apps/web/src/styles/tiptap.css */
+.tiptap {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  min-width: 0;
+  font-size: 0.8rem;
+
+  > * + * {
+    margin-top: 0.6em;
+  }
+
+  h1 {
+    font-size: 1.55em;
+    font-weight: bold;
+  }
+
+  h2 {
+    font-size: 1.25em;
+    font-weight: bold;
+  }
+
+  h3 {
+    font-size: 1.05em;
+    font-weight: bold;
+  }
+
+  ul {
+    list-style-type: disc;
+    padding-left: 1.5rem;
+  }
+
+  ol {
+    list-style-type: decimal;
+    padding-left: 1.5rem;
+  }
+
+  code {
+    background-color: var(--muted);
+    color: var(--muted-foreground);
+  }
+
+  pre {
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+    font-family: 'JetBrainsMono', monospace;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+
+    code {
+      color: inherit;
+      padding: 0;
+      background: none;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  }
+
+  blockquote {
+    border-left: 3px solid #ccc;
+    margin-left: 1.5rem;
+    padding-left: 1rem;
+    font-style: italic;
+  }
+}
+
+/* Floating orb animations */
+@keyframes auth-preview-float {
+  0%, 100% { transform: translateY(0px) rotateY(-4deg); }
+  50% { transform: translateY(-8px) rotateY(-4deg); }
 }

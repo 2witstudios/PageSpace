@@ -229,4 +229,21 @@ export const pageMetadata = {
     path: "/faq",
     keywords: ["FAQ", "help", "support", "questions"],
   }),
+
+  login: createMetadata({
+    title: "Log In",
+    description:
+      "Sign in to your PageSpace workspace. Continue with Google, Apple, or a passkey.",
+    path: "/login",
+    keywords: ["login", "sign in", "authentication"],
+    noIndex: true,
+  }),
+
+  signup: createMetadata({
+    title: "Sign Up",
+    description:
+      "Create your free PageSpace workspace in seconds. AI-native documents, tasks, and collaboration.",
+    path: "/signup",
+    keywords: ["sign up", "register", "create account", "free workspace"],
+  }),
 };

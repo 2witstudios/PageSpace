@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, Download, Sparkles, Users, Brain, FileText, MessageSquare, CheckSquare, Calendar, FolderTree, Bot, Globe, Layers, User, ChevronRight, Edit3, Type, Code, Undo2, Wand2, History, PenTool, AtSign, Hash, Reply, Lock, Send, Circle, CheckCircle2, Clock, BarChart3, ListTodo, UserPlus, CalendarDays, Video, Briefcase, Zap } from "lucide-react";
+import { ArrowRight, Download, Sparkles, Users, FileText, MessageSquare, CheckSquare, Calendar, FolderTree, Bot, Globe, Layers, User, ChevronRight, ChevronLeft, Edit3, Type, Code, Undo2, Wand2, History, PenTool, AtSign, Hash, Reply, Lock, Send, CheckCircle2, BarChart3, ListTodo, CalendarDays, Zap, Home as HomeIcon, Inbox, ChevronsUpDown, Folder, Search, Plus, ChevronDown, Wrench, Activity, MoreHorizontal, Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Table2, Settings2, FileDown, Share2, PanelLeft, PanelRight, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteNavbar } from "@/components/SiteNavbar";
 import { pageMetadata } from "@/lib/metadata";
 import { JsonLd, webApplicationSchema } from "@/lib/schema";
 
@@ -11,58 +12,21 @@ export default function Home() {
     <>
       <JsonLd data={webApplicationSchema} />
       <div className="min-h-screen bg-background">
-        {/* Navigation */}
-        <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="container mx-auto flex h-16 items-center justify-between px-4 md:px-6">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <Sparkles className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="text-xl font-bold">PageSpace</span>
-            </Link>
-            <nav className="hidden md:flex items-center gap-6">
-              <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-                Pricing
-              </Link>
-              <Link href="/downloads" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-                Downloads
-              </Link>
-              <Link href="/docs" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-                Docs
-              </Link>
-              <Link href="/blog" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-                Blog
-              </Link>
-            </nav>
-            <div className="flex items-center gap-3">
-              <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-                <Link href="/login">Log in</Link>
-              </Button>
-              <Button size="sm" asChild>
-                <Link href="/signup">Get Started</Link>
-              </Button>
-            </div>
-          </div>
-        </header>
+        {/* Navigation — matches prod TopBar */}
+        <SiteNavbar />
 
         {/* Hero Section */}
         <section className="relative overflow-hidden">
           {/* Background gradient */}
-          <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.3),rgba(255,255,255,0))]" />
+          <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(59,130,246,0.15),rgba(255,255,255,0))]" />
 
           <div className="container mx-auto px-4 md:px-6 py-16 md:py-24 lg:py-32">
             <div className="mx-auto max-w-4xl text-center">
-              {/* Badge */}
-              <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-muted/50 px-4 py-1.5 text-sm">
-                <Brain className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">AI-native workspace</span>
-              </div>
-
               {/* Headline */}
               <h1 className="mb-6 text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
-                You, your team, and AI—
+                Get on the{" "}
                 <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-                  {" "}working together
+                  same page
                 </span>
               </h1>
 
@@ -105,97 +69,364 @@ export default function Home() {
             <div className="mt-16 md:mt-24">
               <div className="mx-auto max-w-6xl">
                 <div className="relative rounded-xl border border-border bg-card shadow-2xl overflow-hidden">
-                  {/* Browser chrome */}
-                  <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-3">
-                    <div className="flex gap-1.5">
-                      <div className="h-3 w-3 rounded-full bg-red-400/80" />
-                      <div className="h-3 w-3 rounded-full bg-yellow-400/80" />
-                      <div className="h-3 w-3 rounded-full bg-green-400/80" />
+                  {/* TopBar — matches real desktop app TopBar */}
+                  <div className="flex items-center gap-2 px-3 py-2 liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
+                    {/* Left: sidebar toggle + nav */}
+                    <div className="flex items-center gap-1">
+                      <button className="h-6 w-6 rounded-md flex items-center justify-center hover:bg-muted transition-colors">
+                        <PanelLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                      <button className="h-6 w-6 rounded-md flex items-center justify-center text-muted-foreground/40 cursor-not-allowed">
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <button className="h-6 w-6 rounded-md flex items-center justify-center text-muted-foreground/40 cursor-not-allowed">
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
                     </div>
-                    <div className="flex-1 text-center">
-                      <div className="inline-flex items-center gap-2 rounded-md bg-muted px-3 py-1 text-xs text-muted-foreground">
-                        <span>app.pagespace.ai</span>
+                    {/* Breadcrumb */}
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <HomeIcon className="h-3 w-3" />
+                      <span>/</span>
+                    </div>
+                    {/* Search */}
+                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground w-48">
+                      <Search className="h-3 w-3" />
+                      <span className="flex-1">Search...</span>
+                      <kbd className="text-[10px] opacity-60">⌘K</kbd>
+                    </div>
+                    <div className="flex-1" />
+                    {/* Right: panel toggle + avatar */}
+                    <div className="flex items-center gap-1">
+                      <button className="h-6 w-6 rounded-md flex items-center justify-center hover:bg-muted transition-colors">
+                        <PanelRight className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                      <div className="h-5 w-5 rounded-full bg-blue-500 flex items-center justify-center">
+                        <span className="text-[8px] font-medium text-white">JD</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* App preview - simplified UI mockup */}
+                  {/* App preview - EXACT MATCH to Layout.tsx structure */}
                   <div className="flex h-[400px] md:h-[500px] lg:h-[600px]">
-                    {/* Sidebar */}
-                    <div className="hidden sm:flex w-56 flex-col border-r border-border bg-muted/20 p-4">
-                      <div className="flex items-center gap-2 mb-6">
-                        <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                          <Users className="h-4 w-4 text-primary" />
-                        </div>
-                        <span className="text-sm font-medium">My Workspace</span>
+                    {/* Sidebar - matching left-sidebar with pt-4 floating gap */}
+                    <div className="hidden sm:flex w-56 flex-col pt-4">
+                    <div className="flex-1 flex flex-col liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none px-3 py-3">
+                      {/* 1. Drive Switcher - matches DriveSwitcher.tsx */}
+                      <div className="mb-3">
+                        <button className="flex items-center gap-2 px-2 h-8 w-full rounded-lg hover:bg-accent transition-colors">
+                          <Folder className="h-3.5 w-3.5 shrink-0 text-primary" />
+                          <span className="truncate font-medium text-xs flex-1 text-left">My Workspace</span>
+                          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        </button>
                       </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 rounded-md bg-primary/10 px-3 py-2 text-sm">
-                          <FileText className="h-4 w-4 text-primary" />
-                          <span>Documents</span>
+
+                      {/* 2. Primary Navigation - matches PrimaryNavigation.tsx EXACTLY */}
+                      <nav className="flex flex-col gap-0.5 mb-2">
+                        <div className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium transition-colors cursor-pointer text-sidebar-foreground hover:bg-accent hover:text-accent-foreground">
+                          <HomeIcon className="h-3.5 w-3.5" />
+                          <span className="flex-1">Dashboard</span>
                         </div>
-                        <div className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted/50">
-                          <MessageSquare className="h-4 w-4" />
-                          <span>Channels</span>
+                        <div className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium transition-colors cursor-pointer text-sidebar-foreground hover:bg-accent hover:text-accent-foreground">
+                          <Inbox className="h-3.5 w-3.5" />
+                          <span className="flex-1">Inbox</span>
+                          <span className="px-2 py-0.5 text-[10px] rounded-full bg-primary text-primary-foreground">3</span>
                         </div>
-                        <div className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted/50">
-                          <CheckSquare className="h-4 w-4" />
-                          <span>Tasks</span>
+                        <div className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium transition-colors cursor-pointer text-sidebar-foreground hover:bg-accent hover:text-accent-foreground">
+                          <CheckSquare className="h-3.5 w-3.5" />
+                          <span className="flex-1">Tasks</span>
                         </div>
-                        <div className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted/50">
-                          <Calendar className="h-4 w-4" />
-                          <span>Calendar</span>
+                        <div className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium transition-colors cursor-pointer text-sidebar-foreground hover:bg-accent hover:text-accent-foreground">
+                          <Calendar className="h-3.5 w-3.5" />
+                          <span className="flex-1">Calendar</span>
+                        </div>
+                      </nav>
+
+                      {/* 3. Search + Create Button */}
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <div className="h-7 w-full pl-8 pr-3 rounded-lg border border-border bg-background text-xs text-muted-foreground flex items-center">
+                            Search...
+                          </div>
+                        </div>
+                        <button className="h-7 w-7 shrink-0 rounded-lg border border-border bg-background flex items-center justify-center hover:bg-accent transition-colors">
+                          <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                      </div>
+
+                      {/* 4. Page Tree - ACTUAL PAGES only, no file extensions */}
+                      <nav className="flex-1 overflow-auto px-1 py-2">
+                        {/* Active page - Q1 Planning (expanded) */}
+                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 bg-gray-200 dark:bg-gray-700" style={{ paddingLeft: 4 }}>
+                          <button className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors cursor-pointer">
+                            <ChevronRight className="h-3.5 w-3.5 text-gray-500 transition-transform duration-200 rotate-90" />
+                          </button>
+                          <div className="p-0.5 rounded cursor-grab">
+                            <FileText className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                          </div>
+                          <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
+                            Q1 Planning
+                          </span>
+                        </div>
+
+                        {/* Child pages (indented) */}
+                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 28 }}>
+                          <div className="p-0.5 rounded cursor-grab">
+                            <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+                          </div>
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0 ml-1" />
+                          <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
+                            Product Roadmap
+                          </span>
+                        </div>
+
+                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 28 }}>
+                          <div className="p-0.5 rounded cursor-grab">
+                            <MessageSquare className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+                          </div>
+                          <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
+                            Team Discussion
+                          </span>
+                        </div>
+
+                        {/* Product Launch (collapsed) */}
+                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700 mt-1" style={{ paddingLeft: 4 }}>
+                          <button className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer">
+                            <ChevronRight className="h-3.5 w-3.5 text-gray-500 transition-transform duration-200" />
+                          </button>
+                          <div className="p-0.5 rounded cursor-grab">
+                            <Folder className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+                          </div>
+                          <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
+                            Product Launch
+                          </span>
+                        </div>
+
+                        {/* Meeting Notes (single page, no chevron) */}
+                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 4 }}>
+                          <div className="p-0.5 rounded cursor-grab ml-6">
+                            <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+                          </div>
+                          <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
+                            Meeting Notes
+                          </span>
+                        </div>
+                      </nav>
+
+                      {/* 5. Drive Actions (collapsed) - matches DriveFooter.tsx */}
+                      <div className="pt-2 border-t border-border">
+                        <button className="flex items-center justify-between w-full px-2 py-1 rounded-lg hover:bg-accent transition-colors">
+                          <span className="text-xs font-medium text-muted-foreground">Drive Actions</span>
+                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                      </div>
+                    </div>
+                    </div>
+
+                    {/* Main content — pixel-perfect editor replica */}
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                      {/* Content Header — matches content-header/index.tsx */}
+                      <div className="flex flex-col gap-1 sm:gap-2 p-2 sm:p-4 border-b border-[var(--separator)]">
+                        {/* Breadcrumbs */}
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <span className="hover:text-foreground cursor-pointer">My Workspace</span>
+                          <ChevronRight className="h-3 w-3" />
+                          <span className="text-foreground">Q1 Planning</span>
+                        </div>
+                        {/* Title row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <h2 className="text-lg sm:text-2xl font-bold truncate">Q1 Planning</h2>
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <span className="h-2 w-2 rounded-full bg-green-500" />
+                              <span>Saved</span>
+                            </div>
+                          </div>
+                          <div className="hidden sm:flex flex-wrap items-center justify-end gap-1 sm:gap-2">
+                            {/* Page Setup */}
+                            <button className="h-8 px-2 rounded-md hover:bg-muted text-muted-foreground flex items-center gap-1 text-xs">
+                              <Settings2 className="h-4 w-4" />
+                            </button>
+                            {/* Export */}
+                            <button className="h-8 px-2 rounded-md hover:bg-muted text-muted-foreground flex items-center gap-1 text-xs">
+                              <FileDown className="h-4 w-4" />
+                            </button>
+                            {/* Viewer avatars */}
+                            <div className="flex -space-x-2">
+                              <div className="h-7 w-7 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">JD</div>
+                              <div className="h-7 w-7 rounded-full bg-emerald-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">SK</div>
+                            </div>
+                            {/* Share */}
+                            <button className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium flex items-center gap-1.5">
+                              <Share2 className="h-3.5 w-3.5" />
+                              Share
+                            </button>
+                          </div>
                         </div>
                       </div>
-                      <div className="mt-auto pt-4 border-t border-border">
-                        <div className="flex items-center gap-2 rounded-md bg-gradient-to-r from-primary/20 to-primary/5 px-3 py-2 text-sm">
-                          <Brain className="h-4 w-4 text-primary" />
-                          <span className="font-medium">AI Assistant</span>
+
+                      {/* Toolbar — matches Toolbar.tsx (scaled down) */}
+                      <div className="mx-3 mt-3 rounded-md liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)]">
+                        <div className="w-full overflow-x-auto">
+                          <div className="flex items-center gap-0.5 p-1.5 min-w-max">
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Bold size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Italic size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Strikethrough size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Code size={13} /></button>
+                            <div className="w-[1px] h-4 bg-border mx-0.5" />
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Heading1 size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Heading2 size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Heading3 size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors bg-primary text-primary-foreground"><Pilcrow size={13} /></button>
+                            <div className="w-[1px] h-4 bg-border mx-0.5" />
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><List size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><ListOrdered size={13} /></button>
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Quote size={13} /></button>
+                            <div className="w-[1px] h-4 bg-border mx-0.5" />
+                            <button className="p-1.5 rounded transition-colors hover:bg-muted"><Table2 size={13} /></button>
+                            <div className="flex-1" />
+                            <div className="w-[1px] h-4 bg-border mx-0.5" />
+                            {/* Font Family */}
+                            <button className="flex items-center gap-1 px-1.5 py-1 rounded text-[11px] text-muted-foreground hover:bg-muted transition-colors">
+                              Sans
+                              <ChevronDown size={10} />
+                            </button>
+                            {/* Font Size */}
+                            <button className="flex items-center gap-1 px-1.5 py-1 rounded text-[11px] text-muted-foreground hover:bg-muted transition-colors">
+                              16px
+                              <ChevronDown size={10} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Editor Content Area — matches RichEditor.tsx layout */}
+                      <div className="flex-1 overflow-auto flex justify-center items-start p-4">
+                        <div className="max-w-4xl mx-auto w-full">
+                          <div className="tiptap m-5">
+                            <h1>Q1 Planning</h1>
+                            <p>This document outlines our strategic priorities, key objectives, and execution timeline for the first quarter. All team members should review and contribute their department-specific goals.</p>
+                            <h2>Key Objectives</h2>
+                            <ul>
+                              <li>Launch the redesigned onboarding flow and measure activation rate improvements</li>
+                              <li>Expand AI agent capabilities with multi-model support and tool integration</li>
+                              <li>Achieve 95% uptime SLA and reduce p99 latency below 200ms</li>
+                            </ul>
+                            <h2>Timeline</h2>
+                            <p>The quarter is divided into three two-week sprints, each with clear deliverables and review checkpoints. Sprint demos happen every other Friday.</p>
+                            <blockquote>Focus is not about saying yes to the thing you have to focus on. It is about saying no to the hundred other good ideas.</blockquote>
+                            <h3>Sprint 1: Foundation</h3>
+                            <p>The first sprint focuses on infrastructure upgrades and establishing the baseline metrics we will track throughout the quarter.</p>
+                            <pre><code>{`deploy:
+  environment: production
+  region: us-west-2
+  replicas: 3
+  health_check: /api/health`}</code></pre>
+                            <p>Once the deployment pipeline is validated, we can begin rolling out feature flags for the new editor experience.</p>
+                          </div>
+                          <div className="flex justify-end px-5 pb-4 text-xs text-muted-foreground">
+                            847 characters
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Main content */}
-                    <div className="flex-1 flex flex-col">
-                      <div className="border-b border-border px-6 py-4">
-                        <h2 className="text-lg font-semibold">Q1 Planning Document</h2>
-                        <p className="text-sm text-muted-foreground">Last edited 2 minutes ago</p>
+                    {/* AI Panel - matching right-sidebar structure with floating gap */}
+                    <div className="hidden lg:flex w-56 flex-col pt-4">
+                    <div className="flex-1 flex flex-col liquid-glass-regular rounded-tl-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none">
+                      {/* Tab Bar */}
+                      <div className="flex items-center border-b border-border">
+                        <button className="flex-1 flex items-center justify-center gap-1 px-2 py-2 text-[11px] font-medium border-b-2 border-primary text-primary">
+                          <MessageSquare className="h-3 w-3" />
+                          Chat
+                        </button>
+                        <button className="flex-1 flex items-center justify-center gap-1 px-2 py-2 text-[11px] font-medium text-muted-foreground border-b-2 border-transparent">
+                          <History className="h-3 w-3" />
+                          History
+                        </button>
+                        <button className="flex-1 flex items-center justify-center gap-1 px-2 py-2 text-[11px] font-medium text-muted-foreground border-b-2 border-transparent">
+                          <Activity className="h-3 w-3" />
+                          Activity
+                        </button>
                       </div>
-                      <div className="flex-1 p-6 space-y-4">
-                        <div className="h-4 w-3/4 rounded bg-muted/50 animate-pulse" />
-                        <div className="h-4 w-full rounded bg-muted/50 animate-pulse" />
-                        <div className="h-4 w-5/6 rounded bg-muted/50 animate-pulse" />
-                        <div className="h-4 w-2/3 rounded bg-muted/50 animate-pulse" />
-                        <div className="h-20 w-full rounded-lg border border-primary/20 bg-primary/5 p-4 mt-6">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Sparkles className="h-4 w-4 text-primary" />
-                            <span className="text-sm font-medium text-primary">AI Suggestion</span>
+
+                      {/* Chat Header - AISelector mock */}
+                      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+                        <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-accent text-sm font-medium transition-colors">
+                          Global Assistant
+                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                        <button className="h-7 w-7 rounded-md hover:bg-accent flex items-center justify-center transition-colors" title="New Conversation">
+                          <Plus className="h-4 w-4 text-muted-foreground" />
+                        </button>
+                      </div>
+
+                      {/* Messages - compact mode, no avatars */}
+                      <div className="flex-1 overflow-auto p-3 flex flex-col gap-1.5">
+                        {/* User message */}
+                        <div className="group relative bg-primary/10 dark:bg-accent/20 p-2 rounded-md ml-2">
+                          <span className="text-xs font-medium text-primary">You</span>
+                          <p className="text-xs text-foreground">Add key objectives for Q1 — onboarding redesign, AI capabilities, and uptime targets</p>
+                          <span className="text-[10px] text-muted-foreground/60">10:31 AM</span>
+                          <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button className="h-5 w-5 rounded flex items-center justify-center hover:bg-accent">
+                              <MoreHorizontal className="h-3 w-3 text-muted-foreground" />
+                            </button>
                           </div>
-                          <div className="h-3 w-5/6 rounded bg-primary/20 animate-pulse" />
+                        </div>
+
+                        {/* Tool call: Read */}
+                        <div className="py-0.5 text-[11px]">
+                          <button className="w-full flex items-center gap-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors">
+                            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                            <Eye className="h-3 w-3 text-muted-foreground" />
+                            <span className="font-medium truncate flex-1 min-w-0">Read Q1 Planning</span>
+                            <CheckCircle2 className="h-3 w-3 text-green-500" />
+                          </button>
+                        </div>
+
+                        {/* Tool call: Edit */}
+                        <div className="py-0.5 text-[11px]">
+                          <button className="w-full flex items-center gap-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors">
+                            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                            <Edit3 className="h-3 w-3 text-muted-foreground" />
+                            <span className="font-medium truncate flex-1 min-w-0">Edit Q1 Planning</span>
+                            <CheckCircle2 className="h-3 w-3 text-green-500" />
+                          </button>
+                        </div>
+
+                        {/* AI response */}
+                        <div className="group relative">
+                          <p className="text-xs text-foreground">Done — I&apos;ve added a Key Objectives section with the three priorities as bullet points.</p>
+                          <span className="text-[10px] text-muted-foreground/60">10:32 AM</span>
+                          <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button className="h-5 w-5 rounded flex items-center justify-center hover:bg-accent">
+                              <MoreHorizontal className="h-3 w-3 text-muted-foreground" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Input area */}
+                      <div className="p-3 border-t border-border">
+                        <div className="rounded-lg border border-border bg-background">
+                          <div className="px-3 py-2">
+                            <span className="text-xs text-muted-foreground">Ask about this page...</span>
+                          </div>
+                          <div className="flex items-center justify-between px-2 pb-2">
+                            <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent transition-colors">
+                              <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
+                            </button>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-muted-foreground">Claude / Opus 4.6</span>
+                              <button className="h-6 w-6 rounded-full bg-primary flex items-center justify-center">
+                                <ArrowRight className="h-3 w-3 text-primary-foreground" />
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
-
-                    {/* AI Panel */}
-                    <div className="hidden lg:flex w-72 flex-col border-l border-border bg-muted/10 p-4">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Brain className="h-5 w-5 text-primary" />
-                        <span className="font-medium">AI Assistant</span>
-                      </div>
-                      <div className="space-y-3">
-                        <div className="rounded-lg bg-muted p-3 text-sm">
-                          <p className="text-muted-foreground">How can I help with your Q1 planning?</p>
-                        </div>
-                        <div className="rounded-lg bg-primary/10 p-3 text-sm ml-4">
-                          <p>Summarize the key objectives we discussed</p>
-                        </div>
-                        <div className="rounded-lg bg-muted p-3 text-sm">
-                          <div className="flex items-center gap-1 mb-1">
-                            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-                            <span className="text-xs text-muted-foreground">Thinking...</span>
-                          </div>
-                        </div>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -724,7 +955,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Right: Channel Chat Visual */}
+              {/* Right: Channel Chat Visual - EXACT MATCH to ChannelView.tsx */}
               <div className="relative">
                 <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
                   {/* Channel Header */}
@@ -738,47 +969,47 @@ export default function Home() {
                       <div className="flex -space-x-2">
                         <div className="h-6 w-6 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">S</div>
                         <div className="h-6 w-6 rounded-full bg-green-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">M</div>
-                        <div className="h-6 w-6 rounded-full bg-primary border-2 border-card flex items-center justify-center">
-                          <Bot className="h-3 w-3 text-primary-foreground" />
+                        <div className="h-6 w-6 rounded-full bg-gradient-to-br from-violet-500 to-violet-600 border-2 border-card flex items-center justify-center">
+                          <Bot className="h-3 w-3 text-white" />
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* Chat Messages */}
-                  <div className="p-4 space-y-4 min-h-[360px]">
-                    {/* User message */}
-                    <div className="flex items-start gap-3">
-                      <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-xs text-white font-medium flex-shrink-0">S</div>
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm font-medium">Sarah</span>
+                  {/* Chat Messages - matching ChannelView.tsx structure */}
+                  <div className="p-4 space-y-4 min-h-[360px] max-w-4xl mx-auto">
+                    {/* User message - matching group flex items-start gap-4 */}
+                    <div className="group flex items-start gap-4">
+                      <div className="shrink-0 h-10 w-10 rounded-full bg-blue-500 flex items-center justify-center text-sm text-white font-medium">S</div>
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-sm">Sarah</span>
                           <span className="text-xs text-muted-foreground">10:34 AM</span>
                         </div>
-                        <p className="text-sm text-muted-foreground">
-                          We need to finalize the launch email copy. <span className="text-primary font-medium">@Marketing-AI</span> can you draft something based on our positioning doc?
-                        </p>
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <p className="text-sm">
+                            We need to finalize the launch email copy. <span className="text-primary font-medium">@Marketing-AI</span> can you draft something based on our positioning doc?
+                          </p>
+                        </div>
                       </div>
                     </div>
 
-                    {/* AI response */}
-                    <div className="flex items-start gap-3">
-                      <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center flex-shrink-0">
-                        <Bot className="h-4 w-4 text-primary-foreground" />
+                    {/* AI response - matching aiLabel badge styling */}
+                    <div className="group flex items-start gap-4">
+                      <div className="shrink-0 h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center">
+                        <Bot className="h-5 w-5 text-white" />
                       </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm font-medium text-primary">Marketing AI</span>
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-sm">Marketing AI</span>
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">agent</span>
                           <span className="text-xs text-muted-foreground">10:34 AM</span>
-                          <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">AI</span>
                         </div>
-                        <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-                          <p className="text-sm text-muted-foreground mb-2">
-                            Based on your positioning doc, here&apos;s a draft:
-                          </p>
-                          <div className="bg-background rounded p-2 text-sm border border-border">
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <p className="text-sm mb-2">Based on your positioning doc, here&apos;s a draft:</p>
+                          <div className="bg-muted/50 rounded-lg p-3 text-sm border border-border/50">
                             <p className="font-medium mb-1">Subject: Meet your new AI-powered workspace</p>
-                            <p className="text-muted-foreground text-xs">
+                            <p className="text-muted-foreground text-sm">
                               We&apos;re excited to introduce PageSpace—where your documents, tasks, and team conversations live alongside AI that actually understands your work...
                             </p>
                           </div>
@@ -787,31 +1018,36 @@ export default function Home() {
                     </div>
 
                     {/* Another user reply */}
-                    <div className="flex items-start gap-3">
-                      <div className="h-8 w-8 rounded-full bg-green-500 flex items-center justify-center text-xs text-white font-medium flex-shrink-0">M</div>
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm font-medium">Marcus</span>
+                    <div className="group flex items-start gap-4">
+                      <div className="shrink-0 h-10 w-10 rounded-full bg-green-500 flex items-center justify-center text-sm text-white font-medium">M</div>
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-sm">Marcus</span>
                           <span className="text-xs text-muted-foreground">10:35 AM</span>
                         </div>
-                        <p className="text-sm text-muted-foreground">
-                          Love it! Can we make the CTA more action-oriented?
-                        </p>
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <p className="text-sm">Love it! Can we make the CTA more action-oriented?</p>
+                        </div>
                       </div>
                     </div>
 
                     {/* AI typing indicator */}
-                    <div className="flex items-start gap-3">
-                      <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center flex-shrink-0">
-                        <Bot className="h-4 w-4 text-primary-foreground" />
+                    <div className="group flex items-start gap-4">
+                      <div className="shrink-0 h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center">
+                        <Bot className="h-5 w-5 text-white" />
                       </div>
-                      <div className="flex items-center gap-2 py-2">
-                        <div className="flex gap-1">
-                          <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-sm">Marketing AI</span>
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">agent</span>
                         </div>
-                        <span className="text-xs text-muted-foreground">Marketing AI is typing...</span>
+                        <div className="flex items-center gap-2 py-1">
+                          <div className="flex gap-1">
+                            <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '300ms' }} />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -870,7 +1106,7 @@ export default function Home() {
 
             {/* Two Column Layout */}
             <div className="grid lg:grid-cols-2 gap-12 items-center">
-              {/* Left: Task List Visual */}
+              {/* Left: Task List Visual - EXACT MATCH to TaskCompactRow.tsx */}
               <div className="relative order-2 lg:order-1">
                 <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
                   {/* Task List Header */}
@@ -887,88 +1123,117 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Task Items */}
-                  <div className="divide-y divide-border">
+                  {/* Task Items - Matching TaskCompactRow.tsx exactly */}
+                  <div>
                     {/* Completed task - human */}
-                    <div className="flex items-center gap-3 px-4 py-3 bg-muted/10">
-                      <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0" />
-                      <span className="text-sm text-muted-foreground line-through flex-1">Finalize product positioning</span>
-                      <div className="h-6 w-6 rounded-full bg-blue-500 flex items-center justify-center text-[10px] text-white font-medium">S</div>
+                    <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0 opacity-50">
+                      <div className="shrink-0">
+                        <div className="h-5 w-5 rounded border-2 border-primary bg-primary flex items-center justify-center">
+                          <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                      </div>
+                      <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
+                        <span className="text-sm leading-snug line-through text-muted-foreground">Finalize product positioning</span>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-red-500" />
+                          <span>Feb 8</span>
+                          <span className="truncate max-w-[100px]">Sarah</span>
+                        </div>
+                      </button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                     </div>
 
                     {/* Completed task - AI */}
-                    <div className="flex items-center gap-3 px-4 py-3 bg-muted/10">
-                      <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0" />
-                      <span className="text-sm text-muted-foreground line-through flex-1">Research competitor pricing</span>
-                      <div className="h-6 w-6 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-                        <Bot className="h-3 w-3 text-primary-foreground" />
+                    <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0 opacity-50">
+                      <div className="shrink-0">
+                        <div className="h-5 w-5 rounded border-2 border-primary bg-primary flex items-center justify-center">
+                          <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
                       </div>
+                      <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
+                        <span className="text-sm leading-snug line-through text-muted-foreground">Research competitor pricing</span>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-amber-500" />
+                          <span>Feb 7</span>
+                          <span className="truncate max-w-[100px]">Research AI</span>
+                        </div>
+                      </button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                     </div>
 
                     {/* In-progress task - AI */}
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <div className="h-5 w-5 flex items-center justify-center flex-shrink-0">
-                        <Clock className="h-4 w-4 text-primary animate-pulse" />
+                    <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
+                      <div className="shrink-0">
+                        <div className="h-5 w-5 rounded border-2 border-primary" />
                       </div>
-                      <div className="flex-1">
-                        <span className="text-sm">Draft launch email sequence</span>
-                        <div className="flex items-center gap-2 mt-1">
-                          <div className="h-1 flex-1 max-w-24 rounded-full bg-muted overflow-hidden">
-                            <div className="w-[60%] h-full bg-primary rounded-full animate-pulse" />
-                          </div>
-                          <span className="text-[10px] text-primary">AI working...</span>
+                      <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
+                        <span className="text-sm leading-snug text-foreground">Draft launch email sequence</span>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-red-500" />
+                          <span className="text-amber-600 dark:text-amber-400 font-medium">Today</span>
+                          <span className="truncate max-w-[100px]">Marketing AI</span>
+                          <span className="truncate max-w-[80px] text-muted-foreground/70">Launch Tasks</span>
                         </div>
-                      </div>
-                      <div className="h-6 w-6 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-                        <Bot className="h-3 w-3 text-primary-foreground" />
-                      </div>
+                      </button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                     </div>
 
                     {/* Pending task - human */}
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <Circle className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                      <span className="text-sm flex-1">Review AI-generated drafts</span>
-                      <div className="h-6 w-6 rounded-full bg-green-500 flex items-center justify-center text-[10px] text-white font-medium">M</div>
+                    <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
+                      <div className="shrink-0">
+                        <div className="h-5 w-5 rounded border-2 border-primary" />
+                      </div>
+                      <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
+                        <span className="text-sm leading-snug text-foreground">Review AI-generated drafts</span>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-amber-500" />
+                          <span>Feb 14</span>
+                          <span className="truncate max-w-[100px]">Marcus</span>
+                        </div>
+                      </button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                     </div>
 
                     {/* Pending task - AI */}
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <Circle className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                      <span className="text-sm flex-1">Generate social media graphics</span>
-                      <div className="h-6 w-6 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-                        <Bot className="h-3 w-3 text-primary-foreground" />
+                    <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
+                      <div className="shrink-0">
+                        <div className="h-5 w-5 rounded border-2 border-primary" />
                       </div>
+                      <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
+                        <span className="text-sm leading-snug text-foreground">Generate social media graphics</span>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-slate-400 dark:bg-slate-500" />
+                          <span>Feb 15</span>
+                          <span className="truncate max-w-[100px]">Design AI</span>
+                        </div>
+                      </button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                     </div>
 
-                    {/* Pending task - unassigned */}
-                    <div className="flex items-center gap-3 px-4 py-3">
-                      <Circle className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                      <span className="text-sm flex-1">Schedule launch webinar</span>
-                      <div className="h-6 w-6 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center">
-                        <UserPlus className="h-3 w-3 text-muted-foreground/50" />
+                    {/* Pending task - overdue */}
+                    <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
+                      <div className="shrink-0">
+                        <div className="h-5 w-5 rounded border-2 border-primary" />
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Rollup Footer */}
-                  <div className="border-t border-border bg-muted/20 px-4 py-3">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <div className="flex items-center gap-4">
-                        <span className="flex items-center gap-1">
-                          <div className="h-4 w-4 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-                            <Bot className="h-2 w-2 text-primary-foreground" />
-                          </div>
-                          3 AI tasks
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Users className="h-3 w-3" />
-                          2 human tasks
-                        </span>
-                      </div>
-                      <span className="flex items-center gap-1">
-                        <BarChart3 className="h-3 w-3" />
-                        View rollup
-                      </span>
+                      <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
+                        <span className="text-sm leading-snug text-foreground">Schedule launch webinar</span>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-red-500" />
+                          <span className="flex items-center gap-0.5 text-red-500 font-medium">
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <circle cx="12" cy="12" r="10" />
+                              <line x1="12" y1="8" x2="12" y2="12" />
+                              <line x1="12" y1="16" x2="12.01" y2="16" />
+                            </svg>
+                            Feb 10
+                          </span>
+                        </div>
+                      </button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
                     </div>
                   </div>
                 </div>
@@ -1151,7 +1416,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Right: Calendar Visual */}
+              {/* Right: Calendar Visual - EXACT MATCH to WeekView.tsx */}
               <div className="relative">
                 <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
                   {/* Calendar Header */}
@@ -1167,117 +1432,120 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Calendar Grid - Week View */}
-                  <div className="p-4">
-                    {/* Day Headers */}
-                    <div className="grid grid-cols-5 gap-2 mb-2 text-center">
-                      <div className="text-xs text-muted-foreground">Mon 10</div>
-                      <div className="text-xs text-muted-foreground">Tue 11</div>
-                      <div className="text-xs font-medium text-primary">Wed 12</div>
-                      <div className="text-xs text-muted-foreground">Thu 13</div>
-                      <div className="text-xs text-muted-foreground">Fri 14</div>
+                  {/* Week View - matching WeekView.tsx structure */}
+                  <div className="flex flex-col h-[320px] overflow-hidden">
+                    {/* Header with day names */}
+                    <div className="flex border-b bg-background sticky top-0 z-10">
+                      {/* Time gutter spacer */}
+                      <div className="w-12 shrink-0 border-r" />
+                      {/* Day columns header */}
+                      {[
+                        { day: 'Mon', date: 10, isToday: false },
+                        { day: 'Tue', date: 11, isToday: false },
+                        { day: 'Wed', date: 12, isToday: true },
+                        { day: 'Thu', date: 13, isToday: false },
+                        { day: 'Fri', date: 14, isToday: false },
+                      ].map((d) => (
+                        <div key={d.day} className="flex-1 border-r last:border-r-0">
+                          <button className={`w-full px-2 py-2 text-center hover:bg-muted/50 transition-colors ${d.isToday ? 'bg-primary/5' : ''}`}>
+                            <div className="text-xs text-muted-foreground">{d.day}</div>
+                            <div className={`text-lg font-semibold w-8 h-8 mx-auto flex items-center justify-center rounded-full ${d.isToday ? 'bg-primary text-primary-foreground' : ''}`}>
+                              {d.date}
+                            </div>
+                          </button>
+                        </div>
+                      ))}
                     </div>
 
-                    {/* Time Slots */}
-                    <div className="space-y-2">
-                      {/* 9 AM */}
-                      <div className="grid grid-cols-5 gap-2 items-start">
-                        <div className="text-xs text-muted-foreground py-1">9:00</div>
-                        <div className="col-span-4 grid grid-cols-4 gap-2">
-                          <div className="rounded bg-blue-500/20 border border-blue-500/30 px-2 py-1 text-xs">
-                            <div className="flex items-center gap-1">
-                              <Video className="h-3 w-3 text-blue-500" />
-                              <span className="truncate">Team standup</span>
+                    {/* Time grid */}
+                    <div className="flex-1 overflow-auto">
+                      <div className="flex min-h-full">
+                        {/* Time gutter */}
+                        <div className="w-12 shrink-0 border-r">
+                          {[9, 10, 11, 12, 14].map((hour) => (
+                            <div key={hour} className="relative border-b" style={{ height: 48 }}>
+                              <span className="absolute -top-2.5 right-2 text-xs text-muted-foreground">
+                                {hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`}
+                              </span>
                             </div>
+                          ))}
+                        </div>
+
+                        {/* Day columns with events */}
+                        <div className="flex-1 flex">
+                          {/* Monday */}
+                          <div className="flex-1 border-r relative">
+                            {[9, 10, 11, 12, 14].map((h) => (
+                              <div key={h} className="border-b hover:bg-muted/30 cursor-pointer transition-colors" style={{ height: 48 }} />
+                            ))}
+                            {/* Event: Team standup */}
+                            <button className="absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2 bg-purple-500/10 border-l-purple-500 hover:opacity-80 transition-opacity cursor-pointer text-left" style={{ top: 0, height: 40 }}>
+                              <div className="font-medium truncate text-purple-600">Team standup</div>
+                              <div className="text-muted-foreground truncate">9:00 AM</div>
+                            </button>
                           </div>
-                          <div />
-                          <div className="rounded bg-blue-500/20 border border-blue-500/30 px-2 py-1 text-xs">
-                            <div className="flex items-center gap-1">
-                              <Video className="h-3 w-3 text-blue-500" />
-                              <span className="truncate">1:1 with Sarah</span>
+
+                          {/* Tuesday */}
+                          <div className="flex-1 border-r relative">
+                            {[9, 10, 11, 12, 14].map((h) => (
+                              <div key={h} className="border-b hover:bg-muted/30 cursor-pointer transition-colors" style={{ height: 48 }} />
+                            ))}
+                            {/* Event: AI Research */}
+                            <button className="absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2 bg-slate-500/10 border-l-slate-500 hover:opacity-80 transition-opacity cursor-pointer text-left" style={{ top: 48, height: 80 }}>
+                              <div className="font-medium truncate text-slate-600">AI: Research</div>
+                              <div className="text-muted-foreground truncate">10:00 AM</div>
+                            </button>
+                          </div>
+
+                          {/* Wednesday (Today) */}
+                          <div className="flex-1 border-r relative">
+                            {[9, 10, 11, 12, 14].map((h) => (
+                              <div key={h} className="border-b hover:bg-muted/30 cursor-pointer transition-colors" style={{ height: 48 }} />
+                            ))}
+                            {/* Current time indicator */}
+                            <div className="absolute left-0 right-0 z-20 pointer-events-none" style={{ top: 72 }}>
+                              <div className="flex items-center">
+                                <div className="w-2 h-2 rounded-full bg-red-500" />
+                                <div className="flex-1 h-0.5 bg-red-500" />
+                              </div>
                             </div>
+                            {/* Event: 1:1 with Sarah */}
+                            <button className="absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2 bg-purple-500/10 border-l-purple-500 hover:opacity-80 transition-opacity cursor-pointer text-left" style={{ top: 0, height: 40 }}>
+                              <div className="font-medium truncate text-purple-600">1:1 with Sarah</div>
+                              <div className="text-muted-foreground truncate">9:00 AM</div>
+                            </button>
                           </div>
-                          <div />
+
+                          {/* Thursday */}
+                          <div className="flex-1 border-r relative">
+                            {[9, 10, 11, 12, 14].map((h) => (
+                              <div key={h} className="border-b hover:bg-muted/30 cursor-pointer transition-colors" style={{ height: 48 }} />
+                            ))}
+                            {/* Event: Launch deadline */}
+                            <button className="absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2 bg-red-500/10 border-l-red-500 hover:opacity-80 transition-opacity cursor-pointer text-left" style={{ top: 96, height: 40 }}>
+                              <div className="font-medium truncate text-red-600">Launch deadline</div>
+                              <div className="text-muted-foreground truncate">11:00 AM</div>
+                            </button>
+                            {/* Event: Investor call */}
+                            <button className="absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs overflow-hidden border-l-2 bg-purple-500/10 border-l-purple-500 hover:opacity-80 transition-opacity cursor-pointer text-left" style={{ top: 192, height: 48 }}>
+                              <div className="font-medium truncate text-purple-600">Investor call</div>
+                              <div className="text-muted-foreground truncate">2:00 PM</div>
+                            </button>
+                          </div>
+
+                          {/* Friday */}
+                          <div className="flex-1 relative">
+                            {[9, 10, 11, 12, 14].map((h) => (
+                              <div key={h} className="border-b hover:bg-muted/30 cursor-pointer transition-colors" style={{ height: 48 }} />
+                            ))}
+                            {/* Task overlay: Review drafts */}
+                            <button className="absolute left-1 right-1 px-1.5 py-0.5 rounded text-xs truncate border-l-2 bg-muted/30 border-l-muted-foreground/50 border-dashed opacity-70 hover:opacity-100 transition-opacity" style={{ top: 96, height: 32 }}>
+                              <span className="mr-1">☐</span>
+                              <span className="text-muted-foreground italic">Review drafts</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
-
-                      {/* 10 AM */}
-                      <div className="grid grid-cols-5 gap-2 items-start">
-                        <div className="text-xs text-muted-foreground py-1">10:00</div>
-                        <div className="col-span-4 grid grid-cols-4 gap-2">
-                          <div />
-                          <div className="rounded bg-primary/20 border border-primary/30 px-2 py-1 text-xs col-span-2">
-                            <div className="flex items-center gap-1">
-                              <Bot className="h-3 w-3 text-primary" />
-                              <span className="truncate">AI: Research deliverables</span>
-                            </div>
-                          </div>
-                          <div />
-                        </div>
-                      </div>
-
-                      {/* 11 AM */}
-                      <div className="grid grid-cols-5 gap-2 items-start">
-                        <div className="text-xs text-muted-foreground py-1">11:00</div>
-                        <div className="col-span-4 grid grid-cols-4 gap-2">
-                          <div className="rounded bg-green-500/20 border border-green-500/30 px-2 py-1 text-xs">
-                            <div className="flex items-center gap-1">
-                              <Briefcase className="h-3 w-3 text-green-500" />
-                              <span className="truncate">Launch deadline</span>
-                            </div>
-                          </div>
-                          <div />
-                          <div />
-                          <div className="rounded bg-orange-500/20 border border-orange-500/30 px-2 py-1 text-xs">
-                            <div className="flex items-center gap-1">
-                              <CheckSquare className="h-3 w-3 text-orange-500" />
-                              <span className="truncate">Review drafts</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 2 PM */}
-                      <div className="grid grid-cols-5 gap-2 items-start">
-                        <div className="text-xs text-muted-foreground py-1">2:00</div>
-                        <div className="col-span-4 grid grid-cols-4 gap-2">
-                          <div />
-                          <div className="rounded bg-purple-500/20 border border-purple-500/30 px-2 py-1 text-xs">
-                            <div className="flex items-center gap-1 text-purple-500">
-                              <Globe className="h-3 w-3" />
-                              <span className="truncate">Investor call</span>
-                            </div>
-                          </div>
-                          <div />
-                          <div />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Legend */}
-                  <div className="border-t border-border bg-muted/20 px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-blue-500" />
-                        Meetings
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-primary" />
-                        AI Work
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-orange-500" />
-                        Tasks
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-green-500" />
-                        Deadlines
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <div className="h-2 w-2 rounded-full bg-purple-500" />
-                        External
-                      </span>
                     </div>
                   </div>
                 </div>
