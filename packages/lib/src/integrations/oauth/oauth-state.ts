@@ -14,13 +14,15 @@ const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 /**
  * Create a signed state parameter for OAuth flows.
  *
+ * Uses HMAC-SHA256 for message authentication (not password hashing).
+ *
  * @param data - Arbitrary data to include in the state (userId, returnUrl, etc.)
- * @param secret - HMAC secret key (e.g., process.env.OAUTH_STATE_SECRET)
+ * @param signingKey - HMAC signing key (e.g., process.env.OAUTH_STATE_SECRET)
  * @returns Base64-encoded signed state string
  */
 export function createSignedState(
   data: Record<string, unknown>,
-  secret: string
+  signingKey: string
 ): string {
   const stateData = {
     ...data,
@@ -29,7 +31,7 @@ export function createSignedState(
 
   const statePayload = JSON.stringify(stateData);
   const signature = crypto
-    .createHmac('sha256', secret)
+    .createHmac('sha256', signingKey)
     .update(statePayload)
     .digest('hex');
 
@@ -40,13 +42,15 @@ export function createSignedState(
 /**
  * Verify and decode a signed state parameter.
  *
+ * Uses HMAC-SHA256 for message authentication (not password hashing).
+ *
  * @param state - Base64-encoded signed state string
- * @param secret - HMAC secret key (same as used in createSignedState)
+ * @param signingKey - HMAC signing key (same as used in createSignedState)
  * @returns Decoded data if valid, null if invalid or expired
  */
 export function verifySignedState<T extends Record<string, unknown> = Record<string, unknown>>(
   state: string,
-  secret: string
+  signingKey: string
 ): (T & { timestamp: number }) | null {
   try {
     const stateWithSignature = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
@@ -55,9 +59,9 @@ export function verifySignedState<T extends Record<string, unknown> = Record<str
       return null;
     }
 
-    // Verify signature using timing-safe comparison
+    // Verify HMAC signature using timing-safe comparison
     const expectedSignature = crypto
-      .createHmac('sha256', secret)
+      .createHmac('sha256', signingKey)
       .update(JSON.stringify(stateWithSignature.data))
       .digest('hex');
 
