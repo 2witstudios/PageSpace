@@ -42,11 +42,12 @@ export function isInternalRequest(request: Request): boolean {
     return false;
   }
 
-  // Allow localhost (dev/testing)
+  // Allow localhost (dev/testing) - anchor to port separator or end-of-string
+  // to prevent matching localhost.evil.com
   if (
-    host.startsWith('localhost') ||
-    host.startsWith('127.0.0.1') ||
-    host.startsWith('[::1]')
+    /^localhost(:\d+)?$/.test(host) ||
+    /^127\.0\.0\.1(:\d+)?$/.test(host) ||
+    /^\[::1\](:\d+)?$/.test(host)
   ) {
     return true;
   }
@@ -70,6 +71,7 @@ export const isLocalhostRequest = isInternalRequest;
 
 const TIMESTAMP_MAX_AGE_SECONDS = 300; // 5 minutes
 const NONCE_CLEANUP_INTERVAL_MS = 600_000; // 10 minutes
+const MAX_NONCES = 10_000; // Memory exhaustion safeguard
 
 // In-memory nonce store for replay detection.
 // NOTE: This is process-local and won't prevent replay across multiple server instances.
@@ -97,6 +99,7 @@ export function computeCronSignature(
  * Check if a nonce has been seen before and record it.
  * Periodically prunes nonces older than the timestamp acceptance window,
  * preventing the race condition where a blanket clear could evict still-valid nonces.
+ * Rejects if nonce store exceeds MAX_NONCES to prevent memory exhaustion.
  */
 export function checkAndRecordNonce(nonce: string): boolean {
   const now = Date.now();
@@ -110,6 +113,11 @@ export function checkAndRecordNonce(nonce: string): boolean {
 
   if (usedNonces.has(nonce)) {
     return false; // Replay detected
+  }
+
+  // Memory exhaustion safeguard: reject if store is full
+  if (usedNonces.size >= MAX_NONCES) {
+    return false;
   }
 
   usedNonces.set(nonce, now);
