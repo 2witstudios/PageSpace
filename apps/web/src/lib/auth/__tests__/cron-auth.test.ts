@@ -6,6 +6,7 @@ import {
   checkAndRecordNonce,
   validateSignedCronRequest,
   _resetNonceStore,
+  _resetWarningFlag,
 } from '../cron-auth';
 
 describe('cron-auth', () => {
@@ -244,6 +245,7 @@ describe('cron-auth', () => {
 
       beforeEach(() => {
         delete process.env.CRON_SECRET;
+        _resetWarningFlag();
       });
 
       afterEach(() => {

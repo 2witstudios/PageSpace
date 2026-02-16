@@ -26,6 +26,11 @@ let cronSecretWarningLogged = false;
  * Returns true if:
  * - No X-Forwarded-For header (not proxied from external source)
  * - Host is localhost, internal docker service name, or IP
+ *
+ * IMPORTANT: This check is defense-in-depth behind HMAC validation. The host header
+ * and absence of x-forwarded-for can be spoofed by attackers connecting directly.
+ * Infrastructure (reverse proxy/load balancer) MUST set x-forwarded-for on all
+ * inbound requests for this check to be meaningful.
  */
 export function isInternalRequest(request: Request): boolean {
   const host = request.headers.get('host') ?? '';
@@ -66,6 +71,10 @@ export const isLocalhostRequest = isInternalRequest;
 const TIMESTAMP_MAX_AGE_SECONDS = 300; // 5 minutes
 const NONCE_CLEANUP_INTERVAL_MS = 600_000; // 10 minutes
 
+// In-memory nonce store for replay detection.
+// NOTE: This is process-local and won't prevent replay across multiple server instances.
+// For horizontal scaling (multiple replicas, serverless), use Redis with TTL instead.
+// The HMAC signature + 5-minute timestamp window still provides strong protection.
 const usedNonces = new Map<string, number>(); // nonce → epoch ms when recorded
 let lastNonceCleanup = Date.now();
 
@@ -111,6 +120,11 @@ export function checkAndRecordNonce(nonce: string): boolean {
 export function _resetNonceStore(): void {
   usedNonces.clear();
   lastNonceCleanup = Date.now();
+}
+
+/** Exported for testing only - resets the warning flag */
+export function _resetWarningFlag(): void {
+  cronSecretWarningLogged = false;
 }
 
 /**
