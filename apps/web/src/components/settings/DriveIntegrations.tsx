@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Cable, Plug2, Plus } from 'lucide-react';
+import { AlertCircle, Cable, Plug2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDriveConnections, useProviders } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
@@ -25,8 +25,8 @@ interface DriveIntegrationsProps {
 }
 
 export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
-  const { connections, isLoading: loadingConnections, mutate: mutateConnections } = useDriveConnections(driveId);
-  const { providers, isLoading: loadingProviders } = useProviders();
+  const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useDriveConnections(driveId);
+  const { providers, isLoading: loadingProviders, error: providersError } = useProviders();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -55,6 +55,7 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
   };
 
   const isLoading = loadingConnections || loadingProviders;
+  const error = connectionsError || providersError;
 
   return (
     <>
@@ -85,6 +86,11 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
             <div className="space-y-3">
               <Skeleton className="h-14 w-full" />
               <Skeleton className="h-14 w-full" />
+            </div>
+          ) : error ? (
+            <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+              <AlertCircle className="h-4 w-4" />
+              <span>Failed to load integrations</span>
             </div>
           ) : connections.length === 0 ? (
             <div className="border border-dashed rounded-lg p-6 text-center">

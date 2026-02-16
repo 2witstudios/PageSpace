@@ -48,6 +48,6 @@ export async function POST(request: Request) {
   } catch (error) {
     loggers.api.error('Error importing OpenAPI spec:', error as Error);
     const message = error instanceof Error ? error.message : 'Failed to import OpenAPI spec';
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

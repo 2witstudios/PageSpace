@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, count, eq, and, integrationAuditLog } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { isValidId } from '@pagespace/lib';
 import {
   getAuditLogsByDrive,
   getAuditLogsByConnection,
@@ -10,7 +11,6 @@ import {
 } from '@pagespace/lib/integrations';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * GET /api/drives/[driveId]/integrations/audit
@@ -33,33 +33,30 @@ export async function GET(
     }
 
     const { searchParams } = new URL(request.url);
-    const limit = Math.min(parseInt(searchParams.get('limit') ?? '50', 10), 200);
-    const offset = parseInt(searchParams.get('offset') ?? '0', 10);
+    const limit = Math.min(parseInt(searchParams.get('limit') ?? '50', 10) || 50, 200);
+    const offset = parseInt(searchParams.get('offset') ?? '0', 10) || 0;
     const connectionId = searchParams.get('connectionId');
     const successParam = searchParams.get('success');
 
-    if (connectionId && !UUID_RE.test(connectionId)) {
+    if (connectionId && !isValidId(connectionId)) {
       return NextResponse.json({ error: 'Invalid connectionId format' }, { status: 400 });
     }
 
-    // Build where clause for count query (same filters, no limit/offset)
-    let whereClause;
+    // Build where clause by accumulating conditions (always scoped to driveId)
+    const conditions = [eq(integrationAuditLog.driveId, driveId)];
     if (connectionId) {
-      whereClause = eq(integrationAuditLog.connectionId, connectionId);
-    } else if (successParam !== null) {
-      whereClause = and(
-        eq(integrationAuditLog.driveId, driveId),
-        eq(integrationAuditLog.success, successParam === 'true')
-      );
-    } else {
-      whereClause = eq(integrationAuditLog.driveId, driveId);
+      conditions.push(eq(integrationAuditLog.connectionId, connectionId));
     }
+    if (successParam !== null) {
+      conditions.push(eq(integrationAuditLog.success, successParam === 'true'));
+    }
+    const whereClause = conditions.length === 1 ? conditions[0] : and(...conditions);
 
     // Get total count and paginated logs in parallel
     const [countResult, logs] = await Promise.all([
       db.select({ count: count() }).from(integrationAuditLog).where(whereClause),
       connectionId
-        ? getAuditLogsByConnection(db, connectionId, { limit, offset })
+        ? getAuditLogsByConnection(db, driveId, connectionId, { limit, offset })
         : successParam !== null
           ? getAuditLogsBySuccess(db, driveId, successParam === 'true', { limit, offset })
           : getAuditLogsByDrive(db, driveId, { limit, offset }),

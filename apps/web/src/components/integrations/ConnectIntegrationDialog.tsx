@@ -62,7 +62,9 @@ export function ConnectIntegrationDialog({
       const body: Record<string, unknown> = {
         providerId: provider.id,
         name: connectionName,
-        returnUrl: '/settings/integrations',
+        returnUrl: scope === 'drive' && driveId
+          ? `/dashboard/${driveId}/settings`
+          : '/settings/integrations',
       };
 
       if (scope === 'user') {

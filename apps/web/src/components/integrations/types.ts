@@ -12,7 +12,7 @@ export interface SafeProvider {
   description: string | null;
   iconUrl: string | null;
   documentationUrl: string | null;
-  providerType: string;
+  providerType: 'builtin' | 'openapi' | 'custom';
   isSystem: boolean;
   enabled: boolean;
   createdAt: string;

@@ -29,6 +29,16 @@ interface IntegrationAuditLogProps {
 
 const PAGE_SIZE = 20;
 
+const formatTimestamp = (ts: string) => {
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 export function IntegrationAuditLog({ driveId }: IntegrationAuditLogProps) {
   const [offset, setOffset] = useState(0);
   const [connectionFilter, setConnectionFilter] = useState<string>('all');
@@ -54,16 +64,6 @@ export function IntegrationAuditLog({ driveId }: IntegrationAuditLogProps) {
   }
 
   const { logs, total, isLoading, error } = useIntegrationAuditLogs(driveId, params);
-
-  const formatTimestamp = (ts: string) => {
-    const d = new Date(ts);
-    return d.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
 
   const connectionNameMap = useMemo(
     () => new Map(connections.map((c) => [c.id, c.name])),

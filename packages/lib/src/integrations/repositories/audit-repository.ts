@@ -58,17 +58,21 @@ export const getAuditLogsByDrive = async (
 };
 
 /**
- * Get audit logs for a connection.
+ * Get audit logs for a connection, scoped to a specific drive.
  */
 export const getAuditLogsByConnection = async (
   database: typeof defaultDb,
+  driveId: string,
   connectionId: string,
   options: QueryOptions = {}
 ): Promise<IntegrationAuditLogEntry[]> => {
   const { limit = 100, offset = 0 } = options;
 
   const logs = await database.query.integrationAuditLog.findMany({
-    where: eq(integrationAuditLog.connectionId, connectionId),
+    where: and(
+      eq(integrationAuditLog.driveId, driveId),
+      eq(integrationAuditLog.connectionId, connectionId)
+    ),
     orderBy: [desc(integrationAuditLog.createdAt)],
     limit,
     offset,

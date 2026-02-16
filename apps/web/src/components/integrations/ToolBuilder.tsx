@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { createId } from '@paralleldrive/cuid2';
 import { put } from '@/lib/auth/auth-fetch';
 import { JsonSchemaBuilder, parametersToJsonSchema, type SchemaParameter } from './JsonSchemaBuilder';
 
@@ -62,7 +63,7 @@ export function ToolBuilder({ providerId, open, onOpenChange, onSaved }: ToolBui
     setIsSaving(true);
     try {
       const tool = {
-        id: toolName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_'),
+        id: createId(),
         name: toolName.trim(),
         description: description.trim(),
         category,
@@ -83,7 +84,6 @@ export function ToolBuilder({ providerId, open, onOpenChange, onSaved }: ToolBui
       toast.success(`Tool "${toolName}" added`);
       onSaved();
       onOpenChange(false);
-      resetForm();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save tool');
     } finally {

@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,6 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Trash2 } from 'lucide-react';
 
 export interface SchemaParameter {
+  id: string;
   name: string;
   type: 'string' | 'number' | 'boolean' | 'integer';
   description: string;
@@ -28,7 +28,7 @@ interface JsonSchemaBuilderProps {
 
 export function JsonSchemaBuilder({ parameters, onChange }: JsonSchemaBuilderProps) {
   const addParameter = () => {
-    onChange([...parameters, { name: '', type: 'string', description: '', required: false }]);
+    onChange([...parameters, { id: crypto.randomUUID(), name: '', type: 'string', description: '', required: false }]);
   };
 
   const removeParameter = (index: number) => {
@@ -56,7 +56,7 @@ export function JsonSchemaBuilder({ parameters, onChange }: JsonSchemaBuilderPro
       ) : (
         <div className="space-y-3">
           {parameters.map((param, index) => (
-            <div key={index} className="grid grid-cols-12 gap-2 items-start border rounded-md p-2">
+            <div key={param.id} className="grid grid-cols-12 gap-2 items-start border rounded-md p-2">
               <div className="col-span-3">
                 <Input
                   placeholder="name"
@@ -129,13 +129,14 @@ export function parametersToJsonSchema(parameters: SchemaParameter[]): Record<st
   const required: string[] = [];
 
   for (const param of parameters) {
-    if (!param.name.trim()) continue;
-    properties[param.name] = {
+    const name = param.name.trim();
+    if (!name) continue;
+    properties[name] = {
       type: param.type,
       ...(param.description ? { description: param.description } : {}),
     };
     if (param.required) {
-      required.push(param.name);
+      required.push(name);
     }
   }
 

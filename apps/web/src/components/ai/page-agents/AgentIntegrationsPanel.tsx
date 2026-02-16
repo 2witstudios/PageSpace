@@ -168,6 +168,7 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                           Rate limit (req/min, optional)
                         </Label>
                         <Input
+                          key={`ratelimit-${grant.id}-${grant.rateLimitOverride?.requestsPerMinute ?? 'default'}`}
                           id={`ratelimit-${grant.id}`}
                           type="number"
                           min={1}

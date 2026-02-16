@@ -30,8 +30,8 @@ const visibilityLabels: Record<string, string> = {
 export default function IntegrationsSettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { providers, isLoading: loadingProviders } = useProviders();
-  const { connections, isLoading: loadingConnections, mutate: mutateConnections } = useUserConnections();
+  const { providers, isLoading: loadingProviders, error: providersError } = useProviders();
+  const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -45,7 +45,7 @@ export default function IntegrationsSettingsPage() {
       // Clean URL
       router.replace('/settings/integrations');
     } else if (searchParams.get('error')) {
-      toast.error(`Connection failed: ${searchParams.get('error')}`);
+      toast.error('Connection failed. Please try again.');
       router.replace('/settings/integrations');
     }
   }, [searchParams, mutateConnections, router]);
@@ -128,6 +128,11 @@ export default function IntegrationsSettingsPage() {
               <div className="space-y-3">
                 <Skeleton className="h-16 w-full" />
                 <Skeleton className="h-16 w-full" />
+              </div>
+            ) : connectionsError ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                <AlertCircle className="h-4 w-4" />
+                <span>Failed to load integrations</span>
               </div>
             ) : connections.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">
@@ -222,6 +227,11 @@ export default function IntegrationsSettingsPage() {
               <div className="space-y-3">
                 <Skeleton className="h-16 w-full" />
                 <Skeleton className="h-16 w-full" />
+              </div>
+            ) : providersError ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                <AlertCircle className="h-4 w-4" />
+                <span>Failed to load integrations</span>
               </div>
             ) : availableProviders.length === 0 ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">

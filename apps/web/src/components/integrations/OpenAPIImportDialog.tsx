@@ -12,7 +12,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +41,8 @@ interface OpenAPIImportDialogProps {
   onOpenChange: (open: boolean) => void;
   onImported: (result: ParsedSpec) => void;
 }
+
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 export function OpenAPIImportDialog({ open, onOpenChange, onImported }: OpenAPIImportDialogProps) {
   const [tab, setTab] = useState<string>('url');
@@ -75,8 +76,6 @@ export function OpenAPIImportDialog({ open, onOpenChange, onImported }: OpenAPII
       setIsFetching(false);
     }
   };
-
-  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

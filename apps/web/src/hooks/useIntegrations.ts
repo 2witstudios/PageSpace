@@ -6,7 +6,10 @@ import type { SafeProvider, SafeConnection, SafeGrant, AuditLogEntry } from '@/c
 
 const fetcher = async (url: string) => {
   const res = await fetchWithAuth(url);
-  if (!res.ok) throw new Error('Failed to fetch');
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Failed to fetch ${url}: ${res.status}${body ? ` - ${body}` : ''}`);
+  }
   return res.json();
 };
 
@@ -55,8 +58,8 @@ interface AuditLogsParams {
 
 export function useIntegrationAuditLogs(driveId: string | null, params: AuditLogsParams = {}) {
   const searchParams = new URLSearchParams();
-  if (params.limit) searchParams.set('limit', String(params.limit));
-  if (params.offset) searchParams.set('offset', String(params.offset));
+  if (params.limit != null) searchParams.set('limit', String(params.limit));
+  if (params.offset != null) searchParams.set('offset', String(params.offset));
   if (params.connectionId) searchParams.set('connectionId', params.connectionId);
   if (params.success !== undefined) searchParams.set('success', String(params.success));
 
