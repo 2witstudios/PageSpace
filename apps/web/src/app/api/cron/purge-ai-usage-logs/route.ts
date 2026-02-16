@@ -1,6 +1,6 @@
 import { anonymizeAiUsageContent, purgeAiUsageLogs } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
  * Cron endpoint to anonymize and purge old AI usage logs.
@@ -15,7 +15,7 @@ import { validateCronRequest } from '@/lib/auth/cron-auth';
  * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/purge-ai-usage-logs
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

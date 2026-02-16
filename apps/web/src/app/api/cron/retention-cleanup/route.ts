@@ -1,7 +1,7 @@
 import { runRetentionCleanup } from '@pagespace/lib/compliance/retention/retention-engine';
 import { db } from '@pagespace/db';
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
  * Cron endpoint to run data retention cleanup across all tables with expiresAt columns.
@@ -19,7 +19,7 @@ import { validateCronRequest } from '@/lib/auth/cron-auth';
  * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/retention-cleanup
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }
