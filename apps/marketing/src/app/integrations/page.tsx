@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 export const metadata = pageMetadata.integrations;
 
 interface MCPServer {
@@ -121,10 +123,10 @@ export default function IntegrationsPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>
@@ -153,9 +155,9 @@ export default function IntegrationsPage() {
                 </Link>
               </Button>
               <Button size="lg" variant="outline" asChild>
-                <Link href="/signup">
+                <a href={`${APP_URL}/auth/signup`}>
                   Try It Free
-                </Link>
+                </a>
               </Button>
             </div>
           </div>
@@ -395,10 +397,10 @@ export default function IntegrationsPage() {
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Button size="lg" asChild>
-                <Link href="/signup">
+                <a href={`${APP_URL}/auth/signup`}>
                   Get Started Free
                   <ArrowRight className="ml-2 h-4 w-4" />
-                </Link>
+                </a>
               </Button>
               <Button size="lg" variant="outline" asChild>
                 <Link href="/docs/integrations/quickstart">

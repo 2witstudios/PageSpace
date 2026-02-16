@@ -149,7 +149,7 @@ export const siteMetadata: Metadata = {
     images: [DEFAULT_OG_IMAGE],
   },
   verification: {
-    // Add these when available
+    // TODO: Add verification code from Google Search Console dashboard
     // google: 'your-google-verification-code',
   },
   category: "technology",
@@ -230,20 +230,27 @@ export const pageMetadata = {
     keywords: ["FAQ", "help", "support", "questions"],
   }),
 
-  login: createMetadata({
-    title: "Log In",
+  privacy: createMetadata({
+    title: "Privacy Policy",
     description:
-      "Sign in to your PageSpace workspace. Continue with Google, Apple, or a passkey.",
-    path: "/login",
-    keywords: ["login", "sign in", "authentication"],
-    noIndex: true,
+      "Learn how PageSpace collects, uses, and protects your information in our cloud-based workspace platform.",
+    path: "/privacy",
+    keywords: ["privacy policy", "data protection", "GDPR", "security"],
   }),
 
-  signup: createMetadata({
-    title: "Sign Up",
+  terms: createMetadata({
+    title: "Terms of Service",
     description:
-      "Create your free PageSpace workspace in seconds. AI-native documents, tasks, and collaboration.",
-    path: "/signup",
-    keywords: ["sign up", "register", "create account", "free workspace"],
+      "Terms of Service for PageSpace, the AI-powered unified workspace platform.",
+    path: "/terms",
+    keywords: ["terms of service", "terms", "legal", "agreement"],
+  }),
+
+  contact: createMetadata({
+    title: "Contact Us",
+    description:
+      "Get in touch with the PageSpace team. We'd love to hear from you about questions, feedback, or enterprise inquiries.",
+    path: "/contact",
+    keywords: ["contact", "support", "sales", "help"],
   }),
 };

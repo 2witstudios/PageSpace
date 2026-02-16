@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 export const metadata = pageMetadata.tour;
 
 interface TourStep {
@@ -105,10 +107,10 @@ export default function TourPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>
@@ -137,9 +139,9 @@ export default function TourPage() {
                 </a>
               </Button>
               <Button size="lg" variant="outline" asChild>
-                <Link href="/signup">
+                <a href={`${APP_URL}/auth/signup`}>
                   Try It Yourself
-                </Link>
+                </a>
               </Button>
             </div>
           </div>
@@ -230,10 +232,10 @@ export default function TourPage() {
                       </Button>
                     ) : (
                       <Button asChild>
-                        <Link href="/signup">
+                        <a href={`${APP_URL}/auth/signup`}>
                           Start Using PageSpace
                           <ArrowRight className="ml-2 h-4 w-4" />
-                        </Link>
+                        </a>
                       </Button>
                     )}
                   </div>
@@ -251,7 +253,7 @@ export default function TourPage() {
                       </div>
                       <div className="flex-1 text-center">
                         <div className="inline-flex items-center gap-2 rounded-md bg-muted px-3 py-1 text-xs text-muted-foreground">
-                          <span>app.pagespace.ai</span>
+                          <span>pagespace.ai</span>
                         </div>
                       </div>
                     </div>
@@ -262,9 +264,6 @@ export default function TourPage() {
                         <div className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 mb-4">
                           {step.icon}
                         </div>
-                        <p className="text-muted-foreground text-sm">
-                          Interactive demo coming soon
-                        </p>
                       </div>
                     </div>
                   </div>
@@ -286,10 +285,10 @@ export default function TourPage() {
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Button size="lg" asChild>
-                <Link href="/signup">
+                <a href={`${APP_URL}/auth/signup`}>
                   Get Started Free
                   <ArrowRight className="ml-2 h-4 w-4" />
-                </Link>
+                </a>
               </Button>
               <Button size="lg" variant="outline" asChild>
                 <Link href="/pricing">

@@ -4,6 +4,8 @@ import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 const navLinks = [
   { href: "/tour", label: "Product" },
   { href: "/pricing", label: "Pricing" },
@@ -73,10 +75,10 @@ export function SiteNavbar() {
 
         <div className="flex flex-shrink-0 items-center gap-2">
           <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-            <Link href="/login">Log in</Link>
+            <a href={`${APP_URL}/auth/signin`}>Log in</a>
           </Button>
           <Button size="sm" asChild>
-            <Link href="/signup">Get Started</Link>
+            <a href={`${APP_URL}/auth/signup`}>Get Started</a>
           </Button>
         </div>
       </div>

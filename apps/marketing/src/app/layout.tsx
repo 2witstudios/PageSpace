@@ -2,6 +2,7 @@ import type { Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { GoogleOneTap } from "@/components/GoogleOneTap";
 import { siteMetadata } from "@/lib/metadata";
 import { JsonLd, organizationSchema, websiteSchema } from "@/lib/schema";
 
@@ -51,6 +52,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
+          <GoogleOneTap />
         </ThemeProvider>
       </body>
     </html>

@@ -5,7 +5,7 @@
  */
 
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.pagespace.ai";
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
 /**
  * Organization schema - used site-wide

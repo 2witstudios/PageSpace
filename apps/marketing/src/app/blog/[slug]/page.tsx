@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 import type { Metadata } from "next";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 interface BlogPost {
   slug: string;
   title: string;
@@ -532,10 +534,10 @@ export default async function BlogPostPage(
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>
@@ -646,9 +648,9 @@ export default async function BlogPostPage(
               Start free with generous limits. No credit card required.
             </p>
             <Button size="lg" asChild>
-              <Link href="/signup">
+              <a href={`${APP_URL}/auth/signup`}>
                 Get Started Free
-              </Link>
+              </a>
             </Button>
           </div>
         </div>

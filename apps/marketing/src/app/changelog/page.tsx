@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 export const metadata = pageMetadata.changelog;
 
 interface ChangelogEntry {
@@ -173,10 +175,10 @@ export default function ChangelogPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>

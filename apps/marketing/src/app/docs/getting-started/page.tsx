@@ -3,6 +3,8 @@ import { Sparkles, ArrowRight, ArrowLeft, CheckCircle2, ChevronRight, Play, Book
 import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 export const metadata = {
   title: "Getting Started | PageSpace Documentation",
   description: "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
@@ -94,10 +96,10 @@ export default function GettingStartedPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>
@@ -147,7 +149,6 @@ export default function GettingStartedPage() {
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/20 mx-auto mb-4">
                 <Play className="h-8 w-8 text-primary" />
               </div>
-              <p className="text-muted-foreground">Video tutorial coming soon</p>
             </div>
           </div>
 
@@ -212,10 +213,10 @@ export default function GettingStartedPage() {
             <h2 className="text-xl font-bold mb-2">Ready to get started?</h2>
             <p className="text-muted-foreground mb-6">Create your free account and start building.</p>
             <Button size="lg" asChild>
-              <Link href="/signup">
+              <a href={`${APP_URL}/auth/signup`}>
                 Create Free Account
                 <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
+              </a>
             </Button>
           </div>
         </div>

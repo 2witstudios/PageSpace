@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { ArrowRight, ArrowUp, Download, Sparkles, Users, FileText, MessageSquare, CheckSquare, Calendar, FolderTree, Bot, Layers, User, ChevronRight, ChevronLeft, Edit3, Code, Undo2, Wand2, History, PenTool, AtSign, Hash, Paperclip, CheckCircle2, BarChart3, ListTodo, CalendarDays, Zap, Home as HomeIcon, Inbox, ChevronsUpDown, Folder, Search, Plus, ChevronDown, Wrench, Activity, MoreHorizontal, Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Table2, Settings2, FileDown, Share2, PanelLeft, PanelRight, Eye, AlertCircle } from "lucide-react";
+import { ArrowRight, ArrowUp, Download, Sparkles, Users, FileText, MessageSquare, CheckSquare, Calendar, FolderTree, Bot, Layers, ChevronRight, ChevronLeft, Edit3, Code, Undo2, Wand2, History, PenTool, AtSign, Hash, Paperclip, CheckCircle2, BarChart3, ListTodo, CalendarDays, Zap, Home as HomeIcon, Inbox, ChevronsUpDown, Folder, Search, Plus, ChevronDown, Wrench, Activity, MoreHorizontal, Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Table2, Settings2, FileDown, Share2, PanelLeft, PanelRight, Eye, AlertCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 import { JsonLd, webApplicationSchema } from "@/lib/schema";
+
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
 export const metadata = pageMetadata.home;
 
@@ -41,10 +43,10 @@ export default function Home() {
               {/* CTAs */}
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
                 <Button size="lg" asChild className="w-full sm:w-auto">
-                  <Link href="/signup">
+                  <a href={`${APP_URL}/auth/signup`}>
                     Get Started Free
                     <ArrowRight className="ml-2 h-4 w-4" />
-                  </Link>
+                  </a>
                 </Button>
                 <Button size="lg" variant="outline" asChild className="w-full sm:w-auto">
                   <Link href="/pricing">
@@ -1447,10 +1449,10 @@ export default function Home() {
               {/* CTAs */}
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
                 <Button size="lg" asChild className="w-full sm:w-auto">
-                  <Link href="/signup">
+                  <a href={`${APP_URL}/auth/signup`}>
                     Get Started Free
                     <ArrowRight className="ml-2 h-4 w-4" />
-                  </Link>
+                  </a>
                 </Button>
                 <Button size="lg" variant="outline" asChild className="w-full sm:w-auto">
                   <Link href="/pricing">

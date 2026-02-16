@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 export const metadata = pageMetadata.downloads;
 
 // Version info - would come from API/config in production
@@ -111,10 +113,10 @@ export default function DownloadsPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>
@@ -174,11 +176,9 @@ export default function DownloadsPage() {
                       </div>
                     </div>
                   </div>
-                  <Button className="w-full" asChild>
-                    <a href={`/downloads/${download.filename}`} download>
-                      <Download className="mr-2 h-4 w-4" />
-                      Download
-                    </a>
+                  <Button className="w-full" variant="outline" disabled>
+                    <Download className="mr-2 h-4 w-4" />
+                    Coming Soon
                   </Button>
                 </div>
               ))}

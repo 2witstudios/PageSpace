@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { Sparkles, ArrowRight, Book, Code, Zap, Server, FileText, Users, Terminal, ChevronRight, Search, Shield } from "lucide-react";
+import { Sparkles, ArrowRight, Book, Zap, Server, FileText, Users, ChevronRight, Search, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
+
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
 export const metadata = pageMetadata.docs;
 
@@ -49,18 +51,6 @@ const docSections: DocSection[] = [
       { title: "Google Calendar", href: "/docs/integrations/google-calendar" },
       { title: "GitHub Integration", href: "/docs/integrations/github" },
       { title: "Webhooks", href: "/docs/integrations/webhooks" },
-    ],
-  },
-  {
-    title: "API Reference",
-    description: "Full reference for the PageSpace REST API.",
-    icon: <Code className="h-5 w-5" />,
-    href: "/docs/api",
-    items: [
-      { title: "Authentication", href: "/docs/api/authentication" },
-      { title: "Pages", href: "/docs/api/pages" },
-      { title: "Workspaces", href: "/docs/api/workspaces" },
-      { title: "AI Endpoints", href: "/docs/api/ai" },
     ],
   },
   {
@@ -129,10 +119,10 @@ export default function DocsPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <Link href="/login">Log in</Link>
+              <a href={`${APP_URL}/auth/signin`}>Log in</a>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/signup">Get Started</Link>
+              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
             </Button>
           </div>
         </div>
@@ -177,13 +167,6 @@ export default function DocsPage() {
             >
               <Book className="h-4 w-4" />
               Quick Start
-            </Link>
-            <Link
-              href="/docs/api"
-              className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm hover:bg-muted transition-colors"
-            >
-              <Terminal className="h-4 w-4" />
-              API Reference
             </Link>
             <Link
               href="/docs/mcp"
@@ -256,7 +239,7 @@ export default function DocsPage() {
               {[
                 { title: "Quick Start Guide", description: "Get up and running in 5 minutes", href: "/docs/getting-started" },
                 { title: "Understanding Page Agents", description: "Learn how AI agents work in your workspace", href: "/docs/ai/page-agents" },
-                { title: "API Authentication", description: "Secure your API requests with tokens", href: "/docs/api/authentication" },
+                { title: "Setting Up MCP Servers", description: "Connect AI to external tools and services", href: "/docs/mcp/overview" },
                 { title: "MCP Server Setup", description: "Connect AI to external tools", href: "/docs/mcp/overview" },
               ].map((article) => (
                 <Link
