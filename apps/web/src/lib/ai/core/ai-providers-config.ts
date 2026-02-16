@@ -68,9 +68,6 @@ export const AI_PROVIDERS = {
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
 
-      // OpenAI Models (2026)
-      'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
-
       // OpenAI Models (2025)
       'openai/gpt-5.2': 'GPT-5.2',
       'openai/gpt-5.2-codex': 'GPT-5.2 Codex',
@@ -442,15 +439,9 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
 
   // For PageSpace provider, show tier-based naming
   if (provider === 'pagespace') {
-    // Resolve alias to actual model for comparison
     const resolvedModel = resolvePageSpaceModel(model);
-    if (resolvedModel === 'glm-5') {
-      return 'PageSpace Pro';
-    }
-    if (resolvedModel === 'glm-4.7') {
-      return 'PageSpace Standard';
-    }
-    // Any other PageSpace model defaults to Standard
+    const tier = getPageSpaceModelTier(resolvedModel);
+    if (tier === 'pro') return 'PageSpace Pro';
     return 'PageSpace Standard';
   }
 
@@ -459,20 +450,3 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
   return 'PageSpace AI';
 }
 
-/**
- * Providers that don't send data to external third parties.
- * These are either managed by PageSpace or run locally.
- */
-export const CONSENT_EXEMPT_PROVIDERS = new Set([
-  'pagespace',
-  'ollama',
-  'lmstudio',
-]);
-
-/**
- * Check if a provider requires user consent before use.
- * Local and PageSpace-managed providers are exempt.
- */
-export function requiresConsent(provider: string): boolean {
-  return !CONSENT_EXEMPT_PROVIDERS.has(provider);
-}

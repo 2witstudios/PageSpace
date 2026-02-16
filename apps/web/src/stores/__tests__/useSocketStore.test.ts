@@ -192,9 +192,9 @@ describe('useSocketStore', () => {
       const callArgs = vi.mocked(io).mock.calls[0];
       expect(callArgs[1]).toMatchObject({
         reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnectionAttempts: 15,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 30000,
       });
     });
   });

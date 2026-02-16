@@ -167,3 +167,13 @@ export {
   getAuditLogsByAgent,
   getAuditLogsByTool,
 } from './repositories/audit-repository';
+
+// Built-in Provider Adapters
+export {
+  builtinProviders,
+  builtinProviderList,
+  getBuiltinProvider,
+  isBuiltinProvider,
+  genericWebhookProvider,
+  githubProvider,
+} from './providers';

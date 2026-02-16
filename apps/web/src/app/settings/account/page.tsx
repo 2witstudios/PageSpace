@@ -587,8 +587,8 @@ export default function AccountPage() {
       {/* Security Section */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Security</CardTitle>
-          <CardDescription>Manage your password and security settings</CardDescription>
+          <CardTitle>Password</CardTitle>
+          <CardDescription>Change your password</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handlePasswordChange} className="space-y-4">

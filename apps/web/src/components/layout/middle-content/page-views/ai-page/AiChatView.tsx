@@ -27,6 +27,7 @@ import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { isEditingActive } from '@/stores/useEditingStore';
 
 // Shared hooks and components
 import {
@@ -37,6 +38,7 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useChatStop,
+  useSendHandoff,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -51,8 +53,6 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
-import { parseConsentError } from '@/lib/ai/shared/error-messages';
-import { CloudProviderConsentDialog } from '@/components/ai/consent/CloudProviderConsentDialog';
 
 interface AiChatViewProps {
   page: TreePage;
@@ -82,8 +82,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
-  const [consentProvider, setConsentProvider] = useState<string | null>(null);
-
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const voiceOwner = useVoiceModeStore((s) => s.owner);
@@ -175,11 +173,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       transport,
       experimental_throttle: 100,
       onError: (error: Error) => {
-        const provider = parseConsentError(error.message);
-        if (provider) {
-          setConsentProvider(provider);
-          return;
-        }
         console.error('AiChatView: Chat error:', error);
       },
     }),
@@ -190,6 +183,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const { wrapSend } = useSendHandoff(currentConversationId, status);
   const stop = useChatStop(streamTrackingId, chatStop);
   const isLoading = !isInitialized;
 
@@ -419,8 +413,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     if (!input.trim() && attachments.length === 0) return;
+    if (!currentConversationId) return;
 
-    void sendMessageWithContext(input);
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessageWithContext(input));
     setInput('');
     clearFiles();
     inputRef.current?.clear();
@@ -429,8 +425,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     isReadOnly,
     input,
     attachments.length,
+    currentConversationId,
     sendMessageWithContext,
     clearFiles,
+    wrapSend,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -440,11 +438,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     if (!text.trim()) return;
+    if (!currentConversationId) return;
 
-    void sendMessageWithContext(text);
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessageWithContext(text));
   }, [
     isReadOnly,
+    currentConversationId,
     sendMessageWithContext,
+    wrapSend,
   ]);
 
   // Voice mode toggle handler
@@ -472,32 +474,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
   }, [currentConversationId, page.id, setMessages]);
 
-  // Handle consent grant — call API, dismiss dialog, retry last message
-  const handleConsentGrant = useCallback(async () => {
-    if (!consentProvider) return;
-    try {
-      await fetchWithAuth('/api/ai/consent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: consentProvider }),
-      });
-      setConsentProvider(null);
-      setShowError(false);
-      // Retry the last user message if one exists
-      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-      if (lastUserMsg) {
-        const textParts = lastUserMsg.parts?.filter((p) => p.type === 'text') || [];
-        const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-        if (text) {
-          void sendMessageWithContext(text);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to grant consent:', err);
-      toast.error('Failed to grant consent. Please try again.');
-    }
-  }, [consentProvider, messages, sendMessageWithContext]);
-
   // Pull-up refresh handler for mobile - check for missed messages
   const handlePullUpRefresh = useCallback(async () => {
     if (!currentConversationId) return;
@@ -518,7 +494,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // This catches completed AI responses that finished while the app was backgrounded
   useAppStateRecovery({
     onResume: handlePullUpRefresh,
-    enabled: !isStreaming && currentConversationId !== null,
+    // Block recovery if streaming OR pending send OR any editing active
+    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
   });
 
   // Clean up stream tracking when conversation changes or on unmount
@@ -741,11 +718,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         </TabsContent>
       </Tabs>
 
-      <CloudProviderConsentDialog
-        provider={consentProvider}
-        onConsent={handleConsentGrant}
-        onCancel={() => setConsentProvider(null)}
-      />
     </div>
   );
 };

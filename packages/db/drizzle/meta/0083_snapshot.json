@@ -1,6 +1,6 @@
 {
-  "id": "6531b377-a474-4320-aaf6-d2823fe996ed",
-  "prevId": "32b3ebc0-7488-47d3-a637-c9e5991a0584",
+  "id": "a8f1d3e5-9b2c-4a7f-8e6d-1c3b5a7f9e2d",
+  "prevId": "c270b3e2-f280-4383-9486-998dcb6c14c6",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -813,7 +813,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'glm-4.5-air'"
+          "default": "'glm-4.7'"
         },
         "storageUsedBytes": {
           "name": "storageUsedBytes",
@@ -9996,7 +9996,7 @@
           "name": "drive_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "agent_id": {
           "name": "agent_id",

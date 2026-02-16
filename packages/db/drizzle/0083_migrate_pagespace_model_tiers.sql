@@ -9,12 +9,10 @@
 UPDATE users
 SET "currentAiModel" = 'glm-5'
 WHERE "currentAiProvider" = 'pagespace'
-  AND "currentAiModel" = 'glm-4.7';
+  AND "currentAiModel" = 'glm-4.7';--> statement-breakpoint
 
 -- Step 2: Migrate Standard users from glm-4.5-air to glm-4.7
 UPDATE users
 SET "currentAiModel" = 'glm-4.7'
 WHERE "currentAiProvider" = 'pagespace'
   AND "currentAiModel" = 'glm-4.5-air';
-
--- Note: Users using the 'glm' provider directly are unaffected (both models still exist there)

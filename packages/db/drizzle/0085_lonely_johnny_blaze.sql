@@ -1,1 +1,0 @@
-ALTER TABLE "integration_audit_log" ALTER COLUMN "drive_id" DROP NOT NULL;

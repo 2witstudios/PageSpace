@@ -19,3 +19,5 @@ export * from './token-lookup';
 export * from './token-utils';
 export * from './verification-utils';
 export * from './exchange-codes';
+export * from './magic-link-service';
+export * from './passkey-service';

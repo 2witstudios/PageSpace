@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
+import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
+import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
@@ -192,17 +194,17 @@ export async function POST(
   const startTime = Date.now();
   try {
     const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
-    loggers.api.debug('🚀 Global Assistant Chat API: Starting request processing', {});
+    loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
-      loggers.api.debug('❌ Global Assistant Chat API: Authentication failed', {});
+      loggers.api.debug('Global Assistant Chat API: Authentication failed', {});
       return auth.error;
     }
     const userId = auth.userId;
 
     const { id: conversationId } = await context.params;
-    loggers.api.debug('✅ Global Assistant Chat API: Authentication successful, userId:', { userId });
+    loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
 
     // Verify user owns the conversation
     const [conversation] = await db
@@ -229,7 +231,7 @@ export async function POST(
 
     // Parse request body
     const requestBody = await request.json();
-    loggers.api.debug('📦 Global Assistant Chat API: Request body received:', {
+    loggers.api.debug('Global Assistant Chat API: Request body received', {
       messageCount: requestBody.messages?.length || 0,
       conversationId,
       selectedProvider: requestBody.selectedProvider,
@@ -257,11 +259,11 @@ export async function POST(
 
     // Validate required parameters
     if (!requestMessages || requestMessages.length === 0) {
-      loggers.api.debug('❌ Global Assistant Chat API: No messages provided', {});
+      loggers.api.debug('Global Assistant Chat API: No messages provided', {});
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
     
-    loggers.api.debug('✅ Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+    loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
 
     // Image security validation — validate file parts in the user message
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
@@ -310,7 +312,7 @@ export async function POST(
           });
         }
         
-        loggers.api.debug('💾 Global Assistant Chat API: Saving user message immediately:', { id: messageId, contentLength: messageContent.length });
+        loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
         
         await saveGlobalAssistantMessageToDatabase({
           messageId,
@@ -344,9 +346,9 @@ export async function POST(
           .set(updateData)
           .where(eq(conversations.id, conversationId));
         
-        loggers.api.debug('✅ Global Assistant Chat API: User message saved to database', {});
+        loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
-        loggers.api.error('❌ Global Assistant Chat API: Failed to save user message:', error as Error);
+        loggers.api.error('Global Assistant Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',
           details: error instanceof Error ? error.message : 'Unknown database error',
@@ -382,10 +384,9 @@ export async function POST(
     // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
     // This prevents users from exceeding their daily AI call limits
     if (currentProvider === 'pagespace') {
-      const isProModel = currentModel === 'glm-4.7';
-      const providerType = isProModel ? 'pro' : 'standard';
+      const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
 
-      loggers.api.debug('🚦 Global Assistant Chat API: Checking rate limit before streaming', {
+      loggers.api.debug('Global Assistant Chat API: Checking rate limit before streaming', {
         userId: maskIdentifier(userId),
         provider: currentProvider,
         model: currentModel,
@@ -396,7 +397,7 @@ export async function POST(
       const currentUsage = await getCurrentUsage(userId, providerType);
 
       if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.api.warn('🚫 Global Assistant Chat API: Rate limit exceeded', {
+        loggers.api.warn('Global Assistant Chat API: Rate limit exceeded', {
           userId: maskIdentifier(userId),
           providerType,
           currentCount: currentUsage.currentCount,
@@ -408,7 +409,7 @@ export async function POST(
         return createRateLimitResponse(providerType, currentUsage.limit);
       }
 
-      loggers.api.debug('✅ Global Assistant Chat API: Rate limit check passed', {
+      loggers.api.debug('Global Assistant Chat API: Rate limit check passed', {
         userId: maskIdentifier(userId),
         providerType,
         remaining: currentUsage.remainingCalls,
@@ -417,14 +418,14 @@ export async function POST(
       });
     }
 
-    loggers.api.debug('🤖 Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });
+    loggers.api.debug('Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });
 
     // DATABASE-FIRST ARCHITECTURE:
     // PageSpace uses database as the single source of truth for all messages.
     // We MUST read conversation history from database, not from client's request.
     // This ensures edited messages, multi-user changes, and any database updates
     // are reflected in the AI's context immediately.
-    loggers.api.debug('📚 Global Assistant Chat API: Loading conversation history from database', {
+    loggers.api.debug('Global Assistant Chat API: Loading conversation history from database', {
       conversationId
     });
 
@@ -454,7 +455,7 @@ export async function POST(
       })
     );
 
-    loggers.api.debug('✅ Global Assistant Chat API: Loaded conversation history from database', {
+    loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
       conversationId
     });
@@ -678,7 +679,7 @@ MENTION PROCESSING:
     // Apply web search filtering (exclude web_search if disabled)
     let finalTools: ToolSet = filterToolsForWebSearch(postReadOnlyTools, webSearchMode) as ToolSet;
 
-    loggers.api.debug('🔧 Global Assistant Chat API: Tool modes', {
+    loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
       totalTools: Object.keys(finalTools).length
@@ -704,8 +705,7 @@ MENTION PROCESSING:
         userDriveRole,
       });
       if (Object.keys(integrationTools).length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        finalTools = { ...finalTools, ...integrationTools } as any;
+        finalTools = mergeToolSets(finalTools, integrationTools);
         loggers.api.info('Global Assistant: Merged integration tools', {
           integrationToolCount: Object.keys(integrationTools).length,
           totalTools: Object.keys(finalTools).length,
@@ -778,7 +778,7 @@ MENTION PROCESSING:
       });
     }
 
-    loggers.api.debug('🔄 Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
+    loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 
     // Calculate context size BEFORE streaming (for real context window tracking)
     const contextCalculation = calculateTotalContextSize({
@@ -789,7 +789,7 @@ MENTION PROCESSING:
       provider: currentProvider,
     });
 
-    loggers.api.debug('📊 Context calculation', {
+    loggers.api.debug('Global Assistant Chat API: Context calculation', {
       contextSize: contextCalculation.totalTokens,
       messageCount: contextCalculation.messageCount,
       systemPromptTokens: contextCalculation.systemPromptTokens,
@@ -957,8 +957,7 @@ MENTION PROCESSING:
 
             if (isPageSpaceProvider) {
               try {
-                const isProModel = currentModel === 'glm-4.7';
-                const providerType = isProModel ? 'pro' : 'standard';
+                const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
 
                 const usageResult = await incrementUsage(userId, providerType);
 

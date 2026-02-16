@@ -16,21 +16,22 @@ import {
   useConversationScrollRef
 } from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { useGlobalChat } from '@/contexts/GlobalChatContext';
+import { useGlobalChatConversation, useGlobalChatConfig, useGlobalChatStream } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
-import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { InputCard } from '@/components/ui/floating-input';
+import { isEditingActive } from '@/stores/useEditingStore';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
@@ -147,20 +148,24 @@ const SidebarChatTab: React.FC = () => {
   const { isOpen: isKeyboardOpen, height: keyboardHeight } = useMobileKeyboard();
 
   // ============================================
-  // Global Chat Context (for global mode sync)
+  // Global Chat Context (split into selective hooks to minimize re-renders)
   // ============================================
   const {
-    chatConfig: globalChatConfig,
-    isStreaming: contextIsStreaming,
-    stopStreaming: contextStopStreaming,
-    setMessages: setGlobalContextMessages,
-    setIsStreaming: setGlobalIsStreaming,
-    setStopStreaming: setGlobalStopStreaming,
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
     createNewConversation: createGlobalConversation,
     refreshConversation: refreshGlobalConversation,
-  } = useGlobalChat();
+  } = useGlobalChatConversation();
+
+  const {
+    chatConfig: globalChatConfig,
+    setMessages: setGlobalContextMessages,
+  } = useGlobalChatConfig();
+
+  const {
+    isStreaming: contextIsStreaming,
+    stopStreaming: contextStopStreaming,
+  } = useGlobalChatStream();
 
   // ============================================
   // Sidebar Agent State (custom hook)
@@ -203,13 +208,11 @@ const SidebarChatTab: React.FC = () => {
     sendMessage,
     status,
     error,
+    clearError,
     regenerate,
     setMessages,
     stop,
     isStreaming,
-    globalStatus,
-    globalStop,
-    globalMessages,
     setGlobalMessages,
   } = usePageAgentSidebarChat({
     selectedAgent,
@@ -232,6 +235,9 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
     : (isStreaming || contextIsStreaming);
+
+  // Effect-based handoff for pending send → streaming transition
+  const { wrapSend } = useSendHandoff(currentConversationId, status);
 
   // ============================================
   // Centralized Assistant Settings (from store)
@@ -272,7 +278,6 @@ const SidebarChatTab: React.FC = () => {
 
   // Refs
   const chatInputRef = useRef<ChatInputRef>(null);
-  const prevGlobalStatusRef = useRef<string>('ready');
 
   // ============================================
   // Effects: Drive Loading
@@ -388,52 +393,9 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Global Mode Sync to Context
   // ============================================
-  // Only sync when initialized to prevent race conditions during conversation loading.
-  // This ensures we don't overwrite context with stale messages from a previous conversation.
-  useEffect(() => {
-    if (!selectedAgent && globalIsInitialized) {
-      setGlobalContextMessages(globalMessages);
-    }
-  }, [selectedAgent, globalMessages, setGlobalContextMessages, globalIsInitialized]);
-
-  useEffect(() => {
-    if (selectedAgent) return;
-
-    const isCurrentlyStreaming = globalStatus === 'submitted' || globalStatus === 'streaming';
-    const wasStreaming = prevGlobalStatusRef.current === 'submitted' || prevGlobalStatusRef.current === 'streaming';
-
-    if (isCurrentlyStreaming && !wasStreaming) {
-      setGlobalIsStreaming(true);
-    } else if (!isCurrentlyStreaming && wasStreaming) {
-      setGlobalIsStreaming(false);
-    }
-
-    prevGlobalStatusRef.current = globalStatus;
-  }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
-
-  // Register stop function to global context (global mode only)
-  // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
-  useEffect(() => {
-    if (selectedAgent) return;
-
-    const streaming = globalStatus === 'submitted' || globalStatus === 'streaming';
-    if (streaming) {
-      setGlobalStopStreaming(() => async () => {
-        try {
-          // Call abort endpoint to stop server-side processing
-          if (globalConversationId) {
-            await abortActiveStream({ chatId: globalConversationId });
-          }
-        } finally {
-          // Call useChat's stop to abort client-side fetch
-          globalStop();
-        }
-      });
-    } else {
-      setGlobalStopStreaming(null);
-    }
-  }, [selectedAgent, globalStatus, globalStop, globalConversationId, setGlobalStopStreaming]);
+  // GlobalAssistantView is the PRIMARY syncer for global mode state (messages,
+  // streaming status, stop function). The sidebar READS from context but does
+  // not write back, preventing duplicate sync effects and race conditions.
 
   // ============================================
   // Effects: Editing Store Registration
@@ -507,7 +469,8 @@ const SidebarChatTab: React.FC = () => {
 
   useAppStateRecovery({
     onResume: handleAppResume,
-    enabled: !isStreaming && currentConversationId !== null,
+    // Block recovery if streaming OR pending send OR any editing active
+    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
   });
 
   // Clean up stream tracking on unmount or conversation change
@@ -580,7 +543,8 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body }));
     setInput('');
     clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
@@ -598,6 +562,7 @@ const SidebarChatTab: React.FC = () => {
     sendMessage,
     getFilesForSend,
     clearFiles,
+    wrapSend,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -627,7 +592,8 @@ const SidebarChatTab: React.FC = () => {
           selectedModel: currentModel,
         };
 
-    sendMessage({ text }, { body });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text }, { body }));
   }, [
     currentConversationId,
     selectedAgent,
@@ -639,6 +605,7 @@ const SidebarChatTab: React.FC = () => {
     currentProvider,
     currentModel,
     sendMessage,
+    wrapSend,
   ]);
 
   // Voice mode toggle handler
@@ -651,84 +618,29 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
-  const handleEdit = useCallback(async (messageId: string, newContent: string) => {
-    if (!currentConversationId) return;
-
-    try {
-      if (selectedAgent) {
-        await patch(`/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`, {
-          content: newContent,
-        });
-        await refreshAgentConversation();
-      } else {
-        await patch(`/api/ai/global/${currentConversationId}/messages/${messageId}`, {
-          content: newContent,
-        });
-        await refreshGlobalConversation();
-      }
-      toast.success('Message updated successfully');
-    } catch {
-      toast.error('Failed to update message');
-    }
-  }, [currentConversationId, selectedAgent, refreshAgentConversation, refreshGlobalConversation]);
-
-  const handleDelete = useCallback(async (messageId: string) => {
-    if (!currentConversationId) return;
-
-    try {
-      if (selectedAgent) {
-        await del(`/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${messageId}`);
-      } else {
-        await del(`/api/ai/global/${currentConversationId}/messages/${messageId}`);
-      }
-
-      const filtered = messages.filter(m => m.id !== messageId);
-      setMessages(filtered);
-
+  // Unified setMessages that syncs to global context when in global mode
+  // Forward updater functions directly — useChat's setMessages handles them with latest state
+  const unifiedSetMessages = useCallback(
+    (msgs: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => {
+      setMessages(msgs);
       if (!selectedAgent) {
-        setGlobalMessages(filtered);
+        setGlobalMessages(msgs);
       }
+    },
+    [selectedAgent, setMessages, setGlobalMessages]
+  );
 
-      toast.success('Message deleted');
-    } catch {
-      toast.error('Failed to delete message');
-    }
-  }, [currentConversationId, selectedAgent, messages, setMessages, setGlobalMessages]);
+  const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
+    useMessageActions({
+      agentId: selectedAgent?.id || null,
+      conversationId: currentConversationId,
+      messages,
+      setMessages: unifiedSetMessages,
+      regenerate,
+    });
 
-  const handleRetry = useCallback(async () => {
-    if (!currentConversationId) return;
-
-    const lastUserMsgIndex = messages.map(m => m.role).lastIndexOf('user');
-
-    if (lastUserMsgIndex !== -1) {
-      const assistantMessagesToDelete = messages
-        .slice(lastUserMsgIndex + 1)
-        .filter(m => m.role === 'assistant');
-
-      for (const msg of assistantMessagesToDelete) {
-        try {
-          if (selectedAgent) {
-            await del(`/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages/${msg.id}`);
-          } else {
-            await del(`/api/ai/global/${currentConversationId}/messages/${msg.id}`);
-          }
-        } catch {
-          // Continue with other deletions
-        }
-      }
-
-      const filteredMessages = messages.filter(
-        m => !assistantMessagesToDelete.some(toDelete => toDelete.id === m.id)
-      );
-      setMessages(filteredMessages);
-
-      if (!selectedAgent) {
-        setGlobalMessages(filteredMessages);
-      }
-    }
-
-    regenerate();
-  }, [currentConversationId, selectedAgent, messages, setMessages, setGlobalMessages, regenerate]);
+  // Auto-retry on network errors (e.g. ERR_NETWORK_CHANGED killing mid-stream)
+  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2 });
 
   // Adapter for AgentSelector (converts SidebarAgentInfo to AgentInfo shape)
   const handleSelectAgent = useCallback((agent: SidebarAgentInfo | null) => {
@@ -793,14 +705,6 @@ const SidebarChatTab: React.FC = () => {
   // indirection through sync effects that could cause race conditions and state snapping.
   // The useChat hook with the same ID shares state via SWR, so all components see the same messages.
   const displayMessages = messages;
-
-  const lastAssistantMessageId = displayMessages
-    .filter(m => m.role === 'assistant')
-    .slice(-1)[0]?.id;
-
-  const lastUserMessageId = displayMessages
-    .filter(m => m.role === 'user')
-    .slice(-1)[0]?.id;
 
   // ============================================
   // Render

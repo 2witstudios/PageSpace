@@ -2,7 +2,7 @@ import { findOrphanedFileRecords, deleteFileRecords } from '@pagespace/lib/compl
 import { db } from '@pagespace/db';
 import { createDriveServiceToken } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import type { ServiceScope } from '@pagespace/lib';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
@@ -16,15 +16,10 @@ const FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
  * 1. Calls processor service to delete physical file + cache
  * 2. Deletes the DB record
  *
- * Authentication:
- * - Primary: CRON_SECRET Bearer token (timing-safe comparison)
- * - Defense-in-depth: internal network origin check
- *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/cleanup-orphaned-files
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

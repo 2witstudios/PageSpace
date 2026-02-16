@@ -1,11 +1,7 @@
 import { NextResponse, after } from 'next/server';
-import { db, googleCalendarConnections, eq } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { syncGoogleCalendar } from '@/lib/integrations/google-calendar/sync-service';
-import { verifyWebhookToken } from '@/lib/integrations/google-calendar/webhook-token';
-
-type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
-type WebhookChannels = Record<string, WebhookChannel>;
+import { validateWebhookAuth } from '@/lib/integrations/google-calendar/webhook-auth';
 
 /**
  * POST /api/integrations/google-calendar/webhook
@@ -20,8 +16,9 @@ type WebhookChannels = Record<string, WebhookChannel>;
  * - X-Goog-Message-Number: Sequential message number
  * - X-Goog-Channel-Token: Secret token we provided during watch registration
  *
- * We validate the channel token (HMAC) first, then match the channelId
- * against our stored webhook channels as a secondary check.
+ * Zero-trust authentication:
+ * - All sync-triggering requests MUST include a valid HMAC token
+ * - No fallback to channel/resource ID lookup
  */
 export async function POST(request: Request) {
   try {
@@ -35,56 +32,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing headers' }, { status: 400 });
     }
 
-    // Initial sync notification - just acknowledge
+    // Initial sync notification - just acknowledge (no auth required for sync confirmation)
     if (resourceState === 'sync') {
-      loggers.api.info('Google Calendar webhook: sync confirmation received', { channelId });
+      loggers.api.info('Google Calendar webhook: sync confirmation received', { channelId, hasToken: !!channelToken });
       return NextResponse.json({ ok: true });
     }
 
-    // Primary auth: validate HMAC token if present
-    const tokenUserId = channelToken ? verifyWebhookToken(channelToken) : null;
-
-    let matchedUserId: string | null = tokenUserId;
-
-    // If token auth didn't resolve a userId, fall back to channel lookup
-    if (!matchedUserId) {
-      const connections = await db.query.googleCalendarConnections.findMany({
-        where: eq(googleCalendarConnections.status, 'active'),
-        columns: {
-          userId: true,
-          webhookChannels: true,
-        },
+    // Zero-trust authentication: require valid HMAC token
+    const authResult = validateWebhookAuth(channelToken);
+    if (authResult instanceof NextResponse) {
+      loggers.api.warn('Google Calendar webhook: auth failed', {
+        channelId,
+        resourceId,
+        hasToken: !!channelToken,
       });
-
-      for (const conn of connections) {
-        const channels = conn.webhookChannels;
-        if (!channels || typeof channels !== 'object') continue;
-        const typedChannels = channels as WebhookChannels;
-        for (const calId of Object.keys(typedChannels)) {
-          const ch = typedChannels[calId];
-          if (ch?.channelId === channelId && ch?.resourceId === resourceId) {
-            matchedUserId = conn.userId;
-            break;
-          }
-        }
-        if (matchedUserId) break;
-      }
+      return authResult;
     }
 
-    if (!matchedUserId) {
-      loggers.api.warn('Google Calendar webhook: no matching connection found', { channelId, resourceId });
-      // Return 200 to prevent Google from retrying
-      return NextResponse.json({ ok: true });
-    }
+    const { userId } = authResult;
 
     loggers.api.info('Google Calendar webhook: triggering sync', {
-      userId: matchedUserId,
+      userId,
       channelId,
       resourceState,
     });
 
     // Use after() to ensure sync runs to completion even after response is sent
-    const userId = matchedUserId;
     after(() => {
       syncGoogleCalendar(userId).catch((error) => {
         loggers.api.error('Google Calendar webhook sync failed', error as Error, {
@@ -96,7 +69,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     loggers.api.error('Google Calendar webhook error:', error as Error);
-    // Always return 200 to prevent Google from retrying on server errors
-    return NextResponse.json({ ok: true });
+    // Return 500 for unexpected errors (don't mask server issues)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -58,7 +58,26 @@ export const extractPath = (data: unknown, path: string): unknown => {
 };
 
 /**
+ * Resolve a potentially dotted path against a source object.
+ * Flat keys use direct lookup; dotted keys traverse nested properties.
+ */
+const resolveSourceKey = (source: Record<string, unknown>, key: string): unknown => {
+  if (!key.includes('.')) {
+    return source[key];
+  }
+  let current: unknown = source;
+  for (const segment of key.split('.')) {
+    if (current === null || current === undefined || typeof current !== 'object') {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+};
+
+/**
  * Apply field mapping to an object.
+ * Source keys support dot-notation for nested access (e.g. 'user.login').
  */
 export const applyMapping = (
   data: unknown,
@@ -80,7 +99,7 @@ export const applyMapping = (
   const result: Record<string, unknown> = {};
 
   for (const [targetKey, sourceKey] of Object.entries(mapping)) {
-    result[targetKey] = source[sourceKey];
+    result[targetKey] = resolveSourceKey(source, sourceKey);
   }
 
   return result;

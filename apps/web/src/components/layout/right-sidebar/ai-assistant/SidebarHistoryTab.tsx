@@ -64,7 +64,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const {
     conversationId: sidebarAgentConversationId,
     createNewConversation: createNewSidebarAgentConversation,
-    refreshConversation: refreshSidebarAgentConversation,
+    loadConversation: loadSidebarAgentConversation,
   } = usePageAgentSidebarState();
 
   // Use central agent store for dashboard context
@@ -170,17 +170,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
         await loadDashboardConversation(conversationId);
       } else {
         // Page context: load into sidebar's own state
-        try {
-          const messagesResponse = await fetchWithAuth(
-            `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
-          );
-          if (messagesResponse.ok) {
-            // Refresh to sync conversation data
-            await refreshSidebarAgentConversation();
-          }
-        } catch (error) {
-          console.error('Failed to load agent conversation:', error);
-        }
+        await loadSidebarAgentConversation(conversationId);
       }
     } else {
       // Load GLOBAL conversation using GlobalChatContext
@@ -193,7 +183,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     selectedAgent,
     isDashboardContext,
     loadDashboardConversation,
-    refreshSidebarAgentConversation,
+    loadSidebarAgentConversation,
     loadGlobalConversation,
   ]);
 

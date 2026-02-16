@@ -203,6 +203,11 @@
       "import": "./dist/email-templates/VerificationEmail.js",
       "require": "./dist/email-templates/VerificationEmail.js"
     },
+    "./email-templates/MagicLinkEmail": {
+      "types": "./dist/email-templates/MagicLinkEmail.d.ts",
+      "import": "./dist/email-templates/MagicLinkEmail.js",
+      "require": "./dist/email-templates/MagicLinkEmail.js"
+    },
     "./test/auth-helpers": {
       "types": "./dist/test/auth-helpers.d.ts",
       "import": "./dist/test/auth-helpers.js",
@@ -222,6 +227,11 @@
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js",
       "require": "./dist/auth/index.js"
+    },
+    "./auth/magic-link-service": {
+      "types": "./dist/auth/magic-link-service.d.ts",
+      "import": "./dist/auth/magic-link-service.js",
+      "require": "./dist/auth/magic-link-service.js"
     },
     "./notifications": {
       "types": "./dist/notifications/index.d.ts",
@@ -362,6 +372,9 @@
       "email-templates/VerificationEmail": [
         "./dist/email-templates/VerificationEmail.d.ts"
       ],
+      "email-templates/MagicLinkEmail": [
+        "./dist/email-templates/MagicLinkEmail.d.ts"
+      ],
       "test/auth-helpers": [
         "./dist/test/auth-helpers.d.ts"
       ],
@@ -373,6 +386,9 @@
       ],
       "auth": [
         "./dist/auth/index.d.ts"
+      ],
+      "auth/magic-link-service": [
+        "./dist/auth/magic-link-service.d.ts"
       ],
       "notifications": [
         "./dist/notifications/index.d.ts"
@@ -396,6 +412,7 @@
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
+    "@simplewebauthn/server": "^13.2.2",
     "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
     "drizzle-orm": "^0.32.2",

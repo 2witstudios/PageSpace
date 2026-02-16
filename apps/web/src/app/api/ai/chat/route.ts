@@ -10,6 +10,8 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
+import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
+import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
 import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
@@ -454,10 +456,9 @@ export async function POST(request: Request) {
     // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
     // This prevents users from exceeding their daily AI call limits
     if (currentProvider === 'pagespace') {
-      const isProModel = currentModel === 'glm-4.7';
-      const providerType = isProModel ? 'pro' : 'standard';
+      const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
 
-      loggers.ai.debug('🚦 AI Chat API: Checking rate limit before streaming', {
+      loggers.ai.debug('AI Chat API: Checking rate limit before streaming', {
         userId: maskIdentifier(userId),
         provider: currentProvider,
         model: currentModel,
@@ -468,7 +469,7 @@ export async function POST(request: Request) {
       const currentUsage = await getCurrentUsage(userId, providerType);
 
       if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.ai.warn('🚫 AI Chat API: Rate limit exceeded', {
+        loggers.ai.warn('AI Chat API: Rate limit exceeded', {
           userId: maskIdentifier(userId),
           providerType,
           currentCount: currentUsage.currentCount,
@@ -480,7 +481,7 @@ export async function POST(request: Request) {
         return createRateLimitResponse(providerType, currentUsage.limit);
       }
 
-      loggers.ai.debug('✅ AI Chat API: Rate limit check passed', {
+      loggers.ai.debug('AI Chat API: Rate limit check passed', {
         userId: maskIdentifier(userId),
         providerType,
         remaining: currentUsage.remainingCalls,
@@ -540,8 +541,7 @@ export async function POST(request: Request) {
         driveId: page.driveId,
       });
       if (Object.keys(integrationTools).length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        filteredTools = { ...filteredTools, ...integrationTools } as any;
+        filteredTools = mergeToolSets(filteredTools, integrationTools);
         loggers.ai.info('AI Chat API: Merged integration tools', {
           integrationToolCount: Object.keys(integrationTools).length,
           totalTools: Object.keys(filteredTools).length,
@@ -1008,24 +1008,12 @@ export async function POST(request: Request) {
               // Track usage for PageSpace providers only (rate limiting/quota tracking)
               const isPageSpaceProvider = currentProvider === 'pagespace';
 
-              // Determine if this is pro model based on model name
-              const isProModel = currentModel === 'glm-4.7';
-
               const maskedUserId = maskIdentifier(userId);
               const maskedMessageId = maskIdentifier(messageId);
 
-              usageLogger.info('Page AI usage tracking decision', {
-                userId: maskedUserId,
-                provider: currentProvider,
-                model: currentModel,
-                isPageSpaceProvider,
-                isProModel,
-                messageId: maskedMessageId,
-              });
-
               if (isPageSpaceProvider) {
                 try {
-                  const providerType = isProModel ? 'pro' : 'standard';
+                  const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
 
                   usageLogger.debug('Incrementing usage for Page AI response', {
                     userId: maskedUserId,

@@ -63,10 +63,13 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useChatStop,
+  useSendHandoff,
+  useStreamRecovery,
   LocationContext,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { isEditingActive } from '@/stores/useEditingStore';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
@@ -77,8 +80,6 @@ import {
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
-import { parseConsentError } from '@/lib/ai/shared/error-messages';
-import { CloudProviderConsentDialog } from '@/components/ai/consent/CloudProviderConsentDialog';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
 
@@ -138,8 +139,6 @@ const GlobalAssistantView: React.FC = () => {
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
-  const [consentProvider, setConsentProvider] = useState<string | null>(null);
-
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
@@ -283,11 +282,6 @@ const GlobalAssistantView: React.FC = () => {
       transport: agentTransport,
       experimental_throttle: 100,
       onError: (error: Error) => {
-        const provider = parseConsentError(error.message);
-        if (provider) {
-          setConsentProvider(provider);
-          return;
-        }
         console.error('Agent Chat error:', error);
       },
     };
@@ -299,6 +293,7 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage: globalSendMessage,
     status: globalStatus,
     error: globalError,
+    clearError: globalClearError,
     regenerate: globalRegenerate,
     setMessages: setGlobalLocalMessages,
     stop: globalStop,
@@ -310,6 +305,7 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage: agentSendMessage,
     status: agentStatus,
     error: agentError,
+    clearError: agentClearError,
     regenerate: agentRegenerate,
     setMessages: setAgentMessages,
     stop: agentStop,
@@ -322,20 +318,13 @@ const GlobalAssistantView: React.FC = () => {
   const sendMessage = selectedAgent ? agentSendMessage : globalSendMessage;
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
+  const clearError = selectedAgent ? agentClearError : globalClearError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  const { wrapSend } = useSendHandoff(currentConversationId, status);
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
-
-  // Detect consent errors from global mode (onError is in GlobalChatContext)
-  useEffect(() => {
-    if (!error) return;
-    const provider = parseConsentError(error.message);
-    if (provider) {
-      setConsentProvider(provider);
-    }
-  }, [error]);
 
   useEffect(() => {
     latestAgentMessagesRef.current = agentMessages;
@@ -386,6 +375,9 @@ const GlobalAssistantView: React.FC = () => {
       setMessages: selectedAgent ? agentSetMessages : globalSetMessages,
       regenerate,
     });
+
+  // Auto-retry on network errors (e.g. ERR_NETWORK_CHANGED killing mid-stream)
+  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2 });
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -450,7 +442,8 @@ const GlobalAssistantView: React.FC = () => {
   // This catches completed AI responses that finished while the app was backgrounded
   useAppStateRecovery({
     onResume: handlePullUpRefresh,
-    enabled: !isStreaming && currentConversationId !== null,
+    // Block recovery if streaming OR pending send OR any editing active
+    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
   });
 
   // Clean up stream tracking on unmount
@@ -501,6 +494,12 @@ const GlobalAssistantView: React.FC = () => {
       setGlobalIsStreaming(false);
     }
     prevStatusRef.current = globalStatus;
+
+    return () => {
+      if (isCurrentlyStreaming) {
+        setGlobalIsStreaming(false);
+      }
+    };
   }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
 
   // Register stop function to global context (global mode only)
@@ -523,6 +522,10 @@ const GlobalAssistantView: React.FC = () => {
     } else {
       setGlobalStopStreaming(null);
     }
+
+    return () => {
+      setGlobalStopStreaming(null);
+    };
   }, [selectedAgent, globalStatus, globalStop, globalConversationId, setGlobalStopStreaming]);
 
   // ============================================
@@ -540,6 +543,12 @@ const GlobalAssistantView: React.FC = () => {
       setAgentStreaming(false);
     }
     prevAgentStatusRef.current = agentStatus;
+
+    return () => {
+      if (isCurrentlyStreaming) {
+        setAgentStreaming(false);
+      }
+    };
   }, [selectedAgent, agentStatus, setAgentStreaming]);
 
   // Register stop function to dashboard store (agent mode only)
@@ -562,6 +571,10 @@ const GlobalAssistantView: React.FC = () => {
     } else {
       setAgentStopStreaming(null);
     }
+
+    return () => {
+      setAgentStopStreaming(null);
+    };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
   // Register streaming state with editing store
@@ -632,7 +645,8 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody }));
     setInput('');
     clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
@@ -662,7 +676,8 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         };
 
-    sendMessage({ text }, { body: requestBody });
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage({ text }, { body: requestBody }));
   }, [
     currentConversationId,
     selectedAgent,
@@ -676,65 +691,7 @@ const GlobalAssistantView: React.FC = () => {
     currentModel,
     mcpToolSchemas,
     sendMessage,
-  ]);
-
-  // Handle consent grant — call API, dismiss dialog, retry last message
-  const handleConsentGrant = useCallback(async () => {
-    if (!consentProvider) return;
-    try {
-      await fetchWithAuth('/api/ai/consent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: consentProvider }),
-      });
-      setConsentProvider(null);
-      setShowError(false);
-      // Retry: extract last user message and resend
-      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-      if (lastUserMsg && currentConversationId) {
-        const textParts = lastUserMsg.parts?.filter((p) => p.type === 'text') || [];
-        const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-        if (text) {
-          const requestBody = selectedAgent
-            ? {
-                chatId: selectedAgent.id,
-                conversationId: currentConversationId,
-                selectedProvider: agentSelectedProvider,
-                selectedModel: agentSelectedModel,
-                isReadOnly,
-                webSearchEnabled,
-                mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-              }
-            : {
-                isReadOnly,
-                webSearchEnabled,
-                showPageTree,
-                locationContext: locationContext || undefined,
-                selectedProvider: currentProvider,
-                selectedModel: currentModel,
-                mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-              };
-          sendMessage({ text }, { body: requestBody });
-        }
-      }
-    } catch (err) {
-      console.error('Failed to grant consent:', err);
-    }
-  }, [
-    consentProvider,
-    messages,
-    currentConversationId,
-    selectedAgent,
-    agentSelectedProvider,
-    agentSelectedModel,
-    isReadOnly,
-    webSearchEnabled,
-    showPageTree,
-    locationContext,
-    currentProvider,
-    currentModel,
-    mcpToolSchemas,
-    sendMessage,
+    wrapSend,
   ]);
 
   // Track last AI response for voice mode TTS
@@ -937,11 +894,6 @@ const GlobalAssistantView: React.FC = () => {
         )}
       />
 
-      <CloudProviderConsentDialog
-        provider={consentProvider}
-        onConsent={handleConsentGrant}
-        onCancel={() => setConsentProvider(null)}
-      />
     </div>
   );
 };

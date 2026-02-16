@@ -21,12 +21,16 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
     if (!content) return 'New conversation';
     try {
       const parsed = JSON.parse(content);
+      if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if (parsed.originalContent && typeof parsed.originalContent === 'string') return parsed.originalContent.substring(0, 100);
+        if (Array.isArray(parsed.textParts) && parsed.textParts.length > 0) return parsed.textParts[0].substring(0, 100);
+        if (parsed.parts?.[0]?.text) return parsed.parts[0].text.substring(0, 100);
+      }
       if (Array.isArray(parsed) && parsed[0]?.text) return parsed[0].text.substring(0, 100);
-      if (parsed.parts?.[0]?.text) return parsed.parts[0].text.substring(0, 100);
     } catch {
       return content.substring(0, 100);
     }
-    return 'New conversation';
+    return content.substring(0, 100);
   }),
   generateTitle: vi.fn((preview: string) => preview.length > 50 ? preview.substring(0, 50) + '...' : preview),
 }));
@@ -418,6 +422,33 @@ describe('extractPreviewText (pure function)', () => {
     const { extractPreviewText } = actualModule;
 
     expect(extractPreviewText('plain text message')).toBe('plain text message');
+  });
+
+  it('should extract text from structured content with originalContent', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
+    const content = JSON.stringify({
+      textParts: ['Hello structured'],
+      partsOrder: [{ index: 0, type: 'text' }],
+      originalContent: 'Hello structured',
+    });
+    expect(extractPreviewText(content)).toBe('Hello structured');
+  });
+
+  it('should extract text from structured content with textParts when originalContent is missing', async () => {
+    const actualModule = await vi.importActual<
+      typeof import('@/lib/repositories/conversation-repository')
+    >('@/lib/repositories/conversation-repository');
+    const { extractPreviewText } = actualModule;
+
+    const content = JSON.stringify({
+      textParts: ['Hello from textParts'],
+      partsOrder: [{ index: 0, type: 'text' }],
+    });
+    expect(extractPreviewText(content)).toBe('Hello from textParts');
   });
 });
 

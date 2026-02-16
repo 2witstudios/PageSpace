@@ -30,6 +30,11 @@ interface EditingState {
   // Active sessions map
   activeSessions: Map<string, EditingSession>;
 
+  // Pending sends - tracks conversation IDs with sends in progress
+  // Used to block useAppStateRecovery during the window between
+  // clicking send and streaming state being registered
+  pendingSends: Set<string>;
+
   // Query methods
   isAnyEditing: () => boolean;
   isAnyStreaming: () => boolean;
@@ -43,13 +48,20 @@ interface EditingState {
   startStreaming: (id: string, metadata?: EditingSession['metadata']) => void;
   endStreaming: (id: string) => void;
 
+  // Pending send management
+  startPendingSend: (conversationId: string) => void;
+  endPendingSend: (conversationId: string) => void;
+  hasPendingSend: (conversationId: string) => boolean;
+
   // Cleanup
   clearAllSessions: () => void;
+  clearStaleSessions: () => void;
 }
 
 export const useEditingStore = create<EditingState>((set, get) => ({
   // Initial state
   activeSessions: new Map(),
+  pendingSends: new Set(),
 
   // Query methods
   isAnyEditing: () => {
@@ -63,7 +75,8 @@ export const useEditingStore = create<EditingState>((set, get) => ({
   },
 
   isAnyActive: () => {
-    return get().activeSessions.size > 0;
+    const state = get();
+    return state.activeSessions.size > 0 || state.pendingSends.size > 0;
   },
 
   getActiveSessions: () => {
@@ -119,11 +132,62 @@ export const useEditingStore = create<EditingState>((set, get) => ({
     get().endEditing(id);
   },
 
+  // Pending send management
+  startPendingSend: (conversationId) => {
+    set((state) => {
+      const newPendingSends = new Set(state.pendingSends);
+      newPendingSends.add(conversationId);
+
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[EDITING] Pending send started: ${conversationId} (pending: ${newPendingSends.size})`);
+      }
+
+      return { pendingSends: newPendingSends };
+    });
+  },
+
+  endPendingSend: (conversationId) => {
+    set((state) => {
+      const newPendingSends = new Set(state.pendingSends);
+      const existed = newPendingSends.delete(conversationId);
+
+      if (existed && process.env.NODE_ENV === 'development') {
+        console.log(`[EDITING] Pending send ended: ${conversationId} (pending: ${newPendingSends.size})`);
+      }
+
+      return { pendingSends: newPendingSends };
+    });
+  },
+
+  hasPendingSend: (conversationId) => {
+    return get().pendingSends.has(conversationId);
+  },
+
   clearAllSessions: () => {
     if (process.env.NODE_ENV === 'development') {
       console.log('[EDITING] Clearing all sessions');
     }
-    set({ activeSessions: new Map() });
+    set({ activeSessions: new Map(), pendingSends: new Set() });
+  },
+
+  clearStaleSessions: () => {
+    const MAX_SESSION_AGE = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    set((state) => {
+      const newSessions = new Map(state.activeSessions);
+      let cleaned = 0;
+      for (const [id, session] of newSessions) {
+        if (now - session.startedAt > MAX_SESSION_AGE) {
+          newSessions.delete(id);
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) {
+        console.warn(`[EDITING] Cleared ${cleaned} stale sessions`);
+        return { activeSessions: newSessions };
+      }
+      return state;
+    });
   },
 }));
 
