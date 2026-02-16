@@ -17,6 +17,10 @@ import crypto from 'crypto';
  * This prevents registering webhooks without proper auth configuration.
  */
 export const generateWebhookToken = (userId: string): string => {
+  if (userId.includes('.')) {
+    throw new Error('userId must not contain dots (used as token delimiter)');
+  }
+
   const secret = process.env.OAUTH_STATE_SECRET;
   if (!secret) {
     if (process.env.NODE_ENV === 'production') {

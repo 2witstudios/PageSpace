@@ -37,6 +37,12 @@ describe('webhook-token', () => {
       expect(token1).not.toBe(token2);
     });
 
+    it('given userId containing a dot, should throw', () => {
+      expect(() => generateWebhookToken('user.with.dots')).toThrow(
+        'userId must not contain dots'
+      );
+    });
+
     describe('fail-closed behavior', () => {
       const originalNodeEnv = process.env.NODE_ENV;
 
