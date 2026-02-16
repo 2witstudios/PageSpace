@@ -28,7 +28,7 @@ interface AiUsageMonitorProps {
  */
 export function AiUsageMonitor({ conversationId, pageId, className, compact = false }: AiUsageMonitorProps) {
   const connect = useSocketStore((state) => state.connect);
-  const getSocket = useSocketStore((state) => state.getSocket);
+  const socket = useSocketStore((state) => state.socket);
 
   // Use conversation-based tracking for Global Assistant
   const { usage: conversationUsage, isLoading: conversationLoading, isError: conversationError, mutate: mutateConversation } = useAiUsage(
@@ -40,28 +40,30 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
     !conversationId ? pageId : null // Only query if no conversationId
   );
 
-  // Socket.IO listener for real-time usage updates
+  // Ensure socket connection is initiated
   useEffect(() => {
     connect();
-    const socket = getSocket();
+  }, [connect]);
 
-    if (socket) {
-      const handleUsageUpdated = () => {
-        // Trigger refetch when usage updates
-        if (conversationId) {
-          mutateConversation();
-        } else if (pageId) {
-          mutatePage();
-        }
-      };
+  // Socket.IO listener for real-time usage updates
+  // Reactive to `socket` so the listener is registered once the async connection completes
+  useEffect(() => {
+    if (!socket) return;
 
-      socket.on('usage:updated', handleUsageUpdated);
+    const handleUsageUpdated = () => {
+      if (conversationId) {
+        mutateConversation();
+      } else if (pageId) {
+        mutatePage();
+      }
+    };
 
-      return () => {
-        socket.off('usage:updated', handleUsageUpdated);
-      };
-    }
-  }, [connect, getSocket, conversationId, pageId, mutateConversation, mutatePage]);
+    socket.on('usage:updated', handleUsageUpdated);
+
+    return () => {
+      socket.off('usage:updated', handleUsageUpdated);
+    };
+  }, [socket, conversationId, pageId, mutateConversation, mutatePage]);
 
   // Determine which data to use
   const usage = conversationId ? conversationUsage : pageUsage;

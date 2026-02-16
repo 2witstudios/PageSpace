@@ -41,7 +41,7 @@ const fetcher = async (url: string) => {
 export function UsageCounter() {
   const router = useRouter();
   const connect = useSocketStore((state) => state.connect);
-  const getSocket = useSocketStore((state) => state.getSocket);
+  const socket = useSocketStore((state) => state.socket);
   const { showBilling } = useBillingVisibility();
 
   const { data: usage, error, mutate } = useSWR<UsageData>('/api/subscriptions/usage', fetcher, {
@@ -61,36 +61,36 @@ export function UsageCounter() {
     router.push('/settings/billing');
   };
 
-  // Connect to Socket.IO and listen for usage events
+  // Ensure socket connection is initiated
   useEffect(() => {
     connect();
-    const socket = getSocket();
+  }, [connect]);
 
-    if (socket) {
-      const handleUsageUpdated = (payload: UsageEventPayload) => {
-        usageLogger.debug('Received usage update payload', {
-          userId: maskIdentifier(payload.userId),
-          subscriptionTier: payload.subscriptionTier,
-          standard: payload.standard,
-          pro: payload.pro,
-        });
+  // Listen for usage events once socket is available
+  useEffect(() => {
+    if (!socket) return;
 
-        // Update SWR cache with new usage data
-        mutate({
-          subscriptionTier: payload.subscriptionTier,
-          standard: payload.standard,
-          pro: payload.pro
-        }, false); // Don't revalidate, trust the real-time data
-      };
+    const handleUsageUpdated = (payload: UsageEventPayload) => {
+      usageLogger.debug('Received usage update payload', {
+        userId: maskIdentifier(payload.userId),
+        subscriptionTier: payload.subscriptionTier,
+        standard: payload.standard,
+        pro: payload.pro,
+      });
 
-      socket.on('usage:updated', handleUsageUpdated);
+      mutate({
+        subscriptionTier: payload.subscriptionTier,
+        standard: payload.standard,
+        pro: payload.pro
+      }, false);
+    };
 
-      // Cleanup listener on unmount
-      return () => {
-        socket.off('usage:updated', handleUsageUpdated);
-      };
-    }
-  }, [connect, getSocket, mutate]);
+    socket.on('usage:updated', handleUsageUpdated);
+
+    return () => {
+      socket.off('usage:updated', handleUsageUpdated);
+    };
+  }, [socket, mutate]);
 
   // Refresh usage when AI conversations complete (fallback)
   useEffect(() => {
