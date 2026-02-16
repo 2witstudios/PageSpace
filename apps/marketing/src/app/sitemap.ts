@@ -51,7 +51,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
   ];
 
-  // Developer documentation pages
+  // Developer documentation pages (only implemented routes)
   const docsRoutes: MetadataRoute.Sitemap = [
     {
       url: `${BASE_URL}/docs`,
@@ -61,18 +61,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
     {
       url: `${BASE_URL}/docs/getting-started`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.6,
-    },
-    {
-      url: `${BASE_URL}/docs/api`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.6,
-    },
-    {
-      url: `${BASE_URL}/docs/mcp`,
       lastModified,
       changeFrequency: "monthly",
       priority: 0.6,

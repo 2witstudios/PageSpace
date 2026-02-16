@@ -15,6 +15,7 @@
 
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
+import { enableTailwind } from "@remotion/tailwind";
 import path from "path";
 import fs from "fs";
 
@@ -43,7 +44,7 @@ async function renderVideo(
     codec: "h264",
     outputLocation: outputPath,
     onProgress: ({ progress }) => {
-      if (progress % 10 === 0) {
+      if (Math.round(progress * 100) % 10 === 0) {
         process.stdout.write(`  Progress: ${Math.round(progress * 100)}%\r`);
       }
     },
@@ -68,7 +69,7 @@ async function main() {
   console.log("Bundling Remotion project...");
   const bundleLocation = await bundle({
     entryPoint: path.join(__dirname, "../remotion/index.ts"),
-    webpackOverride: (config) => config,
+    webpackOverride: (config) => enableTailwind(config),
   });
   console.log("✓ Bundle created\n");
 

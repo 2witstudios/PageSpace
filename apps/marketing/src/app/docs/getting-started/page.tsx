@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Sparkles, ArrowRight, ArrowLeft, CheckCircle2, ChevronRight, Play, Book, Zap, Code } from "lucide-react";
+import { ArrowRight, ArrowLeft, CheckCircle2, ChevronRight, Play, Book, Zap, Code } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
@@ -71,39 +72,7 @@ const steps = [
 export default function GettingStartedPage() {
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Sparkles className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold">PageSpace</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Pricing
-            </Link>
-            <Link href="/downloads" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Downloads
-            </Link>
-            <Link href="/docs" className="text-sm font-medium text-foreground transition-colors">
-              Docs
-            </Link>
-            <Link href="/blog" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Blog
-            </Link>
-          </nav>
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <a href={`${APP_URL}/auth/signin`}>Log in</a>
-            </Button>
-            <Button size="sm" asChild>
-              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <SiteNavbar />
 
       {/* Breadcrumb */}
       <div className="border-b border-border">
@@ -182,7 +151,7 @@ export default function GettingStartedPage() {
             <h2 className="text-2xl font-bold mb-6">What&apos;s Next?</h2>
             <div className="grid md:grid-cols-3 gap-4">
               <Link
-                href="/docs/ai/page-agents"
+                href="/docs"
                 className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 transition-colors"
               >
                 <Book className="h-6 w-6 text-primary mb-3" />
@@ -190,7 +159,7 @@ export default function GettingStartedPage() {
                 <p className="text-sm text-muted-foreground">Learn advanced Page Agent techniques</p>
               </Link>
               <Link
-                href="/docs/integrations"
+                href="/docs"
                 className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 transition-colors"
               >
                 <Zap className="h-6 w-6 text-primary mb-3" />
@@ -198,7 +167,7 @@ export default function GettingStartedPage() {
                 <p className="text-sm text-muted-foreground">Link your tools and services</p>
               </Link>
               <Link
-                href="/docs/api"
+                href="/docs"
                 className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 transition-colors"
               >
                 <Code className="h-6 w-6 text-primary mb-3" />

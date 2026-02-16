@@ -8,6 +8,11 @@ import {
 } from "remotion";
 import { DESIGN_TOKENS, Theme } from "../Root";
 
+/** Convert `hsl(H S% L%)` to `hsl(H S% L% / alpha)` */
+function withOpacity(hslColor: string, alpha: number): string {
+  return hslColor.replace(/\)$/, ` / ${alpha})`);
+}
+
 interface DocumentEditingProps {
   theme: Theme;
 }
@@ -138,7 +143,7 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
               justifyContent: "space-between",
               padding: "16px 24px",
               borderBottom: `1px solid ${colors.border}`,
-              backgroundColor: colors.muted + "40",
+              backgroundColor: withOpacity(colors.muted, 0.25),
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -177,7 +182,7 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
                 style={{
                   padding: "6px 12px",
                   fontSize: 13,
-                  backgroundColor: colors.primary + "20",
+                  backgroundColor: withOpacity(colors.primary, 0.125),
                   color: colors.primary,
                   fontWeight: 500,
                 }}
@@ -205,7 +210,7 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
                 gap: 4,
                 padding: "12px 24px",
                 borderBottom: `1px solid ${colors.border}`,
-                backgroundColor: colors.muted + "20",
+                backgroundColor: withOpacity(colors.muted, 0.125),
               }}
             >
               {["B", "I", "U"].map((format, i) => (
@@ -220,7 +225,7 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
                     justifyContent: "center",
                     backgroundColor:
                       i === 0 && formatHighlight > 0
-                        ? colors.primary + Math.floor(formatHighlight * 30).toString(16)
+                        ? withOpacity(colors.primary, formatHighlight * 0.18)
                         : "transparent",
                     color:
                       i === 0 && formatHighlight > 0
@@ -263,7 +268,7 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
                   padding: "6px 12px",
                   borderRadius: 6,
                   fontSize: 13,
-                  backgroundColor: colors.primary + "15",
+                  backgroundColor: withOpacity(colors.primary, 0.08),
                   color: colors.primary,
                   display: "flex",
                   alignItems: "center",
@@ -349,7 +354,7 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
                   <span
                     style={{
                       color: colors.primary,
-                      backgroundColor: colors.primary + "15",
+                      backgroundColor: withOpacity(colors.primary, 0.08),
                       borderRadius: 4,
                       padding: "2px 0",
                     }}
@@ -380,8 +385,8 @@ export const DocumentEditingComposition: React.FC<DocumentEditingProps> = ({
                   marginTop: 24,
                   padding: 16,
                   borderRadius: 12,
-                  backgroundColor: colors.primary + "10",
-                  border: `1px solid ${colors.primary}30`,
+                  backgroundColor: withOpacity(colors.primary, 0.06),
+                  border: `1px solid ${withOpacity(colors.primary, 0.19)}`,
                   opacity: aiSuggestionOpacity,
                 }}
               >

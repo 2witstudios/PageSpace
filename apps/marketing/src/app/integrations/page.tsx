@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Sparkles, ArrowRight, Plug, Server, Globe, Code, Database, Calendar, Mail, Github, FileText, Zap, ExternalLink, Terminal, Bot, Blocks, ChevronRight } from "lucide-react";
+import { ArrowRight, Plug, Server, Globe, Code, Database, Calendar, Mail, Github, FileText, Zap, ExternalLink, Terminal, Bot, Blocks, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
@@ -98,39 +99,7 @@ const integrations: Integration[] = [
 export default function IntegrationsPage() {
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Sparkles className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold">PageSpace</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Pricing
-            </Link>
-            <Link href="/downloads" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Downloads
-            </Link>
-            <Link href="/docs" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Docs
-            </Link>
-            <Link href="/blog" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Blog
-            </Link>
-          </nav>
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <a href={`${APP_URL}/auth/signin`}>Log in</a>
-            </Button>
-            <Button size="sm" asChild>
-              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <SiteNavbar />
 
       {/* Hero */}
       <section className="py-16 md:py-24">
@@ -149,7 +118,7 @@ export default function IntegrationsPage() {
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Button size="lg" asChild>
-                <Link href="/docs/integrations">
+                <Link href="/docs">
                   View Documentation
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
@@ -201,7 +170,7 @@ export default function IntegrationsPage() {
                       Learn about MCP
                       <ExternalLink className="h-3 w-3" />
                     </a>
-                    <Link href="/docs/mcp" className="inline-flex items-center gap-1 text-primary hover:underline">
+                    <Link href="/docs" className="inline-flex items-center gap-1 text-primary hover:underline">
                       Setup guide
                       <ChevronRight className="h-3 w-3" />
                     </Link>
@@ -244,7 +213,7 @@ export default function IntegrationsPage() {
 
             <div className="text-center mt-8">
               <Button variant="outline" asChild>
-                <Link href="/docs/mcp/servers">
+                <Link href="/docs">
                   Browse All MCP Servers
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
@@ -330,13 +299,13 @@ export default function IntegrationsPage() {
 
                   <div className="flex flex-wrap gap-4">
                     <Button asChild>
-                      <Link href="/docs/api">
+                      <Link href="/docs">
                         API Documentation
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Link>
                     </Button>
                     <Button variant="outline" asChild>
-                      <Link href="/docs/mcp/custom">
+                      <Link href="/docs">
                         Build Custom MCP Server
                       </Link>
                     </Button>
@@ -347,21 +316,21 @@ export default function IntegrationsPage() {
                   <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">Resources</h3>
                   <div className="space-y-3">
                     <Link
-                      href="/docs/api/reference"
+                      href="/docs"
                       className="flex items-center gap-2 text-sm hover:text-primary transition-colors"
                     >
                       <Code className="h-4 w-4" />
                       API Reference
                     </Link>
                     <Link
-                      href="/docs/sdk"
+                      href="/docs"
                       className="flex items-center gap-2 text-sm hover:text-primary transition-colors"
                     >
                       <Blocks className="h-4 w-4" />
                       SDK Libraries
                     </Link>
                     <Link
-                      href="/docs/webhooks"
+                      href="/docs"
                       className="flex items-center gap-2 text-sm hover:text-primary transition-colors"
                     >
                       <Zap className="h-4 w-4" />
@@ -403,7 +372,7 @@ export default function IntegrationsPage() {
                 </a>
               </Button>
               <Button size="lg" variant="outline" asChild>
-                <Link href="/docs/integrations/quickstart">
+                <Link href="/docs">
                   Integration Quickstart
                 </Link>
               </Button>

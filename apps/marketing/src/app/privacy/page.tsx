@@ -1,14 +1,8 @@
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { createMetadata } from "@/lib/metadata";
+import { pageMetadata } from "@/lib/metadata";
 
-export const metadata = createMetadata({
-  title: "Privacy Policy",
-  description:
-    "Learn how PageSpace collects, uses, and protects your information in our cloud-based workspace platform.",
-  path: "/privacy",
-  keywords: ["privacy policy", "data protection", "GDPR", "security"],
-});
+export const metadata = pageMetadata.privacy;
 
 export default function PrivacyPolicy() {
   return (

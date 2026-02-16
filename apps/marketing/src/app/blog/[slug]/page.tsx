@@ -2,8 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Sparkles, ArrowLeft, Calendar, Clock, User, Share2, Twitter, Linkedin } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import type { Metadata } from "next";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
@@ -509,39 +512,7 @@ export default async function BlogPostPage(
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Sparkles className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold">PageSpace</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Pricing
-            </Link>
-            <Link href="/downloads" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Downloads
-            </Link>
-            <Link href="/docs" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Docs
-            </Link>
-            <Link href="/blog" className="text-sm font-medium text-foreground transition-colors">
-              Blog
-            </Link>
-          </nav>
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <a href={`${APP_URL}/auth/signin`}>Log in</a>
-            </Button>
-            <Button size="sm" asChild>
-              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <SiteNavbar />
 
       {/* Back Link */}
       <div className="container mx-auto px-4 md:px-6 pt-8">
@@ -589,30 +560,9 @@ export default async function BlogPostPage(
 
             {/* Content */}
             <div className="prose prose-neutral dark:prose-invert max-w-none">
-              {post.content.split('\n').map((paragraph, i) => {
-                if (paragraph.startsWith('## ')) {
-                  return <h2 key={i} className="text-2xl font-bold mt-8 mb-4">{paragraph.replace('## ', '')}</h2>;
-                }
-                if (paragraph.startsWith('### ')) {
-                  return <h3 key={i} className="text-xl font-semibold mt-6 mb-3">{paragraph.replace('### ', '')}</h3>;
-                }
-                if (paragraph.startsWith('- ')) {
-                  return <li key={i} className="ml-4">{paragraph.replace('- ', '')}</li>;
-                }
-                if (paragraph.startsWith('```')) {
-                  return null;
-                }
-                if (paragraph.trim().startsWith('📁') || paragraph.trim().startsWith('├') || paragraph.trim().startsWith('│') || paragraph.trim().startsWith('└') || paragraph.trim().startsWith('🤖') || paragraph.trim().startsWith('📄')) {
-                  return <pre key={i} className="bg-muted p-4 rounded-lg font-mono text-sm my-4 overflow-x-auto">{paragraph}</pre>;
-                }
-                if (paragraph.match(/^\d+\./)) {
-                  return <li key={i} className="ml-4 list-decimal">{paragraph.replace(/^\d+\.\s*/, '')}</li>;
-                }
-                if (paragraph.trim()) {
-                  return <p key={i} className="mb-4 text-muted-foreground leading-relaxed">{paragraph}</p>;
-                }
-                return null;
-              })}
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {post.content}
+              </ReactMarkdown>
             </div>
 
             {/* Share */}

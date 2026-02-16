@@ -228,21 +228,13 @@ export function createBreadcrumbSchema(items: BreadcrumbItem[]) {
 }
 
 /**
- * WebSite schema with search action
+ * WebSite schema
  */
 export const websiteSchema = {
   "@context": "https://schema.org",
   "@type": "WebSite",
   name: "PageSpace",
   url: SITE_URL,
-  potentialAction: {
-    "@type": "SearchAction",
-    target: {
-      "@type": "EntryPoint",
-      urlTemplate: `${SITE_URL}/search?q={search_term_string}`,
-    },
-    "query-input": "required name=search_term_string",
-  },
 };
 
 /**

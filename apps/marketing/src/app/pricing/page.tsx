@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Sparkles, Check, X, HelpCircle, Building2, ArrowRight } from "lucide-react";
+import { Check, X, HelpCircle, Building2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
@@ -111,39 +112,7 @@ const featureDescriptions: Record<string, string> = {
 export default function PricingPage() {
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Sparkles className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold">PageSpace</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            <Link href="/pricing" className="text-sm font-medium text-foreground transition-colors">
-              Pricing
-            </Link>
-            <Link href="/downloads" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Downloads
-            </Link>
-            <Link href="/docs" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Docs
-            </Link>
-            <Link href="/blog" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Blog
-            </Link>
-          </nav>
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <a href={`${APP_URL}/auth/signin`}>Log in</a>
-            </Button>
-            <Button size="sm" asChild>
-              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <SiteNavbar />
 
       {/* Hero */}
       <section className="py-16 md:py-24">

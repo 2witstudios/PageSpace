@@ -1,10 +1,9 @@
 import Link from "next/link";
 import { Sparkles, ArrowRight, Book, Zap, Server, FileText, Users, ChevronRight, Search, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
 export const metadata = pageMetadata.docs;
 
@@ -24,69 +23,69 @@ const docSections: DocSection[] = [
     href: "/docs/getting-started",
     items: [
       { title: "Quick Start Guide", href: "/docs/getting-started" },
-      { title: "Creating Your First Workspace", href: "/docs/getting-started/workspace" },
-      { title: "Understanding AI Agents", href: "/docs/getting-started/agents" },
-      { title: "Keyboard Shortcuts", href: "/docs/getting-started/shortcuts" },
+      { title: "Creating Your First Workspace", href: "/docs/getting-started" },
+      { title: "Understanding AI Agents", href: "/docs/getting-started" },
+      { title: "Keyboard Shortcuts", href: "/docs/getting-started" },
     ],
   },
   {
     title: "AI Features",
     description: "Deep dive into AI capabilities including Page Agents and Global Assistant.",
     icon: <Sparkles className="h-5 w-5" />,
-    href: "/docs/ai",
+    href: "/docs",
     items: [
-      { title: "Global Assistant", href: "/docs/ai/global-assistant" },
-      { title: "Page Agents", href: "/docs/ai/page-agents" },
-      { title: "AI Rollback", href: "/docs/ai/rollback" },
-      { title: "Custom Prompts", href: "/docs/ai/prompts" },
+      { title: "Global Assistant", href: "/docs" },
+      { title: "Page Agents", href: "/docs" },
+      { title: "AI Rollback", href: "/docs" },
+      { title: "Custom Prompts", href: "/docs" },
     ],
   },
   {
     title: "Integrations",
     description: "Connect PageSpace to external tools and services.",
     icon: <Zap className="h-5 w-5" />,
-    href: "/docs/integrations",
+    href: "/docs",
     items: [
-      { title: "MCP Overview", href: "/docs/integrations/mcp" },
-      { title: "Google Calendar", href: "/docs/integrations/google-calendar" },
-      { title: "GitHub Integration", href: "/docs/integrations/github" },
-      { title: "Webhooks", href: "/docs/integrations/webhooks" },
+      { title: "MCP Overview", href: "/docs" },
+      { title: "Google Calendar", href: "/docs" },
+      { title: "GitHub Integration", href: "/docs" },
+      { title: "Webhooks", href: "/docs" },
     ],
   },
   {
     title: "MCP Servers",
     description: "Connect AI to external tools with Model Context Protocol.",
     icon: <Server className="h-5 w-5" />,
-    href: "/docs/mcp",
+    href: "/docs",
     items: [
-      { title: "What is MCP?", href: "/docs/mcp/overview" },
-      { title: "Available Servers", href: "/docs/mcp/servers" },
-      { title: "Building Custom Servers", href: "/docs/mcp/custom" },
-      { title: "Security & Permissions", href: "/docs/mcp/security" },
+      { title: "What is MCP?", href: "/docs" },
+      { title: "Available Servers", href: "/docs" },
+      { title: "Building Custom Servers", href: "/docs" },
+      { title: "Security & Permissions", href: "/docs" },
     ],
   },
   {
     title: "Team & Collaboration",
     description: "Learn about team features, permissions, and real-time collaboration.",
     icon: <Users className="h-5 w-5" />,
-    href: "/docs/teams",
+    href: "/docs",
     items: [
-      { title: "Inviting Team Members", href: "/docs/teams/invites" },
-      { title: "Permissions & Roles", href: "/docs/teams/permissions" },
-      { title: "Channels", href: "/docs/teams/channels" },
-      { title: "Task Assignment", href: "/docs/teams/tasks" },
+      { title: "Inviting Team Members", href: "/docs" },
+      { title: "Permissions & Roles", href: "/docs" },
+      { title: "Channels", href: "/docs" },
+      { title: "Task Assignment", href: "/docs" },
     ],
   },
   {
     title: "Security & Privacy",
     description: "Authentication, data protection, and enterprise security features.",
     icon: <Shield className="h-5 w-5" />,
-    href: "/docs/security",
+    href: "/docs",
     items: [
-      { title: "Passkeys (WebAuthn)", href: "/docs/security/passkeys" },
-      { title: "Magic Links", href: "/docs/security/magic-links" },
-      { title: "Zero Trust Architecture", href: "/docs/security/zero-trust" },
-      { title: "Data Encryption", href: "/docs/security/encryption" },
+      { title: "Passkeys (WebAuthn)", href: "/docs" },
+      { title: "Magic Links", href: "/docs" },
+      { title: "Zero Trust Architecture", href: "/docs" },
+      { title: "Data Encryption", href: "/docs" },
     ],
   },
 ];
@@ -94,39 +93,7 @@ const docSections: DocSection[] = [
 export default function DocsPage() {
   return (
     <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4 md:px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Sparkles className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold">PageSpace</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Pricing
-            </Link>
-            <Link href="/downloads" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Downloads
-            </Link>
-            <Link href="/docs" className="text-sm font-medium text-foreground transition-colors">
-              Docs
-            </Link>
-            <Link href="/blog" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-              Blog
-            </Link>
-          </nav>
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-              <a href={`${APP_URL}/auth/signin`}>Log in</a>
-            </Button>
-            <Button size="sm" asChild>
-              <a href={`${APP_URL}/auth/signup`}>Get Started</a>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <SiteNavbar />
 
       {/* Hero */}
       <section className="py-16 md:py-24">
@@ -169,7 +136,7 @@ export default function DocsPage() {
               Quick Start
             </Link>
             <Link
-              href="/docs/mcp"
+              href="/docs"
               className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm hover:bg-muted transition-colors"
             >
               <Server className="h-4 w-4" />
@@ -238,9 +205,9 @@ export default function DocsPage() {
             <div className="grid md:grid-cols-2 gap-4">
               {[
                 { title: "Quick Start Guide", description: "Get up and running in 5 minutes", href: "/docs/getting-started" },
-                { title: "Understanding Page Agents", description: "Learn how AI agents work in your workspace", href: "/docs/ai/page-agents" },
-                { title: "Setting Up MCP Servers", description: "Connect AI to external tools and services", href: "/docs/mcp/overview" },
-                { title: "MCP Server Setup", description: "Connect AI to external tools", href: "/docs/mcp/overview" },
+                { title: "Understanding Page Agents", description: "Learn how AI agents work in your workspace", href: "/docs" },
+                { title: "Setting Up MCP Servers", description: "Connect AI to external tools and services", href: "/docs" },
+                { title: "MCP Server Setup", description: "Connect AI to external tools", href: "/docs" },
               ].map((article) => (
                 <Link
                   key={article.href}

@@ -1,15 +1,9 @@
 import Link from "next/link";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { createMetadata } from "@/lib/metadata";
+import { pageMetadata } from "@/lib/metadata";
 
-export const metadata = createMetadata({
-  title: "Terms of Service",
-  description:
-    "Terms of Service for PageSpace, the AI-powered unified workspace platform.",
-  path: "/terms",
-  keywords: ["terms of service", "terms", "legal", "agreement"],
-});
+export const metadata = pageMetadata.terms;
 
 export default function TermsOfService() {
   return (
