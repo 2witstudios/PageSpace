@@ -122,11 +122,11 @@ export function _resetNonceStore(): void {
  *   X-Cron-Signature: HMAC-SHA256(CRON_SECRET, `${timestamp}:${nonce}:${method}:${path}`)
  *
  * Validation:
- *   1. Reject if CRON_SECRET not configured
+ *   1. Reject if CRON_SECRET not configured (fail-closed in production)
  *   2. Reject if any required header is missing
  *   3. Reject if timestamp older than 5 minutes (anti-replay)
- *   4. Reject if nonce already seen (anti-replay)
- *   5. Recompute signature and timing-safe compare
+ *   4. Recompute signature and timing-safe compare
+ *   5. Reject if nonce already seen (recorded after signature verified)
  *   6. Defense-in-depth: require internal network origin
  *
  * Returns null on success, 403 NextResponse on failure.
@@ -179,15 +179,7 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
     );
   }
 
-  // Anti-replay: check nonce uniqueness
-  if (!checkAndRecordNonce(nonce)) {
-    return NextResponse.json(
-      { error: 'Forbidden - cron request nonce already used' },
-      { status: 403 }
-    );
-  }
-
-  // Recompute and compare signature
+  // Recompute and compare signature (before recording nonce to avoid burning valid nonces)
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const path = url.pathname;
@@ -200,6 +192,14 @@ export function validateSignedCronRequest(request: Request): NextResponse | null
   if (expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
     return NextResponse.json(
       { error: 'Forbidden - invalid cron signature' },
+      { status: 403 }
+    );
+  }
+
+  // Anti-replay: check nonce uniqueness (after signature verified)
+  if (!checkAndRecordNonce(nonce)) {
+    return NextResponse.json(
+      { error: 'Forbidden - cron request nonce already used' },
       { status: 403 }
     );
   }

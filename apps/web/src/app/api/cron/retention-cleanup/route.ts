@@ -11,12 +11,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * drive_backups (unpinned), drive_invitations (pending), page_permissions,
  * and ai_usage_logs.
  *
- * Authentication:
- * - Primary: CRON_SECRET Bearer token (timing-safe comparison)
- * - Defense-in-depth: internal network origin check
- *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/retention-cleanup
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);

@@ -16,12 +16,7 @@ const FILE_DELETE_SCOPES: ServiceScope[] = ['files:delete'];
  * 1. Calls processor service to delete physical file + cache
  * 2. Deletes the DB record
  *
- * Authentication:
- * - Primary: CRON_SECRET Bearer token (timing-safe comparison)
- * - Defense-in-depth: internal network origin check
- *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/cleanup-orphaned-files
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);

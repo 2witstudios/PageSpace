@@ -9,8 +9,7 @@ import { globalConversationRepository } from '@/lib/repositories/global-conversa
  * Removes rows that have been soft-deleted (isActive=false) for longer than
  * 30 days, permanently freeing storage.
  *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/purge-deleted-messages
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);

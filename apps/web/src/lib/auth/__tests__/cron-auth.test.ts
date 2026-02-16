@@ -93,8 +93,6 @@ describe('cron-auth', () => {
     });
   });
 
-;
-
   describe('computeCronSignature', () => {
     it('given valid inputs, should produce deterministic HMAC', () => {
       const sig1 = computeCronSignature('secret', '1000', 'nonce-1', 'POST', '/api/cron/test');

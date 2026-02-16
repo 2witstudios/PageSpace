@@ -11,8 +11,7 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  *
  * This preserves recent analytics while enforcing data retention limits.
  *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/purge-ai-usage-logs
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);
