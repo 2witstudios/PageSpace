@@ -1,6 +1,6 @@
 import { verifySecurityAuditChain } from '@pagespace/lib';
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
  * Cron endpoint to verify the security audit log hash chain integrity.
@@ -8,11 +8,10 @@ import { validateCronRequest } from '@/lib/auth/cron-auth';
  * Detects tampering in the security audit log by recomputing each entry's
  * hash and verifying chain links. Logs a SECURITY ALERT if the chain is broken.
  *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/verify-audit-chain
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }

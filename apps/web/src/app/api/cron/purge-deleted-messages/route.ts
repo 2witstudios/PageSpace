@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { validateCronRequest } from '@/lib/auth/cron-auth';
+import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
@@ -9,11 +9,10 @@ import { globalConversationRepository } from '@/lib/repositories/global-conversa
  * Removes rows that have been soft-deleted (isActive=false) for longer than
  * 30 days, permanently freeing storage.
  *
- * Trigger via:
- * curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/purge-deleted-messages
+ * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
-  const authError = validateCronRequest(request);
+  const authError = validateSignedCronRequest(request);
   if (authError) {
     return authError;
   }
