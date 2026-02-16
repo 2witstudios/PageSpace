@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { CredentialResponse } from '@/types/google-identity';
 
@@ -35,6 +35,8 @@ export function GoogleOneTap({
   const isLoadingRef = useRef(false);
   const initializedRef = useRef(false);
   const scriptLoadedRef = useRef(false);
+  // null = still checking, true = logged in, false = not logged in
+  const [sessionChecked, setSessionChecked] = useState<boolean | null>(null);
 
   const handleCredentialResponse = useCallback(
     async (response: CredentialResponse) => {
@@ -128,16 +130,38 @@ export function GoogleOneTap({
     [onSuccess, onError, redirectTo]
   );
 
-  // FedCM migration: detailed prompt moment methods are deprecated
-  // The browser now handles prompt display through FedCM
-  // See: https://developers.google.com/identity/gsi/web/guides/fedcm-migration
-  const handlePromptMoment = useCallback(() => {
-    console.debug('Google One Tap prompt moment');
-  }, []);
+  // Check if user already has an active session before showing One Tap
+  useEffect(() => {
+    if (disabled) {
+      setSessionChecked(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(res => {
+        if (!cancelled) {
+          setSessionChecked(res.ok);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          // On network error, assume not logged in (allow One Tap)
+          setSessionChecked(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [disabled]);
 
   useEffect(() => {
-    // Don't initialize if disabled or already initialized
+    // Don't initialize if disabled, already initialized, or session check pending/positive
     if (disabled || initializedRef.current) return;
+    // Wait for session check to complete
+    if (sessionChecked === null) return;
+    // User is already logged in - skip One Tap
+    if (sessionChecked) return;
 
     // Don't run in desktop app (use regular OAuth flow instead)
     if (typeof window !== 'undefined' && window.electron?.isDesktop) {
@@ -203,7 +227,11 @@ export function GoogleOneTap({
       });
 
       // Display the One Tap prompt
-      window.google.accounts.id.prompt(handlePromptMoment);
+      // FedCM migration: do NOT pass a momentListener callback to prompt().
+      // PromptMomentNotification methods (isDisplayed, isNotDisplayed, etc.) are
+      // deprecated and will stop functioning when FedCM becomes mandatory.
+      // See: https://developers.google.com/identity/gsi/web/guides/fedcm-migration
+      window.google.accounts.id.prompt();
     };
 
     // Load the Google Identity Services script if not already loaded
@@ -244,7 +272,7 @@ export function GoogleOneTap({
         window.google.accounts.id.cancel();
       }
     };
-  }, [disabled, autoSelect, cancelOnTapOutside, context, handleCredentialResponse, handlePromptMoment]);
+  }, [disabled, sessionChecked, autoSelect, cancelOnTapOutside, context, handleCredentialResponse]);
 
   // This component doesn't render anything visible
   // The One Tap prompt is rendered by Google's library
