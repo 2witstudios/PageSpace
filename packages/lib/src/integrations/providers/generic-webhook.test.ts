@@ -124,6 +124,72 @@ describe('genericWebhookProvider', () => {
 
       expect(result.url).toBe('https://hooks.example.com/');
     });
+
+    it('given path with question mark, should percent-encode it (not treated as query string)', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(
+        config,
+        { path: 'status?key=value' },
+        'https://hooks.example.com'
+      );
+
+      expect(result.url).toBe('https://hooks.example.com/status%3Fkey=value');
+    });
+
+    it('given path with multiple query-like params, should percent-encode the question mark', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(
+        config,
+        { path: 'status?a=1&b=2' },
+        'https://hooks.example.com'
+      );
+
+      expect(result.url).toBe('https://hooks.example.com/status%3Fa=1&b=2');
+    });
+
+    it('given path with spaces, should percent-encode them', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(
+        config,
+        { path: 'hello world' },
+        'https://hooks.example.com'
+      );
+
+      expect(result.url).toBe('https://hooks.example.com/hello%20world');
+    });
+
+    it('given path with hash, should percent-encode it (not treated as fragment)', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(
+        config,
+        { path: 'status#section' },
+        'https://hooks.example.com'
+      );
+
+      expect(result.url).toBe('https://hooks.example.com/status%23section');
+    });
+
+    it('given path with ampersand, should pass it through unencoded', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(
+        config,
+        { path: 'data&more' },
+        'https://hooks.example.com'
+      );
+
+      expect(result.url).toBe('https://hooks.example.com/data&more');
+    });
+
+    it('given path with slashes, should preserve path segments', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const result = buildHttpRequest(
+        config,
+        { path: 'api/v2/events' },
+        'https://hooks.example.com'
+      );
+
+      expect(result.url).toBe('https://hooks.example.com/api/v2/events');
+    });
   });
 
   describe('send_form_webhook tool', () => {

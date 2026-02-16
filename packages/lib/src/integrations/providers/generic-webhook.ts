@@ -4,6 +4,18 @@
  * Sends HTTP requests to arbitrary webhook URLs.
  * The actual URL comes from connection.baseUrlOverride at runtime;
  * baseUrl here is a placeholder the execution saga replaces.
+ *
+ * Path encoding: The `path` parameter is interpolated into the URL pathname
+ * via `interpolatePath` (which performs no encoding), then passed through the
+ * WHATWG URL API's `pathname` setter, which percent-encodes characters that
+ * are invalid in a URL path component. This means:
+ *   - `?` is encoded to `%3F` (not treated as a query delimiter)
+ *   - `#` is encoded to `%23` (not treated as a fragment delimiter)
+ *   - Spaces are encoded to `%20`
+ *   - Unicode characters are percent-encoded
+ *   - `/`, `&`, `=`, `:`, `@` pass through unencoded
+ * Callers cannot embed query strings in the `path` parameter; use
+ * `connection.baseUrlOverride` to set the full URL including query string.
  */
 
 import type { IntegrationProviderConfig } from '../types';
@@ -79,7 +91,8 @@ export const genericWebhookProvider: IntegrationProviderConfig = {
         properties: {
           path: {
             type: 'string',
-            description: 'Optional path appended to the webhook URL (can include query string)',
+            description:
+              'Optional path segment appended to the webhook URL. Special characters (?, #, spaces) are percent-encoded by the URL API.',
           },
         },
         required: [],
