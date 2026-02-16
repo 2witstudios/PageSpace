@@ -1,7 +1,9 @@
 import Link from "next/link";
-import { ArrowRight, Download, Sparkles, Users, FileText, MessageSquare, CheckSquare, Calendar, FolderTree, Bot, Globe, Layers, User, ChevronRight, ChevronLeft, Edit3, Type, Code, Undo2, Wand2, History, PenTool, AtSign, Hash, Reply, Lock, Send, CheckCircle2, BarChart3, ListTodo, CalendarDays, Zap, Home as HomeIcon, Inbox, ChevronsUpDown, Folder, Search, Plus, ChevronDown, Wrench, Activity, MoreHorizontal, Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Table2, Settings2, FileDown, Share2, PanelLeft, PanelRight, Eye } from "lucide-react";
+import { ArrowRight, ArrowUp, Download, Sparkles, Users, FileText, MessageSquare, CheckSquare, Calendar, FolderTree, Bot, Layers, User, ChevronRight, ChevronLeft, Edit3, Code, Undo2, Wand2, History, PenTool, AtSign, Hash, Paperclip, CheckCircle2, BarChart3, ListTodo, CalendarDays, Zap, Home as HomeIcon, Inbox, ChevronsUpDown, Folder, Search, Plus, ChevronDown, Wrench, Activity, MoreHorizontal, Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Table2, Settings2, FileDown, Share2, PanelLeft, PanelRight, Eye, AlertCircle } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
+import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 import { JsonLd, webApplicationSchema } from "@/lib/schema";
 
@@ -157,7 +159,7 @@ export default function Home() {
                       {/* 4. Page Tree - ACTUAL PAGES only, no file extensions */}
                       <nav className="flex-1 overflow-auto px-1 py-2">
                         {/* Active page - Q1 Planning (expanded) */}
-                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 bg-gray-200 dark:bg-gray-700" style={{ paddingLeft: 4 }}>
+                        <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 bg-gray-200 dark:bg-gray-700" style={{ paddingLeft: 4 }}>
                           <button className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors cursor-pointer">
                             <ChevronRight className="h-3.5 w-3.5 text-gray-500 transition-transform duration-200 rotate-90" />
                           </button>
@@ -170,7 +172,7 @@ export default function Home() {
                         </div>
 
                         {/* Child pages (indented) */}
-                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 28 }}>
+                        <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 12 }}>
                           <div className="p-0.5 rounded cursor-grab">
                             <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
                           </div>
@@ -180,7 +182,7 @@ export default function Home() {
                           </span>
                         </div>
 
-                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 28 }}>
+                        <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 12 }}>
                           <div className="p-0.5 rounded cursor-grab">
                             <MessageSquare className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
                           </div>
@@ -190,7 +192,7 @@ export default function Home() {
                         </div>
 
                         {/* Product Launch (collapsed) */}
-                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700 mt-1" style={{ paddingLeft: 4 }}>
+                        <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700 mt-1" style={{ paddingLeft: 4 }}>
                           <button className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer">
                             <ChevronRight className="h-3.5 w-3.5 text-gray-500 transition-transform duration-200" />
                           </button>
@@ -203,7 +205,7 @@ export default function Home() {
                         </div>
 
                         {/* Meeting Notes (single page, no chevron) */}
-                        <div className="group flex items-center px-1 py-1 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 4 }}>
+                        <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 4 }}>
                           <div className="p-0.5 rounded cursor-grab ml-6">
                             <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
                           </div>
@@ -228,37 +230,37 @@ export default function Home() {
                       {/* Content Header — matches content-header/index.tsx */}
                       <div className="flex flex-col gap-1 sm:gap-2 p-2 sm:p-4 border-b border-[var(--separator)]">
                         {/* Breadcrumbs */}
-                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                           <span className="hover:text-foreground cursor-pointer">My Workspace</span>
-                          <ChevronRight className="h-3 w-3" />
+                          <ChevronRight className="h-2.5 w-2.5" />
                           <span className="text-foreground">Q1 Planning</span>
                         </div>
                         {/* Title row */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <h2 className="text-lg sm:text-2xl font-bold truncate">Q1 Planning</h2>
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <span className="h-2 w-2 rounded-full bg-green-500" />
+                            <h2 className="text-sm sm:text-lg font-bold truncate">Q1 Planning</h2>
+                            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
                               <span>Saved</span>
                             </div>
                           </div>
-                          <div className="hidden sm:flex flex-wrap items-center justify-end gap-1 sm:gap-2">
+                          <div className="hidden sm:flex flex-wrap items-center justify-end gap-1 sm:gap-1.5">
                             {/* Page Setup */}
-                            <button className="h-8 px-2 rounded-md hover:bg-muted text-muted-foreground flex items-center gap-1 text-xs">
-                              <Settings2 className="h-4 w-4" />
+                            <button className="h-6 px-1.5 rounded-md hover:bg-muted text-muted-foreground flex items-center gap-1 text-[10px]">
+                              <Settings2 className="h-3.5 w-3.5" />
                             </button>
                             {/* Export */}
-                            <button className="h-8 px-2 rounded-md hover:bg-muted text-muted-foreground flex items-center gap-1 text-xs">
-                              <FileDown className="h-4 w-4" />
+                            <button className="h-6 px-1.5 rounded-md hover:bg-muted text-muted-foreground flex items-center gap-1 text-[10px]">
+                              <FileDown className="h-3.5 w-3.5" />
                             </button>
                             {/* Viewer avatars */}
                             <div className="flex -space-x-2">
-                              <div className="h-7 w-7 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">JD</div>
-                              <div className="h-7 w-7 rounded-full bg-emerald-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">SK</div>
+                              <div className="h-6 w-6 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-[9px] text-white font-medium">JD</div>
+                              <div className="h-6 w-6 rounded-full bg-emerald-500 border-2 border-card flex items-center justify-center text-[9px] text-white font-medium">SK</div>
                             </div>
                             {/* Share */}
-                            <button className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium flex items-center gap-1.5">
-                              <Share2 className="h-3.5 w-3.5" />
+                            <button className="h-6 px-2 rounded-md bg-primary text-primary-foreground text-[10px] font-medium flex items-center gap-1">
+                              <Share2 className="h-3 w-3" />
                               Share
                             </button>
                           </div>
@@ -352,21 +354,21 @@ export default function Home() {
 
                       {/* Chat Header - AISelector mock */}
                       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-                        <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-accent text-sm font-medium transition-colors">
+                        <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-accent text-xs font-medium transition-colors">
                           Global Assistant
-                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
                         </button>
-                        <button className="h-7 w-7 rounded-md hover:bg-accent flex items-center justify-center transition-colors" title="New Conversation">
-                          <Plus className="h-4 w-4 text-muted-foreground" />
+                        <button className="h-6 w-6 rounded-md hover:bg-accent flex items-center justify-center transition-colors" title="New Conversation">
+                          <Plus className="h-3.5 w-3.5 text-muted-foreground" />
                         </button>
                       </div>
 
                       {/* Messages - compact mode, no avatars */}
-                      <div className="flex-1 overflow-auto p-3 flex flex-col gap-1.5">
+                      <div className="flex-1 overflow-auto p-2 flex flex-col gap-1.5">
                         {/* User message */}
                         <div className="group relative bg-primary/10 dark:bg-accent/20 p-2 rounded-md ml-2">
-                          <span className="text-xs font-medium text-primary">You</span>
-                          <p className="text-xs text-foreground">Add key objectives for Q1 — onboarding redesign, AI capabilities, and uptime targets</p>
+                          <span className="text-[10px] font-medium text-primary">You</span>
+                          <p className="text-[10px] text-foreground">Add key objectives for Q1 — onboarding redesign, AI capabilities, and uptime targets</p>
                           <span className="text-[10px] text-muted-foreground/60">10:31 AM</span>
                           <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button className="h-5 w-5 rounded flex items-center justify-center hover:bg-accent">
@@ -397,7 +399,7 @@ export default function Home() {
 
                         {/* AI response */}
                         <div className="group relative">
-                          <p className="text-xs text-foreground">Done — I&apos;ve added a Key Objectives section with the three priorities as bullet points.</p>
+                          <p className="text-[10px] text-foreground">Done — I&apos;ve added a Key Objectives section with the three priorities as bullet points.</p>
                           <span className="text-[10px] text-muted-foreground/60">10:32 AM</span>
                           <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button className="h-5 w-5 rounded flex items-center justify-center hover:bg-accent">
@@ -408,10 +410,10 @@ export default function Home() {
                       </div>
 
                       {/* Input area */}
-                      <div className="p-3 border-t border-border">
+                      <div className="p-2 border-t border-border">
                         <div className="rounded-lg border border-border bg-background">
                           <div className="px-3 py-2">
-                            <span className="text-xs text-muted-foreground">Ask about this page...</span>
+                            <span className="text-[10px] text-muted-foreground">Ask about this page...</span>
                           </div>
                           <div className="flex items-center justify-between px-2 pb-2">
                             <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent transition-colors">
@@ -471,89 +473,122 @@ export default function Home() {
           </div>
         </section>
 
-        {/* AI Architecture Section */}
+        {/* Page Tree Section */}
         <section className="py-16 md:py-24 lg:py-32">
           <div className="container mx-auto px-4 md:px-6">
             {/* Section Header */}
             <div className="mx-auto max-w-3xl text-center mb-12 md:mb-16">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-muted/50 px-4 py-1.5 text-sm">
-                <Layers className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">AI Architecture</span>
-              </div>
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl mb-4">
-                AI that lives in your workspace
+                Everything is a page
               </h2>
               <p className="text-lg text-muted-foreground">
-                Not just a chatbot. PageSpace AI agents are part of your file tree,
-                with their own conversation history and context awareness.
+                Documents, channels, AI agents, spreadsheets, task lists, code files—all
+                the same primitive in one tree. Where you place them shapes what AI knows about them.
               </p>
             </div>
 
             {/* Two Column Layout */}
-            <div className="grid lg:grid-cols-2 gap-12 items-start">
-              {/* Left: Visual File Tree */}
+            <div className="grid lg:grid-cols-2 gap-12 items-center">
+              {/* Left: Sidebar Mock */}
               <div className="relative">
-                <div className="rounded-xl border border-border bg-card p-6 shadow-lg">
-                  <div className="flex items-center gap-2 mb-6 pb-4 border-b border-border">
-                    <FolderTree className="h-5 w-5 text-primary" />
-                    <span className="font-semibold">Workspace Structure</span>
-                  </div>
-
-                  {/* File Tree Visualization */}
-                  <div className="space-y-1 font-mono text-sm">
-                    {/* Global Assistant */}
-                    <div className="flex items-center gap-2 p-2 rounded-md bg-gradient-to-r from-primary/20 to-primary/5 border border-primary/20">
-                      <Globe className="h-4 w-4 text-primary flex-shrink-0" />
-                      <span className="font-semibold text-primary">Global Assistant</span>
-                      <span className="text-xs text-muted-foreground ml-auto">Your personal AI</span>
+                <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
+                  {/* Sidebar inner container */}
+                  <div className="px-3 py-3 space-y-3">
+                    {/* Drive Switcher */}
+                    <div className="flex items-center gap-2 px-2 py-1.5">
+                      <ChevronsUpDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      <span className="font-semibold text-sm">Acme Corp</span>
                     </div>
 
-                    {/* Project 1 */}
-                    <div className="ml-4 mt-3">
-                      <div className="flex items-center gap-2 p-2">
-                        <FolderTree className="h-4 w-4 text-muted-foreground" />
-                        <span>Product Launch</span>
+                    {/* Primary Navigation */}
+                    <nav className="space-y-0.5">
+                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
+                        <HomeIcon className="h-4 w-4" />
+                        <span>Dashboard</span>
                       </div>
-                      <div className="ml-4 space-y-1">
-                        <div className="flex items-center gap-2 p-2 rounded-md bg-primary/10">
-                          <Bot className="h-4 w-4 text-primary" />
-                          <span className="text-primary">Marketing AI Agent</span>
+                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
+                        <Inbox className="h-4 w-4" />
+                        <span>Inbox</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
+                        <CheckSquare className="h-4 w-4" />
+                        <span>Tasks</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
+                        <Calendar className="h-4 w-4" />
+                        <span>Calendar</span>
+                      </div>
+                    </nav>
+
+                    {/* Search + Create */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <div className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm text-muted-foreground flex items-center">
+                          Search pages...
                         </div>
-                        <div className="flex items-center gap-2 p-2 text-muted-foreground">
-                          <FileText className="h-4 w-4" />
-                          <span>Launch Plan.doc</span>
-                        </div>
-                        <div className="flex items-center gap-2 p-2 text-muted-foreground">
-                          <FileText className="h-4 w-4" />
-                          <span>Press Release.doc</span>
-                        </div>
+                      </div>
+                      <div className="flex h-8 w-8 items-center justify-center rounded-md border border-input bg-background text-muted-foreground flex-shrink-0">
+                        <Plus className="h-4 w-4" />
                       </div>
                     </div>
 
-                    {/* Project 2 */}
-                    <div className="ml-4 mt-2">
-                      <div className="flex items-center gap-2 p-2">
-                        <FolderTree className="h-4 w-4 text-muted-foreground" />
-                        <span>Engineering</span>
+                    {/* Page Tree */}
+                    <div className="space-y-0.5 text-sm">
+                      {/* Expanded Folder: Product Launch */}
+                      <div className="flex items-center gap-1 rounded-lg px-1 py-1.5 font-medium">
+                        <ChevronRight className="h-4 w-4 text-gray-500 rotate-90 flex-shrink-0" />
+                        <Folder className="h-4 w-4 text-primary flex-shrink-0" />
+                        <span className="text-gray-900 dark:text-gray-100 truncate">Product Launch</span>
                       </div>
-                      <div className="ml-4 space-y-1">
-                        <div className="flex items-center gap-2 p-2 rounded-md bg-primary/10">
-                          <Bot className="h-4 w-4 text-primary" />
-                          <span className="text-primary">Code Review AI</span>
+                      {/* Children — indented */}
+                      <div className="space-y-0.5" style={{ paddingLeft: '16px' }}>
+                        <div className="flex items-center gap-1 rounded-lg px-1 py-1.5 bg-gray-100 dark:bg-gray-800">
+                          <span className="w-4 flex-shrink-0" />
+                          <Sparkles className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-gray-900 dark:text-gray-100 font-medium truncate">Marketing Agent</span>
                         </div>
-                        <div className="flex items-center gap-2 p-2 text-muted-foreground">
-                          <FileText className="h-4 w-4" />
-                          <span>Architecture.md</span>
+                        <div className="flex items-center gap-1 rounded-lg px-1 py-1.5">
+                          <span className="w-4 flex-shrink-0" />
+                          <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-gray-900 dark:text-gray-100 font-medium truncate">Launch Plan</span>
+                        </div>
+                        <div className="flex items-center gap-1 rounded-lg px-1 py-1.5">
+                          <span className="w-4 flex-shrink-0" />
+                          <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-gray-900 dark:text-gray-100 font-medium truncate">Press Kit</span>
+                        </div>
+                        {/* Channel with children — shows any page type can nest */}
+                        <div className="flex items-center gap-1 rounded-lg px-1 py-1.5">
+                          <ChevronRight className="h-4 w-4 text-gray-500 rotate-90 flex-shrink-0" />
+                          <MessageSquare className="h-4 w-4 text-primary flex-shrink-0" />
+                          <span className="text-gray-900 dark:text-gray-100 font-medium truncate">team-updates</span>
+                        </div>
+                        <div className="space-y-0.5" style={{ paddingLeft: '20px' }}>
+                          <div className="flex items-center gap-1 rounded-lg px-1 py-1.5">
+                            <span className="w-4 flex-shrink-0" />
+                            <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                            <span className="text-gray-900 dark:text-gray-100 font-medium truncate">standup-notes</span>
+                          </div>
+                          <div className="flex items-center gap-1 rounded-lg px-1 py-1.5">
+                            <span className="w-4 flex-shrink-0" />
+                            <CheckSquare className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                            <span className="text-gray-900 dark:text-gray-100 font-medium truncate">Q1 Action Items</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 rounded-lg px-1 py-1.5">
+                          <span className="w-4 flex-shrink-0" />
+                          <CheckSquare className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-gray-900 dark:text-gray-100 font-medium truncate">Launch Tasks</span>
                         </div>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Context Flow Indicator */}
-                  <div className="mt-6 pt-4 border-t border-border">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <ChevronRight className="h-4 w-4" />
-                      <span>Each agent sees its children &amp; inherits parent context</span>
+                      {/* Collapsed Folder: Engineering */}
+                      <div className="flex items-center gap-1 rounded-lg px-1 py-1.5 font-medium mt-0.5">
+                        <ChevronRight className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                        <Folder className="h-4 w-4 text-primary flex-shrink-0" />
+                        <span className="text-gray-900 dark:text-gray-100 truncate">Engineering</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -561,87 +596,53 @@ export default function Home() {
 
               {/* Right: Feature Cards */}
               <div className="space-y-6">
-                {/* Global Assistant */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Globe className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold mb-1">Global Assistant</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Your personal AI that follows you across all workspaces.
-                        Perfect for quick questions, planning, and cross-project thinking.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Page Agents */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Bot className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold mb-1">Page Agents</h3>
-                      <p className="text-sm text-muted-foreground">
-                        AI agents that live in your file tree with their own conversation history.
-                        Give each one a custom personality and system prompt.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Context Hierarchy */}
+                {/* Everything is a Page */}
                 <div className="rounded-xl border border-border bg-card p-6">
                   <div className="flex items-start gap-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <Layers className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-semibold mb-1">Nested Context</h3>
+                      <h3 className="font-semibold mb-1">Everything is a Page</h3>
                       <p className="text-sm text-muted-foreground">
-                        Agents automatically see their child pages. Project-level AI understands
-                        the whole project while document-level AI focuses on specifics.
+                        Documents, channels, AI agents, spreadsheets, task lists, code files—all
+                        the same primitive. Nest and organize them however makes sense for your team.
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Multi-user */}
+                {/* Context is Structure */}
                 <div className="rounded-xl border border-border bg-card p-6">
                   <div className="flex items-start gap-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Users className="h-5 w-5 text-primary" />
+                      <FolderTree className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-semibold mb-1">Team AI</h3>
+                      <h3 className="font-semibold mb-1">Context is Structure</h3>
                       <p className="text-sm text-muted-foreground">
-                        Multiple team members can chat with the same AI agent simultaneously.
-                        The AI maintains context across all conversations.
+                        Where you place an AI agent determines what it knows. Put it next to a spec
+                        and a channel—it sees both. Move it to a different project—different context.
+                        The tree is the knowledge graph.
                       </p>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* ICP Example */}
-            <div className="mt-16 mx-auto max-w-4xl">
-              <div className="rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20 p-6 md:p-8">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 flex-shrink-0">
-                    <User className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-primary font-medium mb-2">How founders use this</p>
-                    <p className="text-muted-foreground">
-                      &ldquo;I use my Global Assistant for high-level planning and brainstorming.
-                      For each project, I create specialized agents—one for marketing copy that knows our
-                      brand voice, another for technical architecture that understands our stack.
-                      They all work together, but each stays focused on what it knows best.&rdquo;
-                    </p>
+                {/* AI at Every Level */}
+                <div className="rounded-xl border border-border bg-card p-6">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
+                      <Sparkles className="h-5 w-5 text-primary" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold mb-1">AI at Every Level</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Drop an AI agent anywhere in the tree. A project-level agent understands
+                        the whole project. A document-level agent focuses deeply. A global assistant
+                        spans everything.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -654,16 +655,12 @@ export default function Home() {
           <div className="container mx-auto px-4 md:px-6">
             {/* Section Header */}
             <div className="mx-auto max-w-3xl text-center mb-12 md:mb-16">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-1.5 text-sm">
-                <FileText className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">Documents</span>
-              </div>
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl mb-4">
                 Write with AI, your way
               </h2>
               <p className="text-lg text-muted-foreground">
-                Rich text or markdown. AI suggestions inline or on demand.
-                Full editing history with one-click rollback.
+                Rich text editing with a full formatting toolbar.
+                AI edits your documents through the sidebar chat.
               </p>
             </div>
 
@@ -678,45 +675,37 @@ export default function Home() {
                       <FileText className="h-4 w-4 text-muted-foreground" />
                       <span className="text-sm font-medium">Building Your Personal Brand</span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      {/* Mode Toggle */}
-                      <div className="flex items-center rounded-md border border-border bg-background p-0.5">
-                        <div className="px-2 py-1 rounded bg-primary/10 text-primary text-xs font-medium">
-                          <Type className="h-3 w-3 inline mr-1" />
-                          Rich
-                        </div>
-                        <div className="px-2 py-1 text-xs text-muted-foreground">
-                          <Code className="h-3 w-3 inline mr-1" />
-                          Markdown
-                        </div>
-                      </div>
-                    </div>
+                    <div className="flex items-center gap-1" />
                   </div>
 
-                  {/* Toolbar */}
-                  <div className="flex items-center gap-1 border-b border-border bg-muted/20 px-4 py-2">
-                    <div className="flex items-center gap-1 pr-3 border-r border-border">
-                      <button className="p-1.5 rounded hover:bg-muted text-muted-foreground">
-                        <span className="text-xs font-bold">B</span>
-                      </button>
-                      <button className="p-1.5 rounded hover:bg-muted text-muted-foreground">
-                        <span className="text-xs italic">I</span>
-                      </button>
-                      <button className="p-1.5 rounded hover:bg-muted text-muted-foreground">
-                        <span className="text-xs underline">U</span>
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-1 px-3 border-r border-border">
-                      <button className="p-1.5 rounded hover:bg-muted text-muted-foreground text-xs">H1</button>
-                      <button className="p-1.5 rounded hover:bg-muted text-muted-foreground text-xs">H2</button>
-                    </div>
-                    <div className="flex items-center gap-1 ml-auto">
-                      <button className="p-1.5 rounded hover:bg-muted text-muted-foreground">
-                        <History className="h-3.5 w-3.5" />
-                      </button>
-                      <button className="p-1.5 rounded bg-primary/10 text-primary">
-                        <Wand2 className="h-3.5 w-3.5" />
-                      </button>
+                  {/* Toolbar — matches real Toolbar.tsx + DocumentView.tsx wrapper */}
+                  <div className="mx-4 mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden">
+                    <div className="w-full overflow-x-auto">
+                      <div className="flex items-center gap-1 p-2 min-w-max">
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Bold size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Italic size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Strikethrough size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Code size={16} /></button>
+                        <div className="w-[1px] h-6 bg-border mx-1" />
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Heading1 size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Heading2 size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Heading3 size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors bg-primary text-primary-foreground"><Pilcrow size={16} /></button>
+                        <div className="w-[1px] h-6 bg-border mx-1" />
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><List size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><ListOrdered size={16} /></button>
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Quote size={16} /></button>
+                        <div className="w-[1px] h-6 bg-border mx-1" />
+                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Table2 size={16} /></button>
+                        <div className="ml-auto" />
+                        <div className="w-[1px] h-6 bg-border mx-1" />
+                        <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted transition-colors">
+                          Sans <ChevronDown size={10} />
+                        </button>
+                        <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted transition-colors">
+                          16px <ChevronDown size={10} />
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -727,70 +716,33 @@ export default function Home() {
                       In the age of AI, your personal brand is more important than ever. Here&apos;s how to stand out...
                     </p>
 
-                    {/* AI Suggestion Block */}
-                    <div className="relative my-4">
-                      <div className="absolute -left-3 top-0 bottom-0 w-1 rounded-full bg-primary" />
-                      <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <Sparkles className="h-4 w-4 text-primary" />
-                          <span className="text-xs font-medium text-primary">AI Suggestion</span>
-                          <div className="ml-auto flex items-center gap-1">
-                            <button className="px-2 py-0.5 text-xs rounded border border-primary/30 text-primary hover:bg-primary/10">
-                              Accept
-                            </button>
-                            <button className="px-2 py-0.5 text-xs rounded text-muted-foreground hover:bg-muted">
-                              Dismiss
-                            </button>
-                          </div>
-                        </div>
-                        <p className="text-sm text-primary/80">
-                          The key differentiator isn&apos;t just your skills—it&apos;s the unique perspective you bring.
-                          AI can replicate knowledge, but it can&apos;t replicate your lived experience.
-                        </p>
-                      </div>
-                    </div>
-
-                    <p className="text-muted-foreground">
-                      <span className="text-foreground">Authenticity is your superpower.</span> Share your failures alongside your wins...
+                    <p className="text-muted-foreground mb-4">
+                      The key differentiator isn&apos;t just your skills—it&apos;s the unique perspective you bring.
+                      AI can replicate knowledge, but it can&apos;t replicate your lived experience.
                     </p>
 
-                    {/* Cursor with AI suggestion appearing */}
-                    <div className="mt-4 flex items-center gap-1">
-                      <span className="h-5 w-0.5 bg-primary animate-pulse" />
-                      <span className="text-xs text-muted-foreground italic opacity-60">
-                        ...and your audience will connect on a deeper level.
-                      </span>
-                    </div>
+                    <p className="text-muted-foreground">
+                      <span className="text-foreground">Authenticity is your superpower.</span> Share your failures alongside your wins,
+                      and your audience will connect on a deeper level.
+                    </p>
                   </div>
 
-                  {/* Editor Footer with AI Status */}
-                  <div className="flex items-center justify-between border-t border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-2">
-                      <span>428 words</span>
-                      <span className="text-border">•</span>
-                      <span>Saved</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Undo2 className="h-3 w-3" />
-                      <span>12 versions</span>
-                    </div>
-                  </div>
                 </div>
               </div>
 
               {/* Right: Feature Points */}
               <div className="space-y-6 order-1 lg:order-2">
-                {/* AI Inline Editing */}
+                {/* AI Chat Editing */}
                 <div className="rounded-xl border border-border bg-card p-6">
                   <div className="flex items-start gap-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <Wand2 className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-semibold mb-1">AI Inline Editing</h3>
+                      <h3 className="font-semibold mb-1">AI-Powered Editing</h3>
                       <p className="text-sm text-muted-foreground">
-                        AI suggestions appear right in your document. Accept, modify, or dismiss with a click.
-                        No context switching to a chat window.
+                        Talk to AI in the sidebar chat and it edits your document directly.
+                        Ask for rewrites, expansions, or tone changes without leaving your page.
                       </p>
                     </div>
                   </div>
@@ -845,26 +797,6 @@ export default function Home() {
                 </div>
               </div>
             </div>
-
-            {/* ICP Example - Content Creator */}
-            <div className="mt-16 mx-auto max-w-4xl">
-              <div className="rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20 p-6 md:p-8">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 flex-shrink-0">
-                    <User className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-primary font-medium mb-2">How content creators use this</p>
-                    <p className="text-muted-foreground">
-                      &ldquo;I write my blog posts in PageSpace now. The AI knows my voice from previous posts,
-                      so suggestions actually sound like me. When I&apos;m stuck, I just highlight a paragraph
-                      and ask for alternatives. And if I go too far down a rabbit hole? One click and
-                      I&apos;m back to where I started. No more ctrl+Z 47 times.&rdquo;
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -873,10 +805,6 @@ export default function Home() {
           <div className="container mx-auto px-4 md:px-6">
             {/* Section Header */}
             <div className="mx-auto max-w-3xl text-center mb-12 md:mb-16">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-muted/50 px-4 py-1.5 text-sm">
-                <MessageSquare className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">Channels & DMs</span>
-              </div>
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl mb-4">
                 Team chat, upgraded with AI
               </h2>
@@ -900,55 +828,39 @@ export default function Home() {
                       <h3 className="font-semibold mb-1">@mention AI Agents</h3>
                       <p className="text-sm text-muted-foreground">
                         Type @Marketing-AI or @Code-Review in any channel.
-                        AI agents join the conversation with full context of the thread.
+                        AI agents join the conversation with full context of the channel.
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Channels */}
+                {/* Channels & DMs */}
                 <div className="rounded-xl border border-border bg-card p-6">
                   <div className="flex items-start gap-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <Hash className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-semibold mb-1">Public & Private Channels</h3>
+                      <h3 className="font-semibold mb-1">Channels & Direct Messages</h3>
                       <p className="text-sm text-muted-foreground">
-                        Organize discussions by project, topic, or team.
-                        AI agents can be added to specific channels for focused help.
+                        Public channels for team discussions, private channels for
+                        focused work, and 1:1 DMs — all with AI agents available.
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* DMs */}
+                {/* Inbox */}
                 <div className="rounded-xl border border-border bg-card p-6">
                   <div className="flex items-start gap-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Lock className="h-5 w-5 text-primary" />
+                      <Inbox className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-semibold mb-1">Private Conversations</h3>
+                      <h3 className="font-semibold mb-1">Unified Inbox</h3>
                       <p className="text-sm text-muted-foreground">
-                        Direct messages for 1:1 or small group conversations.
-                        Add AI agents for private brainstorming sessions.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Threads */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Reply className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold mb-1">Threaded Discussions</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Keep conversations organized with threads.
-                        AI responds in the thread, keeping main channels clean.
+                        Every channel, DM, and mention in one place.
+                        Never lose track of a conversation across your workspace.
                       </p>
                     </div>
                   </div>
@@ -1052,33 +964,38 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Message Input */}
-                  <div className="border-t border-border bg-muted/20 p-3">
-                    <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                      <AtSign className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm text-muted-foreground flex-1">Message #product-launch</span>
-                      <Send className="h-4 w-4 text-muted-foreground" />
+                  {/* Message Input — matches InputCard + ChannelInput + ChannelInputFooter */}
+                  <div className="p-4">
+                    <div className="max-w-4xl mx-auto">
+                      <div className="bg-background rounded-2xl border border-border/60 shadow-sm overflow-hidden">
+                        {/* Input row */}
+                        <div className="flex items-end gap-2 p-3">
+                          <div className="flex-1 min-h-[36px] flex items-center">
+                            <span className="text-sm text-muted-foreground">Message #product-launch...</span>
+                          </div>
+                          <button className="h-9 w-9 shrink-0 rounded-full bg-muted text-muted-foreground flex items-center justify-center">
+                            <ArrowUp className="h-4 w-4" />
+                          </button>
+                        </div>
+                        {/* Footer — matches ChannelInputFooter.tsx */}
+                        <div className="flex items-center justify-between px-3 py-2 border-t border-border/40">
+                          <div className="flex items-center gap-0.5">
+                            <button className="h-8 w-8 p-0 rounded-md text-muted-foreground hover:bg-muted/50 flex items-center justify-center">
+                              <Bold className="h-4 w-4" />
+                            </button>
+                            <div className="w-px h-4 bg-border/60 mx-1" />
+                            <button className="h-8 w-8 p-0 rounded-md text-muted-foreground hover:bg-muted/50 flex items-center justify-center">
+                              <AtSign className="h-4 w-4" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button className="h-8 w-8 p-0 rounded-md text-muted-foreground hover:bg-muted/50 flex items-center justify-center">
+                              <Paperclip className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* ICP Example - Small Team */}
-            <div className="mt-16 mx-auto max-w-4xl">
-              <div className="rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20 p-6 md:p-8">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 flex-shrink-0">
-                    <Users className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-primary font-medium mb-2">How small teams use this</p>
-                    <p className="text-muted-foreground">
-                      &ldquo;We have specialized AI agents for different parts of our business—one knows our codebase,
-                      one knows our marketing voice, one knows our customer conversations. When we&apos;re discussing
-                      something cross-functional, we just @mention all of them. It&apos;s like having expert consultants
-                      on call 24/7, but they actually know our specific context.&rdquo;
-                    </p>
                   </div>
                 </div>
               </div>
@@ -1091,10 +1008,6 @@ export default function Home() {
           <div className="container mx-auto px-4 md:px-6">
             {/* Section Header */}
             <div className="mx-auto max-w-3xl text-center mb-12 md:mb-16">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-1.5 text-sm">
-                <CheckSquare className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">Tasks</span>
-              </div>
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl mb-4">
                 Assign work to AI or humans
               </h2>
@@ -1128,11 +1041,7 @@ export default function Home() {
                     {/* Completed task - human */}
                     <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0 opacity-50">
                       <div className="shrink-0">
-                        <div className="h-5 w-5 rounded border-2 border-primary bg-primary flex items-center justify-center">
-                          <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                          </svg>
-                        </div>
+                        <Checkbox checked={true} className="h-5 w-5" />
                       </div>
                       <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
                         <span className="text-sm leading-snug line-through text-muted-foreground">Finalize product positioning</span>
@@ -1148,11 +1057,7 @@ export default function Home() {
                     {/* Completed task - AI */}
                     <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0 opacity-50">
                       <div className="shrink-0">
-                        <div className="h-5 w-5 rounded border-2 border-primary bg-primary flex items-center justify-center">
-                          <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                          </svg>
-                        </div>
+                        <Checkbox checked={true} className="h-5 w-5" />
                       </div>
                       <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
                         <span className="text-sm leading-snug line-through text-muted-foreground">Research competitor pricing</span>
@@ -1168,7 +1073,7 @@ export default function Home() {
                     {/* In-progress task - AI */}
                     <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
                       <div className="shrink-0">
-                        <div className="h-5 w-5 rounded border-2 border-primary" />
+                        <Checkbox checked={false} className="h-5 w-5" />
                       </div>
                       <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
                         <span className="text-sm leading-snug text-foreground">Draft launch email sequence</span>
@@ -1185,7 +1090,7 @@ export default function Home() {
                     {/* Pending task - human */}
                     <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
                       <div className="shrink-0">
-                        <div className="h-5 w-5 rounded border-2 border-primary" />
+                        <Checkbox checked={false} className="h-5 w-5" />
                       </div>
                       <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
                         <span className="text-sm leading-snug text-foreground">Review AI-generated drafts</span>
@@ -1201,7 +1106,7 @@ export default function Home() {
                     {/* Pending task - AI */}
                     <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
                       <div className="shrink-0">
-                        <div className="h-5 w-5 rounded border-2 border-primary" />
+                        <Checkbox checked={false} className="h-5 w-5" />
                       </div>
                       <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
                         <span className="text-sm leading-snug text-foreground">Generate social media graphics</span>
@@ -1217,18 +1122,14 @@ export default function Home() {
                     {/* Pending task - overdue */}
                     <div className="flex items-center gap-3 px-4 py-3 active:bg-muted/60 transition-colors border-b border-border/50 last:border-b-0">
                       <div className="shrink-0">
-                        <div className="h-5 w-5 rounded border-2 border-primary" />
+                        <Checkbox checked={false} className="h-5 w-5" />
                       </div>
                       <button type="button" className="flex-1 min-w-0 flex flex-col gap-0.5 text-left bg-transparent border-0 p-0">
                         <span className="text-sm leading-snug text-foreground">Schedule launch webinar</span>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-red-500" />
                           <span className="flex items-center gap-0.5 text-red-500 font-medium">
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <circle cx="12" cy="12" r="10" />
-                              <line x1="12" y1="8" x2="12" y2="12" />
-                              <line x1="12" y1="16" x2="12.01" y2="16" />
-                            </svg>
+                            <AlertCircle className="h-3 w-3" />
                             Feb 10
                           </span>
                         </div>
@@ -1306,26 +1207,6 @@ export default function Home() {
                 </div>
               </div>
             </div>
-
-            {/* ICP Example - Founder */}
-            <div className="mt-16 mx-auto max-w-4xl">
-              <div className="rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20 p-6 md:p-8">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 flex-shrink-0">
-                    <User className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-primary font-medium mb-2">How founders use this</p>
-                    <p className="text-muted-foreground">
-                      &ldquo;Monday morning I dump 20 research tasks into PageSpace and assign them all to my Research AI.
-                      By afternoon, I have competitor analyses, market data, and draft summaries waiting for review.
-                      My team handles the strategic decisions—AI handles the grunt work. We&apos;re a 5-person startup
-                      that operates like a 20-person company.&rdquo;
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -1334,10 +1215,6 @@ export default function Home() {
           <div className="container mx-auto px-4 md:px-6">
             {/* Section Header */}
             <div className="mx-auto max-w-3xl text-center mb-12 md:mb-16">
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-muted/50 px-4 py-1.5 text-sm">
-                <Calendar className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">Calendar</span>
-              </div>
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl mb-4">
                 Everything in one view
               </h2>
@@ -1437,7 +1314,7 @@ export default function Home() {
                     {/* Header with day names */}
                     <div className="flex border-b bg-background sticky top-0 z-10">
                       {/* Time gutter spacer */}
-                      <div className="w-12 shrink-0 border-r" />
+                      <div className="w-16 shrink-0 border-r" />
                       {/* Day columns header */}
                       {[
                         { day: 'Mon', date: 10, isToday: false },
@@ -1461,7 +1338,7 @@ export default function Home() {
                     <div className="flex-1 overflow-auto">
                       <div className="flex min-h-full">
                         {/* Time gutter */}
-                        <div className="w-12 shrink-0 border-r">
+                        <div className="w-16 shrink-0 border-r">
                           {[9, 10, 11, 12, 14].map((hour) => (
                             <div key={hour} className="relative border-b" style={{ height: 48 }}>
                               <span className="absolute -top-2.5 right-2 text-xs text-muted-foreground">
@@ -1551,26 +1428,6 @@ export default function Home() {
                 </div>
               </div>
             </div>
-
-            {/* ICP Example - Busy Founder */}
-            <div className="mt-16 mx-auto max-w-4xl">
-              <div className="rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20 p-6 md:p-8">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 flex-shrink-0">
-                    <User className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-primary font-medium mb-2">How busy founders use this</p>
-                    <p className="text-muted-foreground">
-                      &ldquo;I used to context-switch between 4 different calendars. Now I see everything in one place—
-                      my investor calls from Google Calendar, task deadlines from all my projects, even the blocks
-                      where AI is working on my behalf. When my Research AI schedules a &apos;deliverables ready&apos; event,
-                      I know exactly when to expect results without constantly checking.&rdquo;
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -1578,12 +1435,6 @@ export default function Home() {
         <section className="border-t border-border bg-gradient-to-b from-muted/50 to-background py-16 md:py-24 lg:py-32">
           <div className="container mx-auto px-4 md:px-6">
             <div className="mx-auto max-w-4xl text-center">
-              {/* Main CTA */}
-              <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-sm">
-                <Sparkles className="h-4 w-4 text-primary" />
-                <span className="text-primary">Start building your AI-powered workspace</span>
-              </div>
-
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl mb-6">
                 Ready to work differently?
               </h2>
@@ -1609,20 +1460,6 @@ export default function Home() {
               </div>
 
               {/* Trust Signals */}
-              <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground mb-12">
-                <span className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  Free tier available
-                </span>
-                <span className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  No credit card required
-                </span>
-                <span className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  Cancel anytime
-                </span>
-              </div>
 
               {/* Quick Links */}
               <div className="flex flex-wrap items-center justify-center gap-6 pt-8 border-t border-border">
@@ -1647,68 +1484,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Footer */}
-        <footer className="border-t border-border bg-muted/30 py-12 md:py-16">
-          <div className="container mx-auto px-4 md:px-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-12">
-              {/* Product */}
-              <div>
-                <h3 className="font-semibold mb-4">Product</h3>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li><Link href="/tour" className="hover:text-foreground transition-colors">Product Tour</Link></li>
-                  <li><Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link></li>
-                  <li><Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link></li>
-                  <li><Link href="/integrations" className="hover:text-foreground transition-colors">Integrations</Link></li>
-                  <li><Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link></li>
-                </ul>
-              </div>
-
-              {/* Resources */}
-              <div>
-                <h3 className="font-semibold mb-4">Resources</h3>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li><Link href="/docs" className="hover:text-foreground transition-colors">Documentation</Link></li>
-                  <li><Link href="/blog" className="hover:text-foreground transition-colors">Blog</Link></li>
-                  <li><Link href="/faq" className="hover:text-foreground transition-colors">FAQ</Link></li>
-                  <li><Link href="/docs/api" className="hover:text-foreground transition-colors">API Reference</Link></li>
-                </ul>
-              </div>
-
-              {/* Company */}
-              <div>
-                <h3 className="font-semibold mb-4">Company</h3>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li><Link href="/about" className="hover:text-foreground transition-colors">About</Link></li>
-                  <li><Link href="/careers" className="hover:text-foreground transition-colors">Careers</Link></li>
-                  <li><Link href="/contact" className="hover:text-foreground transition-colors">Contact</Link></li>
-                </ul>
-              </div>
-
-              {/* Legal */}
-              <div>
-                <h3 className="font-semibold mb-4">Legal</h3>
-                <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li><Link href="/privacy" className="hover:text-foreground transition-colors">Privacy Policy</Link></li>
-                  <li><Link href="/terms" className="hover:text-foreground transition-colors">Terms of Service</Link></li>
-                  <li><Link href="/security" className="hover:text-foreground transition-colors">Security</Link></li>
-                </ul>
-              </div>
-            </div>
-
-            {/* Bottom Bar */}
-            <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-8 border-t border-border">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                  <Sparkles className="h-5 w-5 text-primary-foreground" />
-                </div>
-                <span className="font-semibold">PageSpace</span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
-              </p>
-            </div>
-          </div>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

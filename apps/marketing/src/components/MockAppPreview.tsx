@@ -105,7 +105,7 @@ function Sidebar({ activeView }: { activeView: string }) {
   };
 
   return (
-    <div className="w-[280px] liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none flex flex-col flex-1 px-3 py-3">
+    <div className="w-[16rem] liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none flex flex-col flex-1 px-3 py-3">
       {/* 1. Drive Switcher - matches DriveSwitcher.tsx */}
       <div className="mb-3">
         <button className="flex items-center gap-2 px-2 h-9 w-full rounded-lg hover:bg-accent transition-colors">
@@ -304,7 +304,7 @@ function PageTreeItem({
           ? "bg-gray-200 dark:bg-gray-700"
           : "hover:bg-gray-200 dark:hover:bg-gray-700"
       )}
-      style={{ paddingLeft: `${depth * 12 + 4}px` }}
+      style={{ paddingLeft: `${depth * 8 + 4}px` }}
     >
       {/* Expand/Collapse Chevron - INTERACTIVE */}
       {hasChildren && (
@@ -411,37 +411,37 @@ function ChatContent() {
     <>
       {/* Tab Bar */}
       <div className="flex items-center border-b border-border">
-        <button className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 border-primary text-primary">
-          <MessageSquare className="h-3.5 w-3.5" />
+        <button className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-medium border-b-2 border-primary text-primary">
+          <MessageSquare className="h-3 w-3" />
           Chat
         </button>
-        <button className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium text-muted-foreground border-b-2 border-transparent">
-          <History className="h-3.5 w-3.5" />
+        <button className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-medium text-muted-foreground border-b-2 border-transparent">
+          <History className="h-3 w-3" />
           History
         </button>
-        <button className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium text-muted-foreground border-b-2 border-transparent">
-          <Activity className="h-3.5 w-3.5" />
+        <button className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-medium text-muted-foreground border-b-2 border-transparent">
+          <Activity className="h-3 w-3" />
           Activity
         </button>
       </div>
 
       {/* Chat Header - AISelector mock */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-accent text-sm font-medium transition-colors">
+        <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-accent text-xs font-medium transition-colors">
           Global Assistant
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </button>
-        <button className="h-7 w-7 rounded-md hover:bg-accent flex items-center justify-center transition-colors" title="New Conversation">
-          <Plus className="h-4 w-4 text-muted-foreground" />
+        <button className="h-6 w-6 rounded-md hover:bg-accent flex items-center justify-center transition-colors" title="New Conversation">
+          <Plus className="h-3.5 w-3.5 text-muted-foreground" />
         </button>
       </div>
 
       {/* Messages - compact mode, no avatars */}
-      <div className="flex-1 overflow-auto p-3 flex flex-col gap-1.5">
+      <div className="flex-1 overflow-auto p-2 flex flex-col gap-1.5">
         {/* User message */}
         <div className="group relative bg-primary/10 dark:bg-accent/20 p-2 rounded-md ml-2">
-          <span className="text-xs font-medium text-primary">You</span>
-          <p className="text-xs text-foreground">Can you help me write a product roadmap for Q1?</p>
+          <span className="text-[10px] font-medium text-primary">You</span>
+          <p className="text-[10px] text-foreground">Can you help me write a product roadmap for Q1?</p>
           <span className="text-[10px] text-muted-foreground/60">10:30 AM</span>
           <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button className="h-5 w-5 rounded flex items-center justify-center hover:bg-accent">
@@ -452,9 +452,9 @@ function ChatContent() {
 
         {/* AI response */}
         <div className="group relative">
-          <div className="text-xs text-foreground space-y-1.5">
+          <div className="text-[10px] text-foreground space-y-1.5">
             <p>I&apos;d be happy to help you create a Q1 product roadmap. Let me suggest a structure:</p>
-            <ul className="list-disc list-inside space-y-0.5 text-xs ml-1">
+            <ul className="list-disc list-inside space-y-0.5 text-[10px] ml-1">
               <li>Executive Summary</li>
               <li>Key Objectives &amp; KPIs</li>
               <li>Feature Releases Timeline</li>
@@ -472,10 +472,10 @@ function ChatContent() {
       </div>
 
       {/* Input area */}
-      <div className="p-3 border-t border-border">
+      <div className="p-2 border-t border-border">
         <div className="rounded-lg border border-border bg-background">
           <div className="px-3 py-2">
-            <span className="text-xs text-muted-foreground">Ask about this page...</span>
+            <span className="text-[10px] text-muted-foreground">Ask about this page...</span>
           </div>
           <div className="flex items-center justify-between px-2 pb-2">
             <button className="h-6 w-6 rounded flex items-center justify-center hover:bg-accent transition-colors">

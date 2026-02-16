@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles, ArrowRight, ArrowLeft, CheckCircle2, ChevronRight, Play, Book, Zap, Code } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteFooter } from "@/components/SiteFooter";
 
 export const metadata = {
   title: "Getting Started | PageSpace Documentation",
@@ -220,28 +221,7 @@ export default function GettingStartedPage() {
         </div>
       </div>
 
-      {/* Footer */}
-      <footer className="border-t border-border py-12 mt-12">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <Sparkles className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold">PageSpace</span>
-            </div>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-              <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-              <Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link>
-              <Link href="/blog" className="hover:text-foreground transition-colors">Blog</Link>
-              <Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link>
-            </nav>
-            <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
-            </p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter variant="compact" />
     </div>
   );
 }

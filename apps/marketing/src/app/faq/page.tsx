@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles, ChevronDown, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.faq;
@@ -93,6 +94,33 @@ const faqs: FAQItem[] = [
     question: "Does PageSpace support SSO?",
     answer: "Yes, Enterprise plans support SSO with SAML and OIDC providers. Contact our sales team for setup assistance.",
     category: "Privacy & Security",
+  },
+
+  // Security
+  {
+    question: "How does PageSpace secure user sessions?",
+    answer: "PageSpace uses opaque session tokens with hash-only storage—we never store your actual token, only a SHA-256 hash. This means even if our database were compromised, attackers couldn't use the hashes to impersonate users. Sessions can be instantly revoked, and we validate every request against our database.",
+    category: "Security",
+  },
+  {
+    question: "How does PageSpace protect against brute force attacks?",
+    answer: "We use distributed rate limiting and database-backed account lockout. Login attempts are limited to 5 per 15 minutes per IP and per email. After 10 failed attempts, accounts are locked for 15 minutes. This lockout persists across IP changes because it's stored in our database, not just in memory.",
+    category: "Security",
+  },
+  {
+    question: "How does PageSpace secure real-time collaboration?",
+    answer: "WebSocket connections use per-event authorization—every write operation (document updates, file uploads, task changes) is re-authorized in real-time. We use short-lived socket tokens (5-minute expiry) and HMAC-signed inter-service communication. Read-only events like cursor movement use connection-level auth for performance.",
+    category: "Security",
+  },
+  {
+    question: "What authentication methods does PageSpace support?",
+    answer: "PageSpace supports email/password authentication with strong requirements (12+ characters, mixed case, numbers) and OAuth with Google and Apple. Passwords are hashed with bcrypt (cost factor 12). All authentication flows include CSRF protection with HMAC-signed tokens.",
+    category: "Security",
+  },
+  {
+    question: "How does PageSpace handle security events?",
+    answer: "We log security events including login attempts, CSRF failures, and admin actions for audit trails. Rate limiting is distributed across our infrastructure, not just in-memory, ensuring protection even across restarts. We use timing-safe comparisons to prevent timing attacks on sensitive operations.",
+    category: "Security",
   },
 
   // Integrations
@@ -240,28 +268,7 @@ export default function FAQPage() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-border py-12">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <Sparkles className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold">PageSpace</span>
-            </div>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-              <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-              <Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link>
-              <Link href="/docs" className="hover:text-foreground transition-colors">Docs</Link>
-              <Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link>
-            </nav>
-            <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
-            </p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter variant="compact" />
     </div>
   );
 }

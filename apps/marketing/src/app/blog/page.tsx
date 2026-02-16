@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles, Calendar, Clock, User, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.blog;
@@ -18,6 +19,34 @@ interface BlogPost {
 
 const blogPosts: BlogPost[] = [
   {
+    slug: "security-architecture-deep-dive",
+    title: "How PageSpace Protects Your Data",
+    description: "A deep dive into PageSpace's security architecture: opaque session tokens, per-event WebSocket authorization, and defense-in-depth design.",
+    author: "PageSpace Team",
+    date: "2026-02-14",
+    readTime: "8 min read",
+    category: "Security",
+    featured: true,
+  },
+  {
+    slug: "real-time-security",
+    title: "Securing Real-Time Collaboration",
+    description: "How PageSpace implements per-event authorization for WebSocket connections, ensuring every action is verified in real-time.",
+    author: "PageSpace Team",
+    date: "2026-02-13",
+    readTime: "6 min read",
+    category: "Technical",
+  },
+  {
+    slug: "oauth-security-best-practices",
+    title: "OAuth Security: Signed State and Safe Redirects",
+    description: "How PageSpace implements secure OAuth flows with HMAC-signed state parameters and strict redirect validation.",
+    author: "PageSpace Team",
+    date: "2026-02-12",
+    readTime: "5 min read",
+    category: "Technical",
+  },
+  {
     slug: "introducing-pagespace",
     title: "Introducing PageSpace: AI-Native Collaboration",
     description: "Today we're launching PageSpace, a new kind of workspace where AI isn't bolted on—it's woven into every interaction. Here's our vision for the future of work.",
@@ -25,7 +54,6 @@ const blogPosts: BlogPost[] = [
     date: "2026-02-10",
     readTime: "5 min read",
     category: "Announcements",
-    featured: true,
   },
   {
     slug: "understanding-page-agents",
@@ -56,7 +84,7 @@ const blogPosts: BlogPost[] = [
   },
 ];
 
-const categories = ["All", "Announcements", "Product", "Technical", "Company"];
+const categories = ["All", "Announcements", "Product", "Technical", "Security", "Company"];
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString);
@@ -250,28 +278,7 @@ export default function BlogPage() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-border py-12">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <Sparkles className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold">PageSpace</span>
-            </div>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-              <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-              <Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link>
-              <Link href="/docs" className="hover:text-foreground transition-colors">Docs</Link>
-              <Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link>
-            </nav>
-            <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
-            </p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter variant="compact" />
     </div>
   );
 }

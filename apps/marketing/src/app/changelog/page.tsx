@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles, ArrowRight, Zap, Bug, Star, Wrench, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.changelog;
@@ -17,6 +18,20 @@ interface ChangelogEntry {
 }
 
 const changelog: ChangelogEntry[] = [
+  {
+    version: "2.5.0",
+    date: "2026-02-14",
+    title: "Security Hardening & Per-Event Authorization",
+    description: "Enhanced security with per-event WebSocket authorization, distributed rate limiting, and improved session management.",
+    changes: [
+      { type: "feature", text: "Per-event WebSocket authorization for all write operations" },
+      { type: "feature", text: "Distributed rate limiting with database-backed account lockout" },
+      { type: "feature", text: "HMAC-signed inter-service broadcast authentication" },
+      { type: "improvement", text: "Opaque session tokens with hash-only storage" },
+      { type: "improvement", text: "Enhanced CSRF protection with timing-safe validation" },
+      { type: "improvement", text: "Security event logging for audit trails" },
+    ],
+  },
   {
     version: "2.4.0",
     date: "2026-02-10",
@@ -277,28 +292,7 @@ export default function ChangelogPage() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-border py-12">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <Sparkles className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold">PageSpace</span>
-            </div>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-              <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-              <Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link>
-              <Link href="/docs" className="hover:text-foreground transition-colors">Docs</Link>
-              <Link href="/blog" className="hover:text-foreground transition-colors">Blog</Link>
-            </nav>
-            <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
-            </p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter variant="compact" />
     </div>
   );
 }

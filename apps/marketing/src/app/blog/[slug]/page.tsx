@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Sparkles, ArrowLeft, Calendar, Clock, User, Share2, Twitter, Linkedin } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SiteFooter } from "@/components/SiteFooter";
 import type { Metadata } from "next";
 
 interface BlogPost {
@@ -16,6 +17,240 @@ interface BlogPost {
 }
 
 const blogPosts: Record<string, BlogPost> = {
+  "security-architecture-deep-dive": {
+    slug: "security-architecture-deep-dive",
+    title: "How PageSpace Protects Your Data",
+    description: "A deep dive into PageSpace's security architecture: opaque session tokens, per-event WebSocket authorization, and defense-in-depth design.",
+    content: `
+## Security by Design
+
+At PageSpace, security isn't an afterthought—it's foundational to everything we build. Here's how we protect your data at every layer.
+
+## Opaque Session Tokens
+
+Unlike systems that use JWTs (which can be decoded by anyone), PageSpace uses opaque session tokens:
+
+- **Hash-only storage**: We never store your actual token—only a SHA-256 hash
+- **High entropy**: 256 bits of randomness makes tokens unguessable
+- **Stateful validation**: Every request is verified against our database
+- **Instant revocation**: Compromised sessions can be invalidated immediately
+
+### Why Not JWT?
+
+JWTs are popular, but they have downsides for stateful applications:
+
+- Can't be revoked until they expire
+- Carry claims that anyone can read
+- Require careful implementation to avoid vulnerabilities
+
+Our opaque tokens give us full control over session lifecycle.
+
+## Account Protection
+
+### Rate Limiting
+
+Distributed rate limiting protects against brute force:
+
+- **Login attempts**: 5 per 15 minutes per IP and per email
+- **Signup**: 3 per hour to prevent abuse
+- **Password reset**: 3 per hour per account
+
+### Account Lockout
+
+After 10 failed login attempts:
+
+- Account locked for 15 minutes
+- Persists across IP changes (database-backed, not in-memory)
+- Automatic unlock after cooldown period
+
+### Password Requirements
+
+Strong password policy enforced:
+
+- Minimum 12 characters
+- At least one uppercase letter
+- At least one lowercase letter
+- At least one number
+- Hashed with bcrypt (cost factor 12)
+
+## CSRF Protection
+
+Every state-changing request requires CSRF validation:
+
+- **Signed tokens**: HMAC-SHA256 prevents tampering
+- **Timing-safe comparison**: Immune to timing attacks
+- **Pre-login protection**: Even login forms are protected
+
+## Defense in Depth
+
+No single security measure is perfect, so we layer them:
+
+1. **Transport security**: TLS encryption for all connections
+2. **Authentication**: Session tokens with database validation
+3. **Authorization**: Per-resource permission checks
+4. **Rate limiting**: Distributed throttling
+5. **Monitoring**: Security event logging for audit trails
+
+Security is a continuous process, not a checklist.
+    `,
+    author: "PageSpace Team",
+    date: "2026-02-14",
+    readTime: "8 min read",
+    category: "Security",
+  },
+  "real-time-security": {
+    slug: "real-time-security",
+    title: "Securing Real-Time Collaboration",
+    description: "How PageSpace implements per-event authorization for WebSocket connections, ensuring every action is verified in real-time.",
+    content: `
+## The Challenge of Real-Time Security
+
+Real-time collaboration requires persistent WebSocket connections. But how do you ensure security when connections stay open for extended periods?
+
+## Per-Event Authorization
+
+PageSpace doesn't just authenticate the connection—we authorize every event:
+
+### Sensitive Events (Re-Authorized)
+
+Every write operation is verified in real-time:
+
+- Document updates and page changes
+- File uploads
+- Comment creation and deletion
+- Task management operations
+
+### Read-Only Events (Connection Auth)
+
+Lower-risk events use connection-level auth:
+
+- Cursor movement
+- Presence updates
+- Typing indicators
+- Selection changes
+
+## Socket Token Flow
+
+WebSocket auth uses a short-lived token exchange:
+
+1. Browser requests a socket token (same-origin, with cookies)
+2. Server validates the session and issues a 5-minute socket token
+3. Client connects to WebSocket with the socket token
+4. Server validates and establishes the connection
+
+### Why Short-Lived Tokens?
+
+Socket tokens expire in 5 minutes because:
+
+- Limits exposure if token is intercepted
+- Forces re-authentication for long sessions
+- Separate auth domain from main sessions
+
+## Inter-Service Security
+
+Our real-time service communicates with the main app securely:
+
+- **HMAC-signed broadcasts**: Services verify each other's identity
+- **Timestamp validation**: Prevents replay attacks
+- **Event-specific signatures**: Each broadcast type is authenticated
+
+## Permission-Aware Broadcasting
+
+When events are broadcast:
+
+- User permissions are checked in real-time
+- Unauthorized users don't receive events they shouldn't see
+- Permission changes take effect immediately
+
+Real-time doesn't mean less secure—it means security has to be real-time too.
+    `,
+    author: "PageSpace Team",
+    date: "2026-02-13",
+    readTime: "6 min read",
+    category: "Technical",
+  },
+  "oauth-security-best-practices": {
+    slug: "oauth-security-best-practices",
+    title: "OAuth Security: Signed State and Safe Redirects",
+    description: "How PageSpace implements secure OAuth flows with HMAC-signed state parameters and strict redirect validation.",
+    content: `
+## OAuth Done Right
+
+OAuth is powerful but tricky to implement securely. Here's how PageSpace handles it.
+
+## The State Parameter Problem
+
+The OAuth state parameter prevents CSRF attacks, but many implementations are weak:
+
+- Random string that's easy to forge
+- No validation of tampering
+- Return URL stored in plain text
+
+### Our Approach: Signed State
+
+PageSpace uses HMAC-SHA256 signed state parameters:
+
+\`\`\`
+state = base64({
+  returnUrl: "/dashboard",
+  platform: "web",
+  signature: HMAC(secret, data)
+})
+\`\`\`
+
+Benefits:
+
+- **Tamper-proof**: Any modification breaks the signature
+- **Authenticated**: Only our server can create valid states
+- **Contextual**: Contains metadata for better UX
+
+## Safe Redirect Validation
+
+Open redirect vulnerabilities are common in OAuth. We prevent them:
+
+### Strict URL Validation
+
+Return URLs must be:
+
+- Relative paths starting with \`/\`
+- No protocol-relative URLs (\`//evil.com\`)
+- No backslash tricks (\`\\/evil.com\`)
+- No encoded sequences that bypass validation
+
+### Example Blocked URLs
+
+These would all be rejected:
+
+- \`https://evil.com\`
+- \`//evil.com\`
+- \`\\/evil.com\`
+- \`/\\evil.com\`
+
+## Supported Providers
+
+PageSpace supports OAuth with:
+
+- **Google**: Full profile and email access
+- **Apple**: Privacy-focused sign-in
+
+Both use authorization code flow (never implicit flow) for maximum security.
+
+## Token Handling
+
+After successful OAuth:
+
+1. Exchange code for tokens server-side
+2. Validate token integrity
+3. Create our own session token
+4. Never expose OAuth tokens to the browser
+
+OAuth is complex, but getting it right matters.
+    `,
+    author: "PageSpace Team",
+    date: "2026-02-12",
+    readTime: "5 min read",
+    category: "Technical",
+  },
   "introducing-pagespace": {
     slug: "introducing-pagespace",
     title: "Introducing PageSpace: AI-Native Collaboration",
@@ -419,28 +654,7 @@ export default async function BlogPostPage(
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-border py-12">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <Sparkles className="h-5 w-5 text-primary-foreground" />
-              </div>
-              <span className="font-semibold">PageSpace</span>
-            </div>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-              <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-              <Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link>
-              <Link href="/docs" className="hover:text-foreground transition-colors">Docs</Link>
-              <Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link>
-            </nav>
-            <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
-            </p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter variant="compact" />
     </div>
   );
 }
