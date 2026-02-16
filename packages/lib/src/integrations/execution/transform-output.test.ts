@@ -99,6 +99,48 @@ describe('applyMapping', () => {
     expect(applyMapping(null, { a: 'b' })).toBeNull();
     expect(applyMapping(undefined, { a: 'b' })).toBeUndefined();
   });
+
+  it('given dot-notation source key, should traverse nested properties', () => {
+    const data = {
+      user: { login: 'octocat', id: 1 },
+      head: { ref: 'feature-branch' },
+    };
+    const mapping = {
+      author: 'user.login',
+      branch: 'head.ref',
+    };
+
+    const result = applyMapping(data, mapping);
+
+    expect(result).toEqual({
+      author: 'octocat',
+      branch: 'feature-branch',
+    });
+  });
+
+  it('given dot-notation with missing intermediate, should return undefined', () => {
+    const data = { user: null };
+    const mapping = { author: 'user.login' };
+
+    const result = applyMapping(data, mapping) as Record<string, unknown>;
+
+    expect(result.author).toBeUndefined();
+  });
+
+  it('given array with dot-notation mapping, should resolve nested paths per element', () => {
+    const data = [
+      { user: { login: 'alice' }, title: 'PR 1' },
+      { user: { login: 'bob' }, title: 'PR 2' },
+    ];
+    const mapping = { author: 'user.login', title: 'title' };
+
+    const result = applyMapping(data, mapping);
+
+    expect(result).toEqual([
+      { author: 'alice', title: 'PR 1' },
+      { author: 'bob', title: 'PR 2' },
+    ]);
+  });
 });
 
 describe('truncateStrings', () => {
