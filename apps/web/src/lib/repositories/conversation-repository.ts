@@ -47,10 +47,21 @@ export function extractPreviewText(content: string | null): string {
 
   try {
     const parsed = JSON.parse(content);
+    // Structured content format (textParts/originalContent from saveMessageToDatabase)
+    if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (parsed.originalContent && typeof parsed.originalContent === 'string') {
+        return parsed.originalContent.substring(0, 100);
+      }
+      if (Array.isArray(parsed.textParts) && parsed.textParts.length > 0 && typeof parsed.textParts[0] === 'string') {
+        return parsed.textParts[0].substring(0, 100);
+      }
+      if (parsed.parts?.[0]?.text) {
+        return parsed.parts[0].text.substring(0, 100);
+      }
+    }
+    // Legacy array format
     if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].text) {
       return parsed[0].text.substring(0, 100);
-    } else if (typeof parsed === 'object' && parsed.parts?.[0]?.text) {
-      return parsed.parts[0].text.substring(0, 100);
     }
     // JSON parsed but didn't match expected formats - use raw content
     return content.substring(0, 100);
