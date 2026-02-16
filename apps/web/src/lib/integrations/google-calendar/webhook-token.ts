@@ -12,10 +12,19 @@ import crypto from 'crypto';
 /**
  * Generate an HMAC token for webhook authentication.
  * Token encodes the userId so we can identify the user without a DB lookup.
+ *
+ * Fail-closed in production: throws if OAUTH_STATE_SECRET is not configured.
+ * This prevents registering webhooks without proper auth configuration.
  */
 export const generateWebhookToken = (userId: string): string => {
   const secret = process.env.OAUTH_STATE_SECRET;
-  if (!secret) return '';
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('OAUTH_STATE_SECRET must be configured in production');
+    }
+    // Development: return empty string, webhook registration proceeds but auth will fail
+    return '';
+  }
 
   const signature = crypto
     .createHmac('sha256', secret)
