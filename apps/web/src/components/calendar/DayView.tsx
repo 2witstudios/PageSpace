@@ -133,16 +133,18 @@ export function DayView({ currentDate, events, tasks, handlers }: DayViewProps) 
       <div ref={containerRef} className="flex-1 overflow-auto">
         <div className="flex min-h-full">
           {/* Time gutter */}
-          <div className="w-20 shrink-0 border-r">
+          <div className="w-20 shrink-0 border-r sticky left-0 bg-background z-10">
             {HOURS.map((hour) => (
               <div
                 key={hour}
                 className="relative border-b"
                 style={{ height: HOUR_HEIGHT }}
               >
-                <span className="absolute -top-2.5 right-3 text-xs text-muted-foreground">
-                  {format(setHours(new Date(), hour), 'h a')}
-                </span>
+                {hour > 0 && (
+                  <span className="absolute top-0 right-3 -translate-y-1/2 text-xs text-muted-foreground leading-none">
+                    {format(setHours(new Date(), hour), 'h a')}
+                  </span>
+                )}
               </div>
             ))}
           </div>
