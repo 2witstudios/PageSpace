@@ -15,10 +15,12 @@ export interface UseSidebarChatReturn {
   status: 'ready' | 'submitted' | 'streaming' | 'error';
   /** Current error (if any) */
   error: Error | undefined;
+  /** Clear current error state */
+  clearError: () => void;
   /** Regenerate last response */
-  regenerate: () => void;
-  /** Update messages array */
-  setMessages: (messages: UIMessage[]) => void;
+  regenerate: (options?: { body?: Record<string, unknown> }) => void;
+  /** Update messages array (accepts updater function) */
+  setMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
   /** Stop current stream */
   stop: () => void;
   /** Whether currently streaming */
@@ -30,7 +32,7 @@ export interface UseSidebarChatReturn {
   /** Global mode messages */
   globalMessages: UIMessage[];
   /** Set global messages */
-  setGlobalMessages: (messages: UIMessage[]) => void;
+  setGlobalMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
 }
 
 interface UseSidebarChatOptions {
@@ -66,6 +68,7 @@ export function usePageAgentSidebarChat({
     sendMessage: globalSendMessage,
     status: globalStatus,
     error: globalError,
+    clearError: globalClearError,
     regenerate: globalRegenerate,
     setMessages: setGlobalMessages,
     stop: globalStop,
@@ -79,6 +82,7 @@ export function usePageAgentSidebarChat({
     sendMessage: agentSendMessage,
     status: agentStatus,
     error: agentError,
+    clearError: agentClearError,
     regenerate: agentRegenerate,
     setMessages: setAgentMessages,
     stop: agentStop,
@@ -126,6 +130,7 @@ export function usePageAgentSidebarChat({
   const messages = selectedAgent ? agentMessages : globalMessages;
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
+  const clearError = selectedAgent ? agentClearError : globalClearError;
   const setMessages = selectedAgent ? setAgentMessages : setGlobalMessages;
   const stop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -142,12 +147,12 @@ export function usePageAgentSidebarChat({
     [selectedAgent, agentSendMessage, globalSendMessage]
   );
 
-  // Wrap regenerate to use correct function
-  const regenerate = useCallback(() => {
+  // Wrap regenerate to use correct function (pass options through for chatId support)
+  const regenerate = useCallback((options?: { body?: Record<string, unknown> }) => {
     if (selectedAgent) {
-      agentRegenerate();
+      agentRegenerate(options);
     } else {
-      globalRegenerate();
+      globalRegenerate(options);
     }
   }, [selectedAgent, agentRegenerate, globalRegenerate]);
 
@@ -160,6 +165,7 @@ export function usePageAgentSidebarChat({
     sendMessage,
     status,
     error,
+    clearError,
     regenerate,
     setMessages,
     stop,
@@ -174,6 +180,7 @@ export function usePageAgentSidebarChat({
     sendMessage,
     status,
     error,
+    clearError,
     regenerate,
     setMessages,
     stop,

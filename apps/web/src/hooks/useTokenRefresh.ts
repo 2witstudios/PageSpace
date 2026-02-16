@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { mutate } from 'swr';
 import { useRouter } from 'next/navigation';
 import { post, fetchWithAuth, refreshAuthSession, clearSessionCache } from '@/lib/auth/auth-fetch';
@@ -58,7 +58,8 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     }
   };
 
-  const refreshToken = async (): Promise<boolean> => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const refreshToken = useCallback(async (): Promise<boolean> => {
     // If there's already a refresh in progress globally, wait for it
     if (globalRefreshPromise) {
       console.log('Token refresh already in progress, waiting...');
@@ -127,9 +128,10 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     })();
 
     return globalRefreshPromise;
-  };
+  // Stable — uses refs and module-level state internally
+  }, []);
 
-  const scheduleTokenRefresh = () => {
+  const scheduleTokenRefresh = useCallback(() => {
     // Clear local timeout ref
     clearRefreshTimeout();
 
@@ -144,7 +146,6 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
 
     // Singleton pattern: Only allow one global schedule
     if (isRefreshScheduled) {
-      console.log('⏰ Token refresh already scheduled globally, skipping duplicate');
       return;
     }
 
@@ -192,14 +193,14 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
 
     // Also store in local ref for component cleanup
     timeoutRef.current = globalRefreshTimeout;
-  };
+  }, [refreshBeforeExpiryMs, retryDelayMs, retryAttempts, refreshToken]);
 
-  const startTokenRefresh = () => {
+  const startTokenRefresh = useCallback(() => {
     retryCountRef.current = 0;
     scheduleTokenRefresh();
-  };
+  }, [scheduleTokenRefresh]);
 
-  const stopTokenRefresh = () => {
+  const stopTokenRefresh = useCallback(() => {
     // Clear both local and global timeouts
     clearRefreshTimeout();
     if (globalRefreshTimeout) {
@@ -208,7 +209,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
       isRefreshScheduled = false;
     }
     retryCountRef.current = 0;
-  };
+  }, []);
 
   // Wake detection - check token expiry when app becomes visible
   useEffect(() => {

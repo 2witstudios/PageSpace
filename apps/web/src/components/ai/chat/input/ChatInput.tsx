@@ -184,13 +184,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const handleSend = () => {
       const hasText = value.trim().length > 0;
       const hasImages = (attachments?.length ?? 0) > 0;
-      if ((hasText || hasImages) && !disabled) {
+      if ((hasText || hasImages) && !disabled && !isStreaming) {
         keyboard.dismiss();
         onSend();
       }
     };
 
-    const canSend = (value.trim().length > 0 || (attachments?.length ?? 0) > 0) && !disabled;
+    const canSend = (value.trim().length > 0 || (attachments?.length ?? 0) > 0) && !disabled && !isStreaming;
 
     // Drag-and-drop handler for images
     const handleDragOver = useCallback((e: React.DragEvent) => {

@@ -64,6 +64,7 @@ import {
   useStreamingRegistration,
   useChatStop,
   useSendHandoff,
+  useStreamRecovery,
   LocationContext,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
@@ -292,6 +293,7 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage: globalSendMessage,
     status: globalStatus,
     error: globalError,
+    clearError: globalClearError,
     regenerate: globalRegenerate,
     setMessages: setGlobalLocalMessages,
     stop: globalStop,
@@ -303,6 +305,7 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage: agentSendMessage,
     status: agentStatus,
     error: agentError,
+    clearError: agentClearError,
     regenerate: agentRegenerate,
     setMessages: setAgentMessages,
     stop: agentStop,
@@ -315,6 +318,7 @@ const GlobalAssistantView: React.FC = () => {
   const sendMessage = selectedAgent ? agentSendMessage : globalSendMessage;
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
+  const clearError = selectedAgent ? agentClearError : globalClearError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -371,6 +375,9 @@ const GlobalAssistantView: React.FC = () => {
       setMessages: selectedAgent ? agentSetMessages : globalSetMessages,
       regenerate,
     });
+
+  // Auto-retry on network errors (e.g. ERR_NETWORK_CHANGED killing mid-stream)
+  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2 });
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -487,6 +494,12 @@ const GlobalAssistantView: React.FC = () => {
       setGlobalIsStreaming(false);
     }
     prevStatusRef.current = globalStatus;
+
+    return () => {
+      if (isCurrentlyStreaming) {
+        setGlobalIsStreaming(false);
+      }
+    };
   }, [selectedAgent, globalStatus, setGlobalIsStreaming]);
 
   // Register stop function to global context (global mode only)
@@ -509,6 +522,10 @@ const GlobalAssistantView: React.FC = () => {
     } else {
       setGlobalStopStreaming(null);
     }
+
+    return () => {
+      setGlobalStopStreaming(null);
+    };
   }, [selectedAgent, globalStatus, globalStop, globalConversationId, setGlobalStopStreaming]);
 
   // ============================================
@@ -526,6 +543,12 @@ const GlobalAssistantView: React.FC = () => {
       setAgentStreaming(false);
     }
     prevAgentStatusRef.current = agentStatus;
+
+    return () => {
+      if (isCurrentlyStreaming) {
+        setAgentStreaming(false);
+      }
+    };
   }, [selectedAgent, agentStatus, setAgentStreaming]);
 
   // Register stop function to dashboard store (agent mode only)
@@ -548,6 +571,10 @@ const GlobalAssistantView: React.FC = () => {
     } else {
       setAgentStopStreaming(null);
     }
+
+    return () => {
+      setAgentStopStreaming(null);
+    };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
   // Register streaming state with editing store
