@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils/index";
+import { useEnterToSend } from "@/hooks/useEnterToSend";
 import type { ChatStatus, FileUIPart } from "ai";
 import {
   CornerDownLeftIcon,
@@ -826,6 +827,7 @@ export const PromptInputTextarea = ({
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
+  const enterToSend = useEnterToSend();
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
     if (e.key === "Enter") {
@@ -833,6 +835,10 @@ export const PromptInputTextarea = ({
         return;
       }
       if (e.shiftKey) {
+        return;
+      }
+      // On mobile (or iPad with on-screen keyboard), Enter inserts a newline
+      if (!enterToSend) {
         return;
       }
       e.preventDefault();

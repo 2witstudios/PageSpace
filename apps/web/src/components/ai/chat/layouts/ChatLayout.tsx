@@ -10,6 +10,7 @@ import {
   ChatMessagesAreaRef,
 } from '@/components/ai/shared/chat';
 import { WelcomeContent } from './WelcomeContent';
+import { useEnterToSend } from '@/hooks/useEnterToSend';
 
 export interface ChatLayoutProps {
   /** Messages in the conversation */
@@ -157,6 +158,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
   ) => {
     const shouldReduceMotion = useReducedMotion();
     const messagesRef = useRef<ChatMessagesAreaRef>(null);
+    const enterToSend = useEnterToSend();
 
     // Expose methods to parent
     React.useImperativeHandle(ref, () => ({
@@ -175,7 +177,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && enterToSend) {
               e.preventDefault();
               if (input.trim() && !disabled && !isStreaming) {
                 onSend();
