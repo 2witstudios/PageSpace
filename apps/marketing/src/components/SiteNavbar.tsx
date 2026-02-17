@@ -3,8 +3,7 @@ import Image from "next/image";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+import { APP_URL } from "@/lib/metadata";
 
 const navLinks = [
   { href: "/tour", label: "Product" },

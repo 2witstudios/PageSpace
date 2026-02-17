@@ -2,9 +2,7 @@ import Link from "next/link";
 import { Sparkles, Download, Apple, Monitor, Smartphone, ExternalLink, CheckCircle2, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
-import { pageMetadata } from "@/lib/metadata";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+import { pageMetadata, APP_URL } from "@/lib/metadata";
 
 export const metadata = pageMetadata.downloads;
 

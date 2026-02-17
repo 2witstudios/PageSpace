@@ -389,7 +389,7 @@ MCP servers in PageSpace are sandboxed:
 
 ### Learn More
 
-Visit our [MCP documentation](/docs/mcp) for detailed setup guides.
+Visit our [MCP documentation](/docs) for detailed setup guides.
     `,
     author: "PageSpace Team",
     date: "2026-02-05",

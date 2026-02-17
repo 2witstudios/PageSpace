@@ -7,12 +7,18 @@ import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata.docs;
 
+interface DocItem {
+  title: string;
+  href?: string;
+  comingSoon?: boolean;
+}
+
 interface DocSection {
   title: string;
   description: string;
   icon: React.ReactNode;
   href: string;
-  items: { title: string; href: string }[];
+  items: DocItem[];
 }
 
 const docSections: DocSection[] = [
@@ -24,8 +30,8 @@ const docSections: DocSection[] = [
     items: [
       { title: "Quick Start Guide", href: "/docs/getting-started" },
       { title: "Creating Your First Workspace", href: "/docs/getting-started" },
-      { title: "Understanding AI Agents", href: "/docs/getting-started" },
-      { title: "Keyboard Shortcuts", href: "/docs/getting-started" },
+      { title: "Understanding AI Agents", comingSoon: true },
+      { title: "Keyboard Shortcuts", comingSoon: true },
     ],
   },
   {
@@ -34,10 +40,10 @@ const docSections: DocSection[] = [
     icon: <Sparkles className="h-5 w-5" />,
     href: "/docs",
     items: [
-      { title: "Global Assistant", href: "/docs" },
-      { title: "Page Agents", href: "/docs" },
-      { title: "AI Rollback", href: "/docs" },
-      { title: "Custom Prompts", href: "/docs" },
+      { title: "Global Assistant", comingSoon: true },
+      { title: "Page Agents", comingSoon: true },
+      { title: "AI Rollback", comingSoon: true },
+      { title: "Custom Prompts", comingSoon: true },
     ],
   },
   {
@@ -46,10 +52,10 @@ const docSections: DocSection[] = [
     icon: <Zap className="h-5 w-5" />,
     href: "/docs",
     items: [
-      { title: "MCP Overview", href: "/docs" },
-      { title: "Google Calendar", href: "/docs" },
-      { title: "GitHub Integration", href: "/docs" },
-      { title: "Webhooks", href: "/docs" },
+      { title: "MCP Overview", comingSoon: true },
+      { title: "Google Calendar", comingSoon: true },
+      { title: "GitHub Integration", comingSoon: true },
+      { title: "Webhooks", comingSoon: true },
     ],
   },
   {
@@ -58,10 +64,10 @@ const docSections: DocSection[] = [
     icon: <Server className="h-5 w-5" />,
     href: "/docs",
     items: [
-      { title: "What is MCP?", href: "/docs" },
-      { title: "Available Servers", href: "/docs" },
-      { title: "Building Custom Servers", href: "/docs" },
-      { title: "Security & Permissions", href: "/docs" },
+      { title: "What is MCP?", comingSoon: true },
+      { title: "Available Servers", comingSoon: true },
+      { title: "Building Custom Servers", comingSoon: true },
+      { title: "Security & Permissions", comingSoon: true },
     ],
   },
   {
@@ -70,10 +76,10 @@ const docSections: DocSection[] = [
     icon: <Users className="h-5 w-5" />,
     href: "/docs",
     items: [
-      { title: "Inviting Team Members", href: "/docs" },
-      { title: "Permissions & Roles", href: "/docs" },
-      { title: "Channels", href: "/docs" },
-      { title: "Task Assignment", href: "/docs" },
+      { title: "Inviting Team Members", comingSoon: true },
+      { title: "Permissions & Roles", comingSoon: true },
+      { title: "Channels", comingSoon: true },
+      { title: "Task Assignment", comingSoon: true },
     ],
   },
   {
@@ -82,10 +88,10 @@ const docSections: DocSection[] = [
     icon: <Shield className="h-5 w-5" />,
     href: "/docs",
     items: [
-      { title: "Passkeys (WebAuthn)", href: "/docs" },
-      { title: "Magic Links", href: "/docs" },
-      { title: "Zero Trust Architecture", href: "/docs" },
-      { title: "Data Encryption", href: "/docs" },
+      { title: "Passkeys (WebAuthn)", comingSoon: true },
+      { title: "Magic Links", comingSoon: true },
+      { title: "Zero Trust Architecture", comingSoon: true },
+      { title: "Data Encryption", comingSoon: true },
     ],
   },
 ];
@@ -175,13 +181,20 @@ export default function DocsPage() {
                 <ul className="space-y-2">
                   {section.items.map((item) => (
                     <li key={item.title}>
-                      <Link
-                        href={item.href}
-                        className="flex items-center gap-2 text-sm hover:text-primary transition-colors group"
-                      >
-                        <ChevronRight className="h-3 w-3 text-muted-foreground group-hover:text-primary transition-colors" />
-                        {item.title}
-                      </Link>
+                      {item.comingSoon ? (
+                        <span className="flex items-center gap-2 text-sm text-muted-foreground/70 cursor-default">
+                          <ChevronRight className="h-3 w-3" />
+                          {item.title}
+                        </span>
+                      ) : (
+                        <Link
+                          href={item.href!}
+                          className="flex items-center gap-2 text-sm hover:text-primary transition-colors group"
+                        >
+                          <ChevronRight className="h-3 w-3 text-muted-foreground group-hover:text-primary transition-colors" />
+                          {item.title}
+                        </Link>
+                      )}
                     </li>
                   ))}
                 </ul>

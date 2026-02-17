@@ -3,9 +3,7 @@ import { Check, X, HelpCircle, Building2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { pageMetadata } from "@/lib/metadata";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+import { pageMetadata, APP_URL } from "@/lib/metadata";
 
 export const metadata = pageMetadata.pricing;
 

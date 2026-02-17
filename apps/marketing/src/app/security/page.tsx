@@ -15,9 +15,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/SiteFooter";
+import { APP_URL } from "@/lib/metadata";
 import type { Metadata } from "next";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
 export const metadata: Metadata = {
   title: "Security | PageSpace",

@@ -5,6 +5,8 @@ const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai"
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 const TWITTER_HANDLE = "@PageSpaceAI";
 
+export const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+
 export interface PageMetadata {
   title: string;
   description: string;
@@ -26,10 +28,10 @@ export function createMetadata({
   keywords = [],
 }: PageMetadata): Metadata {
   const url = `${SITE_URL}${path}`;
-  const fullTitle = path === "" ? title : `${title} | ${SITE_NAME}`;
+  const ogTitle = path === "" ? title : `${title} | ${SITE_NAME}`;
 
   return {
-    title: fullTitle,
+    title: path === "" ? { absolute: title } : title,
     description,
     keywords: [
       "PageSpace",
@@ -54,7 +56,7 @@ export function createMetadata({
       locale: "en_US",
       url,
       siteName: SITE_NAME,
-      title: fullTitle,
+      title: ogTitle,
       description,
       images: [
         {
@@ -69,7 +71,7 @@ export function createMetadata({
       card: "summary_large_image",
       site: TWITTER_HANDLE,
       creator: TWITTER_HANDLE,
-      title: fullTitle,
+      title: ogTitle,
       description,
       images: [image],
     },

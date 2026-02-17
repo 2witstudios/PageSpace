@@ -4,10 +4,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { pageMetadata } from "@/lib/metadata";
+import { pageMetadata, APP_URL } from "@/lib/metadata";
 import { JsonLd, webApplicationSchema } from "@/lib/schema";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
 export const metadata = pageMetadata.home;
 

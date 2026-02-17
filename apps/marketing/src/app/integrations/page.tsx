@@ -3,9 +3,7 @@ import { ArrowRight, Plug, Server, Globe, Code, Database, Calendar, Mail, Github
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { pageMetadata } from "@/lib/metadata";
-
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+import { pageMetadata, APP_URL } from "@/lib/metadata";
 
 export const metadata = pageMetadata.integrations;
 
@@ -314,22 +312,18 @@ curl -X POST https://api.pagespace.ai/v1/pages \\
                       className="flex items-center gap-2 text-sm hover:text-primary transition-colors"
                     >
                       <Code className="h-4 w-4" />
-                      API Reference
+                      Documentation
                     </Link>
-                    <Link
-                      href="/docs"
-                      className="flex items-center gap-2 text-sm hover:text-primary transition-colors"
-                    >
+                    <span className="flex items-center gap-2 text-sm text-muted-foreground/70 cursor-default">
                       <Blocks className="h-4 w-4" />
                       SDK Libraries
-                    </Link>
-                    <Link
-                      href="/docs"
-                      className="flex items-center gap-2 text-sm hover:text-primary transition-colors"
-                    >
+                      <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Soon</span>
+                    </span>
+                    <span className="flex items-center gap-2 text-sm text-muted-foreground/70 cursor-default">
                       <Zap className="h-4 w-4" />
                       Webhook Events
-                    </Link>
+                      <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Soon</span>
+                    </span>
                     <a
                       href="https://github.com/pagespace"
                       target="_blank"

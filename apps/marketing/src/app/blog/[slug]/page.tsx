@@ -9,8 +9,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { blogPosts } from "./data";
 import { ShareButtons } from "./ShareButtons";
+import { APP_URL } from "@/lib/metadata";
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 
 export async function generateStaticParams() {
@@ -135,7 +135,7 @@ export default async function BlogPostPage(
               Start free with generous limits. No credit card required.
             </p>
             <Button size="lg" asChild>
-              <a href={`${APP_URL}/auth/signup`}>
+              <a href={`${APP_URL}/auth/signup`} rel="noopener">
                 Get Started Free
               </a>
             </Button>

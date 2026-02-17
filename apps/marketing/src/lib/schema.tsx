@@ -4,6 +4,7 @@
  * @see https://developers.google.com/search/docs/appearance/structured-data
  */
 
+// In development, set NEXT_PUBLIC_MARKETING_URL and NEXT_PUBLIC_APP_URL to distinct local origins
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 const SOFTWARE_VERSION = "1.0";
@@ -243,7 +244,9 @@ export const websiteSchema = {
 /**
  * Helper to render JSON-LD script tag
  */
-export function JsonLd({ data }: { data: object | object[] }) {
+type JsonLdData = Record<string, unknown>;
+
+export function JsonLd({ data }: { data: JsonLdData | JsonLdData[] }) {
   const jsonLd = Array.isArray(data) ? data : [data];
 
   return (
