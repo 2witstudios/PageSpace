@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "motion/react";
 import { Mail } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   AuthShell,
   AuthDivider,
@@ -18,9 +16,6 @@ import { useLoginCSRF } from "@/hooks/useLoginCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 
 export default function SignUp() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [acceptedTos, setAcceptedTos] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { csrfToken } = useLoginCSRF();
@@ -59,81 +54,9 @@ export default function SignUp() {
         </p>
       </motion.div>
 
-      {/* Name + Email fields */}
-      <motion.div
-        className="space-y-3"
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.05, duration: 0.3 }}
-      >
-        <div className="grid gap-1.5">
-          <Label htmlFor="name">Name</Label>
-          <Input
-            id="name"
-            name="name"
-            autoComplete="name"
-            placeholder="John Doe"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            disabled={isAnyLoading}
-          />
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email webauthn"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={isAnyLoading}
-          />
-        </div>
-      </motion.div>
-
-      {/* Terms of Service */}
-      <motion.div
-        className="mt-4 flex items-start gap-2"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.1, duration: 0.3 }}
-      >
-        <input
-          type="checkbox"
-          id="acceptedTos"
-          checked={acceptedTos}
-          onChange={(e) => setAcceptedTos(e.target.checked)}
-          className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-          disabled={isAnyLoading}
-        />
-        <label
-          htmlFor="acceptedTos"
-          className="text-sm text-muted-foreground"
-        >
-          I agree to the{" "}
-          <Link
-            href="/terms"
-            target="_blank"
-            className="underline hover:text-foreground"
-          >
-            Terms of Service
-          </Link>{" "}
-          and{" "}
-          <Link
-            href="/privacy"
-            target="_blank"
-            className="underline hover:text-foreground"
-          >
-            Privacy Policy
-          </Link>
-        </label>
-      </motion.div>
-
       {error && (
         <motion.p
-          className="mt-3 text-sm text-red-500"
+          className="mb-4 text-center text-sm text-red-500"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
         >
@@ -142,15 +65,13 @@ export default function SignUp() {
       )}
 
       {/* OAuth buttons */}
-      <div className="mt-6">
-        <OAuthButtons
-          onGoogleClick={handleGoogleSignIn}
-          onAppleClick={handleAppleSignIn}
-          disabled={isAnyLoading}
-          isGoogleLoading={isGoogleLoading}
-          isAppleLoading={isAppleLoading}
-        />
-      </div>
+      <OAuthButtons
+        onGoogleClick={handleGoogleSignIn}
+        onAppleClick={handleAppleSignIn}
+        disabled={isAnyLoading}
+        isGoogleLoading={isGoogleLoading}
+        isAppleLoading={isAppleLoading}
+      />
 
       <AuthDivider delay={0.3} />
 
@@ -163,9 +84,6 @@ export default function SignUp() {
         {csrfToken && (
           <PasskeySignupButton
             csrfToken={csrfToken}
-            email={email}
-            name={name}
-            acceptedTos={acceptedTos}
             onSuccess={(redirectUrl) => {
               router.replace(redirectUrl);
             }}
@@ -210,6 +128,22 @@ export default function SignUp() {
           </Link>
         </p>
       </motion.div>
+
+      <motion.p
+        className="mt-4 text-center text-xs text-muted-foreground/70"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6, duration: 0.3 }}
+      >
+        By signing up, you agree to our{" "}
+        <Link href="/terms" className="underline hover:text-muted-foreground">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="underline hover:text-muted-foreground">
+          Privacy Policy
+        </Link>
+      </motion.p>
     </AuthShell>
   );
 }

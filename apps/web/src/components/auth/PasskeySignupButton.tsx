@@ -2,7 +2,10 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
+import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -10,9 +13,6 @@ import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
-  email: string;
-  name: string;
-  acceptedTos: boolean;
   onSuccess?: (redirectUrl: string) => void;
   onEmailExists?: () => void;
   className?: string;
@@ -21,9 +21,6 @@ interface PasskeySignupButtonProps {
 
 export function PasskeySignupButton({
   csrfToken,
-  email,
-  name,
-  acceptedTos,
   onSuccess,
   onEmailExists,
   className,
@@ -31,6 +28,9 @@ export function PasskeySignupButton({
 }: PasskeySignupButtonProps) {
   const [isSupported, setIsSupported] = useState<boolean | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
 
   useEffect(() => {
     setIsSupported(browserSupportsWebAuthn());
@@ -42,13 +42,8 @@ export function PasskeySignupButton({
       return;
     }
 
-    if (!email || !name) {
+    if (!email.trim() || !name.trim()) {
       toast.error('Please enter your name and email');
-      return;
-    }
-
-    if (!acceptedTos) {
-      toast.error('Please accept the Terms of Service');
       return;
     }
 
@@ -62,8 +57,8 @@ export function PasskeySignupButton({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email,
-          name,
+          email: email.trim(),
+          name: name.trim(),
           csrfToken,
         }),
       });
@@ -91,12 +86,12 @@ export function PasskeySignupButton({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email,
-          name,
+          email: email.trim(),
+          name: name.trim(),
           response: regResponse,
           expectedChallenge: options.challenge,
           csrfToken,
-          acceptedTos,
+          acceptedTos: true,
         }),
       });
 
@@ -143,33 +138,89 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, email, name, acceptedTos, onSuccess, onEmailExists]);
+  }, [csrfToken, email, name, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
     return null;
   }
 
-  const isDisabled = disabled || isRegistering || isSupported === null || !email || !name || !acceptedTos;
+  const isButtonDisabled = disabled || isRegistering || isSupported === null;
 
   return (
-    <Button
-      onClick={handleSignup}
-      disabled={isDisabled}
-      className={cn('w-full', className)}
-    >
-      {isRegistering ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Creating account...
-        </>
-      ) : (
-        <>
-          <Fingerprint className="mr-2 h-4 w-4" />
-          Create with Passkey
-        </>
-      )}
-    </Button>
+    <div className={cn('w-full', className)}>
+      <AnimatePresence mode="wait">
+        {!isExpanded ? (
+          <motion.div
+            key="collapsed"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+          >
+            <Button
+              onClick={() => setIsExpanded(true)}
+              disabled={isButtonDisabled}
+              className="w-full"
+            >
+              <Fingerprint className="mr-2 h-4 w-4" />
+              Create with Passkey
+            </Button>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="expanded"
+            className="space-y-3"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="grid gap-1.5">
+              <Label htmlFor="passkey-name">Name</Label>
+              <Input
+                id="passkey-name"
+                name="name"
+                autoComplete="name"
+                placeholder="John Doe"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={isRegistering}
+                autoFocus
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="passkey-email">Email</Label>
+              <Input
+                id="passkey-email"
+                name="email"
+                type="email"
+                autoComplete="email webauthn"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={isRegistering}
+              />
+            </div>
+            <Button
+              onClick={handleSignup}
+              disabled={isButtonDisabled || !name.trim() || !email.trim()}
+              className="w-full"
+            >
+              {isRegistering ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating account...
+                </>
+              ) : (
+                <>
+                  <Fingerprint className="mr-2 h-4 w-4" />
+                  Continue
+                </>
+              )}
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
