@@ -10,9 +10,9 @@
     "typecheck": "tsc --noEmit",
     "capture": "npx playwright test scripts/capture.spec.ts",
     "remotion:studio": "remotion studio remotion/index.ts",
-    "remotion:render": "npx ts-node scripts/render-videos.ts",
-    "remotion:render:light": "npx ts-node scripts/render-videos.ts --light",
-    "remotion:render:dark": "npx ts-node scripts/render-videos.ts --dark"
+    "remotion:render": "npx ts-node --esm scripts/render-videos.ts",
+    "remotion:render:light": "npx ts-node --esm scripts/render-videos.ts --light",
+    "remotion:render:dark": "npx ts-node --esm scripts/render-videos.ts --dark"
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",

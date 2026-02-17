@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { pageMetadata } from "@/lib/metadata";
+import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
 
 export const metadata = pageMetadata.terms;
 
@@ -13,7 +13,7 @@ export default function TermsOfService() {
       <div className="container mx-auto px-4 py-12 md:py-16 max-w-4xl">
         <div className="mb-8">
           <h1 className="text-4xl font-bold mb-2">Terms of Service</h1>
-          <p className="text-muted-foreground">Last updated: November 1, 2025</p>
+          <p className="text-muted-foreground">Last updated: {LEGAL_LAST_UPDATED}</p>
         </div>
 
         <div className="prose prose-lg max-w-none dark:prose-invert">
@@ -208,7 +208,7 @@ export default function TermsOfService() {
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Email:</strong> hello@pagespace.ai</li>
               <li><strong>Support:</strong> Available through the in-app help system</li>
-              <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" className="text-primary hover:underline">PageSpace Discord</a></li>
+              <li><strong>Community:</strong> <a href="https://discord.gg/kve8qgzZ8x" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">PageSpace Discord</a></li>
             </ul>
           </section>
         </div>

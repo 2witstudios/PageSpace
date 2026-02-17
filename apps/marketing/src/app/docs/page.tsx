@@ -110,11 +110,12 @@ export default function DocsPage() {
             <div className="max-w-xl mx-auto">
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-                <input
-                  type="text"
-                  placeholder="Search documentation..."
-                  className="w-full rounded-xl border border-border bg-card pl-12 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
+                <button
+                  type="button"
+                  className="w-full rounded-xl border border-border bg-card pl-12 pr-4 py-3 text-sm text-left text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  Search documentation...
+                </button>
                 <kbd className="absolute right-4 top-1/2 -translate-y-1/2 hidden sm:inline-flex h-6 items-center gap-1 rounded border border-border bg-muted px-2 text-xs text-muted-foreground">
                   <span>⌘</span>K
                 </kbd>
@@ -173,7 +174,7 @@ export default function DocsPage() {
                 </p>
                 <ul className="space-y-2">
                   {section.items.map((item) => (
-                    <li key={item.href}>
+                    <li key={item.title}>
                       <Link
                         href={item.href}
                         className="flex items-center gap-2 text-sm hover:text-primary transition-colors group"
@@ -207,10 +208,9 @@ export default function DocsPage() {
                 { title: "Quick Start Guide", description: "Get up and running in 5 minutes", href: "/docs/getting-started" },
                 { title: "Understanding Page Agents", description: "Learn how AI agents work in your workspace", href: "/docs" },
                 { title: "Setting Up MCP Servers", description: "Connect AI to external tools and services", href: "/docs" },
-                { title: "MCP Server Setup", description: "Connect AI to external tools", href: "/docs" },
               ].map((article) => (
                 <Link
-                  key={article.href}
+                  key={article.title}
                   href={article.href}
                   className="flex items-start gap-4 rounded-xl border border-border bg-card p-4 hover:border-primary/50 transition-colors"
                 >

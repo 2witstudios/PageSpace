@@ -1,6 +1,6 @@
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
-import { pageMetadata } from "@/lib/metadata";
+import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
 
 export const metadata = pageMetadata.privacy;
 
@@ -12,7 +12,7 @@ export default function PrivacyPolicy() {
       <div className="container mx-auto px-4 py-12 md:py-16 max-w-4xl">
         <div className="mb-8">
           <h1 className="text-4xl font-bold mb-2">Privacy Policy</h1>
-          <p className="text-muted-foreground">Last updated: November 1, 2025</p>
+          <p className="text-muted-foreground">Last updated: {LEGAL_LAST_UPDATED}</p>
         </div>
 
         <div className="prose prose-lg max-w-none dark:prose-invert">

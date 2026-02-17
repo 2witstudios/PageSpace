@@ -3,13 +3,11 @@ import { ArrowRight, ArrowLeft, CheckCircle2, ChevronRight, Play, Book, Zap, Cod
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
+import { pageMetadata } from "@/lib/metadata";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
-export const metadata = {
-  title: "Getting Started | PageSpace Documentation",
-  description: "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
-};
+export const metadata = pageMetadata.gettingStarted;
 
 const steps = [
   {
@@ -150,30 +148,30 @@ export default function GettingStartedPage() {
           <div className="mt-16 pt-12 border-t border-border">
             <h2 className="text-2xl font-bold mb-6">What&apos;s Next?</h2>
             <div className="grid md:grid-cols-3 gap-4">
-              <Link
-                href="/docs"
-                className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 transition-colors"
-              >
-                <Book className="h-6 w-6 text-primary mb-3" />
+              <div className="rounded-xl border border-border bg-card p-5 opacity-75 cursor-default">
+                <div className="flex items-center justify-between mb-3">
+                  <Book className="h-6 w-6 text-primary" />
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">Coming Soon</span>
+                </div>
                 <h3 className="font-semibold mb-1">Page Agents Deep Dive</h3>
                 <p className="text-sm text-muted-foreground">Learn advanced Page Agent techniques</p>
-              </Link>
-              <Link
-                href="/docs"
-                className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 transition-colors"
-              >
-                <Zap className="h-6 w-6 text-primary mb-3" />
+              </div>
+              <div className="rounded-xl border border-border bg-card p-5 opacity-75 cursor-default">
+                <div className="flex items-center justify-between mb-3">
+                  <Zap className="h-6 w-6 text-primary" />
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">Coming Soon</span>
+                </div>
                 <h3 className="font-semibold mb-1">Connect Integrations</h3>
                 <p className="text-sm text-muted-foreground">Link your tools and services</p>
-              </Link>
-              <Link
-                href="/docs"
-                className="rounded-xl border border-border bg-card p-5 hover:border-primary/50 transition-colors"
-              >
-                <Code className="h-6 w-6 text-primary mb-3" />
+              </div>
+              <div className="rounded-xl border border-border bg-card p-5 opacity-75 cursor-default">
+                <div className="flex items-center justify-between mb-3">
+                  <Code className="h-6 w-6 text-primary" />
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">Coming Soon</span>
+                </div>
                 <h3 className="font-semibold mb-1">API Reference</h3>
                 <p className="text-sm text-muted-foreground">Build with the PageSpace API</p>
-              </Link>
+              </div>
             </div>
           </div>
 

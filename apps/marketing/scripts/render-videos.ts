@@ -18,6 +18,10 @@ import { renderMedia, selectComposition } from "@remotion/renderer";
 import { enableTailwind } from "@remotion/tailwind";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const COMPOSITIONS = [
   { id: "Sample", light: "Sample", dark: "SampleDark" },
@@ -26,11 +30,14 @@ const COMPOSITIONS = [
   { id: "Channels", light: "Channels", dark: "ChannelsDark" },
 ];
 
+let lastReportedPercent = -1;
+
 async function renderVideo(
   bundleLocation: string,
   compositionId: string,
   outputPath: string
 ) {
+  lastReportedPercent = -1;
   console.log(`Rendering ${compositionId}...`);
 
   const composition = await selectComposition({
@@ -44,8 +51,10 @@ async function renderVideo(
     codec: "h264",
     outputLocation: outputPath,
     onProgress: ({ progress }) => {
-      if (Math.round(progress * 100) % 10 === 0) {
-        process.stdout.write(`  Progress: ${Math.round(progress * 100)}%\r`);
+      const pct = Math.round(progress * 100);
+      if (pct !== lastReportedPercent && pct % 10 === 0) {
+        lastReportedPercent = pct;
+        process.stdout.write(`  Progress: ${pct}%\r`);
       }
     },
   });

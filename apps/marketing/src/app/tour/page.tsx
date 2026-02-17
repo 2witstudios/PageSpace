@@ -192,10 +192,10 @@ export default function TourPage() {
 
                   {/* Navigation to next step */}
                   <div className="mt-8 flex items-center gap-4">
-                    {step.number < tourSteps.length ? (
+                    {index < tourSteps.length - 1 ? (
                       <Button variant="outline" asChild>
-                        <a href={`#step-${step.number + 1}`}>
-                          Next: {tourSteps[step.number].title}
+                        <a href={`#step-${tourSteps[index + 1].number}`}>
+                          Next: {tourSteps[index + 1].title}
                           <ArrowRight className="ml-2 h-4 w-4" />
                         </a>
                       </Button>

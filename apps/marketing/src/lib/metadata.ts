@@ -155,6 +155,8 @@ export const siteMetadata: Metadata = {
   category: "technology",
 };
 
+export const LEGAL_LAST_UPDATED = "November 1, 2025";
+
 /**
  * Pre-defined metadata for common pages
  */
@@ -212,6 +214,14 @@ export const pageMetadata = {
       "PageSpace developer documentation. Learn how to use the API, integrate MCP servers, and extend your workspace.",
     path: "/docs",
     keywords: ["documentation", "API", "developers", "MCP", "integration"],
+  }),
+
+  gettingStarted: createMetadata({
+    title: "Getting Started",
+    description:
+      "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
+    path: "/docs/getting-started",
+    keywords: ["getting started", "setup", "quickstart", "tutorial"],
   }),
 
   changelog: createMetadata({

@@ -284,18 +284,12 @@ export default function IntegrationsPage() {
                   </p>
 
                   {/* Code Preview */}
-                  <div className="rounded-lg bg-muted/50 p-4 font-mono text-sm mb-6 overflow-x-auto">
-                    <div className="text-muted-foreground"># Create a new document with AI</div>
-                    <div className="mt-2">
-                      <span className="text-green-600 dark:text-green-400">curl</span> -X POST https://api.pagespace.ai/v1/pages \
-                    </div>
-                    <div className="pl-4">
-                      -H &quot;Authorization: Bearer $API_KEY&quot; \
-                    </div>
-                    <div className="pl-4">
-                      -d &apos;&#123;&quot;title&quot;: &quot;Meeting Notes&quot;, &quot;ai_assist&quot;: true&#125;&apos;
-                    </div>
-                  </div>
+                  <pre className="rounded-lg bg-muted/50 p-4 font-mono text-sm mb-6 overflow-x-auto">
+                    <code>{`# Create a new document with AI
+curl -X POST https://api.pagespace.ai/v1/pages \\
+  -H "Authorization: Bearer $API_KEY" \\
+  -d '{"title": "Meeting Notes", "ai_assist": true}'`}</code>
+                  </pre>
 
                   <div className="flex flex-wrap gap-4">
                     <Button asChild>

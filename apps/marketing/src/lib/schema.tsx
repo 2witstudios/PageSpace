@@ -6,6 +6,7 @@
 
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
+const SOFTWARE_VERSION = "1.0";
 
 /**
  * Organization schema - used site-wide
@@ -26,6 +27,9 @@ export const organizationSchema = {
     email: "support@pagespace.ai",
   },
 };
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const { "@context": _context, ...organizationRef } = organizationSchema;
 
 /**
  * WebApplication schema - for the landing page
@@ -57,8 +61,8 @@ export const webApplicationSchema = {
     "MCP server integration",
   ],
   screenshot: `${SITE_URL}/og-image.png`,
-  softwareVersion: "1.0",
-  author: organizationSchema,
+  softwareVersion: SOFTWARE_VERSION,
+  author: organizationRef,
 };
 
 /**
@@ -138,14 +142,13 @@ export const softwareApplicationSchema = {
   name: "PageSpace",
   applicationCategory: "ProductivityApplication",
   operatingSystem: "macOS, Windows, Linux, iOS, Android",
-  downloadUrl: `${SITE_URL}/downloads`,
-  softwareVersion: "1.0",
+  softwareVersion: SOFTWARE_VERSION,
   offers: {
     "@type": "Offer",
     price: "0",
     priceCurrency: "USD",
   },
-  author: organizationSchema,
+  author: organizationRef,
 };
 
 /**
@@ -197,7 +200,7 @@ export function createArticleSchema(article: ArticleData) {
       "@type": "Person",
       name: article.author || "PageSpace Team",
     },
-    publisher: organizationSchema,
+    publisher: organizationRef,
     image: article.image || `${SITE_URL}/og-image.png`,
     mainEntityOfPage: {
       "@type": "WebPage",
@@ -247,7 +250,7 @@ export function JsonLd({ data }: { data: object | object[] }) {
     <script
       type="application/ld+json"
       dangerouslySetInnerHTML={{
-        __html: JSON.stringify(jsonLd),
+        __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
       }}
     />
   );
