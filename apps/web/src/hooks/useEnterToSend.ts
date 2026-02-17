@@ -30,6 +30,10 @@ function isTabletBrowser(): boolean {
   return false;
 }
 
+// On-screen keyboard is typically 300+ px; the floating toolbar
+// shown with an external keyboard is ~55px.
+const EXTERNAL_KEYBOARD_THRESHOLD = 120;
+
 /**
  * Determines whether Enter key should send a message or insert a newline.
  *
@@ -46,16 +50,12 @@ function isTabletBrowser(): boolean {
  * shows no keyboard or just a small predictive-text toolbar (~55px).
  */
 export function useEnterToSend(): boolean {
-  const { isNative, isIPad } = useCapacitor();
+  const { isNative, isIPad, isReady } = useCapacitor();
   const { isOpen, height } = useMobileKeyboard();
 
-  // --- Native Capacitor app ---
-  if (isNative) {
+  // --- Native Capacitor app (only once useCapacitor has initialized) ---
+  if (isReady && isNative) {
     if (isIPad) {
-      // On-screen keyboard is typically 300+ px; the floating toolbar
-      // shown with an external keyboard is ~55px. Use 120px as threshold.
-      const EXTERNAL_KEYBOARD_THRESHOLD = 120;
-
       if (isOpen && height > EXTERNAL_KEYBOARD_THRESHOLD) {
         return false; // On-screen keyboard active → Enter = newline
       }
@@ -68,7 +68,8 @@ export function useEnterToSend(): boolean {
     return false;
   }
 
-  // --- Web browser ---
+  // --- Web browser (or native before useCapacitor is ready, falling
+  //     through to the UA heuristics which work on both) ---
 
   // Phone browser (iOS Safari, Android Chrome, etc.): Enter = newline
   if (isMobilePhoneBrowser()) return false;
