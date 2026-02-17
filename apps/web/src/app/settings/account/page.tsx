@@ -20,7 +20,10 @@ import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
 import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
 import { useDevices } from "@/hooks/useDevices";
-import { Smartphone } from "lucide-react";
+import { PasskeyManager } from "@/components/settings/PasskeyManager";
+import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Smartphone, ChevronDown } from "lucide-react";
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -53,6 +56,12 @@ export default function AccountPage() {
     fetcher
   );
 
+  // Fetch account data (hasPassword)
+  const { data: accountInfo } = useSWR<{ hasPassword: boolean }>(
+    user ? '/api/account' : null,
+    fetcher
+  );
+
   // Profile form state
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -70,6 +79,7 @@ export default function AccountPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSavingPassword, setIsSavingPassword] = useState(false);
+  const [isPasswordOpen, setIsPasswordOpen] = useState(false);
 
   // Email verification state
   const [isResendingVerification, setIsResendingVerification] = useState(false);
@@ -587,60 +597,77 @@ export default function AccountPage() {
       {/* Security Section */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Password</CardTitle>
-          <CardDescription>Change your password</CardDescription>
+          <CardTitle>Security</CardTitle>
+          <CardDescription>Manage passkeys and password</CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handlePasswordChange} className="space-y-4">
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="current-password">Current Password</Label>
-                <Input
-                  id="current-password"
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter current password"
-                  required
-                />
-              </div>
+        <CardContent className="space-y-6">
+          <PasskeyManager />
 
-              <div className="grid gap-2">
-                <Label htmlFor="new-password">New Password</Label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password (min 8 characters)"
-                  required
-                />
-              </div>
+          {accountInfo?.hasPassword && (
+            <>
+              <Separator />
+              <Collapsible open={isPasswordOpen} onOpenChange={setIsPasswordOpen}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" className="w-full justify-between px-0 hover:bg-transparent">
+                    <span className="text-sm font-medium">Change Password</span>
+                    <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isPasswordOpen ? 'rotate-180' : ''}`} />
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <form onSubmit={handlePasswordChange} className="space-y-4 pt-2">
+                    <div className="grid gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="current-password">Current Password</Label>
+                        <Input
+                          id="current-password"
+                          type="password"
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          placeholder="Enter current password"
+                          required
+                        />
+                      </div>
 
-              <div className="grid gap-2">
-                <Label htmlFor="confirm-password">Confirm New Password</Label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
-                  required
-                />
-              </div>
-            </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="new-password">New Password</Label>
+                        <Input
+                          id="new-password"
+                          type="password"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="Enter new password (min 8 characters)"
+                          required
+                        />
+                      </div>
 
-            <Button type="submit" disabled={isSavingPassword}>
-              {isSavingPassword ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Changing Password...
-                </>
-              ) : (
-                "Change Password"
-              )}
-            </Button>
-          </form>
+                      <div className="grid gap-2">
+                        <Label htmlFor="confirm-password">Confirm New Password</Label>
+                        <Input
+                          id="confirm-password"
+                          type="password"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="Confirm new password"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <Button type="submit" disabled={isSavingPassword}>
+                      {isSavingPassword ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Changing Password...
+                        </>
+                      ) : (
+                        "Change Password"
+                      )}
+                    </Button>
+                  </form>
+                </CollapsibleContent>
+              </Collapsible>
+            </>
+          )}
         </CardContent>
       </Card>
 

@@ -23,6 +23,7 @@ export async function GET(req: Request) {
       name: true,
       email: true,
       image: true,
+      password: true,
       tokenVersion: true,
     },
   });
@@ -36,6 +37,7 @@ export async function GET(req: Request) {
     name: user.name,
     email: user.email,
     image: user.image,
+    hasPassword: !!user.password,
   });
 }
 
