@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -126,6 +127,7 @@ export function PasskeySignupButton({
       const { redirectUrl } = await verifyRes.json();
 
       persistCsrfToken();
+      useAuthStore.getState().setAuthFailedPermanently(false);
 
       toast.success('Account created successfully!');
 

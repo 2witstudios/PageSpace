@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
@@ -100,6 +101,7 @@ export function PasskeyLoginButton({
       const { redirectUrl } = await verifyRes.json();
 
       persistCsrfToken();
+      useAuthStore.getState().setAuthFailedPermanently(false);
 
       toast.success('Signed in successfully');
 
@@ -228,6 +230,7 @@ export function useConditionalPasskeyUI(
       const { redirectUrl } = await verifyRes.json();
 
       persistCsrfToken();
+      useAuthStore.getState().setAuthFailedPermanently(false);
 
       toast.success('Signed in successfully');
 
