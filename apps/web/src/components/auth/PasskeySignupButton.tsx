@@ -19,6 +19,16 @@ interface PasskeySignupButtonProps {
   disabled?: boolean;
 }
 
+export function useWebAuthnSupport() {
+  const [isSupported, setIsSupported] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setIsSupported(browserSupportsWebAuthn());
+  }, []);
+
+  return isSupported;
+}
+
 export function PasskeySignupButton({
   csrfToken,
   onSuccess,
@@ -26,15 +36,11 @@ export function PasskeySignupButton({
   className,
   disabled = false,
 }: PasskeySignupButtonProps) {
-  const [isSupported, setIsSupported] = useState<boolean | null>(null);
+  const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-
-  useEffect(() => {
-    setIsSupported(browserSupportsWebAuthn());
-  }, []);
 
   const handleSignup = useCallback(async () => {
     if (!csrfToken) {
@@ -200,39 +206,36 @@ export function PasskeySignupButton({
                 disabled={isRegistering}
               />
             </div>
-            <Button
-              onClick={handleSignup}
-              disabled={isButtonDisabled || !name.trim() || !email.trim()}
-              className="w-full"
-            >
-              {isRegistering ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating account...
-                </>
-              ) : (
-                <>
-                  <Fingerprint className="mr-2 h-4 w-4" />
-                  Continue
-                </>
-              )}
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setIsExpanded(false)}
+                disabled={isRegistering}
+                className="shrink-0"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSignup}
+                disabled={isButtonDisabled || !name.trim() || !email.trim()}
+                className="w-full"
+              >
+                {isRegistering ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating account...
+                  </>
+                ) : (
+                  <>
+                    <Fingerprint className="mr-2 h-4 w-4" />
+                    Continue
+                  </>
+                )}
+              </Button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
     </div>
   );
-}
-
-/**
- * Hook to check if WebAuthn is supported in the current browser.
- */
-export function useWebAuthnSupport() {
-  const [isSupported, setIsSupported] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    setIsSupported(browserSupportsWebAuthn());
-  }, []);
-
-  return isSupported;
 }

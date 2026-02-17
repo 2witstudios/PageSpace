@@ -76,12 +76,12 @@ export default function SignUp() {
       <AuthDivider delay={0.3} />
 
       {/* Passkey signup */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.35, duration: 0.3 }}
-      >
-        {csrfToken && (
+      {csrfToken && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, duration: 0.3 }}
+        >
           <PasskeySignupButton
             csrfToken={csrfToken}
             onSuccess={(redirectUrl) => {
@@ -92,8 +92,8 @@ export default function SignUp() {
             }}
             disabled={isAnyLoading}
           />
-        )}
-      </motion.div>
+        </motion.div>
+      )}
 
       {/* Magic link fallback */}
       <motion.div
