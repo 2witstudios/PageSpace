@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { startRegistration, browserSupportsWebAuthn } from '@simplewebauthn/browser';
+import { startRegistration } from '@simplewebauthn/browser';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,6 +10,7 @@ import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
+import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -19,16 +20,6 @@ interface PasskeySignupButtonProps {
   onLoadingChange?: (isLoading: boolean) => void;
   className?: string;
   disabled?: boolean;
-}
-
-export function useWebAuthnSupport() {
-  const [isSupported, setIsSupported] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    setIsSupported(browserSupportsWebAuthn());
-  }, []);
-
-  return isSupported;
 }
 
 export function PasskeySignupButton({
@@ -58,6 +49,11 @@ export function PasskeySignupButton({
 
     if (!email.trim() || !name.trim()) {
       toast.error('Please enter your name and email');
+      return;
+    }
+
+    if (!email.includes('@') || !email.split('@')[1]?.includes('.')) {
+      toast.error('Please enter a valid email address');
       return;
     }
 

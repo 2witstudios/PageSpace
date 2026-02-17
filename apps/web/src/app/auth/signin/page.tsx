@@ -14,13 +14,13 @@ import {
   MagicLinkForm,
   PasskeyLoginButton,
 } from "@/components/auth";
-import { useLoginCSRF } from "@/hooks/useLoginCSRF";
+import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
   const searchParams = useSearchParams();
-  const { csrfToken, refreshToken } = useLoginCSRF();
+  const { csrfToken, refreshToken } = useAuthCSRF();
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
     useOAuthSignIn();
 

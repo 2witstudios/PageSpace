@@ -24,14 +24,18 @@ export function createCSRFHook(endpoint: string) {
           throw new Error('Failed to fetch CSRF token');
         }
 
-        const data = await response.json();
-        const token = data?.csrfToken;
+        const data: unknown = await response.json();
+        const token =
+          typeof data === 'object' && data !== null && 'csrfToken' in data
+            ? (data as { csrfToken: unknown }).csrfToken
+            : undefined;
         if (typeof token !== 'string' || !token) {
           throw new Error('Invalid CSRF token response');
         }
         setCsrfToken(token);
         return token;
       } catch (err) {
+        setCsrfToken(null);
         console.error('Failed to fetch CSRF token:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch CSRF token');
         return null;

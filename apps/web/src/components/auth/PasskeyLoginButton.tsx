@@ -7,7 +7,7 @@ import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
-import { useWebAuthnSupport } from './PasskeySignupButton';
+import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;

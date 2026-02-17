@@ -12,13 +12,13 @@ import {
   GoogleOneTap,
   PasskeySignupButton,
 } from "@/components/auth";
-import { useLoginCSRF } from "@/hooks/useLoginCSRF";
+import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 
 export default function SignUp() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const { csrfToken, refreshToken } = useLoginCSRF();
+  const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
     useOAuthSignIn({
