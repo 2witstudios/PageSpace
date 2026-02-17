@@ -218,7 +218,7 @@ export function PasskeySignupButton({
               <Button
                 onClick={handleSignup}
                 disabled={isButtonDisabled || !name.trim() || !email.trim()}
-                className="w-full"
+                className="flex-1"
               >
                 {isRegistering ? (
                   <>
