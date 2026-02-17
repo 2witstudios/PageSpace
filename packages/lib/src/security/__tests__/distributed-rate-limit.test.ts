@@ -369,12 +369,12 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.LOGIN.progressiveDelay).toBe(true);
     });
 
-    it('SIGNUP has stricter limits', () => {
-      expect(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts).toBe(3);
+    it('SIGNUP has strict limits', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.SIGNUP.maxAttempts).toBe(10);
       expect(DISTRIBUTED_RATE_LIMITS.SIGNUP.windowMs).toBe(60 * 60 * 1000);
     });
 
-    it('PASSWORD_RESET matches SIGNUP limits', () => {
+    it('PASSWORD_RESET allows 3 attempts per hour', () => {
       expect(DISTRIBUTED_RATE_LIMITS.PASSWORD_RESET.maxAttempts).toBe(3);
       expect(DISTRIBUTED_RATE_LIMITS.PASSWORD_RESET.windowMs).toBe(60 * 60 * 1000);
     });

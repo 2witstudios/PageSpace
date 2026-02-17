@@ -76,6 +76,7 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/auth/signup') ||
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/google') ||
+      pathname.startsWith('/api/auth/passkey/authenticate') ||
       pathname.startsWith('/api/auth/device/') ||
       pathname.startsWith('/api/auth/mobile/') ||
       pathname.startsWith('/api/auth/desktop/') ||

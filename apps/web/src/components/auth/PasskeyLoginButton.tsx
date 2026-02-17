@@ -1,15 +1,17 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { startAuthentication, browserSupportsWebAuthn } from '@simplewebauthn/browser';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { Button } from '@/components/ui/button';
 import { Fingerprint, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
+import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
+  refreshToken?: () => Promise<string | null>;
   email?: string;
   onSuccess?: (redirectUrl: string) => void;
   className?: string;
@@ -18,17 +20,14 @@ interface PasskeyLoginButtonProps {
 
 export function PasskeyLoginButton({
   csrfToken,
+  refreshToken,
   email,
   onSuccess,
   className,
   variant = 'outline',
 }: PasskeyLoginButtonProps) {
-  const [isSupported, setIsSupported] = useState<boolean | null>(null);
+  const isSupported = useWebAuthnSupport();
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-
-  useEffect(() => {
-    setIsSupported(browserSupportsWebAuthn());
-  }, []);
 
   const handleLogin = useCallback(async () => {
     if (!csrfToken) {
@@ -39,6 +38,9 @@ export function PasskeyLoginButton({
     setIsAuthenticating(true);
 
     try {
+      // Refresh CSRF token to avoid expiry after sitting on the page
+      const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
+
       // Get authentication options
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
         method: 'POST',
@@ -47,7 +49,7 @@ export function PasskeyLoginButton({
         },
         body: JSON.stringify({
           email,
-          csrfToken,
+          csrfToken: freshToken,
         }),
       });
 
@@ -77,7 +79,7 @@ export function PasskeyLoginButton({
         body: JSON.stringify({
           response: authResponse,
           expectedChallenge: options.challenge,
-          csrfToken,
+          csrfToken: freshToken,
         }),
       });
 
@@ -121,7 +123,7 @@ export function PasskeyLoginButton({
     } finally {
       setIsAuthenticating(false);
     }
-  }, [csrfToken, email, onSuccess]);
+  }, [csrfToken, refreshToken, email, onSuccess]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {

@@ -347,7 +347,7 @@ export const DISTRIBUTED_RATE_LIMITS = {
     progressiveDelay: true,
   },
   SIGNUP: {
-    maxAttempts: 3,
+    maxAttempts: 10,
     windowMs: 60 * 60 * 1000, // 1 hour
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,

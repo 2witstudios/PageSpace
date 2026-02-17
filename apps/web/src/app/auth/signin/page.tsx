@@ -1,472 +1,198 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
-import { Button } from "@/components/ui/button";
+import { motion } from "motion/react";
+import { Mail } from "lucide-react";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { GoogleOneTap, MagicLinkForm } from "@/components/auth";
-import { useLoginCSRF } from "@/hooks/useLoginCSRF";
-
-type AuthMethod = 'magic-link' | 'password';
-
-interface SocialSignInButtonsProps {
-  disabled: boolean;
-  isGoogleLoading: boolean;
-  isAppleLoading: boolean;
-  onGoogleClick: () => void;
-  onAppleClick: () => void;
-}
-
-function SocialSignInButtons({
-  disabled,
-  isGoogleLoading,
-  isAppleLoading,
-  onGoogleClick,
-  onAppleClick,
-}: SocialSignInButtonsProps) {
-  return (
-    <>
-      <div className="relative">
-        <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-background px-2 text-muted-foreground">
-            Or continue with
-          </span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full"
-          disabled={disabled}
-          onClick={onGoogleClick}
-        >
-          {isGoogleLoading ? (
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-              </svg>
-              <span>Google</span>
-            </div>
-          )}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full"
-          disabled={disabled}
-          onClick={onAppleClick}
-        >
-          {isAppleLoading ? (
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
-              </svg>
-              <span>Apple</span>
-            </div>
-          )}
-        </Button>
-      </div>
-    </>
-  );
-}
+  AuthShell,
+  AuthDivider,
+  OAuthButtons,
+  GoogleOneTap,
+  MagicLinkForm,
+  PasskeyLoginButton,
+} from "@/components/auth";
+import { useAuthCSRF } from "@/hooks/useAuthCSRF";
+import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 
 function SignInForm() {
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('magic-link');
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [isAppleLoading, setIsAppleLoading] = useState(false);
-  const router = useRouter();
+  const [showMagicLink, setShowMagicLink] = useState(false);
   const searchParams = useSearchParams();
-  const { actions, isLoading } = useAuth();
-  useLoginCSRF();
+  const { csrfToken, refreshToken } = useAuthCSRF();
+  const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
+    useOAuthSignIn();
 
   useEffect(() => {
-    const error = searchParams.get('error');
-    const newAccount = searchParams.get('newAccount');
+    const error = searchParams.get("error");
+    const newAccount = searchParams.get("newAccount");
 
     if (newAccount) {
-      toast.info('Your account was created successfully! Please sign in to continue.');
+      toast.info(
+        "Your account was created successfully! Please sign in to continue."
+      );
     }
 
     if (error) {
       switch (error) {
-        case 'access_denied':
-          toast.error('Google sign-in was cancelled. Please try again if you want to continue.');
+        case "access_denied":
+          toast.error(
+            "Google sign-in was cancelled. Please try again if you want to continue."
+          );
           break;
-        case 'oauth_error':
-          toast.error('Google sign-in failed. Please try again.');
+        case "oauth_error":
+          toast.error("Google sign-in failed. Please try again.");
           break;
-        case 'rate_limit':
-          toast.error('Too many login attempts. Please try again later.');
+        case "rate_limit":
+          toast.error("Too many login attempts. Please try again later.");
           break;
-        case 'invalid_request':
-          toast.error('Invalid request. Please try again.');
+        case "invalid_request":
+          toast.error("Invalid request. Please try again.");
           break;
-        case 'magic_link_expired':
-          toast.error('Your sign-in link has expired. Please request a new one.');
+        case "magic_link_expired":
+          toast.error(
+            "Your sign-in link has expired. Please request a new one."
+          );
           break;
-        case 'magic_link_used':
-          toast.error('This sign-in link has already been used. Please request a new one.');
+        case "magic_link_used":
+          toast.error(
+            "This sign-in link has already been used. Please request a new one."
+          );
           break;
-        case 'account_suspended':
-          toast.error('Your account has been suspended. Please contact support.');
+        case "account_suspended":
+          toast.error(
+            "Your account has been suspended. Please contact support."
+          );
           break;
-        case 'invalid_token':
-          toast.error('Invalid sign-in link. Please request a new one.');
+        case "invalid_token":
+          toast.error("Invalid sign-in link. Please request a new one.");
           break;
         default:
-          toast.error('An error occurred during sign-in.');
+          toast.error("An error occurred during sign-in.");
       }
     }
   }, [searchParams]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Prevent double submission
-    if (isLoading) return;
-    
-    setError(null);
-
-    try {
-      const result = await actions.login(email, password);
-
-      if (result.success) {
-        // Use replace to avoid back navigation issues
-        router.replace(result.redirectTo ?? '/dashboard');
-      } else {
-        const errorMessage = result.error || 'An unexpected error occurred.';
-        setError(errorMessage);
-        toast.error(errorMessage);
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      const networkError = 'Network error. Please check your connection and try again.';
-      setError(networkError);
-      toast.error(networkError);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    if (isGoogleLoading) return;
-
-    setIsGoogleLoading(true);
-    setError(null);
-
-    try {
-      // Detect platform
-      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-      // Check for iOS native app - use native Google Sign-In SDK
-      const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } = await import('@/lib/ios-google-auth');
-      if (isNativeGoogleAuthAvailable()) {
-        const result = await nativeSignIn();
-
-        if (result.success) {
-          // Import auth store for state updates
-          const { useAuthStore } = await import('@/stores/useAuthStore');
-
-          // Clear authFailedPermanently flag to allow auth validation
-          useAuthStore.getState().setAuthFailedPermanently(false);
-
-          // Directly set auth state - no API call needed
-          // This is synchronous and prevents race conditions where the dashboard
-          // would check auth before the async loadSession() completes
-          if (result.user) {
-            useAuthStore.getState().setUser(result.user);
-          }
-
-          // Use Next.js router for client-side navigation
-          // This works reliably in WKWebView unlike window.location.href
-          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
-        } else {
-          // Don't show error for cancellation
-          if (result.error !== 'Sign-in cancelled') {
-            setError(result.error || 'Google sign-in failed');
-            toast.error(result.error || 'Google sign-in failed');
-          }
-        }
-        return;
-      }
-
-      // Desktop or web: Use OAuth redirect flow
-      let deviceId: string;
-      let deviceName: string;
-
-      if (isDesktop && window.electron) {
-        // Desktop: Get device info from Electron
-        const deviceInfo = await window.electron.auth.getDeviceInfo();
-        deviceId = deviceInfo.deviceId;
-        deviceName = deviceInfo.deviceName;
-      } else {
-        // Web browser: Use fingerprint utility for device identification
-        const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
-        deviceId = getOrCreateDeviceId();
-        deviceName = getDeviceName();
-      }
-
-      const response = await fetch('/api/auth/google/signin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          platform: isDesktop ? 'desktop' : 'web',
-          deviceId,
-          deviceName,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        window.location.href = data.url;
-      } else {
-        const errorData = await response.json();
-        const errorMessage = errorData.error || 'Google sign-in failed. Please try again.';
-        setError(errorMessage);
-        toast.error(errorMessage);
-      }
-    } catch (error) {
-      console.error('Google sign-in error:', error);
-      const networkError = 'Network error. Please check your connection and try again.';
-      setError(networkError);
-      toast.error(networkError);
-    } finally {
-      setIsGoogleLoading(false);
-    }
-  };
-
-  const handleAppleSignIn = async () => {
-    if (isAppleLoading) return;
-
-    setIsAppleLoading(true);
-    setError(null);
-
-    try {
-      // Check for iOS native app - use native Apple Sign-In SDK
-      const { isNativeAppleAuthAvailable, signInWithApple: nativeSignIn } = await import('@/lib/ios-apple-auth');
-      if (isNativeAppleAuthAvailable()) {
-        const result = await nativeSignIn();
-
-        if (result.success) {
-          // Import auth store for state updates
-          const { useAuthStore } = await import('@/stores/useAuthStore');
-
-          // Clear authFailedPermanently flag to allow auth validation
-          useAuthStore.getState().setAuthFailedPermanently(false);
-
-          // Directly set auth state - no API call needed
-          if (result.user) {
-            useAuthStore.getState().setUser(result.user);
-          }
-
-          // Use Next.js router for client-side navigation
-          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
-        } else {
-          // Don't show error for cancellation
-          if (result.error !== 'Sign-in cancelled') {
-            setError(result.error || 'Apple sign-in failed');
-            toast.error(result.error || 'Apple sign-in failed');
-          }
-        }
-        return;
-      }
-
-      // Detect platform
-      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-      // Desktop or web: Use OAuth redirect flow
-      let deviceId: string;
-      let deviceName: string;
-
-      if (isDesktop && window.electron) {
-        // Desktop: Get device info from Electron
-        const deviceInfo = await window.electron.auth.getDeviceInfo();
-        deviceId = deviceInfo.deviceId;
-        deviceName = deviceInfo.deviceName;
-      } else {
-        // Web browser: Use fingerprint utility for device identification
-        const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
-        deviceId = getOrCreateDeviceId();
-        deviceName = getDeviceName();
-      }
-
-      const response = await fetch('/api/auth/apple/signin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          platform: isDesktop ? 'desktop' : 'web',
-          deviceId,
-          deviceName,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        window.location.href = data.url;
-      } else {
-        const errorData = await response.json();
-        const errorMessage = errorData.error || 'Apple sign-in failed. Please try again.';
-        setError(errorMessage);
-        toast.error(errorMessage);
-      }
-    } catch (error) {
-      console.error('Apple sign-in error:', error);
-      const networkError = 'Network error. Please check your connection and try again.';
-      setError(networkError);
-      toast.error(networkError);
-    } finally {
-      setIsAppleLoading(false);
-    }
-  };
-
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
-      {/* Google One Tap - displays automatically for signed-in Google users */}
-      <GoogleOneTap
-        onSuccess={() => {
-          // Toast handled internally by GoogleOneTap
-        }}
-        onError={(error) => {
-          console.error('Google One Tap error:', error);
-        }}
-        autoSelect={true}
-        cancelOnTapOutside={true}
-        context="signin"
+    <AuthShell>
+      <GoogleOneTap autoSelect={true} cancelOnTapOutside={true} context="signin" />
+
+      {/* Heading */}
+      <motion.div
+        className="mb-8 text-center"
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+      >
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+          Welcome back
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Sign in to your workspace
+        </p>
+      </motion.div>
+
+      {/* OAuth buttons */}
+      <OAuthButtons
+        onGoogleClick={handleGoogleSignIn}
+        onAppleClick={handleAppleSignIn}
+        disabled={isGoogleLoading || isAppleLoading}
+        isGoogleLoading={isGoogleLoading}
+        isAppleLoading={isAppleLoading}
       />
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-2xl">Sign In</CardTitle>
-          <CardDescription>
-            {authMethod === 'magic-link'
-              ? 'Enter your email to receive a sign-in link'
-              : 'Enter your credentials to access your account'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {authMethod === 'magic-link' ? (
-            <div className="grid gap-4">
-              <MagicLinkForm
-                onSwitchToPassword={() => setAuthMethod('password')}
-              />
 
-              <SocialSignInButtons
-                disabled={isGoogleLoading || isAppleLoading}
-                isGoogleLoading={isGoogleLoading}
-                isAppleLoading={isAppleLoading}
-                onGoogleClick={handleGoogleSignIn}
-                onAppleClick={handleAppleSignIn}
-              />
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit}>
-              <div className="grid gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="m@example.com"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? (
-                    <div className="flex items-center gap-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      <span>Signing In...</span>
-                    </div>
-                  ) : (
-                    "Sign In"
-                  )}
-                </Button>
+      <AuthDivider delay={0.3} />
 
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="w-full text-muted-foreground"
-                  onClick={() => setAuthMethod('magic-link')}
-                  disabled={isLoading}
-                >
-                  Sign in with email link instead
-                </Button>
+      {/* Passkey login */}
+      {csrfToken && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, duration: 0.3 }}
+        >
+          <PasskeyLoginButton
+            csrfToken={csrfToken}
+            refreshToken={refreshToken}
+            variant="outline"
+          />
+        </motion.div>
+      )}
 
-                <SocialSignInButtons
-                  disabled={isGoogleLoading || isAppleLoading || isLoading}
-                  isGoogleLoading={isGoogleLoading}
-                  isAppleLoading={isAppleLoading}
-                  onGoogleClick={handleGoogleSignIn}
-                  onAppleClick={handleAppleSignIn}
-                />
-              </div>
-            </form>
-          )}
-          <div className="mt-4 text-center text-sm">
-            Don&apos;t have an account?{" "}
-            <Link href="/auth/signup" className="underline">
-              Sign up
-            </Link>
+      {/* Magic link toggle */}
+      <motion.div
+        className="mt-4"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.45, duration: 0.3 }}
+      >
+        {showMagicLink ? (
+          <div className="mt-2">
+            <MagicLinkForm />
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        ) : (
+          <button
+            type="button"
+            className="flex w-full items-center justify-center gap-2 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setShowMagicLink(true)}
+          >
+            <Mail className="h-4 w-4" />
+            Or use a magic link
+          </button>
+        )}
+      </motion.div>
+
+      {/* Footer */}
+      <motion.div
+        className="mt-8 text-center"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.55, duration: 0.3 }}
+      >
+        <p className="text-sm text-muted-foreground">
+          Don&apos;t have an account?{" "}
+          <Link
+            href="/auth/signup"
+            className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            Sign up
+          </Link>
+        </p>
+      </motion.div>
+
+      <motion.p
+        className="mt-4 text-center text-xs text-muted-foreground/70"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6, duration: 0.3 }}
+      >
+        By signing in, you agree to our{" "}
+        <Link href="/terms" className="underline hover:text-muted-foreground">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="underline hover:text-muted-foreground">
+          Privacy Policy
+        </Link>
+      </motion.p>
+    </AuthShell>
   );
 }
 
 export default function SignIn() {
   return (
-    <Suspense fallback={
-      <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-2xl">Sign In</CardTitle>
-            <CardDescription>
-              Loading...
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <AuthShell>
+          <div className="text-center">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+              Welcome back
+            </h1>
+            <p className="mt-2 text-sm text-muted-foreground">Loading...</p>
+          </div>
+        </AuthShell>
+      }
+    >
       <SignInForm />
     </Suspense>
   );

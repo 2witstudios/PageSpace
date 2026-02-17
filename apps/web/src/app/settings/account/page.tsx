@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock } from "lucide-react";
+import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
@@ -20,7 +20,9 @@ import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
 import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
 import { useDevices } from "@/hooks/useDevices";
-import { Smartphone } from "lucide-react";
+import { PasskeyManager } from "@/components/settings/PasskeyManager";
+import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -48,8 +50,14 @@ export default function AccountPage() {
   const router = useRouter();
 
   // Fetch email verification status
-  const { data: accountData } = useSWR<{ emailVerified: Date | null }>(
+  const { data: accountData, error: accountDataError, isLoading: accountDataLoading } = useSWR<{ emailVerified: Date | null }>(
     user ? '/api/account/verification-status' : null,
+    fetcher
+  );
+
+  // Fetch account data (hasPassword)
+  const { data: accountInfo, error: accountInfoError, isLoading: accountInfoLoading } = useSWR<{ hasPassword: boolean }>(
+    user ? '/api/account' : null,
     fetcher
   );
 
@@ -70,6 +78,7 @@ export default function AccountPage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSavingPassword, setIsSavingPassword] = useState(false);
+  const [isPasswordOpen, setIsPasswordOpen] = useState(false);
 
   // Email verification state
   const [isResendingVerification, setIsResendingVerification] = useState(false);
@@ -512,7 +521,17 @@ export default function AccountPage() {
               <CardTitle>Email Verification</CardTitle>
               <CardDescription>Verify your email to unlock all features</CardDescription>
             </div>
-            {accountData?.emailVerified ? (
+            {accountDataLoading ? (
+              <Badge variant="outline">
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                Checking...
+              </Badge>
+            ) : accountDataError ? (
+              <Badge variant="destructive">
+                <AlertCircle className="h-3 w-3 mr-1" />
+                Error
+              </Badge>
+            ) : accountData?.emailVerified ? (
               <Badge variant="default" className="bg-green-600">
                 <CheckCircle2 className="h-3 w-3 mr-1" />
                 Verified
@@ -526,7 +545,19 @@ export default function AccountPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {accountData?.emailVerified ? (
+          {accountDataLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking verification status...
+            </div>
+          ) : accountDataError ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Failed to load verification status. Please refresh the page.
+              </AlertDescription>
+            </Alert>
+          ) : accountData?.emailVerified ? (
             <Alert>
               <CheckCircle2 className="h-4 w-4 text-green-600" />
               <AlertDescription>
@@ -587,60 +618,99 @@ export default function AccountPage() {
       {/* Security Section */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Password</CardTitle>
-          <CardDescription>Change your password</CardDescription>
+          <CardTitle>Security</CardTitle>
+          <CardDescription>Manage passkeys and password</CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handlePasswordChange} className="space-y-4">
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="current-password">Current Password</Label>
-                <Input
-                  id="current-password"
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter current password"
-                  required
-                />
-              </div>
+        <CardContent className="space-y-6">
+          <PasskeyManager />
 
-              <div className="grid gap-2">
-                <Label htmlFor="new-password">New Password</Label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password (min 8 characters)"
-                  required
-                />
+          {accountInfoLoading && (
+            <>
+              <Separator />
+              <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading security settings...
               </div>
+            </>
+          )}
 
-              <div className="grid gap-2">
-                <Label htmlFor="confirm-password">Confirm New Password</Label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
-                  required
-                />
-              </div>
-            </div>
+          {accountInfoError && (
+            <>
+              <Separator />
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Failed to load password settings. Please refresh the page.
+                </AlertDescription>
+              </Alert>
+            </>
+          )}
 
-            <Button type="submit" disabled={isSavingPassword}>
-              {isSavingPassword ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Changing Password...
-                </>
-              ) : (
-                "Change Password"
-              )}
-            </Button>
-          </form>
+          {!accountInfoLoading && !accountInfoError && accountInfo?.hasPassword && (
+            <>
+              <Separator />
+              <Collapsible open={isPasswordOpen} onOpenChange={setIsPasswordOpen}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" className="w-full justify-between px-0 hover:bg-transparent">
+                    <span className="text-sm font-medium">Change Password</span>
+                    <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isPasswordOpen ? 'rotate-180' : ''}`} />
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <form onSubmit={handlePasswordChange} className="space-y-4 pt-2">
+                    <div className="grid gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="current-password">Current Password</Label>
+                        <Input
+                          id="current-password"
+                          type="password"
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          placeholder="Enter current password"
+                          required
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label htmlFor="new-password">New Password</Label>
+                        <Input
+                          id="new-password"
+                          type="password"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="Enter new password (min 8 characters)"
+                          required
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label htmlFor="confirm-password">Confirm New Password</Label>
+                        <Input
+                          id="confirm-password"
+                          type="password"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="Confirm new password"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <Button type="submit" disabled={isSavingPassword}>
+                      {isSavingPassword ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Changing Password...
+                        </>
+                      ) : (
+                        "Change Password"
+                      )}
+                    </Button>
+                  </form>
+                </CollapsibleContent>
+              </Collapsible>
+            </>
+          )}
         </CardContent>
       </Card>
 

@@ -11,7 +11,7 @@ export function createCSRFHook(endpoint: string) {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const fetchToken = useCallback(async () => {
+    const fetchToken = useCallback(async (): Promise<string | null> => {
       setIsLoading(true);
       setError(null);
 
@@ -24,11 +24,21 @@ export function createCSRFHook(endpoint: string) {
           throw new Error('Failed to fetch CSRF token');
         }
 
-        const data = await response.json();
-        setCsrfToken(data.csrfToken);
+        const data: unknown = await response.json();
+        const token =
+          typeof data === 'object' && data !== null && 'csrfToken' in data
+            ? (data as { csrfToken: unknown }).csrfToken
+            : undefined;
+        if (typeof token !== 'string' || !token) {
+          throw new Error('Invalid CSRF token response');
+        }
+        setCsrfToken(token);
+        return token;
       } catch (err) {
+        setCsrfToken(null);
         console.error('Failed to fetch CSRF token:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch CSRF token');
+        return null;
       } finally {
         setIsLoading(false);
       }
@@ -38,8 +48,8 @@ export function createCSRFHook(endpoint: string) {
       fetchToken();
     }, [fetchToken]);
 
-    const refreshToken = useCallback(async () => {
-      await fetchToken();
+    const refreshToken = useCallback(async (): Promise<string | null> => {
+      return fetchToken();
     }, [fetchToken]);
 
     return {
