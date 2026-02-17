@@ -15,6 +15,7 @@ interface PasskeySignupButtonProps {
   csrfToken: string;
   onSuccess?: (redirectUrl: string) => void;
   onEmailExists?: () => void;
+  onLoadingChange?: (isLoading: boolean) => void;
   className?: string;
   disabled?: boolean;
 }
@@ -33,12 +34,18 @@ export function PasskeySignupButton({
   csrfToken,
   onSuccess,
   onEmailExists,
+  onLoadingChange,
   className,
   disabled = false,
 }: PasskeySignupButtonProps) {
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    onLoadingChange?.(isRegistering);
+  }, [isRegistering, onLoadingChange]);
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
 

@@ -19,13 +19,14 @@ export default function SignUp() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { csrfToken } = useLoginCSRF();
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
     useOAuthSignIn({
       onStart: () => setError(null),
       onError: (msg) => setError(msg),
     });
 
-  const isAnyLoading = isGoogleLoading || isAppleLoading;
+  const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
 
   return (
     <AuthShell>
@@ -90,6 +91,7 @@ export default function SignUp() {
             onEmailExists={() => {
               router.push("/auth/signin");
             }}
+            onLoadingChange={setPasskeyLoading}
             disabled={isAnyLoading}
           />
         </motion.div>

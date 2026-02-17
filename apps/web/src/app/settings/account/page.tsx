@@ -50,13 +50,13 @@ export default function AccountPage() {
   const router = useRouter();
 
   // Fetch email verification status
-  const { data: accountData } = useSWR<{ emailVerified: Date | null }>(
+  const { data: accountData, error: accountDataError, isLoading: accountDataLoading } = useSWR<{ emailVerified: Date | null }>(
     user ? '/api/account/verification-status' : null,
     fetcher
   );
 
   // Fetch account data (hasPassword)
-  const { data: accountInfo } = useSWR<{ hasPassword: boolean }>(
+  const { data: accountInfo, error: accountInfoError, isLoading: accountInfoLoading } = useSWR<{ hasPassword: boolean }>(
     user ? '/api/account' : null,
     fetcher
   );
@@ -521,7 +521,17 @@ export default function AccountPage() {
               <CardTitle>Email Verification</CardTitle>
               <CardDescription>Verify your email to unlock all features</CardDescription>
             </div>
-            {accountData?.emailVerified ? (
+            {accountDataLoading ? (
+              <Badge variant="outline">
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                Checking...
+              </Badge>
+            ) : accountDataError ? (
+              <Badge variant="destructive">
+                <AlertCircle className="h-3 w-3 mr-1" />
+                Error
+              </Badge>
+            ) : accountData?.emailVerified ? (
               <Badge variant="default" className="bg-green-600">
                 <CheckCircle2 className="h-3 w-3 mr-1" />
                 Verified
@@ -535,7 +545,19 @@ export default function AccountPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {accountData?.emailVerified ? (
+          {accountDataLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking verification status...
+            </div>
+          ) : accountDataError ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Failed to load verification status. Please refresh the page.
+              </AlertDescription>
+            </Alert>
+          ) : accountData?.emailVerified ? (
             <Alert>
               <CheckCircle2 className="h-4 w-4 text-green-600" />
               <AlertDescription>
@@ -602,7 +624,29 @@ export default function AccountPage() {
         <CardContent className="space-y-6">
           <PasskeyManager />
 
-          {accountInfo?.hasPassword && (
+          {accountInfoLoading && (
+            <>
+              <Separator />
+              <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading security settings...
+              </div>
+            </>
+          )}
+
+          {accountInfoError && (
+            <>
+              <Separator />
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Failed to load password settings. Please refresh the page.
+                </AlertDescription>
+              </Alert>
+            </>
+          )}
+
+          {!accountInfoLoading && !accountInfoError && accountInfo?.hasPassword && (
             <>
               <Separator />
               <Collapsible open={isPasswordOpen} onOpenChange={setIsPasswordOpen}>
