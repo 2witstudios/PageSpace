@@ -8,7 +8,8 @@ const fetcher = async (url: string) => {
   const res = await fetchWithAuth(url);
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Failed to fetch ${url}: ${res.status}${body ? ` - ${body}` : ''}`);
+    const sanitized = body.replace(/[\r\n]+/g, ' ').slice(0, 200);
+    throw new Error(`Failed to fetch ${url}: ${res.status}${sanitized ? ` - ${sanitized}` : ''}`);
   }
   return res.json();
 };

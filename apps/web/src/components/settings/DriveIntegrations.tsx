@@ -74,7 +74,7 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
             <Button
               size="sm"
               onClick={() => setShowProviderPicker(true)}
-              disabled={availableProviders.length === 0}
+              disabled={isLoading || availableProviders.length === 0}
             >
               <Plus className="h-4 w-4 mr-1" />
               Connect

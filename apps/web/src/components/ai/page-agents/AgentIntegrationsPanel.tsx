@@ -178,11 +178,12 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                           defaultValue={grant.rateLimitOverride?.requestsPerMinute ?? ''}
                           disabled={updatingGrant === grant.id}
                           onBlur={(e) => {
-                            const val = e.target.value ? parseInt(e.target.value, 10) : null;
+                            const raw = e.target.value.trim();
+                            const val = raw === '' ? null : parseInt(raw, 10);
                             const current = grant.rateLimitOverride?.requestsPerMinute ?? null;
-                            if (val !== current) {
+                            if (val !== current && (val === null || !Number.isNaN(val))) {
                               handleUpdateGrant(grant, {
-                                rateLimitOverride: val ? { requestsPerMinute: val } : null,
+                                rateLimitOverride: val != null ? { requestsPerMinute: val } : null,
                               });
                             }
                           }}

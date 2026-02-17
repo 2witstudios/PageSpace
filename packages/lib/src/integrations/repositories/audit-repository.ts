@@ -12,6 +12,8 @@ import {
   desc,
   gte,
   lte,
+  count,
+  isNotNull,
   integrationAuditLog,
   type IntegrationAuditLogEntry,
   type NewIntegrationAuditLogEntry,
@@ -194,23 +196,17 @@ export const countAuditLogsByErrorType = async (
     )!;
   }
 
-  const logs = await database.query.integrationAuditLog.findMany({
-    where: whereClause,
-    columns: {
-      errorType: true,
-    },
-  });
+  const rows = await database
+    .select({
+      errorType: integrationAuditLog.errorType,
+      count: count(),
+    })
+    .from(integrationAuditLog)
+    .where(and(whereClause, isNotNull(integrationAuditLog.errorType)))
+    .groupBy(integrationAuditLog.errorType);
 
-  // Group by errorType
-  const counts = new Map<string, number>();
-  for (const log of logs) {
-    if (log.errorType) {
-      counts.set(log.errorType, (counts.get(log.errorType) ?? 0) + 1);
-    }
-  }
-
-  return Array.from(counts.entries()).map(([errorType, count]) => ({
-    errorType,
-    count,
+  return rows.map((row) => ({
+    errorType: row.errorType!,
+    count: Number(row.count),
   }));
 };

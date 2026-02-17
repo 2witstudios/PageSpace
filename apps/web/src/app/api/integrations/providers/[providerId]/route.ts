@@ -107,11 +107,14 @@ export async function PUT(
 
     // If addTools is provided, merge new tools into existing config.tools
     if (addTools && addTools.length > 0) {
-      const existingConfig = (provider.config as Record<string, unknown>) ?? {};
-      const existingTools = Array.isArray(existingConfig.tools) ? existingConfig.tools : [];
+      const baseConfig = (provider.config as Record<string, unknown>) ?? {};
+      const mergedConfig = { ...baseConfig, ...(updateData.config ?? {}) };
+      const existingTools = Array.isArray(mergedConfig.tools) ? mergedConfig.tools as { id: string }[] : [];
+      const newToolIds = new Set(addTools.map((t) => t.id));
+      const filteredExisting = existingTools.filter((t) => !newToolIds.has(t.id));
       updateData.config = {
-        ...existingConfig,
-        tools: [...existingTools, ...addTools],
+        ...mergedConfig,
+        tools: [...filteredExisting, ...addTools],
       };
     }
 
