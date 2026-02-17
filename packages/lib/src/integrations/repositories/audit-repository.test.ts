@@ -301,6 +301,11 @@ describe('getAuditLogsByConnection', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].connectionId).toBe('conn-1');
+    expect(mockDb.query.integrationAuditLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ driveId: 'drive-1', connectionId: 'conn-1' }),
+      })
+    );
   });
 });
 

@@ -208,7 +208,7 @@ export const countAuditLogsByErrorType = async (
     .groupBy(integrationAuditLog.errorType);
 
   return rows.map((row) => ({
-    errorType: row.errorType!,
+    errorType: row.errorType ?? 'UNKNOWN_ERROR',
     count: Number(row.count),
   }));
 };

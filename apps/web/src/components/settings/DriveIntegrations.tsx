@@ -26,7 +26,7 @@ interface DriveIntegrationsProps {
 
 export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useDriveConnections(driveId);
-  const { providers, isLoading: loadingProviders, error: providersError } = useProviders();
+  const { providers, isLoading: loadingProviders, error: providersError, mutate: mutateProviders } = useProviders();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -91,7 +91,7 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
             <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
               <AlertCircle className="h-4 w-4" />
               <span>Failed to load integrations</span>
-              <Button variant="ghost" size="sm" onClick={() => mutateConnections()}>
+              <Button variant="ghost" size="sm" onClick={() => { mutateConnections(); mutateProviders(); }}>
                 Retry
               </Button>
             </div>
