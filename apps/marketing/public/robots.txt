@@ -1,0 +1,13 @@
+# PageSpace Marketing Site - Robots.txt
+# Allow all crawlers to index public marketing pages
+
+User-agent: *
+Allow: /
+
+# Disallow API routes and internal paths
+Disallow: /api/
+Disallow: /_next/
+Disallow: /screenshots/
+
+# Sitemap location
+Sitemap: https://pagespace.ai/sitemap.xml

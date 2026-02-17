@@ -1,7 +1,10 @@
-import type { Metadata, Viewport } from "next";
+import type { Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { GoogleOneTap } from "@/components/GoogleOneTap";
+import { siteMetadata } from "@/lib/metadata";
+import { JsonLd, organizationSchema, websiteSchema } from "@/lib/schema";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,14 +16,15 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "PageSpace Marketing",
-  description: "Marketing and screenshot generator for PageSpace",
-};
+export const metadata = siteMetadata;
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f0f0f" },
+  ],
 };
 
 export default function RootLayout({
@@ -30,6 +34,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="icon" href="/favicon.ico" sizes="any" />
+        <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32" />
+        <link rel="icon" href="/favicon-16x16.png" type="image/png" sizes="16x16" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/manifest.json" />
+        <JsonLd data={[organizationSchema, websiteSchema]} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
@@ -40,6 +52,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
+          <GoogleOneTap />
         </ThemeProvider>
       </body>
     </html>
