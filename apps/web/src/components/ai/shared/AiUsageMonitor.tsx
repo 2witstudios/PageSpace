@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Activity, DollarSign, Database, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSocketStore } from '@/stores/useSocketStore';
+import type { UsageEventPayload } from '@/lib/websocket';
 import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 
 interface AiUsageMonitorProps {
@@ -50,7 +51,11 @@ export function AiUsageMonitor({ conversationId, pageId, className, compact = fa
   useEffect(() => {
     if (!socket) return;
 
-    const handleUsageUpdated = () => {
+    const handleUsageUpdated = (payload: UsageEventPayload & { conversationId?: string; pageId?: string }) => {
+      // Skip events targeting a different conversation or page
+      if (payload.conversationId && payload.conversationId !== conversationId) return;
+      if (payload.pageId && payload.pageId !== pageId) return;
+
       if (conversationId) {
         mutateConversation();
       } else if (pageId) {
