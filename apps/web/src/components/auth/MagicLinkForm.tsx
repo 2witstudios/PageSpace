@@ -7,13 +7,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 
-interface MagicLinkFormProps {
-  onSwitchToPassword?: () => void;
-}
-
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
-export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
+export function MagicLinkForm() {
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [formState, setFormState] = useState<FormState>('input');
@@ -241,17 +237,6 @@ export function MagicLinkForm({ onSwitchToPassword }: MagicLinkFormProps) {
         )}
       </Button>
 
-      {onSwitchToPassword && (
-        <Button
-          type="button"
-          variant="ghost"
-          className="w-full text-muted-foreground"
-          onClick={onSwitchToPassword}
-          disabled={formState === 'sending'}
-        >
-          Sign in with password instead
-        </Button>
-      )}
     </form>
   );
 }
