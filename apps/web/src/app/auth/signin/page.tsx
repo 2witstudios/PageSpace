@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -19,7 +19,6 @@ import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useLoginCSRF();
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
@@ -123,9 +122,6 @@ function SignInForm() {
           <PasskeyLoginButton
             csrfToken={csrfToken}
             refreshToken={refreshToken}
-            onSuccess={(redirectUrl) => {
-              router.replace(redirectUrl);
-            }}
             variant="outline"
           />
         )}

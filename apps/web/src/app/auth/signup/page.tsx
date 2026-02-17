@@ -86,9 +86,6 @@ export default function SignUp() {
           <PasskeySignupButton
             csrfToken={csrfToken}
             refreshToken={refreshToken}
-            onSuccess={(redirectUrl) => {
-              router.replace(redirectUrl);
-            }}
             onEmailExists={() => {
               router.push("/auth/signin");
             }}

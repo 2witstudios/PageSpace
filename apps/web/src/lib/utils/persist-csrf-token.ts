@@ -6,6 +6,10 @@ import { getCookieValue } from '@/lib/utils/get-cookie-value';
 export function persistCsrfToken(): void {
   const token = getCookieValue('csrf_token');
   if (token) {
-    localStorage.setItem('csrfToken', token);
+    try {
+      localStorage.setItem('csrfToken', token);
+    } catch {
+      // localStorage may be unavailable (private browsing, storage full, etc.)
+    }
   }
 }
