@@ -8,8 +8,8 @@ export function persistCsrfToken(): void {
   if (token) {
     try {
       localStorage.setItem('csrfToken', token);
-    } catch {
-      // localStorage may be unavailable (private browsing, storage full, etc.)
+    } catch (e) {
+      console.warn('Failed to persist CSRF token:', e);
     }
   }
 }

@@ -76,15 +76,7 @@ function SignInForm() {
 
   return (
     <AuthShell>
-      <GoogleOneTap
-        onSuccess={() => {}}
-        onError={(error) => {
-          console.error("Google One Tap error:", error);
-        }}
-        autoSelect={true}
-        cancelOnTapOutside={true}
-        context="signin"
-      />
+      <GoogleOneTap autoSelect={true} cancelOnTapOutside={true} context="signin" />
 
       {/* Heading */}
       <motion.div
@@ -113,19 +105,19 @@ function SignInForm() {
       <AuthDivider delay={0.3} />
 
       {/* Passkey login */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.35, duration: 0.3 }}
-      >
-        {csrfToken && (
+      {csrfToken && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, duration: 0.3 }}
+        >
           <PasskeyLoginButton
             csrfToken={csrfToken}
             refreshToken={refreshToken}
             variant="outline"
           />
-        )}
-      </motion.div>
+        </motion.div>
+      )}
 
       {/* Magic link toggle */}
       <motion.div

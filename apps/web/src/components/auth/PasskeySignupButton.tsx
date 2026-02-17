@@ -43,13 +43,12 @@ export function PasskeySignupButton({
   const isSupported = useWebAuthnSupport();
   const [isRegistering, setIsRegistering] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
 
   useEffect(() => {
     onLoadingChange?.(isRegistering);
   }, [isRegistering, onLoadingChange]);
-
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
 
   const handleSignup = useCallback(async () => {
     if (!csrfToken) {

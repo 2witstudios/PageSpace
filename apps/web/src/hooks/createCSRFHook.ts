@@ -25,8 +25,12 @@ export function createCSRFHook(endpoint: string) {
         }
 
         const data = await response.json();
-        setCsrfToken(data.csrfToken);
-        return data.csrfToken as string;
+        const token = data?.csrfToken;
+        if (typeof token !== 'string' || !token) {
+          throw new Error('Invalid CSRF token response');
+        }
+        setCsrfToken(token);
+        return token;
       } catch (err) {
         console.error('Failed to fetch CSRF token:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch CSRF token');

@@ -47,7 +47,7 @@ export async function POST(req: Request) {
 
     if (!validation.success) {
       return NextResponse.json(
-        { error: 'Invalid request body', details: validation.error.issues },
+        { error: 'Invalid request body', details: validation.error.flatten().fieldErrors },
         { status: 400 }
       );
     }

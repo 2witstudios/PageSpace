@@ -30,15 +30,7 @@ export default function SignUp() {
 
   return (
     <AuthShell>
-      <GoogleOneTap
-        onSuccess={() => {}}
-        onError={(error) => {
-          console.error("Google One Tap error:", error);
-        }}
-        autoSelect={true}
-        cancelOnTapOutside={true}
-        context="signup"
-      />
+      <GoogleOneTap autoSelect={true} cancelOnTapOutside={true} context="signup" />
 
       {/* Heading */}
       <motion.div
