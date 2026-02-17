@@ -9,6 +9,8 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { RolesManager } from '@/components/settings/RolesManager';
 import { DriveAISettings } from '@/components/settings/DriveAISettings';
 import { DriveDeleteSection } from '@/components/settings/DriveDeleteSection';
+import { DriveIntegrations } from '@/components/settings/DriveIntegrations';
+import { IntegrationAuditLog } from '@/components/settings/IntegrationAuditLog';
 
 export default function DriveSettingsPage() {
   const params = useParams();
@@ -89,6 +91,8 @@ export default function DriveSettingsPage() {
         <div className="space-y-6">
           <RolesManager driveId={driveId} />
           <DriveAISettings driveId={driveId} />
+          <DriveIntegrations driveId={driveId} />
+          <IntegrationAuditLog driveId={driveId} />
 
           {/* Danger Zone - Only show to owners */}
           {drive.isOwned && (

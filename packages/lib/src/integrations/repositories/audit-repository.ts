@@ -12,6 +12,8 @@ import {
   desc,
   gte,
   lte,
+  count,
+  isNotNull,
   integrationAuditLog,
   type IntegrationAuditLogEntry,
   type NewIntegrationAuditLogEntry,
@@ -58,17 +60,21 @@ export const getAuditLogsByDrive = async (
 };
 
 /**
- * Get audit logs for a connection.
+ * Get audit logs for a connection, scoped to a specific drive.
  */
 export const getAuditLogsByConnection = async (
   database: typeof defaultDb,
+  driveId: string,
   connectionId: string,
   options: QueryOptions = {}
 ): Promise<IntegrationAuditLogEntry[]> => {
   const { limit = 100, offset = 0 } = options;
 
   const logs = await database.query.integrationAuditLog.findMany({
-    where: eq(integrationAuditLog.connectionId, connectionId),
+    where: and(
+      eq(integrationAuditLog.driveId, driveId),
+      eq(integrationAuditLog.connectionId, connectionId)
+    ),
     orderBy: [desc(integrationAuditLog.createdAt)],
     limit,
     offset,
@@ -180,33 +186,29 @@ export const countAuditLogsByErrorType = async (
   startDate?: Date,
   endDate?: Date
 ): Promise<Array<{ errorType: string; count: number }>> => {
-  let whereClause = eq(integrationAuditLog.driveId, driveId);
+  const conditions = [
+    eq(integrationAuditLog.driveId, driveId),
+  ];
 
-  if (startDate && endDate) {
-    whereClause = and(
-      whereClause,
-      gte(integrationAuditLog.createdAt, startDate),
-      lte(integrationAuditLog.createdAt, endDate)
-    )!;
+  if (startDate) {
+    conditions.push(gte(integrationAuditLog.createdAt, startDate));
   }
-
-  const logs = await database.query.integrationAuditLog.findMany({
-    where: whereClause,
-    columns: {
-      errorType: true,
-    },
-  });
-
-  // Group by errorType
-  const counts = new Map<string, number>();
-  for (const log of logs) {
-    if (log.errorType) {
-      counts.set(log.errorType, (counts.get(log.errorType) ?? 0) + 1);
-    }
+  if (endDate) {
+    conditions.push(lte(integrationAuditLog.createdAt, endDate));
   }
+  conditions.push(isNotNull(integrationAuditLog.errorType));
 
-  return Array.from(counts.entries()).map(([errorType, count]) => ({
-    errorType,
-    count,
+  const rows = await database
+    .select({
+      errorType: integrationAuditLog.errorType,
+      count: count(),
+    })
+    .from(integrationAuditLog)
+    .where(and(...conditions))
+    .groupBy(integrationAuditLog.errorType);
+
+  return rows.map((row) => ({
+    errorType: row.errorType ?? 'UNKNOWN_ERROR',
+    count: Number(row.count),
   }));
 };

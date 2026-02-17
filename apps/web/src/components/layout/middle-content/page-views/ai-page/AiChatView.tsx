@@ -21,6 +21,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
+import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useSWRConfig } from 'swr';
@@ -715,6 +716,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             isProviderConfigured={isProviderConfigured}
             onSavingChange={setIsSettingsSaving}
           />
+          <AgentIntegrationsPanel pageId={page.id} driveId={driveId} />
         </TabsContent>
       </Tabs>
 
