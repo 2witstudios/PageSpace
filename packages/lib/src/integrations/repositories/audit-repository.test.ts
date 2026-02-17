@@ -68,11 +68,12 @@ const getAuditLogsByDrive = async (
 
 const getAuditLogsByConnection = async (
   db: MockDb,
+  driveId: string,
   connectionId: string,
   options: { limit?: number; offset?: number } = {}
 ): Promise<MockAuditEntry[]> => {
   return db.query.integrationAuditLog.findMany({
-    where: { connectionId },
+    where: { driveId, connectionId },
     limit: options.limit,
     offset: options.offset,
     orderBy: { createdAt: 'desc' },
@@ -296,7 +297,7 @@ describe('getAuditLogsByConnection', () => {
 
     mockDb.query.integrationAuditLog.findMany.mockResolvedValue(logs);
 
-    const result = await getAuditLogsByConnection(mockDb, 'conn-1');
+    const result = await getAuditLogsByConnection(mockDb, 'drive-1', 'conn-1');
 
     expect(result).toHaveLength(1);
     expect(result[0].connectionId).toBe('conn-1');

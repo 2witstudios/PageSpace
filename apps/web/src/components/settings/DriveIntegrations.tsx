@@ -91,6 +91,9 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
             <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
               <AlertCircle className="h-4 w-4" />
               <span>Failed to load integrations</span>
+              <Button variant="ghost" size="sm" onClick={() => mutateConnections()}>
+                Retry
+              </Button>
             </div>
           ) : connections.length === 0 ? (
             <div className="border border-dashed rounded-lg p-6 text-center">

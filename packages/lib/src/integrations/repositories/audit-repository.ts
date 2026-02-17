@@ -186,15 +186,17 @@ export const countAuditLogsByErrorType = async (
   startDate?: Date,
   endDate?: Date
 ): Promise<Array<{ errorType: string; count: number }>> => {
-  let whereClause = eq(integrationAuditLog.driveId, driveId);
+  const conditions = [
+    eq(integrationAuditLog.driveId, driveId),
+  ];
 
-  if (startDate && endDate) {
-    whereClause = and(
-      whereClause,
-      gte(integrationAuditLog.createdAt, startDate),
-      lte(integrationAuditLog.createdAt, endDate)
-    )!;
+  if (startDate) {
+    conditions.push(gte(integrationAuditLog.createdAt, startDate));
   }
+  if (endDate) {
+    conditions.push(lte(integrationAuditLog.createdAt, endDate));
+  }
+  conditions.push(isNotNull(integrationAuditLog.errorType));
 
   const rows = await database
     .select({
@@ -202,7 +204,7 @@ export const countAuditLogsByErrorType = async (
       count: count(),
     })
     .from(integrationAuditLog)
-    .where(and(whereClause, isNotNull(integrationAuditLog.errorType)))
+    .where(and(...conditions))
     .groupBy(integrationAuditLog.errorType);
 
   return rows.map((row) => ({

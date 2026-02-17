@@ -62,8 +62,8 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
         }
       }
       mutateGrants();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update');
     } finally {
       setToggling(null);
     }
@@ -146,6 +146,7 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                       checked={isEnabled}
                       disabled={!isActive || toggling === connection.id}
                       onCheckedChange={(checked) => handleToggle(connection, checked)}
+                      aria-label={`Enable ${connection.name} integration`}
                     />
                   </div>
 
@@ -179,7 +180,13 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                           disabled={updatingGrant === grant.id}
                           onBlur={(e) => {
                             const raw = e.target.value.trim();
-                            const val = raw === '' ? null : parseInt(raw, 10);
+                            const parsed = raw === '' ? null : parseInt(raw, 10);
+                            const val = parsed != null && !Number.isNaN(parsed)
+                              ? Math.max(1, Math.min(1000, parsed))
+                              : parsed;
+                            if (val != null && !Number.isNaN(val)) {
+                              e.target.value = String(val);
+                            }
                             const current = grant.rateLimitOverride?.requestsPerMinute ?? null;
                             if (val !== current && (val === null || !Number.isNaN(val))) {
                               handleUpdateGrant(grant, {
