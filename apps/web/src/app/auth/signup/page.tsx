@@ -18,7 +18,7 @@ import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 export default function SignUp() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const { csrfToken } = useLoginCSRF();
+  const { csrfToken, refreshToken } = useLoginCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
     useOAuthSignIn({
@@ -85,6 +85,7 @@ export default function SignUp() {
         >
           <PasskeySignupButton
             csrfToken={csrfToken}
+            refreshToken={refreshToken}
             onSuccess={(redirectUrl) => {
               router.replace(redirectUrl);
             }}

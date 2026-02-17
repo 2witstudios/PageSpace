@@ -21,7 +21,7 @@ function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { csrfToken } = useLoginCSRF();
+  const { csrfToken, refreshToken } = useLoginCSRF();
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
     useOAuthSignIn();
 
@@ -122,6 +122,7 @@ function SignInForm() {
         {csrfToken && (
           <PasskeyLoginButton
             csrfToken={csrfToken}
+            refreshToken={refreshToken}
             onSuccess={(redirectUrl) => {
               router.replace(redirectUrl);
             }}

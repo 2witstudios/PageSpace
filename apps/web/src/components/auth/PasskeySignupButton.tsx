@@ -13,6 +13,7 @@ import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
+  refreshToken?: () => Promise<string | null>;
   onSuccess?: (redirectUrl: string) => void;
   onEmailExists?: () => void;
   onLoadingChange?: (isLoading: boolean) => void;
@@ -32,6 +33,7 @@ export function useWebAuthnSupport() {
 
 export function PasskeySignupButton({
   csrfToken,
+  refreshToken,
   onSuccess,
   onEmailExists,
   onLoadingChange,
@@ -63,6 +65,9 @@ export function PasskeySignupButton({
     setIsRegistering(true);
 
     try {
+      // Refresh CSRF token to avoid expiry after sitting on the page
+      const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
+
       // Get registration options
       const optionsRes = await fetch('/api/auth/signup-passkey/options', {
         method: 'POST',
@@ -72,7 +77,7 @@ export function PasskeySignupButton({
         body: JSON.stringify({
           email: email.trim(),
           name: name.trim(),
-          csrfToken,
+          csrfToken: freshToken,
         }),
       });
 
@@ -103,7 +108,7 @@ export function PasskeySignupButton({
           name: name.trim(),
           response: regResponse,
           expectedChallenge: options.challenge,
-          csrfToken,
+          csrfToken: freshToken,
           acceptedTos: true,
         }),
       });
@@ -151,7 +156,7 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, email, name, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {

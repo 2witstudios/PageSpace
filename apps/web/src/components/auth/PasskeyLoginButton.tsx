@@ -10,6 +10,7 @@ import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 
 interface PasskeyLoginButtonProps {
   csrfToken: string;
+  refreshToken?: () => Promise<string | null>;
   email?: string;
   onSuccess?: (redirectUrl: string) => void;
   className?: string;
@@ -18,6 +19,7 @@ interface PasskeyLoginButtonProps {
 
 export function PasskeyLoginButton({
   csrfToken,
+  refreshToken,
   email,
   onSuccess,
   className,
@@ -39,6 +41,9 @@ export function PasskeyLoginButton({
     setIsAuthenticating(true);
 
     try {
+      // Refresh CSRF token to avoid expiry after sitting on the page
+      const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
+
       // Get authentication options
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
         method: 'POST',
@@ -47,7 +52,7 @@ export function PasskeyLoginButton({
         },
         body: JSON.stringify({
           email,
-          csrfToken,
+          csrfToken: freshToken,
         }),
       });
 
@@ -77,7 +82,7 @@ export function PasskeyLoginButton({
         body: JSON.stringify({
           response: authResponse,
           expectedChallenge: options.challenge,
-          csrfToken,
+          csrfToken: freshToken,
         }),
       });
 
@@ -121,7 +126,7 @@ export function PasskeyLoginButton({
     } finally {
       setIsAuthenticating(false);
     }
-  }, [csrfToken, email, onSuccess]);
+  }, [csrfToken, refreshToken, email, onSuccess]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
