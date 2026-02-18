@@ -57,6 +57,22 @@ interface AuditLogsParams {
   success?: boolean;
 }
 
+interface AvailableBuiltin {
+  id: string;
+  name: string;
+  description: string | null;
+  documentationUrl: string | null;
+}
+
+export function useAvailableBuiltins() {
+  const { data, error, isLoading, mutate } = useSWR<{ providers: AvailableBuiltin[] }>(
+    '/api/integrations/providers/available',
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+  return { builtins: data?.providers ?? [], error, isLoading, mutate };
+}
+
 export function useIntegrationAuditLogs(driveId: string | null, params: AuditLogsParams = {}) {
   const searchParams = new URLSearchParams();
   if (params.limit != null) searchParams.set('limit', String(params.limit));
