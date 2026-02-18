@@ -1,6 +1,7 @@
 import Link from "next/link";
+import Image from "next/image";
 import { notFound } from "next/navigation";
-import { Sparkles, ArrowLeft, Calendar, Clock, User } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -37,6 +38,7 @@ export async function generateMetadata(
       url: `${SITE_URL}/blog/${slug}`,
       publishedTime: post.date,
       authors: [post.author],
+      ...(post.image && { images: [{ url: `${SITE_URL}${post.image}` }] }),
     },
   };
 }
@@ -80,12 +82,17 @@ export default async function BlogPostPage(
         <div className="container mx-auto px-4 md:px-6">
           <div className="mx-auto max-w-3xl">
             {/* Header */}
-            <header className="mb-8">
-              <span className="text-sm font-medium text-primary">{post.category}</span>
-              <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold mt-3 mb-6">
+            <header className="mb-10">
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary mb-4">
+                {post.category}
+              </span>
+              <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight leading-[1.15] mb-6">
                 {post.title}
               </h1>
-              <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
+              <p className="text-lg text-muted-foreground mb-6">
+                {post.description}
+              </p>
+              <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground pb-8 border-b border-border">
                 <div className="flex items-center gap-2">
                   <User className="h-4 w-4" />
                   {post.author}
@@ -101,22 +108,31 @@ export default async function BlogPostPage(
               </div>
             </header>
 
-            {/* Feature Image Placeholder */}
-            <div className="rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 h-64 md:h-80 flex items-center justify-center mb-8">
-              <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/10">
-                <Sparkles className="h-10 w-10 text-primary" />
+            {/* Feature Image */}
+            {post.image ? (
+              <div className="rounded-2xl overflow-hidden mb-12">
+                <Image
+                  src={post.image}
+                  alt={post.title}
+                  width={1200}
+                  height={630}
+                  className="w-full h-auto"
+                  priority
+                />
               </div>
-            </div>
+            ) : (
+              <div className="rounded-2xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent h-64 md:h-72 mb-12" />
+            )}
 
             {/* Content */}
-            <div className="prose prose-neutral dark:prose-invert max-w-none">
+            <div className="prose prose-lg prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:tracking-tight prose-h2:text-2xl prose-h2:mt-12 prose-h2:mb-4 prose-p:leading-relaxed prose-p:text-muted-foreground prose-li:text-muted-foreground prose-strong:text-foreground prose-strong:font-semibold prose-a:text-primary prose-a:no-underline hover:prose-a:underline prose-code:text-sm prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted/60 prose-pre:text-foreground prose-pre:border prose-pre:border-border/50 prose-pre:rounded-xl prose-pre:[&_code]:bg-transparent prose-blockquote:border-l-primary/50 prose-blockquote:text-muted-foreground prose-hr:border-border">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {post.content}
               </ReactMarkdown>
             </div>
 
             {/* Share */}
-            <div className="mt-12 pt-8 border-t border-border">
+            <div className="mt-16 pt-8 border-t border-border">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Share this article</span>
                 <ShareButtons title={post.title} />
@@ -143,7 +159,7 @@ export default async function BlogPostPage(
         </div>
       </section>
 
-      <SiteFooter variant="compact" />
+      <SiteFooter />
     </div>
   );
 }

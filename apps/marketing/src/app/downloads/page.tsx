@@ -147,10 +147,6 @@ export default function DownloadsPage() {
               Current version: <span className="font-medium text-foreground">{VERSION}</span>
               <span className="mx-2">•</span>
               Released {RELEASE_DATE}
-              <span className="mx-2">•</span>
-              <Link href="/changelog" className="text-primary hover:underline">
-                View changelog
-              </Link>
             </p>
           </div>
         </div>
@@ -299,7 +295,7 @@ export default function DownloadsPage() {
         </div>
       </section>
 
-      <SiteFooter variant="compact" />
+      <SiteFooter />
     </div>
   );
 }

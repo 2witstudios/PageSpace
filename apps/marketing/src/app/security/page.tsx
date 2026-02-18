@@ -122,7 +122,7 @@ export default function SecurityPage() {
               <span className="font-medium">Distributed Rate Limiting</span>
             </div>
             <div className="flex items-center gap-2">
-              <Lock className="h-5 w-5 text-blue-500" />
+              <Lock className="h-5 w-5 text-primary" />
               <span className="font-medium">TLS Encrypted</span>
             </div>
           </div>
@@ -451,7 +451,7 @@ export default function SecurityPage() {
         </div>
       </section>
 
-      <SiteFooter variant="compact" />
+      <SiteFooter />
     </div>
   );
 }

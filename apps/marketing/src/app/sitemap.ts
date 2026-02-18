@@ -26,75 +26,74 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.8,
     },
     {
-      url: `${BASE_URL}/tour`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.7,
-    },
-    {
-      url: `${BASE_URL}/integrations`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.7,
-    },
-    {
       url: `${BASE_URL}/faq`,
       lastModified,
       changeFrequency: "monthly",
       priority: 0.6,
     },
-    {
-      url: `${BASE_URL}/changelog`,
-      lastModified,
-      changeFrequency: "weekly",
-      priority: 0.6,
-    },
   ];
 
-  // Developer documentation pages (only implemented routes)
-  const docsRoutes: MetadataRoute.Sitemap = [
-    {
-      url: `${BASE_URL}/docs`,
-      lastModified,
-      changeFrequency: "weekly",
-      priority: 0.7,
-    },
-    {
-      url: `${BASE_URL}/docs/getting-started`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.6,
-    },
+  // Documentation pages
+  const docPaths = [
+    "/docs",
+    "/docs/getting-started",
+    "/docs/core-concepts",
+    "/docs/page-types",
+    // AI
+    "/docs/ai",
+    "/docs/ai/providers",
+    "/docs/ai/tool-calling",
+    "/docs/ai/agents",
+    // MCP
+    "/docs/mcp",
+    "/docs/mcp/desktop",
+    // API Reference
+    "/docs/api",
+    "/docs/api/auth",
+    "/docs/api/pages",
+    "/docs/api/drives",
+    "/docs/api/ai",
+    "/docs/api/channels",
+    "/docs/api/mcp",
+    "/docs/api/files",
+    "/docs/api/search",
+    "/docs/api/users",
+    "/docs/api/admin",
+    // Security
+    "/docs/security",
+    "/docs/security/authentication",
+    "/docs/security/permissions",
+    "/docs/security/zero-trust",
+    // Self-Hosting
+    "/docs/self-hosting",
+    "/docs/self-hosting/docker",
+    "/docs/self-hosting/environment",
+    "/docs/self-hosting/architecture",
   ];
+
+  const docsRoutes: MetadataRoute.Sitemap = docPaths.map((path) => ({
+    url: `${BASE_URL}${path}`,
+    lastModified,
+    changeFrequency: "weekly" as const,
+    priority: path === "/docs" ? 0.8 : 0.6,
+  }));
 
   // Blog routes
   const blogRoutes: MetadataRoute.Sitemap = [
     {
       url: `${BASE_URL}/blog`,
       lastModified,
-      changeFrequency: "daily",
+      changeFrequency: "weekly",
       priority: 0.7,
     },
     {
-      url: `${BASE_URL}/blog/introducing-pagespace`,
+      url: `${BASE_URL}/blog/your-workspace-is-the-context`,
       lastModified,
       changeFrequency: "monthly",
       priority: 0.6,
     },
     {
-      url: `${BASE_URL}/blog/understanding-page-agents`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.6,
-    },
-    {
-      url: `${BASE_URL}/blog/mcp-servers-explained`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.6,
-    },
-    {
-      url: `${BASE_URL}/blog/ai-rollback-why-it-matters`,
+      url: `${BASE_URL}/blog/pagespace-as-memory-for-coding-agents`,
       lastModified,
       changeFrequency: "monthly",
       priority: 0.6,

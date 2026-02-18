@@ -150,14 +150,10 @@ export const siteMetadata: Metadata = {
       "Your AI-powered workspace for documents, tasks, calendar, and team collaboration. Work with AI that understands your entire workspace.",
     images: [DEFAULT_OG_IMAGE],
   },
-  verification: {
-    // TODO: Add verification code from Google Search Console dashboard
-    // google: 'your-google-verification-code',
-  },
   category: "technology",
 };
 
-export const LEGAL_LAST_UPDATED = "November 1, 2025";
+export const LEGAL_LAST_UPDATED = "February 17, 2026";
 
 /**
  * Pre-defined metadata for common pages
@@ -186,22 +182,6 @@ export const pageMetadata = {
     keywords: ["download", "desktop app", "mobile app", "macOS", "Windows", "Linux", "iOS", "Android"],
   }),
 
-  tour: createMetadata({
-    title: "Product Tour",
-    description:
-      "Take a guided tour of PageSpace features. See how AI collaboration, document editing, and team coordination work together.",
-    path: "/tour",
-    keywords: ["product tour", "features", "demo", "walkthrough"],
-  }),
-
-  integrations: createMetadata({
-    title: "Integrations",
-    description:
-      "Connect PageSpace with your favorite tools. MCP servers, Google Calendar, and more integrations coming soon.",
-    path: "/integrations",
-    keywords: ["integrations", "MCP", "API", "Google Calendar", "third-party"],
-  }),
-
   blog: createMetadata({
     title: "Blog",
     description:
@@ -224,14 +204,6 @@ export const pageMetadata = {
       "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
     path: "/docs/getting-started",
     keywords: ["getting started", "setup", "quickstart", "tutorial"],
-  }),
-
-  changelog: createMetadata({
-    title: "Changelog",
-    description:
-      "See what's new in PageSpace. Release notes, feature updates, and improvements.",
-    path: "/changelog",
-    keywords: ["changelog", "release notes", "updates", "features"],
   }),
 
   faq: createMetadata({
@@ -264,5 +236,21 @@ export const pageMetadata = {
       "Get in touch with the PageSpace team. We'd love to hear from you about questions, feedback, or enterprise inquiries.",
     path: "/contact",
     keywords: ["contact", "support", "sales", "help"],
+  }),
+
+  mcp: createMetadata({
+    title: "MCP Integration",
+    description:
+      "Connect AI tools like Claude and Cursor to PageSpace via MCP. Set up tokens, configure servers, and manage local MCP tools in the desktop app.",
+    path: "/docs/mcp",
+    keywords: ["MCP", "Model Context Protocol", "AI integration", "Claude", "Cursor", "API tokens"],
+  }),
+
+  pageTypes: createMetadata({
+    title: "Page Types",
+    description:
+      "Explore the 9 page types in PageSpace: documents, channels, AI chats, canvases, sheets, task lists, code files, and more.",
+    path: "/docs/page-types",
+    keywords: ["page types", "documents", "channels", "AI chat", "canvas", "sheets", "tasks", "code editor"],
   }),
 };

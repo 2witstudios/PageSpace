@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { GoogleOneTap } from "@/components/GoogleOneTap";
+import { SearchDialog } from "@/components/SearchDialog";
 import { siteMetadata } from "@/lib/metadata";
 import { JsonLd, organizationSchema, websiteSchema } from "@/lib/schema";
 
@@ -52,6 +53,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
+          <SearchDialog />
           <GoogleOneTap />
         </ThemeProvider>
       </body>
