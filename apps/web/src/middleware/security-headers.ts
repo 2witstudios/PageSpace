@@ -116,7 +116,9 @@ export const applySecurityHeaders = (
 };
 
 export const isPublicPageRoute = (pathname: string): boolean =>
-  pathname === '/auth' || pathname.startsWith('/auth/');
+  pathname === '/' ||
+  pathname === '/auth' ||
+  pathname.startsWith('/auth/');
 
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
