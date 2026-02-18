@@ -4,7 +4,9 @@ import {
   getStartOfTodayInTimezone,
   getUserTimeOfDay,
   isValidTimezone,
+  isNaiveISODatetime,
   normalizeTimezone,
+  parseNaiveDatetimeInTimezone,
 } from '../timestamp-utils';
 
 describe('timestamp-utils', () => {
@@ -129,6 +131,92 @@ describe('timestamp-utils', () => {
 
       const result = getStartOfTodayInTimezone('Invalid/Timezone');
       expect(result.toISOString()).toBe('2024-06-15T00:00:00.000Z');
+    });
+  });
+
+  describe('isNaiveISODatetime', () => {
+    it('matches naive datetime with seconds', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00')).toBe(true);
+    });
+
+    it('matches naive datetime without seconds', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00')).toBe(true);
+    });
+
+    it('matches naive datetime with milliseconds', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00.000')).toBe(true);
+    });
+
+    it('trims whitespace before matching', () => {
+      expect(isNaiveISODatetime('  2026-02-19T19:00:00  ')).toBe(true);
+    });
+
+    it('rejects datetime with Z suffix', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00Z')).toBe(false);
+    });
+
+    it('rejects datetime with positive UTC offset', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00+05:00')).toBe(false);
+    });
+
+    it('rejects datetime with negative UTC offset', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00-06:00')).toBe(false);
+    });
+
+    it('rejects date-only strings', () => {
+      expect(isNaiveISODatetime('2026-02-19')).toBe(false);
+    });
+
+    it('rejects natural language', () => {
+      expect(isNaiveISODatetime('tomorrow at 3pm')).toBe(false);
+    });
+
+    it('rejects empty string', () => {
+      expect(isNaiveISODatetime('')).toBe(false);
+    });
+  });
+
+  describe('parseNaiveDatetimeInTimezone', () => {
+    it('interprets a naive datetime in a standard timezone', () => {
+      // 7pm Central (CST, UTC-6) = 2026-02-20T01:00:00Z
+      const result = parseNaiveDatetimeInTimezone('2026-02-19T19:00:00', 'America/Chicago');
+      expect(result.toISOString()).toBe('2026-02-20T01:00:00.000Z');
+    });
+
+    it('handles spring-forward DST transition (America/New_York)', () => {
+      // 2024-03-10 at 2:00 AM ET clocks spring forward to 3:00 AM EDT.
+      // "3:30 AM" on that day is EDT (UTC-4), so correct UTC = 07:30Z.
+      const result = parseNaiveDatetimeInTimezone('2024-03-10T03:30:00', 'America/New_York');
+      expect(result.toISOString()).toBe('2024-03-10T07:30:00.000Z');
+    });
+
+    it('handles fall-back DST transition (America/New_York)', () => {
+      // 2024-11-03 at 2:00 AM EDT clocks fall back to 1:00 AM EST.
+      // "2:30 AM" on that day is unambiguously EST (UTC-5), so correct UTC = 07:30Z.
+      const result = parseNaiveDatetimeInTimezone('2024-11-03T02:30:00', 'America/New_York');
+      expect(result.toISOString()).toBe('2024-11-03T07:30:00.000Z');
+    });
+
+    it('handles spring-forward DST in a positive-offset timezone (Australia/Sydney)', () => {
+      // 2024-10-06 at 2:00 AM AEST clocks spring forward to 3:00 AM AEDT.
+      // "3:30 AM" on that day is AEDT (UTC+11), so correct UTC = 2024-10-05T16:30Z.
+      const result = parseNaiveDatetimeInTimezone('2024-10-06T03:30:00', 'Australia/Sydney');
+      expect(result.toISOString()).toBe('2024-10-05T16:30:00.000Z');
+    });
+
+    it('handles a time well outside DST transitions', () => {
+      // Midsummer New York: EDT (UTC-4). 14:00 local = 18:00Z.
+      const result = parseNaiveDatetimeInTimezone('2024-07-15T14:00:00', 'America/New_York');
+      expect(result.toISOString()).toBe('2024-07-15T18:00:00.000Z');
+    });
+
+    it('handles UTC timezone as a no-op offset', () => {
+      const result = parseNaiveDatetimeInTimezone('2024-06-15T12:00:00', 'UTC');
+      expect(result.toISOString()).toBe('2024-06-15T12:00:00.000Z');
+    });
+
+    it('throws for invalid datetime strings', () => {
+      expect(() => parseNaiveDatetimeInTimezone('not-a-date', 'UTC')).toThrow('Invalid datetime');
     });
   });
 

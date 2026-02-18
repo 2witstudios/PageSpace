@@ -93,10 +93,10 @@ const createMockEvent = (overrides = {}) => ({
   ...overrides,
 });
 
-const createAuthContext = (userId = 'user-123') => ({
+const createAuthContext = (userId = 'user-123', timezone?: string) => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, ...(timezone && { timezone }) } as ToolExecutionContext,
 });
 
 describe('calendar-read-tools', () => {
@@ -488,6 +488,70 @@ describe('calendar-read-tools', () => {
         given: 'user is an attendee of ATTENDEES_ONLY event',
         should: 'return success',
         actual: (result as { success: boolean }).success,
+        expected: true,
+      });
+    });
+
+    it('includes localStart and localEnd in response when timezone is set', async () => {
+      const event = createMockEvent({
+        createdById: 'user-123',
+        startAt: new Date('2026-02-20T01:00:00Z'),
+        endAt: new Date('2026-02-20T02:00:00Z'),
+        timezone: 'America/Chicago',
+      });
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+      const input = { eventId: 'event-1' };
+
+      const result = await calendarReadTools.get_calendar_event.execute!(
+        input,
+        createAuthContext('user-123', 'America/Chicago')
+      );
+
+      const eventData = (result as { data: { event: Record<string, unknown> } }).data.event;
+
+      assert({
+        given: 'event with user timezone America/Chicago',
+        should: 'include localStart field',
+        actual: typeof eventData.localStart === 'string' && (eventData.localStart as string).length > 0,
+        expected: true,
+      });
+
+      assert({
+        given: 'event with user timezone America/Chicago',
+        should: 'include localEnd field',
+        actual: typeof eventData.localEnd === 'string' && (eventData.localEnd as string).length > 0,
+        expected: true,
+      });
+
+      assert({
+        given: 'event at 2026-02-20T01:00:00Z with America/Chicago timezone',
+        should: 'show local start as Feb 19 7:00 PM',
+        actual: (eventData.localStart as string).includes('7:00 PM'),
+        expected: true,
+      });
+    });
+
+    it('falls back to event timezone when user timezone is not set', async () => {
+      const event = createMockEvent({
+        createdById: 'user-123',
+        startAt: new Date('2026-02-20T01:00:00Z'),
+        endAt: new Date('2026-02-20T02:00:00Z'),
+        timezone: 'America/Chicago',
+      });
+      mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
+      const input = { eventId: 'event-1' };
+
+      const result = await calendarReadTools.get_calendar_event.execute!(
+        input,
+        createAuthContext('user-123')
+      );
+
+      const eventData = (result as { data: { event: Record<string, unknown> } }).data.event;
+
+      assert({
+        given: 'no user timezone, event timezone is America/Chicago',
+        should: 'use event timezone for localStart',
+        actual: (eventData.localStart as string).includes('7:00 PM'),
         expected: true,
       });
     });

@@ -18,6 +18,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkM
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
+import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -284,6 +285,16 @@ export async function POST(request: Request) {
 
     const data = parseResult.data;
 
+    // Apply timezone-aware parsing for naive ISO datetimes.
+    // When a client sends "2026-02-19T19:00:00" with timezone "America/Chicago",
+    // the time should be interpreted as 7pm Central, not 7pm UTC.
+    const startAt = (typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
+      ? parseNaiveDatetimeInTimezone(body.startAt, data.timezone)
+      : data.startAt;
+    const endAt = (typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
+      ? parseNaiveDatetimeInTimezone(body.endAt, data.timezone)
+      : data.endAt;
+
     // Check MCP create scope (scoped tokens can only create in their allowed drives)
     const createScopeError = checkMCPCreateScope(auth, data.driveId ?? null);
     if (createScopeError) return createScopeError;
@@ -300,7 +311,7 @@ export async function POST(request: Request) {
     }
 
     // Validate end date is after start date
-    if (data.endAt <= data.startAt) {
+    if (endAt <= startAt) {
       return NextResponse.json(
         { error: 'End date must be after start date' },
         { status: 400 }
@@ -343,8 +354,8 @@ export async function POST(request: Request) {
         title: data.title,
         description: data.description ?? null,
         location: data.location ?? null,
-        startAt: data.startAt,
-        endAt: data.endAt,
+        startAt,
+        endAt,
         allDay: data.allDay,
         timezone: data.timezone,
         recurrenceRule: data.recurrenceRule ?? null,

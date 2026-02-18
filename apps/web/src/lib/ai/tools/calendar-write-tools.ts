@@ -13,7 +13,7 @@ import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
-import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone } from '../core/timestamp-utils';
+import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
@@ -29,6 +29,12 @@ function parseDateTime(input: string, referenceDate?: Date, timezone?: string): 
   // Try ISO 8601 first
   const isoDate = new Date(input);
   if (!isNaN(isoDate.getTime())) {
+    // If the input is a naive ISO datetime (no Z or offset) and a timezone is provided,
+    // interpret the time in the specified timezone instead of treating as UTC/server-local.
+    // E.g., "2026-02-19T19:00:00" with timezone "America/Chicago" → 7pm Central, not 7pm UTC.
+    if (timezone && isNaiveISODatetime(input)) {
+      return parseNaiveDatetimeInTimezone(input, timezone);
+    }
     return isoDate;
   }
 

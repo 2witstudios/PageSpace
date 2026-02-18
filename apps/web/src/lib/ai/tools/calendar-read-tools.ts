@@ -15,7 +15,7 @@ import {
 } from '@pagespace/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { type ToolExecutionContext } from '../core';
-import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone } from '../core/timestamp-utils';
+import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 
 /**
  * Check if user can access an event based on visibility rules
@@ -75,7 +75,8 @@ function formatEventForResponse(event: {
   }>;
   page?: { id: string; title: string; type: string } | null;
   drive?: { id: string; name: string; slug: string } | null;
-}) {
+}, timezone?: string) {
+  const displayTz = timezone ?? event.timezone;
   return {
     id: event.id,
     title: event.title,
@@ -83,6 +84,8 @@ function formatEventForResponse(event: {
     location: event.location,
     startAt: event.startAt.toISOString(),
     endAt: event.endAt.toISOString(),
+    localStart: formatDateInTimezone(event.startAt, displayTz),
+    localEnd: formatDateInTimezone(event.endAt, displayTz),
     allDay: event.allDay,
     timezone: event.timezone,
     visibility: event.visibility,
@@ -163,8 +166,13 @@ export const calendarReadTools = {
       const includePersonal = includePersonalInput ?? true;
 
       try {
-        const parsedStartDate = new Date(startDate);
-        const parsedEndDate = new Date(endDate);
+        const listTz = (ctx as ToolExecutionContext)?.timezone;
+        const parsedStartDate = isNaiveISODatetime(startDate) && listTz
+          ? parseNaiveDatetimeInTimezone(startDate, listTz)
+          : new Date(startDate);
+        const parsedEndDate = isNaiveISODatetime(endDate) && listTz
+          ? parseNaiveDatetimeInTimezone(endDate, listTz)
+          : new Date(endDate);
 
         if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
           return {
@@ -250,7 +258,8 @@ export const calendarReadTools = {
             orderBy: [desc(calendarEvents.startAt)],
           });
 
-          const formattedEvents = events.map(formatEventForResponse);
+          const userTz = (ctx as ToolExecutionContext)?.timezone;
+          const formattedEvents = events.map((e) => formatEventForResponse(e, userTz));
 
           return {
             success: true,
@@ -346,7 +355,8 @@ export const calendarReadTools = {
           orderBy: [desc(calendarEvents.startAt)],
         });
 
-        const formattedEvents = events.map(formatEventForResponse);
+        const userTzForList = (ctx as ToolExecutionContext)?.timezone;
+        const formattedEvents = events.map((e) => formatEventForResponse(e, userTzForList));
 
         return {
           success: true,
@@ -442,7 +452,7 @@ export const calendarReadTools = {
           };
         }
 
-        const formatted = formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0]);
+        const formatted = formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone);
 
         // Calculate RSVP summary if attendees included
         let rsvpSummary: Record<string, number> | undefined;
@@ -529,8 +539,13 @@ export const calendarReadTools = {
       const workingHoursEnd = workingHoursEndInput ?? 17;
 
       try {
-        const parsedStartDate = new Date(startDate);
-        const parsedEndDate = new Date(endDate);
+        const availTz = (ctx as ToolExecutionContext)?.timezone;
+        const parsedStartDate = isNaiveISODatetime(startDate) && availTz
+          ? parseNaiveDatetimeInTimezone(startDate, availTz)
+          : new Date(startDate);
+        const parsedEndDate = isNaiveISODatetime(endDate) && availTz
+          ? parseNaiveDatetimeInTimezone(endDate, availTz)
+          : new Date(endDate);
 
         if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
           return {

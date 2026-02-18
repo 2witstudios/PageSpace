@@ -74,6 +74,43 @@ function getTimezoneOffsetMilliseconds(date: Date, timezone: string): number {
 }
 
 /**
+ * Check if a string is a naive ISO datetime (has date and time but no timezone indicator).
+ * Matches: "2026-02-19T19:00:00", "2026-02-19T19:00", "2026-02-19T19:00:00.000"
+ * Does NOT match: "2026-02-19T19:00:00Z", "2026-02-19T19:00:00+05:00", "2026-02-19", "tomorrow"
+ */
+export function isNaiveISODatetime(input: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(input.trim());
+}
+
+/**
+ * Interpret a naive ISO datetime string as being in the specified IANA timezone.
+ * When a naive datetime like "2026-02-19T19:00:00" is paired with "America/Chicago",
+ * this returns a UTC Date representing 7pm Central (= 1am UTC next day),
+ * instead of treating 19:00 as UTC.
+ */
+export function parseNaiveDatetimeInTimezone(naiveDatetime: string, timezone: string): Date {
+  // Append 'Z' to force UTC interpretation of the date components
+  const asUtc = new Date(naiveDatetime.trim() + 'Z');
+  if (isNaN(asUtc.getTime())) {
+    throw new Error(`Invalid datetime: "${naiveDatetime}"`);
+  }
+  const tz = normalizeTimezone(timezone);
+
+  // Two-pass offset resolution keeps results stable across DST boundaries.
+  // The offset at the provisional UTC instant may differ from the offset at
+  // the actual target instant when a DST transition falls between them.
+  const firstOffsetMs = getTimezoneOffsetMilliseconds(asUtc, tz);
+  const firstGuess = new Date(asUtc.getTime() - firstOffsetMs);
+
+  const secondOffsetMs = getTimezoneOffsetMilliseconds(firstGuess, tz);
+  if (secondOffsetMs !== firstOffsetMs) {
+    return new Date(asUtc.getTime() - secondOffsetMs);
+  }
+
+  return firstGuess;
+}
+
+/**
  * Get user's time-of-day based on their timezone
  * @param timezone - IANA timezone string (e.g., "America/New_York")
  * @returns Object with hour and timeOfDay string
