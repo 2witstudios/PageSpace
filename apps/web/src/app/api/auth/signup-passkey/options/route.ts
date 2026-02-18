@@ -24,6 +24,34 @@ export async function POST(req: Request) {
   try {
     const clientIP = getClientIP(req);
 
+    // Parse and validate request body
+    const body = await req.json();
+    const validation = optionsSchema.safeParse(body);
+
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: 'Invalid request body', details: validation.error.flatten().fieldErrors },
+        { status: 400 }
+      );
+    }
+
+    const { email, name, csrfToken } = validation.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Verify login CSRF token BEFORE rate limiting so stale tokens
+    // don't burn rate limit attempts (cheap stateless HMAC check)
+    if (!validateLoginCSRFToken(csrfToken)) {
+      logSecurityEvent('passkey_csrf_invalid', {
+        ip: clientIP,
+        email: normalizedEmail.substring(0, 3) + '***',
+        flow: 'signup_options',
+      });
+      return NextResponse.json(
+        { error: 'Invalid CSRF token' },
+        { status: 403 }
+      );
+    }
+
     // Rate limiting by IP (using signup rate limit)
     const ipRateLimitKey = `signup:ip:${clientIP}`;
     const ipRateLimitResult = await checkDistributedRateLimit(
@@ -42,20 +70,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Parse and validate request body
-    const body = await req.json();
-    const validation = optionsSchema.safeParse(body);
-
-    if (!validation.success) {
-      return NextResponse.json(
-        { error: 'Invalid request body', details: validation.error.issues },
-        { status: 400 }
-      );
-    }
-
-    const { email, name, csrfToken } = validation.data;
-    const normalizedEmail = email.toLowerCase().trim();
-
     // Rate limiting by email
     const emailRateLimitKey = `signup:email:${normalizedEmail}`;
     const emailRateLimitResult = await checkDistributedRateLimit(
@@ -71,19 +85,6 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { error: 'Too many signup attempts for this email', retryAfter: emailRateLimitResult.retryAfter },
         { status: 429 }
-      );
-    }
-
-    // Verify login CSRF token
-    if (!validateLoginCSRFToken(csrfToken)) {
-      logSecurityEvent('passkey_csrf_invalid', {
-        ip: clientIP,
-        email: normalizedEmail.substring(0, 3) + '***',
-        flow: 'signup_options',
-      });
-      return NextResponse.json(
-        { error: 'Invalid CSRF token' },
-        { status: 403 }
       );
     }
 

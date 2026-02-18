@@ -1,530 +1,141 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { motion } from "motion/react";
+import { Mail } from "lucide-react";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { getOrCreateDeviceId, getDeviceName } from "@/lib/analytics";
-import { GoogleOneTap } from "@/components/auth";
-import { ChevronDown, ChevronUp, Mail } from "lucide-react";
+  AuthShell,
+  AuthDivider,
+  OAuthButtons,
+  GoogleOneTap,
+  PasskeySignupButton,
+} from "@/components/auth";
+import { useAuthCSRF } from "@/hooks/useAuthCSRF";
+import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 
 export default function SignUp() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [acceptedTos, setAcceptedTos] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [isAppleLoading, setIsAppleLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState("Creating account...");
-  const [loginCsrfToken, setLoginCsrfToken] = useState<string | null>(null);
-  const [showPasswordSignup, setShowPasswordSignup] = useState(false);
   const router = useRouter();
+  const { csrfToken, refreshToken } = useAuthCSRF();
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
+    useOAuthSignIn({
+      onStart: () => setError(null),
+      onError: (msg) => setError(msg),
+    });
 
-  // Fetch login CSRF token on mount (prevents Login CSRF attacks)
-  useEffect(() => {
-    const fetchCsrfToken = async () => {
-      try {
-        const response = await fetch('/api/auth/login-csrf', {
-          credentials: 'include',
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setLoginCsrfToken(data.csrfToken);
-        }
-      } catch (error) {
-        console.error('Failed to fetch login CSRF token:', error);
-      }
-    };
-    fetchCsrfToken();
-  }, []);
-
-  const handlePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // Prevent double submission
-    if (isLoading) return;
-
-    setError(null);
-
-    // Client-side password match validation
-    if (password !== confirmPassword) {
-      setError("Passwords do not match");
-      toast.error("Passwords do not match");
-      return;
-    }
-
-    // Client-side TOS acceptance validation
-    if (!acceptedTos) {
-      setError("You must accept the Terms of Service and Privacy Policy");
-      toast.error("You must accept the Terms of Service and Privacy Policy");
-      return;
-    }
-
-    setIsLoading(true);
-    setLoadingMessage("Creating account...");
-
-    try {
-      // Get device information for device token creation
-      const deviceId = getOrCreateDeviceId();
-      const deviceName = getDeviceName();
-      const existingDeviceToken = typeof localStorage !== 'undefined' ? localStorage.getItem('deviceToken') : null;
-
-      const signupResponse = await fetch("/api/auth/signup", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(loginCsrfToken && { "X-Login-CSRF-Token": loginCsrfToken }),
-        },
-        body: JSON.stringify({
-          name,
-          email,
-          password,
-          confirmPassword,
-          acceptedTos,
-          deviceId,
-          deviceName,
-          ...(existingDeviceToken && { deviceToken: existingDeviceToken }),
-        }),
-        credentials: 'include',
-        redirect: 'manual', // Don't auto-follow redirects, we'll handle them
-      });
-
-      // Handle successful signup (303 redirect)
-      if (signupResponse.status === 303 || signupResponse.type === 'opaqueredirect') {
-        // Success! Server sent redirect
-        setLoadingMessage("Taking you to your dashboard...");
-
-        // Navigate to dashboard (or follow the Location header)
-        const location = signupResponse.headers.get('Location') || '/dashboard?auth=success';
-        window.location.href = location;
-        return;
-      }
-
-      // Handle error responses (server returns JSON for errors)
-      if (!signupResponse.ok) {
-        try {
-          const signupData = await signupResponse.json();
-          let errorMessage = 'An unexpected error occurred during signup.';
-
-          if (signupData.errors) {
-            // Handle validation errors
-            const fieldErrors = signupData.errors;
-            const errorMessages = [];
-            if (fieldErrors.name) errorMessages.push(...fieldErrors.name);
-            if (fieldErrors.email) errorMessages.push(...fieldErrors.email);
-            if (fieldErrors.password) errorMessages.push(...fieldErrors.password);
-            if (fieldErrors.confirmPassword) errorMessages.push(...fieldErrors.confirmPassword);
-            errorMessage = errorMessages.join(', ');
-          } else if (signupData.error) {
-            errorMessage = signupData.error;
-          }
-
-          setError(errorMessage);
-          toast.error(errorMessage);
-        } catch {
-          // Failed to parse error response
-          setError('An unexpected error occurred during signup.');
-          toast.error('An unexpected error occurred during signup.');
-        }
-        return;
-      }
-
-      // If we reach here, something unexpected happened
-      setError('Unexpected response from server');
-      toast.error('Unexpected response from server');
-
-    } catch (error) {
-      console.error('Sign up error:', error);
-      const networkError = 'Network error. Please check your connection and try again.';
-      setError(networkError);
-      toast.error(networkError);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    if (isGoogleLoading) return;
-
-    setIsGoogleLoading(true);
-    setError(null);
-
-    try {
-      // Check for iOS native app - use native Google Sign-In SDK
-      const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } = await import('@/lib/ios-google-auth');
-      if (isNativeGoogleAuthAvailable()) {
-        const result = await nativeSignIn();
-
-        if (result.success) {
-          const { useAuthStore } = await import('@/stores/useAuthStore');
-          useAuthStore.getState().setAuthFailedPermanently(false);
-
-          if (result.user) {
-            useAuthStore.getState().setUser(result.user);
-          }
-
-          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
-        } else {
-          if (result.error !== 'Sign-in cancelled') {
-            setError(result.error || 'Google sign-in failed');
-            toast.error(result.error || 'Google sign-in failed');
-          }
-        }
-        return;
-      }
-
-      // Detect platform
-      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-      // Desktop or web: Use OAuth redirect flow
-      let deviceId: string;
-      let deviceName: string;
-
-      if (isDesktop && window.electron) {
-        const deviceInfo = await window.electron.auth.getDeviceInfo();
-        deviceId = deviceInfo.deviceId;
-        deviceName = deviceInfo.deviceName;
-      } else {
-        deviceId = getOrCreateDeviceId();
-        deviceName = getDeviceName();
-      }
-
-      const response = await fetch('/api/auth/google/signin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          platform: isDesktop ? 'desktop' : 'web',
-          deviceId,
-          deviceName,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        window.location.href = data.url;
-      } else {
-        const errorData = await response.json();
-        const errorMessage = errorData.error || 'Google sign-in failed. Please try again.';
-        setError(errorMessage);
-        toast.error(errorMessage);
-      }
-    } catch (error) {
-      console.error('Google sign-in error:', error);
-      const networkError = 'Network error. Please check your connection and try again.';
-      setError(networkError);
-      toast.error(networkError);
-    } finally {
-      setIsGoogleLoading(false);
-    }
-  };
-
-  const handleAppleSignIn = async () => {
-    if (isAppleLoading) return;
-
-    setIsAppleLoading(true);
-    setError(null);
-
-    try {
-      // Check for iOS native app - use native Apple Sign-In SDK
-      const { isNativeAppleAuthAvailable, signInWithApple: nativeSignIn } = await import('@/lib/ios-apple-auth');
-      if (isNativeAppleAuthAvailable()) {
-        const result = await nativeSignIn();
-
-        if (result.success) {
-          const { useAuthStore } = await import('@/stores/useAuthStore');
-          useAuthStore.getState().setAuthFailedPermanently(false);
-
-          if (result.user) {
-            useAuthStore.getState().setUser(result.user);
-          }
-
-          router.replace(result.isNewUser ? '/dashboard?welcome=true' : '/dashboard');
-        } else {
-          if (result.error !== 'Sign-in cancelled') {
-            setError(result.error || 'Apple sign-in failed');
-            toast.error(result.error || 'Apple sign-in failed');
-          }
-        }
-        return;
-      }
-
-      // Detect platform
-      const isDesktop = typeof window !== 'undefined' && window.electron?.isDesktop;
-
-      // Desktop or web: Use OAuth redirect flow
-      let deviceId: string;
-      let deviceName: string;
-
-      if (isDesktop && window.electron) {
-        const deviceInfo = await window.electron.auth.getDeviceInfo();
-        deviceId = deviceInfo.deviceId;
-        deviceName = deviceInfo.deviceName;
-      } else {
-        deviceId = getOrCreateDeviceId();
-        deviceName = getDeviceName();
-      }
-
-      const response = await fetch('/api/auth/apple/signin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          platform: isDesktop ? 'desktop' : 'web',
-          deviceId,
-          deviceName,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        window.location.href = data.url;
-      } else {
-        const errorData = await response.json();
-        const errorMessage = errorData.error || 'Apple sign-in failed. Please try again.';
-        setError(errorMessage);
-        toast.error(errorMessage);
-      }
-    } catch (error) {
-      console.error('Apple sign-in error:', error);
-      const networkError = 'Network error. Please check your connection and try again.';
-      setError(networkError);
-      toast.error(networkError);
-    } finally {
-      setIsAppleLoading(false);
-    }
-  };
-
-  const isAnyLoading = isLoading || isGoogleLoading || isAppleLoading;
+  const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
-      {/* Google One Tap - displays automatically for signed-in Google users */}
-      <GoogleOneTap
-        onSuccess={() => {
-          // Toast handled internally by GoogleOneTap
-        }}
-        onError={(error) => {
-          console.error('Google One Tap error:', error);
-        }}
-        autoSelect={true}
-        cancelOnTapOutside={true}
-        context="signup"
+    <AuthShell>
+      <GoogleOneTap autoSelect={true} cancelOnTapOutside={true} context="signup" />
+
+      {/* Heading */}
+      <motion.div
+        className="mb-8 text-center"
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+      >
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+          Get on the same Page.
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Create your free workspace in seconds
+        </p>
+      </motion.div>
+
+      {error && (
+        <motion.p
+          className="mb-4 text-center text-sm text-red-500"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
+          {error}
+        </motion.p>
+      )}
+
+      {/* OAuth buttons */}
+      <OAuthButtons
+        onGoogleClick={handleGoogleSignIn}
+        onAppleClick={handleAppleSignIn}
+        disabled={isAnyLoading}
+        isGoogleLoading={isGoogleLoading}
+        isAppleLoading={isAppleLoading}
       />
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-2xl">Create your account</CardTitle>
-          <CardDescription>
-            Get started with passwordless authentication
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4">
-            {/* Name and Email fields */}
-            <div className="grid gap-2">
-              <Label htmlFor="name">Name</Label>
-              <Input
-                id="name"
-                name="name"
-                autoComplete="name"
-                placeholder="John Doe"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                disabled={isAnyLoading}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email webauthn"
-                placeholder="m@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={isAnyLoading}
-              />
-            </div>
 
-            {/* Terms of Service */}
-            <div className="flex items-start gap-2">
-              <input
-                type="checkbox"
-                id="acceptedTos"
-                checked={acceptedTos}
-                onChange={(e) => setAcceptedTos(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                disabled={isAnyLoading}
-              />
-              <label htmlFor="acceptedTos" className="text-sm text-muted-foreground">
-                I agree to the{" "}
-                <Link href="/terms" target="_blank" className="underline hover:text-foreground">
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link href="/privacy" target="_blank" className="underline hover:text-foreground">
-                  Privacy Policy
-                </Link>
-              </label>
-            </div>
+      <AuthDivider delay={0.3} />
 
-            {error && <p className="text-red-500 text-sm">{error}</p>}
+      {/* Passkey signup */}
+      {csrfToken && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, duration: 0.3 }}
+        >
+          <PasskeySignupButton
+            csrfToken={csrfToken}
+            refreshToken={refreshToken}
+            onEmailExists={() => {
+              router.push("/auth/signin");
+            }}
+            onLoadingChange={setPasskeyLoading}
+            disabled={isAnyLoading}
+          />
+        </motion.div>
+      )}
 
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">
-                  Or continue with
-                </span>
-              </div>
-            </div>
+      {/* Magic link fallback */}
+      <motion.div
+        className="mt-4 text-center"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.45, duration: 0.3 }}
+      >
+        <Link
+          href="/auth/magic-link"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Mail className="h-3.5 w-3.5" />
+          Or sign up with email link
+        </Link>
+      </motion.div>
 
-            {/* OAuth buttons */}
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={isAnyLoading}
-                onClick={handleGoogleSignIn}
-              >
-                {isGoogleLoading ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                    </svg>
-                    <span>Google</span>
-                  </div>
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={isAnyLoading}
-                onClick={handleAppleSignIn}
-              >
-                {isAppleLoading ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
-                    </svg>
-                    <span>Apple</span>
-                  </div>
-                )}
-              </Button>
-            </div>
+      {/* Footer */}
+      <motion.div
+        className="mt-8 text-center"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.55, duration: 0.3 }}
+      >
+        <p className="text-sm text-muted-foreground">
+          Already have an account?{" "}
+          <Link
+            href="/auth/signin"
+            className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            Log in
+          </Link>
+        </p>
+      </motion.div>
 
-            {/* Magic link / Email signup fallback */}
-            <div className="text-center">
-              <Link
-                href="/auth/magic-link"
-                className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-              >
-                <Mail className="h-3 w-3" />
-                Sign up with email link
-              </Link>
-            </div>
-
-            {/* Collapsible password signup - deprecated but available */}
-            <div className="border-t pt-4">
-              <button
-                type="button"
-                onClick={() => setShowPasswordSignup(!showPasswordSignup)}
-                className="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-              >
-                {showPasswordSignup ? (
-                  <>
-                    <ChevronUp className="h-4 w-4" />
-                    Hide password signup
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-4 w-4" />
-                    Sign up with password instead
-                  </>
-                )}
-              </button>
-
-              {showPasswordSignup && (
-                <form onSubmit={handlePasswordSubmit} className="mt-4 grid gap-4">
-                  <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
-                    Password signup is available but we recommend using passkeys for better security.
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="password">Password</Label>
-                    <Input
-                      id="password"
-                      name="password"
-                      type="password"
-                      autoComplete="new-password"
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="confirmPassword">Confirm Password</Label>
-                    <Input
-                      id="confirmPassword"
-                      name="confirm-password"
-                      type="password"
-                      autoComplete="new-password"
-                      required
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <Button type="submit" variant="outline" className="w-full" disabled={isLoading || !acceptedTos}>
-                    {isLoading ? (
-                      <div className="flex items-center gap-2">
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-                        <span>{loadingMessage}</span>
-                      </div>
-                    ) : (
-                      "Create with password"
-                    )}
-                  </Button>
-                </form>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-4 text-center text-sm">
-            Already have an account?{" "}
-            <Link href="/auth/signin" className="underline">
-              Sign in
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+      <motion.p
+        className="mt-4 text-center text-xs text-muted-foreground/70"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6, duration: 0.3 }}
+      >
+        By signing up, you agree to our{" "}
+        <Link href="/terms" className="underline hover:text-muted-foreground">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="underline hover:text-muted-foreground">
+          Privacy Policy
+        </Link>
+      </motion.p>
+    </AuthShell>
   );
 }

@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Calendar, Eye } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Eye, Cable } from "lucide-react";
 
 interface SettingsItem {
   title: string;
@@ -80,13 +80,6 @@ export default function SettingsPage() {
           available: true,
         },
         {
-          title: "Personalization",
-          description: "Customize how AI interacts with you",
-          icon: Sparkles,
-          href: "/settings/personalization",
-          available: true,
-        },
-        {
           title: "Notifications",
           description: "Manage email notification preferences",
           icon: Bell,
@@ -118,13 +111,32 @@ export default function SettingsPage() {
       ]),
     },
     {
-      title: "AI Integrations",
+      title: "AI Settings",
       items: filterItems([
         {
-          title: "Google Calendar",
-          description: "Import events from Google Calendar",
-          icon: Calendar,
-          href: "/settings/integrations/google-calendar",
+          title: "Personalization",
+          description: "Customize how AI interacts with you",
+          icon: Sparkles,
+          href: "/settings/personalization",
+          available: true,
+        },
+        {
+          title: "AI API Keys",
+          description: "Configure AI provider API keys",
+          icon: Key,
+          href: "/settings/ai",
+          available: true,
+        },
+      ]),
+    },
+    {
+      title: "Integrations",
+      items: filterItems([
+        {
+          title: "Service Connections",
+          description: "Connect external APIs and services to your AI assistants",
+          icon: Cable,
+          href: "/settings/integrations",
           available: true,
         },
         {
@@ -141,13 +153,6 @@ export default function SettingsPage() {
           href: "/settings/local-mcp",
           available: true,
           desktopOnly: true,
-        },
-        {
-          title: "AI API Keys",
-          description: "Configure AI provider API keys",
-          icon: Key,
-          href: "/settings/ai",
-          available: true,
         },
       ]),
     },

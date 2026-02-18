@@ -13,6 +13,21 @@ import {
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+const toolSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  category: z.enum(['read', 'write', 'admin', 'dangerous']),
+  inputSchema: z.record(z.string(), z.unknown()).optional(),
+  execution: z.object({
+    type: z.literal('http'),
+    config: z.object({
+      method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+      pathTemplate: z.string().min(1),
+    }),
+  }),
+});
+
 const updateProviderSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
@@ -20,6 +35,7 @@ const updateProviderSchema = z.object({
   documentationUrl: z.string().url().nullable().optional(),
   config: z.record(z.string(), z.unknown()).optional(),
   enabled: z.boolean().optional(),
+  addTools: z.array(toolSchema).optional(),
 });
 
 /**
@@ -87,7 +103,22 @@ export async function PUT(
       );
     }
 
-    const updated = await updateProvider(db, providerId, validation.data);
+    const { addTools, ...updateData } = validation.data;
+
+    // If addTools is provided, merge new tools into existing config.tools
+    if (addTools && addTools.length > 0) {
+      const baseConfig = (provider.config as Record<string, unknown>) ?? {};
+      const mergedConfig = { ...baseConfig, ...(updateData.config ?? {}) };
+      const existingTools = Array.isArray(mergedConfig.tools) ? mergedConfig.tools as { id: string }[] : [];
+      const newToolIds = new Set(addTools.map((t) => t.id));
+      const filteredExisting = existingTools.filter((t) => !newToolIds.has(t.id));
+      updateData.config = {
+        ...mergedConfig,
+        tools: [...filteredExisting, ...addTools],
+      };
+    }
+
+    const updated = await updateProvider(db, providerId, updateData);
     return NextResponse.json({ provider: updated });
   } catch (error) {
     loggers.api.error('Error updating provider:', error as Error);

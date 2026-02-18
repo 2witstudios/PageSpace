@@ -673,7 +673,7 @@ export default function Home() {
                   <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
                     <div className="flex items-center gap-3">
                       <FileText className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">Building Your Personal Brand</span>
+                      <span className="text-sm font-medium">Editor Overview</span>
                     </div>
                     <div className="flex items-center gap-1" />
                   </div>
@@ -711,19 +711,20 @@ export default function Home() {
 
                   {/* Editor Content */}
                   <div className="p-6 min-h-[320px]">
-                    <h1 className="text-xl font-bold mb-4">Building Your Personal Brand in 2026</h1>
+                    <h1 className="text-xl font-bold mb-4">Editor Overview</h1>
                     <p className="text-muted-foreground mb-4">
-                      In the age of AI, your personal brand is more important than ever. Here&apos;s how to stand out...
+                      A rich text editor built on TipTap with full formatting, markdown shortcuts, and code blocks.
+                      Write naturally—the toolbar and keyboard shortcuts stay out of your way.
                     </p>
 
                     <p className="text-muted-foreground mb-4">
-                      The key differentiator isn&apos;t just your skills—it&apos;s the unique perspective you bring.
-                      AI can replicate knowledge, but it can&apos;t replicate your lived experience.
+                      <span className="text-foreground">AI edits your document directly.</span> Ask the sidebar chat to rewrite a paragraph, expand an outline,
+                      or change the tone—changes appear inline so you stay in flow.
                     </p>
 
                     <p className="text-muted-foreground">
-                      <span className="text-foreground">Authenticity is your superpower.</span> Share your failures alongside your wins,
-                      and your audience will connect on a deeper level.
+                      Supports headings, lists, tables, blockquotes, and fenced code blocks.
+                      Switch between rich text and raw markdown anytime.
                     </p>
                   </div>
 
@@ -1336,12 +1337,12 @@ export default function Home() {
 
                     {/* Time grid */}
                     <div className="flex-1 overflow-auto">
-                      <div className="flex min-h-full">
+                      <div className="flex min-h-full pt-3">
                         {/* Time gutter */}
-                        <div className="w-16 shrink-0 border-r">
+                        <div className="w-16 shrink-0">
                           {[9, 10, 11, 12, 14].map((hour) => (
-                            <div key={hour} className="relative border-b" style={{ height: 48 }}>
-                              <span className="absolute -top-2.5 right-2 text-xs text-muted-foreground">
+                            <div key={hour} className="relative" style={{ height: 48 }}>
+                              <span className="absolute -top-2 right-2 text-xs text-muted-foreground">
                                 {hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`}
                               </span>
                             </div>
