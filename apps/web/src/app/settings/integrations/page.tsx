@@ -12,13 +12,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, Cable, Plug2, Loader2, ExternalLink, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Cable, Plug2, Loader2, ExternalLink, AlertCircle, Package } from 'lucide-react';
 import { toast } from 'sonner';
-import { useProviders, useUserConnections } from '@/hooks/useIntegrations';
+import { useProviders, useUserConnections, useAvailableBuiltins } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { DisconnectConfirmDialog } from '@/components/integrations/DisconnectConfirmDialog';
-import { del, patch } from '@/lib/auth/auth-fetch';
+import { del, patch, post } from '@/lib/auth/auth-fetch';
 import type { SafeProvider, SafeConnection } from '@/components/integrations/types';
 
 const visibilityLabels: Record<string, string> = {
@@ -30,12 +30,15 @@ const visibilityLabels: Record<string, string> = {
 export default function IntegrationsSettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { providers, isLoading: loadingProviders, error: providersError } = useProviders();
+  const { providers, isLoading: loadingProviders, error: providersError, mutate: mutateProviders } = useProviders();
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
+
+  const { builtins, isLoading: loadingBuiltins, mutate: mutateBuiltins } = useAvailableBuiltins();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
   const [updatingVisibility, setUpdatingVisibility] = useState<string | null>(null);
+  const [installingBuiltin, setInstallingBuiltin] = useState<string | null>(null);
 
   // Handle OAuth callback redirect params
   useEffect(() => {
@@ -81,6 +84,20 @@ export default function IntegrationsSettingsPage() {
       toast.error('Failed to update visibility');
     } finally {
       setUpdatingVisibility(null);
+    }
+  };
+
+  const handleInstallBuiltin = async (builtinId: string) => {
+    setInstallingBuiltin(builtinId);
+    try {
+      await post('/api/integrations/providers/install', { builtinId });
+      toast.success('Integration installed');
+      mutateProviders();
+      mutateBuiltins();
+    } catch {
+      toast.error('Failed to install integration');
+    } finally {
+      setInstallingBuiltin(null);
     }
   };
 
@@ -265,6 +282,64 @@ export default function IntegrationsSettingsPage() {
                       onClick={() => setConnectProvider(provider)}
                     >
                       Connect
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Built-in Integrations */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Package className="h-5 w-5" />
+              Built-in Integrations
+            </CardTitle>
+            <CardDescription>
+              Install built-in integrations to make them available for connection.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {loadingBuiltins ? (
+              <div className="space-y-3">
+                <Skeleton className="h-16 w-full" />
+              </div>
+            ) : builtins.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">
+                All built-in integrations have been installed.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {builtins.map((builtin) => (
+                  <div
+                    key={builtin.id}
+                    className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="p-2 rounded-full bg-muted flex-shrink-0">
+                        <Package className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="font-medium">{builtin.name}</span>
+                        {builtin.description && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            {builtin.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={installingBuiltin === builtin.id}
+                      onClick={() => handleInstallBuiltin(builtin.id)}
+                    >
+                      {installingBuiltin === builtin.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : null}
+                      Install
                     </Button>
                   </div>
                 ))}
