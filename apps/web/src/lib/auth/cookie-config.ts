@@ -77,6 +77,7 @@ export function createLoggedInIndicatorCookie(): string {
     sameSite: 'strict' as const,
     path: COOKIE_CONFIG.loggedIn.path,
     maxAge: COOKIE_CONFIG.loggedIn.maxAge,
+    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 
@@ -91,6 +92,7 @@ export function createClearLoggedInIndicatorCookie(): string {
     sameSite: 'strict' as const,
     path: COOKIE_CONFIG.loggedIn.path,
     expires: new Date(0),
+    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 

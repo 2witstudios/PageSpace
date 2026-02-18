@@ -34,7 +34,7 @@ export function NavbarAuthButtons() {
   if (isLoggedIn) {
     return (
       <Button size="sm" asChild>
-        <a href={`${APP_URL}/`}>Dashboard</a>
+        <a href={`${APP_URL}/dashboard`}>Dashboard</a>
       </Button>
     );
   }
