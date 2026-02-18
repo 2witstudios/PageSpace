@@ -33,7 +33,7 @@ export default function IntegrationsSettingsPage() {
   const { providers, isLoading: loadingProviders, error: providersError, mutate: mutateProviders } = useProviders();
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
 
-  const { builtins, isLoading: loadingBuiltins, mutate: mutateBuiltins } = useAvailableBuiltins();
+  const { builtins, isLoading: loadingBuiltins, error: builtinsError, mutate: mutateBuiltins } = useAvailableBuiltins();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -305,6 +305,11 @@ export default function IntegrationsSettingsPage() {
             {loadingBuiltins ? (
               <div className="space-y-3">
                 <Skeleton className="h-16 w-full" />
+              </div>
+            ) : builtinsError ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                <AlertCircle className="h-4 w-4" />
+                <span>Failed to load available integrations</span>
               </div>
             ) : builtins.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">

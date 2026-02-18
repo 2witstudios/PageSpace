@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import {
@@ -9,8 +9,6 @@ import {
   createProvider,
 } from '@pagespace/lib/integrations';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
-
 const installSchema = z.object({
   builtinId: z.string().min(1),
 });
@@ -18,10 +16,11 @@ const installSchema = z.object({
 /**
  * POST /api/integrations/providers/install
  * Installs a builtin provider by copying its config into the database.
+ * Admin only — verifyAdminAuth handles session + CSRF + role-version validation.
  */
 export async function POST(request: Request) {
-  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-  if (isAuthError(auth)) return auth.error;
+  const adminUser = await verifyAdminAuth(request);
+  if (isAdminAuthError(adminUser)) return adminUser;
 
   try {
     const body = await request.json();
@@ -56,7 +55,7 @@ export async function POST(request: Request) {
       providerType: 'builtin',
       config: builtin as unknown as Record<string, unknown>,
       isSystem: true,
-      createdBy: auth.userId,
+      createdBy: adminUser.id,
       driveId: null,
       enabled: true,
     });
