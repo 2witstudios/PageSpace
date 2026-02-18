@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
 import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 import { useMentionTracker } from '@/hooks/useMentionTracker';
+import { useEnterToSend } from '@/hooks/useEnterToSend';
 
 interface ChatInputProps {
   value: string;
@@ -36,6 +37,7 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
   const context = useSuggestionContext();
   // Track IME composition state to prevent accidental sends during predictive text
   const [isComposing, setIsComposing] = useState(false);
+  const enterToSend = useEnterToSend();
 
   // Convert between markdown (parent) and display text (textarea)
   const {
@@ -73,7 +75,7 @@ const ChatInputWithProvider = forwardRef<ChatInputRef, ChatInputProps>(({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     suggestion.handleKeyDown(e);
 
-    if (!context.isOpen && e.key === 'Enter' && !e.shiftKey) {
+    if (!context.isOpen && e.key === 'Enter' && !e.shiftKey && enterToSend) {
       // Don't send during IME composition (predictive text, etc.)
       if (isComposing || e.nativeEvent.isComposing) {
         return;
