@@ -178,9 +178,9 @@ describe('cookie-config', () => {
       expect(cookie).not.toContain('HttpOnly');
     });
 
-    it('should use sameSite lax for cross-subdomain reads', () => {
+    it('should use sameSite strict', () => {
       const cookie = createLoggedInIndicatorCookie();
-      expect(cookie).toContain('SameSite=Lax');
+      expect(cookie).toContain('SameSite=Strict');
     });
 
     it('should set value to 1', () => {
@@ -188,12 +188,6 @@ describe('cookie-config', () => {
       expect(cookie).toContain('ps_logged_in=1');
     });
 
-    it('should include domain in production when COOKIE_DOMAIN is set', () => {
-      vi.stubEnv('NODE_ENV', 'production');
-      vi.stubEnv('COOKIE_DOMAIN', '.example.com');
-      const cookie = createLoggedInIndicatorCookie();
-      expect(cookie).toContain('Domain=.example.com');
-    });
   });
 
   describe('createClearLoggedInIndicatorCookie', () => {

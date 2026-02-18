@@ -8,11 +8,10 @@ import { SiteFooter } from "@/components/SiteFooter";
 import type { Metadata } from "next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { blogPosts } from "./data";
+import { blogPosts, formatDate } from "./data";
 import { ShareButtons } from "./ShareButtons";
-import { APP_URL } from "@/lib/metadata";
-
-const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
+import { APP_URL, SITE_URL } from "@/lib/metadata";
+import { JsonLd, createArticleSchema } from "@/lib/schema";
 
 export async function generateStaticParams() {
   return Object.keys(blogPosts).map((slug) => ({ slug }));
@@ -31,6 +30,9 @@ export async function generateMetadata(
   return {
     title: `${post.title} | PageSpace Blog`,
     description: post.description,
+    alternates: {
+      canonical: `${SITE_URL}/blog/${slug}`,
+    },
     openGraph: {
       title: post.title,
       description: post.description,
@@ -41,15 +43,6 @@ export async function generateMetadata(
       ...(post.image && { images: [{ url: `${SITE_URL}${post.image}` }] }),
     },
   };
-}
-
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 export default async function BlogPostPage(
@@ -64,6 +57,16 @@ export default async function BlogPostPage(
 
   return (
     <div className="min-h-screen bg-background">
+      <JsonLd
+        data={createArticleSchema({
+          title: post.title,
+          description: post.description,
+          slug,
+          publishedAt: post.date,
+          author: post.author,
+          image: post.image ? `${SITE_URL}${post.image}` : undefined,
+        })}
+      />
       <SiteNavbar />
 
       {/* Back Link */}

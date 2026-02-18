@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 const SITE_NAME = "PageSpace";
-const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
+export const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 const TWITTER_HANDLE = "@PageSpaceAI";
 
@@ -198,14 +198,6 @@ export const pageMetadata = {
     keywords: ["documentation", "API", "developers", "MCP", "integration"],
   }),
 
-  gettingStarted: createMetadata({
-    title: "Getting Started",
-    description:
-      "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
-    path: "/docs/getting-started",
-    keywords: ["getting started", "setup", "quickstart", "tutorial"],
-  }),
-
   faq: createMetadata({
     title: "FAQ",
     description:
@@ -238,19 +230,4 @@ export const pageMetadata = {
     keywords: ["contact", "support", "sales", "help"],
   }),
 
-  mcp: createMetadata({
-    title: "MCP Integration",
-    description:
-      "Connect AI tools like Claude and Cursor to PageSpace via MCP. Set up tokens, configure servers, and manage local MCP tools in the desktop app.",
-    path: "/docs/mcp",
-    keywords: ["MCP", "Model Context Protocol", "AI integration", "Claude", "Cursor", "API tokens"],
-  }),
-
-  pageTypes: createMetadata({
-    title: "Page Types",
-    description:
-      "Explore the 9 page types in PageSpace: documents, channels, AI chats, canvases, sheets, task lists, code files, and more.",
-    path: "/docs/page-types",
-    keywords: ["page types", "documents", "channels", "AI chat", "canvas", "sheets", "tasks", "code editor"],
-  }),
 };

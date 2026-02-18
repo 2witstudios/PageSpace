@@ -66,7 +66,7 @@ export function createSessionCookie(token: string): string {
 
 /**
  * Create a logged-in indicator cookie.
- * Non-httpOnly so the marketing site can read it client-side.
+ * Non-httpOnly for client-side auth detection across same-domain apps.
  * Contains no sensitive data -- just signals "a session exists".
  */
 export function createLoggedInIndicatorCookie(): string {
@@ -74,10 +74,9 @@ export function createLoggedInIndicatorCookie(): string {
   return serialize(COOKIE_CONFIG.loggedIn.name, COOKIE_CONFIG.loggedIn.value, {
     httpOnly: false,
     secure: isProduction,
-    sameSite: 'lax' as const,
+    sameSite: 'strict' as const,
     path: COOKIE_CONFIG.loggedIn.path,
     maxAge: COOKIE_CONFIG.loggedIn.maxAge,
-    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 
@@ -89,10 +88,9 @@ export function createClearLoggedInIndicatorCookie(): string {
   return serialize(COOKIE_CONFIG.loggedIn.name, '', {
     httpOnly: false,
     secure: isProduction,
-    sameSite: 'lax' as const,
+    sameSite: 'strict' as const,
     path: COOKIE_CONFIG.loggedIn.path,
     expires: new Date(0),
-    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
   });
 }
 

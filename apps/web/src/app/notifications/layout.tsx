@@ -1,7 +1,10 @@
-"use client";
+import type { Metadata } from "next";
+import NotificationsLayoutClient from "./NotificationsLayoutClient";
 
-import Layout from "@/components/layout/Layout";
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 export default function NotificationsLayout({ children }: { children: React.ReactNode }) {
-  return <Layout>{children}</Layout>;
+  return <NotificationsLayoutClient>{children}</NotificationsLayoutClient>;
 }

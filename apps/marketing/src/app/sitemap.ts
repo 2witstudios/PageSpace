@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { blogPosts } from "./blog/[slug]/data";
 
 const BASE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 
@@ -26,10 +27,34 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.8,
     },
     {
+      url: `${BASE_URL}/security`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.7,
+    },
+    {
       url: `${BASE_URL}/faq`,
       lastModified,
       changeFrequency: "monthly",
       priority: 0.6,
+    },
+    {
+      url: `${BASE_URL}/contact`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.5,
+    },
+    {
+      url: `${BASE_URL}/privacy`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.3,
+    },
+    {
+      url: `${BASE_URL}/terms`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority: 0.3,
     },
   ];
 
@@ -78,7 +103,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: path === "/docs" ? 0.8 : 0.6,
   }));
 
-  // Blog routes
+  // Blog routes - derived from blog data
   const blogRoutes: MetadataRoute.Sitemap = [
     {
       url: `${BASE_URL}/blog`,
@@ -86,18 +111,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "weekly",
       priority: 0.7,
     },
-    {
-      url: `${BASE_URL}/blog/your-workspace-is-the-context`,
+    ...Object.keys(blogPosts).map((slug) => ({
+      url: `${BASE_URL}/blog/${slug}`,
       lastModified,
-      changeFrequency: "monthly",
+      changeFrequency: "monthly" as const,
       priority: 0.6,
-    },
-    {
-      url: `${BASE_URL}/blog/pagespace-as-memory-for-coding-agents`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.6,
-    },
+    })),
   ];
 
   return [...staticRoutes, ...docsRoutes, ...blogRoutes];

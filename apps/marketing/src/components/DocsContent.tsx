@@ -15,7 +15,7 @@ function Breadcrumbs({ pathname }: { pathname: string }) {
   const crumbs = getBreadcrumbs(pathname);
 
   return (
-    <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
+    <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
       {crumbs.map((crumb, i) => (
         <span key={crumb.href} className="flex items-center gap-1.5">
           {i > 0 && <ChevronRight className="h-3.5 w-3.5" />}

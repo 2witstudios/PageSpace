@@ -7,7 +7,17 @@ export interface BlogPost {
   date: string;
   readTime: string;
   category: string;
+  featured?: boolean;
   image?: string;
+}
+
+export function formatDate(dateString: string): string {
+  const date = new Date(`${dateString}T00:00:00`);
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 export const blogPosts: Record<string, BlogPost> = {
@@ -155,6 +165,7 @@ Your workspace is the context. Make it a good one.
     date: "2026-02-17",
     readTime: "9 min read",
     category: "Product",
+    featured: true,
   },
   "pagespace-as-memory-for-coding-agents": {
     slug: "pagespace-as-memory-for-coding-agents",

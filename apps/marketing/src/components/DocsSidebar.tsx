@@ -19,6 +19,8 @@ function SidebarSection({ section, pathname }: { section: NavSection; pathname: 
   return (
     <div>
       <button
+        type="button"
+        aria-expanded={open}
         onClick={() => setOpen(!open)}
         className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium text-foreground hover:bg-muted/50 rounded-lg transition-colors"
       >
@@ -39,6 +41,7 @@ function SidebarSection({ section, pathname }: { section: NavSection; pathname: 
             <li key={item.href}>
               <Link
                 href={item.href}
+                aria-current={pathname === item.href ? "page" : undefined}
                 className={cn(
                   "block rounded-md px-3 py-1.5 text-sm transition-colors",
                   pathname === item.href
@@ -78,7 +81,7 @@ export function DocsSidebar() {
     return (
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
-          <button className="fixed bottom-4 left-4 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg md:hidden">
+          <button aria-label="Open navigation" className="fixed bottom-4 left-4 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg md:hidden">
             <Menu className="h-5 w-5" />
           </button>
         </SheetTrigger>

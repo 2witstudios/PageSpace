@@ -4,57 +4,11 @@ import { Calendar, Clock, User, PenLine } from "lucide-react";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
+import { blogPosts as blogPostsRecord, formatDate } from "./[slug]/data";
 
 export const metadata = pageMetadata.blog;
 
-interface BlogPost {
-  slug: string;
-  title: string;
-  description: string;
-  author: string;
-  date: string;
-  readTime: string;
-  category: string;
-  featured?: boolean;
-  image?: string;
-}
-
-const blogPosts: BlogPost[] = [
-  {
-    slug: "your-workspace-is-the-context",
-    title:
-      "Your Workspace Is the Context: How PageSpace Teaches AI Where It Is",
-    description:
-      "Most AI tools dump flat text into a prompt. PageSpace gives AI a map — a tree structure that encodes location, hierarchy, and meaning. Here's how workspace organization becomes AI understanding.",
-    author: "Jono",
-    date: "2026-02-17",
-    readTime: "9 min read",
-    category: "Product",
-    featured: true,
-    image: "/blog/workspace-is-the-context.png",
-  },
-  {
-    slug: "pagespace-as-memory-for-coding-agents",
-    title: "Using PageSpace as Memory for Your Coding Agent",
-    description:
-      "Coding agents are stateless. Every session starts from scratch. Here's how to give them persistent memory with PageSpace and MCP — including cloud agents that intelligently retrieve the right context.",
-    author: "Jono",
-    date: "2026-02-17",
-    readTime: "8 min read",
-    category: "Guide",
-    featured: false,
-    image: "/blog/pagespace-memory-coding-agents.png",
-  },
-];
-
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
+const blogPosts = Object.values(blogPostsRecord);
 
 export default function BlogPage() {
   const featuredPost = blogPosts.find((post) => post.featured);

@@ -21,6 +21,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://pagespace.ai'),
+  robots: { index: false, follow: false },
   title: {
     default: "PageSpace - AI-Powered Workspace",
     template: "%s | PageSpace"

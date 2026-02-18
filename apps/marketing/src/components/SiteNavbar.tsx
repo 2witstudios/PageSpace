@@ -52,7 +52,7 @@ export function SiteNavbar() {
         </div>
 
         {/* Center: Nav Links */}
-        <nav className="hidden md:flex items-center gap-1">
+        <nav aria-label="Main" className="hidden md:flex items-center gap-1">
           {navLinks.map(({ href, label }) => (
             <Link
               key={href}
