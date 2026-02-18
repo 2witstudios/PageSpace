@@ -12,6 +12,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from 
 import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
+import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -202,9 +203,19 @@ export async function PATCH(
 
     const data = parseResult.data;
 
+    // Apply timezone-aware parsing for naive ISO datetimes.
+    // Use the provided timezone, or fall back to the existing event's timezone.
+    const effectiveTimezone = data.timezone ?? event.timezone ?? 'UTC';
+    const adjustedStartAt = (data.startAt && typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
+      ? parseNaiveDatetimeInTimezone(body.startAt, effectiveTimezone)
+      : data.startAt;
+    const adjustedEndAt = (data.endAt && typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
+      ? parseNaiveDatetimeInTimezone(body.endAt, effectiveTimezone)
+      : data.endAt;
+
     // Validate dates if both are provided
-    const newStartAt = data.startAt ?? event.startAt;
-    const newEndAt = data.endAt ?? event.endAt;
+    const newStartAt = adjustedStartAt ?? event.startAt;
+    const newEndAt = adjustedEndAt ?? event.endAt;
     if (newEndAt <= newStartAt) {
       return NextResponse.json(
         { error: 'End date must be after start date' },
@@ -219,8 +230,8 @@ export async function PATCH(
         title: data.title,
         description: data.description,
         location: data.location,
-        startAt: data.startAt,
-        endAt: data.endAt,
+        startAt: adjustedStartAt,
+        endAt: adjustedEndAt,
         allDay: data.allDay,
         timezone: data.timezone,
         recurrenceRule: data.recurrenceRule,
