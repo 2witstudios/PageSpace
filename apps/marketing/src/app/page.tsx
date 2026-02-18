@@ -27,7 +27,7 @@ export default function Home() {
               {/* Headline */}
               <h1 className="mb-6 text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
                 Get on the{" "}
-                <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+                <span className="bg-gradient-to-r from-primary to-primary/60 dark:from-[oklch(0.78_0.18_235)] dark:to-[oklch(0.55_0.16_235)] bg-clip-text text-transparent">
                   same page
                 </span>
               </h1>
@@ -60,10 +60,10 @@ export default function Home() {
                   <span>Mac, Windows, Linux</span>
                 </Link>
                 <span className="text-border">|</span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span>iOS & Android</span>
+                <Link href="/downloads" className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors">
+                  <span>iOS</span>
                   <span className="text-xs bg-muted px-1.5 py-0.5 rounded">Beta</span>
-                </span>
+                </Link>
               </div>
             </div>
 
@@ -102,7 +102,7 @@ export default function Home() {
                       <button className="h-6 w-6 rounded-md flex items-center justify-center hover:bg-muted transition-colors">
                         <PanelRight className="h-3.5 w-3.5 text-muted-foreground" />
                       </button>
-                      <div className="h-5 w-5 rounded-full bg-blue-500 flex items-center justify-center">
+                      <div className="h-5 w-5 rounded-full bg-primary flex items-center justify-center">
                         <span className="text-[8px] font-medium text-white">JD</span>
                       </div>
                     </div>
@@ -176,7 +176,7 @@ export default function Home() {
                           <div className="p-0.5 rounded cursor-grab">
                             <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
                           </div>
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0 ml-1" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0 ml-1" />
                           <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">
                             Product Roadmap
                           </span>
@@ -255,7 +255,7 @@ export default function Home() {
                             </button>
                             {/* Viewer avatars */}
                             <div className="flex -space-x-2">
-                              <div className="h-6 w-6 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-[9px] text-white font-medium">JD</div>
+                              <div className="h-6 w-6 rounded-full bg-primary border-2 border-card flex items-center justify-center text-[9px] text-white font-medium">JD</div>
                               <div className="h-6 w-6 rounded-full bg-emerald-500 border-2 border-card flex items-center justify-center text-[9px] text-white font-medium">SK</div>
                             </div>
                             {/* Share */}
@@ -440,13 +440,20 @@ export default function Home() {
         {/* Features Preview - Brief section to connect to rest of page */}
         <section className="border-t border-border bg-muted/30 py-16 md:py-24">
           <div className="container mx-auto px-4 md:px-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
               <div className="text-center">
                 <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-4">
                   <FileText className="h-6 w-6 text-primary" />
                 </div>
                 <h3 className="font-semibold mb-1">Documents</h3>
                 <p className="text-sm text-muted-foreground">AI-assisted editing</p>
+              </div>
+              <div className="text-center">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-4">
+                  <Bot className="h-6 w-6 text-primary" />
+                </div>
+                <h3 className="font-semibold mb-1">Agents</h3>
+                <p className="text-sm text-muted-foreground">AI that takes action</p>
               </div>
               <div className="text-center">
                 <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 mb-4">
@@ -880,7 +887,7 @@ export default function Home() {
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="flex -space-x-2">
-                        <div className="h-6 w-6 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">S</div>
+                        <div className="h-6 w-6 rounded-full bg-primary border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">S</div>
                         <div className="h-6 w-6 rounded-full bg-green-500 border-2 border-card flex items-center justify-center text-[10px] text-white font-medium">M</div>
                         <div className="h-6 w-6 rounded-full bg-gradient-to-br from-violet-500 to-violet-600 border-2 border-card flex items-center justify-center">
                           <Bot className="h-3 w-3 text-white" />
@@ -893,7 +900,7 @@ export default function Home() {
                   <div className="p-4 space-y-4 min-h-[360px] max-w-4xl mx-auto">
                     {/* User message - matching group flex items-start gap-4 */}
                     <div className="group flex items-start gap-4">
-                      <div className="shrink-0 h-10 w-10 rounded-full bg-blue-500 flex items-center justify-center text-sm text-white font-medium">S</div>
+                      <div className="shrink-0 h-10 w-10 rounded-full bg-primary flex items-center justify-center text-sm text-white font-medium">S</div>
                       <div className="flex flex-col min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-sm">Sarah</span>
@@ -1472,13 +1479,9 @@ export default function Home() {
                   <FileText className="h-4 w-4" />
                   Documentation
                 </Link>
-                <Link href="/tour" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  <Layers className="h-4 w-4" />
-                  Product Tour
-                </Link>
-                <Link href="/integrations" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
+                <Link href="/blog" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
                   <Zap className="h-4 w-4" />
-                  Integrations
+                  Blog
                 </Link>
               </div>
             </div>

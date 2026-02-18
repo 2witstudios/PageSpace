@@ -124,9 +124,10 @@ export default function TermsOfService() {
               PageSpace offers the following subscription plans:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Free Plan:</strong> 20 AI calls per day, 500MB storage, basic processing</li>
-              <li><strong>Pro Plan ($29.99/month):</strong> 50 AI calls per day, 10 Extra Thinking calls, 2GB storage, priority processing</li>
-              <li><strong>Business Plan ($199.99/month):</strong> 500 AI calls per day, 50 Extra Thinking calls, 50GB storage, enterprise features</li>
+              <li><strong>Free Plan:</strong> 50 AI calls per day, 500MB storage</li>
+              <li><strong>Pro Plan ($15/month):</strong> 200 AI calls per day, 50 Pro AI sessions per month, 2GB storage</li>
+              <li><strong>Founder Plan ($50/month):</strong> 500 AI calls per day, 100 Pro AI sessions per month, 10GB storage, priority support</li>
+              <li><strong>Business Plan ($100/month):</strong> 1,000 AI calls per day, 500 Pro AI sessions per month, 50GB storage, priority support</li>
             </ul>
 
             <h3 className="text-xl font-semibold mb-3">11.2 Billing and Payment</h3>

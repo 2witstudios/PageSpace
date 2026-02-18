@@ -2,6 +2,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+@plugin "@tailwindcss/typography";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -188,10 +190,8 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
     @apply bg-background text-foreground;
   }
 }
@@ -399,7 +399,7 @@
   }
 
   blockquote {
-    border-left: 3px solid #ccc;
+    border-left: 3px solid var(--border);
     margin-left: 1.5rem;
     padding-left: 1rem;
     font-style: italic;

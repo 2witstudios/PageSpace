@@ -67,7 +67,7 @@ export function MockAppPreview({ variant = "sidebar", className }: MockAppPrevie
           <button className="h-7 w-7 rounded-md flex items-center justify-center hover:bg-muted transition-colors">
             <PanelRight className="h-4 w-4 text-muted-foreground" />
           </button>
-          <div className="h-6 w-6 rounded-full bg-blue-500 flex items-center justify-center">
+          <div className="h-6 w-6 rounded-full bg-primary flex items-center justify-center">
             <span className="text-[10px] font-medium text-white">JD</span>
           </div>
         </div>
@@ -231,7 +231,7 @@ function Sidebar({ activeView }: { activeView: string }) {
       {/* 6. User Footer */}
       <div className="pt-3 border-t border-border mt-3">
         <div className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-accent transition-colors cursor-pointer">
-          <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center border-2 border-card">
+          <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center border-2 border-card">
             <span className="text-sm font-medium text-white">JD</span>
           </div>
           <div className="flex-1 min-w-0">
@@ -328,7 +328,7 @@ function PageTreeItem({
 
       {/* Change indicator dot */}
       {hasChanges && (
-        <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 ml-1" />
+        <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0 ml-1" />
       )}
 
       {/* Title */}
@@ -360,7 +360,7 @@ function DocumentContent() {
         </div>
         <div className="flex items-center gap-2">
           <div className="flex -space-x-2">
-            <div className="w-8 h-8 rounded-full bg-blue-500 border-2 border-card flex items-center justify-center text-xs text-white font-medium">JD</div>
+            <div className="w-8 h-8 rounded-full bg-primary border-2 border-card flex items-center justify-center text-xs text-white font-medium">JD</div>
             <div className="w-8 h-8 rounded-full bg-green-500 border-2 border-card flex items-center justify-center text-xs text-white font-medium">SM</div>
             <div className="w-8 h-8 rounded-full bg-purple-500 border-2 border-card flex items-center justify-center text-xs text-white font-medium">AK</div>
           </div>
@@ -529,8 +529,8 @@ function CanvasContent() {
 
           {/* Cursors */}
           <div className="absolute top-40 left-60">
-            <div className="w-4 h-4 border-l-2 border-t-2 border-blue-500 rotate-[-45deg]" />
-            <div className="mt-1 px-2 py-1 rounded bg-blue-500 text-white text-xs whitespace-nowrap">
+            <div className="w-4 h-4 border-l-2 border-t-2 border-primary rotate-[-45deg]" />
+            <div className="mt-1 px-2 py-1 rounded bg-primary text-white text-xs whitespace-nowrap">
               Alex
             </div>
           </div>

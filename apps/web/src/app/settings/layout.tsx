@@ -1,7 +1,10 @@
-"use client";
+import type { Metadata } from "next";
+import SettingsLayoutClient from "./SettingsLayoutClient";
 
-import Layout from "@/components/layout/Layout";
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
-  return <Layout>{children}</Layout>;
+  return <SettingsLayoutClient>{children}</SettingsLayoutClient>;
 }

@@ -48,7 +48,7 @@ const plans: Plan[] = [
     price: "$15",
     period: "/month",
     description: "For individuals who want more AI power and storage",
-    cta: "Start Pro Trial",
+    cta: "Upgrade to Pro",
     ctaVariant: "default",
     highlight: true,
     features: {
@@ -66,7 +66,7 @@ const plans: Plan[] = [
     price: "$50",
     period: "/month",
     description: "For power users and small teams who need serious AI capability",
-    cta: "Start Founder Trial",
+    cta: "Upgrade to Founder",
     ctaVariant: "outline",
     features: {
       storage: "10 GB",
@@ -123,7 +123,7 @@ export default function PricingPage() {
               Start free with generous limits. Scale as you grow. No hidden fees.
             </p>
             <p className="text-sm text-muted-foreground">
-              All plans include 14-day free trial. No credit card required.
+              No credit card required for the Free plan.
             </p>
           </div>
         </div>
@@ -354,7 +354,7 @@ export default function PricingPage() {
         </div>
       </section>
 
-      <SiteFooter variant="compact" />
+      <SiteFooter />
     </div>
   );
 }

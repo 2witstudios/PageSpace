@@ -7,447 +7,279 @@ export interface BlogPost {
   date: string;
   readTime: string;
   category: string;
+  featured?: boolean;
+  image?: string;
+}
+
+export function formatDate(dateString: string): string {
+  const date = new Date(`${dateString}T00:00:00`);
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 export const blogPosts: Record<string, BlogPost> = {
-  "security-architecture-deep-dive": {
-    slug: "security-architecture-deep-dive",
-    title: "How PageSpace Protects Your Data",
-    description: "A deep dive into PageSpace's security architecture: opaque session tokens, per-event WebSocket authorization, and defense-in-depth design.",
+  "your-workspace-is-the-context": {
+    slug: "your-workspace-is-the-context",
+    title:
+      "Your Workspace Is the Context: How PageSpace Teaches AI Where It Is",
+    description:
+      "Most AI tools dump flat text into a prompt. PageSpace gives AI a map — a tree structure that encodes location, hierarchy, and meaning. Here's how workspace organization becomes AI understanding.",
+    image: "/blog/workspace-is-the-context.png",
     content: `
-## Security by Design
+## The Problem with Flat Context
 
-At PageSpace, security isn't an afterthought—it's foundational to everything we build. Here's how we protect your data at every layer.
+Most AI tools work like this: take a blob of text, shove it into the system prompt, hope the model figures it out.
 
-## Opaque Session Tokens
+There's no structure. No location. No hierarchy. The AI doesn't know where it is, what's around it, or how the information relates to anything else. It's reading a book with no table of contents, no chapters, no page numbers.
 
-Unlike systems that use JWTs (which can be decoded by anyone), PageSpace uses opaque session tokens:
+You end up doing the work the AI should be doing — explaining what project this is, what files are relevant, what conventions apply. Every session. Every time.
 
-- **Hash-only storage**: We never store your actual token—only a SHA-256 hash
-- **High entropy**: 256 bits of randomness makes tokens unguessable
-- **Stateful validation**: Every request is verified against our database
-- **Instant revocation**: Compromised sessions can be invalidated immediately
+The problem isn't the AI's capability. It's that nobody gave it a map.
 
-### Why Not JWT?
+## The Tree as a Semantic Structure
 
-JWTs are popular, but they have downsides for stateful applications:
+PageSpace organizes everything in a page tree. Folders, documents, AI agents, chat channels, spreadsheets, canvases — they all live in a hierarchical structure you design.
 
-- Can't be revoked until they expire
-- Carry claims that anyone can read
-- Require careful implementation to avoid vulnerabilities
+This isn't just a UI convenience. The tree *is* the context model.
 
-Our opaque tokens give us full control over session lifecycle.
+Where a page lives tells the AI what it means. A document called "API Design" under \`/Engineering/Backend/\` carries different weight than a document with the same name under \`/Archive/Old Drafts/\`. The path encodes intent, scope, and relevance — without you writing a single annotation.
 
-## Account Protection
+When you organize your workspace, you're not just tidying up for yourself. You're teaching the AI how your work is structured.
 
-### Rate Limiting
+## Breadcrumb Path Injection
 
-Distributed rate limiting protects against brute force:
+When you chat with an AI agent in PageSpace, the system builds a breadcrumb path from the page's position in the tree and injects it directly into the system prompt.
 
-- **Login attempts**: 5 per 15 minutes per IP and per email
-- **Signup**: 3 per hour to prevent abuse
-- **Password reset**: 3 per hour per account
+Here's what the AI actually receives — the real \`PAGE CONTEXT\` block from the system prompt builder:
 
-### Account Lockout
+\`\`\`
+PAGE CONTEXT:
+• Location: /engineering/backend/api-design
+• Type: DOCUMENT
+• Path: Engineering > Backend > API Design
+• When users say "here", they mean this page
+\`\`\`
 
-After 10 failed login attempts:
+The AI now knows it's looking at an API design document inside the backend section of the engineering workspace. When you say "here," it means something specific. When you say "update this," the AI knows exactly what "this" refers to.
 
-- Account locked for 15 minutes
-- Persists across IP changes (database-backed, not in-memory)
-- Automatic unlock after cooldown period
+No ambiguity. No guessing. The tree position resolves it.
 
-### Password Requirements
+## Workspace Structure as a Map
 
-Strong password policy enforced:
+Beyond knowing its own location, the AI can receive the entire workspace tree — formatted as a visual hierarchy that mirrors the structure you built.
 
-- Minimum 12 characters
-- At least one uppercase letter
-- At least one lowercase letter
-- At least one number
-- Hashed with bcrypt (cost factor 12)
+Here's the real format, generated from PageSpace's tree formatter:
 
-## CSRF Protection
+\`\`\`
+├── 📁 Engineering
+│   ├── 📄 Architecture Overview
+│   ├── 🤖 Code Review Agent
+│   └── 📁 Backend
+│       ├── 📄 API Design
+│       └── 📄 Database Schema
+└── 📁 Product
+    ├── 📄 Roadmap
+    └── 💬 Team Discussion
+\`\`\`
 
-Every state-changing request requires CSRF validation:
+The AI can see sibling pages, parent folders, and the full organizational context. It knows that "Architecture Overview" and "Code Review Agent" sit alongside the "Backend" folder. It can decide what to read based on structure, not guesswork.
 
-- **Signed tokens**: HMAC-SHA256 prevents tampering
-- **Timing-safe comparison**: Immune to timing attacks
-- **Pre-login protection**: Even login forms are protected
+When someone asks "what do we know about the backend?" the AI doesn't search blindly — it looks at the Backend folder, sees what's there, and reads what's relevant. The tree tells it where to look.
 
-## Defense in Depth
+## Inline Instructions — What the AI Knows About Itself
 
-No single security measure is perfect, so we layer them:
+Beyond location, the AI receives contextual rules that define how it should behave in this specific context. These come from PageSpace's inline instruction system:
 
-1. **Transport security**: TLS encryption for all connections
-2. **Authentication**: Session tokens with database validation
-3. **Authorization**: Per-resource permission checks
-4. **Rate limiting**: Distributed throttling
-5. **Monitoring**: Security event logging for audit trails
+\`\`\`
+CONTEXT:
+• Current location: "API Design" [DOCUMENT] at /eng/backend/api-design in "Engineering"
+• DriveSlug: eng, DriveId: abc123
+• When user says "here" or "this", they mean this location
+• Explore current drive first (list_pages) before other drives
+\`\`\`
 
-Security is a continuous process, not a checklist.
+The AI also receives page type documentation — what each type can do, what operations make sense. It knows that a DOCUMENT page supports rich text editing and content updates. It knows that a SPREADSHEET page has structured data. It knows that an AI_CHAT page is a conversation.
+
+Add workspace-level rules — your team's conventions, writing style preferences, tool restrictions — and the AI's behavior becomes specific to where it's operating, not generic across all contexts.
+
+## The Tools — How the AI Explores
+
+PageSpace doesn't just give the AI a static context dump. It gives the AI real tools to explore your workspace actively:
+
+- **\`list_pages\`** — Browse the tree structure, see what's inside any folder
+- **\`read_page\`** — Read the full content of any page in the workspace
+- **\`regex_search\`** — Search content across pages with regex patterns, returns matches with line numbers and semantic paths
+- **\`glob_search\`** — Find pages by path patterns like \`**/meeting-notes/*\` or \`engineering/**\`
+- **\`multi_drive_search\`** — Search across all workspaces at once when the answer might live somewhere else
+- **\`ask_agent\`** — Call another AI agent in the workspace, delegating specialized questions to agents with domain expertise
+
+The AI doesn't just receive context passively — it can actively navigate. The tree gives it a map. The tools let it move through it. When the AI needs to find related documents, it doesn't ask you to paste them. It searches, reads, and synthesizes on its own.
+
+## Page Agents: Context-Aware AI in the Tree
+
+Page agents are AI_CHAT pages that live in the tree alongside your documents. They're not separate from your workspace — they're part of it.
+
+Each agent can be configured with:
+
+- **Custom system prompts** — specific instructions for what this agent knows and how it should behave
+- **Tool permissions** — allow only read tools for a research agent, or write tools for an editor agent
+- **Page tree visibility** — see only children of the current folder, or the full drive structure
+- **Drive prompt inclusion** — inherit workspace-level instructions and conventions
+
+Here's why the tree matters for agents: an agent nested under \`/Engineering/Backend/\` naturally has context about backend engineering. Its position in the tree encodes its purpose. A "Code Review Agent" sitting next to "Architecture Overview" and "API Design" inherently understands its scope — it's there to review code in the context of that architecture and those APIs.
+
+You don't need to write elaborate prompts explaining what the agent should focus on. The tree already told it.
+
+## The Composable Prompt
+
+All of this comes together in how PageSpace assembles the final system prompt. It's not one monolithic block — it's built from discrete, composable layers:
+
+1. **Core role definition** — the base personality and capabilities
+2. **User personalization** — your bio, writing style, custom rules
+3. **Location context** — breadcrumbs, drive info, page type
+4. **Workspace structure** — the tree, visible as a map
+5. **Inline instructions** — contextual rules for this specific location
+6. **Timestamp context** — current date, time, and timezone
+7. **Agent awareness** — list of other agents available to consult
+
+Each layer is independently cacheable. Each is determined by the tree position — different locations produce different prompts. An agent in the Engineering folder gets engineering context. An agent in Product gets product context. Same underlying model, different understanding.
+
+The tree isn't just organizing your files. It's programming the AI.
+
+## Why This Matters
+
+AI that knows where it is makes better decisions.
+
+It doesn't need you to explain the project structure — it can see the tree. It doesn't need you to point at related documents — it can find them. It understands that a page under "Architecture Decisions" is different from a page under "Meeting Notes" even if they mention the same topic.
+
+Structure is meaning. A flat list of documents is just noise. A tree is a semantic model — every folder boundary, every nesting level, every sibling relationship carries information about how your work fits together.
+
+When you organize your PageSpace workspace, you're not doing busywork. You're building the context model that makes your AI actually useful. The workspace *is* the prompt.
+
+Your workspace is the context. Make it a good one.
     `,
-    author: "PageSpace Team",
-    date: "2026-02-14",
-    readTime: "8 min read",
-    category: "Security",
-  },
-  "real-time-security": {
-    slug: "real-time-security",
-    title: "Securing Real-Time Collaboration",
-    description: "How PageSpace implements per-event authorization for WebSocket connections, ensuring every action is verified in real-time.",
-    content: `
-## The Challenge of Real-Time Security
-
-Real-time collaboration requires persistent WebSocket connections. But how do you ensure security when connections stay open for extended periods?
-
-## Per-Event Authorization
-
-PageSpace doesn't just authenticate the connection—we authorize every event:
-
-### Sensitive Events (Re-Authorized)
-
-Every write operation is verified in real-time:
-
-- Document updates and page changes
-- File uploads
-- Comment creation and deletion
-- Task management operations
-
-### Read-Only Events (Connection Auth)
-
-Lower-risk events use connection-level auth:
-
-- Cursor movement
-- Presence updates
-- Typing indicators
-- Selection changes
-
-## Socket Token Flow
-
-WebSocket auth uses a short-lived token exchange:
-
-1. Browser requests a socket token (same-origin, with cookies)
-2. Server validates the session and issues a 5-minute socket token
-3. Client connects to WebSocket with the socket token
-4. Server validates and establishes the connection
-
-### Why Short-Lived Tokens?
-
-Socket tokens expire in 5 minutes because:
-
-- Limits exposure if token is intercepted
-- Forces re-authentication for long sessions
-- Separate auth domain from main sessions
-
-## Inter-Service Security
-
-Our real-time service communicates with the main app securely:
-
-- **HMAC-signed broadcasts**: Services verify each other's identity
-- **Timestamp validation**: Prevents replay attacks
-- **Event-specific signatures**: Each broadcast type is authenticated
-
-## Permission-Aware Broadcasting
-
-When events are broadcast:
-
-- User permissions are checked in real-time
-- Unauthorized users don't receive events they shouldn't see
-- Permission changes take effect immediately
-
-Real-time doesn't mean less secure—it means security has to be real-time too.
-    `,
-    author: "PageSpace Team",
-    date: "2026-02-13",
-    readTime: "6 min read",
-    category: "Technical",
-  },
-  "oauth-security-best-practices": {
-    slug: "oauth-security-best-practices",
-    title: "OAuth Security: Signed State and Safe Redirects",
-    description: "How PageSpace implements secure OAuth flows with HMAC-signed state parameters and strict redirect validation.",
-    content: `
-## OAuth Done Right
-
-OAuth is powerful but tricky to implement securely. Here's how PageSpace handles it.
-
-## The State Parameter Problem
-
-The OAuth state parameter prevents CSRF attacks, but many implementations are weak:
-
-- Random string that's easy to forge
-- No validation of tampering
-- Return URL stored in plain text
-
-### Our Approach: Signed State
-
-PageSpace uses HMAC-SHA256 signed state parameters:
-
-\`\`\`
-state = base64({
-  returnUrl: "/dashboard",
-  platform: "web",
-  signature: HMAC(secret, data)
-})
-\`\`\`
-
-Benefits:
-
-- **Tamper-proof**: Any modification breaks the signature
-- **Authenticated**: Only our server can create valid states
-- **Contextual**: Contains metadata for better UX
-
-## Safe Redirect Validation
-
-Open redirect vulnerabilities are common in OAuth. We prevent them:
-
-### Strict URL Validation
-
-Return URLs must be:
-
-- Relative paths starting with \`/\`
-- No protocol-relative URLs (\`//evil.com\`)
-- No backslash tricks (\`\\/evil.com\`)
-- No encoded sequences that bypass validation
-
-### Example Blocked URLs
-
-These would all be rejected:
-
-- \`https://evil.com\`
-- \`//evil.com\`
-- \`\\/evil.com\`
-- \`/\\evil.com\`
-
-## Supported Providers
-
-PageSpace supports OAuth with:
-
-- **Google**: Full profile and email access
-- **Apple**: Privacy-focused sign-in
-
-Both use authorization code flow (never implicit flow) for maximum security.
-
-## Token Handling
-
-After successful OAuth:
-
-1. Exchange code for tokens server-side
-2. Validate token integrity
-3. Create our own session token
-4. Never expose OAuth tokens to the browser
-
-OAuth is complex, but getting it right matters.
-    `,
-    author: "PageSpace Team",
-    date: "2026-02-12",
-    readTime: "5 min read",
-    category: "Technical",
-  },
-  "introducing-pagespace": {
-    slug: "introducing-pagespace",
-    title: "Introducing PageSpace: AI-Native Collaboration",
-    description: "Today we're launching PageSpace, a new kind of workspace where AI isn't bolted on—it's woven into every interaction.",
-    content: `
-## A New Vision for Work
-
-For too long, AI has been an afterthought in productivity tools—a chatbot in a sidebar, a feature you opt into. We built PageSpace because we believe AI should be fundamentally woven into how you work.
-
-### The Problem with Bolt-on AI
-
-Most productivity tools treat AI as an add-on. You write a document, then ask AI to review it. You have a conversation, then summarize it with AI. The AI doesn't know your context, your project, or your team.
-
-### Our Approach: AI-Native Architecture
-
-PageSpace is built differently. Every workspace has AI at its core:
-
-- **Global Assistant**: Your personal AI that follows you across all workspaces
-- **Page Agents**: Specialized AI helpers that live in your file tree with custom prompts
-- **Context-Aware**: AI understands your project hierarchy and team dynamics
-
-### What You Can Do Today
-
-With PageSpace, you can:
-
-1. **Write with AI inline** - Get suggestions and completions as you type
-2. **Collaborate in channels** - @mention AI agents in any conversation
-3. **Assign tasks to AI** - Let AI work autonomously on research and drafting
-4. **Roll back any AI change** - One-click undo for all AI edits
-
-### Join Us
-
-We're just getting started. Sign up today and help shape the future of AI-native collaboration.
-    `,
-    author: "PageSpace Team",
-    date: "2026-02-10",
-    readTime: "5 min read",
-    category: "Announcements",
-  },
-  "understanding-page-agents": {
-    slug: "understanding-page-agents",
-    title: "Understanding Page Agents: AI That Lives in Your Workspace",
-    description: "Learn how PageSpace's unique Page Agent architecture gives you specialized AI helpers that understand your project context.",
-    content: `
-## What Are Page Agents?
-
-Page Agents are a core innovation in PageSpace. Unlike traditional AI assistants that exist in isolation, Page Agents live directly in your file tree—right alongside your documents, tasks, and notes.
-
-### The File Tree as AI Context
-
-When you create a Page Agent, it inherits context from its location:
-
-\`\`\`
-My Workspace
-  Project Overview
-  Marketing AI (Page Agent)
-    Custom prompt: "You are a marketing expert..."
-  Campaigns
-    Q1 Campaign
-    Q2 Campaign
-\`\`\`
-
-The Marketing AI agent automatically understands:
-- It's part of "My Workspace"
-- The project context from "Project Overview"
-- The campaigns it should help with
-
-### Custom Prompts
-
-Each Page Agent can have a custom system prompt. This lets you create specialized helpers:
-
-- **Code Review AI**: Strict code review with your team's standards
-- **Writing Assistant**: Matches your brand voice and style
-- **Research Agent**: Focuses on specific domains or sources
-
-### Nested Context
-
-Page Agents can be nested, creating hierarchies of context:
-
-\`\`\`
-Engineering
-  Engineering AI (broad technical knowledge)
-    Frontend
-      React Expert (React-specific knowledge)
-\`\`\`
-
-The React Expert inherits context from both the Engineering workspace and its parent agent.
-
-### Try It Today
-
-Page Agents are available on all PageSpace plans. Create your first one in minutes.
-    `,
-    author: "PageSpace Team",
-    date: "2026-02-08",
-    readTime: "7 min read",
+    author: "Jono",
+    date: "2026-02-17",
+    readTime: "9 min read",
     category: "Product",
+    featured: true,
   },
-  "mcp-servers-explained": {
-    slug: "mcp-servers-explained",
-    title: "MCP Servers Explained: Connecting AI to Your Tools",
-    description: "A deep dive into Model Context Protocol and how PageSpace uses it to give AI direct access to your tools and data.",
+  "pagespace-as-memory-for-coding-agents": {
+    slug: "pagespace-as-memory-for-coding-agents",
+    title: "Using PageSpace as Memory for Your Coding Agent",
+    description:
+      "Coding agents are stateless. Every session starts from scratch. Here's how to give them persistent memory with PageSpace and MCP — including cloud agents that intelligently retrieve the right context.",
+    image: "/blog/pagespace-memory-coding-agents.png",
     content: `
-## What is MCP?
+## The Problem: Your Coding Agent Has Amnesia
 
-Model Context Protocol (MCP) is an open protocol that allows AI models to safely interact with external systems. Instead of copy-pasting data into chat, AI can directly access databases, file systems, and APIs.
+Every time you start a new session with your coding agent, it forgets everything. The architecture decisions you explained yesterday. The conventions your team agreed on last week. The debugging session where you finally figured out that weird race condition.
 
-### Why MCP Matters
+You re-explain the same context over and over. You paste the same docs into chat. You point at the same files and say "remember, we do it this way."
 
-Traditional AI assistants are limited to what you tell them. With MCP:
+CLAUDE.md files help — they give your agent a starting point. But they're static, local to one repo, and limited in what they can capture. They're a sticky note on the monitor, not a knowledge base.
 
-- AI can query your database directly
-- AI can read and write files
-- AI can interact with external services
-- All with proper permissions and safety
+What if your coding agent could actually remember?
 
-### How PageSpace Uses MCP
+## What If Your Agent Had a Knowledge Base?
 
-PageSpace integrates MCP servers to extend what your AI agents can do:
+Imagine a persistent, organized workspace your coding agent can read from, write to, and search across. Not files buried in your repo — a structured knowledge system that:
 
-**Available MCP Servers:**
-- Filesystem - Read/write local files
-- PostgreSQL - Query databases
-- GitHub - Manage repositories
-- Slack - Send messages
-- Google Calendar - Manage events
-- Web Search - Research topics
+- **Persists across sessions** — context survives after you close your terminal
+- **Works across projects** — your React conventions apply whether you're in the frontend repo or the monorepo
+- **Shares across machines** — same knowledge base on your laptop and your CI server
+- **Stays organized** — not a flat dump of text, but a hierarchy of pages, folders, and agents
 
-### Setting Up MCP
+That's what PageSpace gives your coding agent.
 
-Adding an MCP server is straightforward:
+## PageSpace + MCP: The Connection
 
-1. Go to Workspace Settings > Integrations
-2. Select the MCP server you want
-3. Configure authentication
-4. AI agents can now use that server
+PageSpace publishes an MCP server — \`pagespace-mcp\` on npm — that exposes your knowledge base to any coding agent that supports the Model Context Protocol.
 
-### Security First
+Install it, point it at your PageSpace instance with a token, and your coding agent gets direct access to search, read, and write pages in your workspace.
 
-MCP servers in PageSpace are sandboxed:
-- Each server has explicit permissions
-- Actions are logged and auditable
-- You control what AI can access
+MCP is the protocol. PageSpace is the memory.
 
-### Learn More
+## Setup
 
-Visit our [MCP documentation](/docs) for detailed setup guides.
+Add PageSpace to your coding agent's MCP configuration:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "pagespace": {
+      "command": "npx",
+      "args": ["-y", "pagespace-mcp@latest"],
+      "env": {
+        "PAGESPACE_API_URL": "https://your-instance.pagespace.ai",
+        "PAGESPACE_AUTH_TOKEN": "your-mcp-token"
+      }
+    }
+  }
+}
+\`\`\`
+
+Generate an MCP token from your PageSpace workspace settings. The token is scoped to a specific drive, so you control exactly what your agent can access.
+
+That's it. Your coding agent can now search your knowledge base, read pages, create new ones, and update existing content — all through natural tool calls.
+
+## The Real Differentiator: Cloud Agents
+
+Here's where PageSpace goes beyond "document storage your agent can read."
+
+PageSpace has **page agents** — cloud AI agents with custom instructions that live inside your knowledge base. They're not just documents. They're intelligent retrieval and processing layers that sit between your coding agent and your knowledge.
+
+When your coding agent calls PageSpace via MCP, it can talk to these page agents. That means:
+
+**Smart retrieval, not keyword search.** Instead of your coding agent trying to guess which document has the answer, it can ask a page agent: "What are our conventions for error handling in API routes?" The page agent knows the knowledge base, understands the question, and returns the relevant context.
+
+**Summarization on demand.** A page agent can digest a 20-page architecture doc into the three paragraphs your coding agent actually needs for its current task.
+
+**Knowledge base maintenance.** Page agents can organize incoming information. Your coding agent writes a raw note about a decision you made — a page agent files it properly, links it to related docs, and keeps the knowledge base clean.
+
+**Shared context across agents.** Multiple coding agents — yours, your teammate's, your CI pipeline's — all read from and write to the same workspace. Page agents ensure consistency. One source of truth, many consumers.
+
+This is the difference between giving your agent a filing cabinet and giving it a research assistant.
+
+## What to Put in Your Knowledge Base
+
+Start with what you find yourself re-explaining to your coding agent:
+
+- **Architecture decisions and rationale** — why you chose that database, why the auth works that way, why you split that service
+- **Coding conventions and patterns** — how you structure components, naming rules, error handling patterns, test conventions
+- **API documentation** — internal APIs, external integrations, authentication flows
+- **Debugging playbooks** — "when X happens, check Y" knowledge that's hard to capture in code comments
+- **Meeting notes and decisions** — the context behind the code, not just the code itself
+- **Project roadmaps** — what's planned, what's in progress, what's blocked and why
+
+The key insight: anything you'd explain verbally to a new team member belongs in your knowledge base. Your coding agent is a new team member every single session.
+
+## Security
+
+Giving an AI agent access to your knowledge base requires trust in the access model:
+
+- **Drive-scoped tokens** — each MCP token is scoped to a single drive. Your agent sees only what you explicitly share
+- **Audit logging** — every read and write through MCP is logged
+- **Fail-closed permissions** — if the token doesn't grant access, the request is denied. No fallbacks, no defaults
+
+You control the boundary. The agent works within it.
+
+## Getting Started
+
+1. Create a PageSpace account and set up a drive for your project knowledge
+2. Add your architecture docs, conventions, and patterns as pages
+3. Create page agents with instructions tailored to your workflow
+4. Generate an MCP token and add the config to your coding agent
+5. Start a session and ask your agent to check the knowledge base
+
+Your coding agent just got a memory. Use it.
     `,
-    author: "PageSpace Team",
-    date: "2026-02-05",
+    author: "Jono",
+    date: "2026-02-17",
     readTime: "8 min read",
-    category: "Technical",
-  },
-  "ai-rollback-why-it-matters": {
-    slug: "ai-rollback-why-it-matters",
-    title: "AI Rollback: Why One-Click Undo Changes Everything",
-    description: "How PageSpace's version control for AI edits gives you confidence to experiment without fear of losing work.",
-    content: `
-## The Fear of AI Edits
-
-Have you ever hesitated to let AI edit your document? Worried it might change something important? You're not alone.
-
-The biggest barrier to AI adoption isn't capability—it's trust. Users are afraid of:
-- Losing their original work
-- AI making unwanted changes
-- Not being able to go back
-
-### Introducing AI Rollback
-
-PageSpace solves this with AI Rollback. Every AI edit is versioned, and you can undo it with one click.
-
-### How It Works
-
-1. **Every AI action is tracked**: Edits, suggestions, completions
-2. **Changes are grouped logically**: One "undo" reverts one AI action
-3. **Full history preserved**: See exactly what AI changed
-4. **One-click rollback**: Instantly restore previous state
-
-### In Practice
-
-Imagine you're writing a document:
-
-1. You ask AI to "make this more concise"
-2. AI rewrites three paragraphs
-3. You don't like paragraph 2
-4. Click rollback on just that paragraph
-5. Your original is restored
-
-### Beyond Documents
-
-AI Rollback works everywhere in PageSpace:
-- Document edits
-- Task completions
-- Channel messages drafted by AI
-- Code changes
-
-### Experiment Freely
-
-With AI Rollback, you can experiment without fear. Try bold AI suggestions knowing you can always go back.
-
-This is how AI collaboration should feel.
-    `,
-    author: "PageSpace Team",
-    date: "2026-02-01",
-    readTime: "4 min read",
-    category: "Product",
+    category: "Guide",
   },
 };

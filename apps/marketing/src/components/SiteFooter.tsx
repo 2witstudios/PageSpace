@@ -1,97 +1,100 @@
 import Link from "next/link";
 import Image from "next/image";
+import { Github } from "lucide-react";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
-export function SiteFooter({ variant = "full" }: { variant?: "full" | "compact" }) {
-  if (variant === "compact") {
-    return (
-      <footer className="border-t border-border py-12">
-        <div className="container mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+const productLinks = [
+  { label: "Pricing", href: "/pricing" },
+  { label: "Downloads", href: "/downloads" },
+  { label: "Blog", href: "/blog" },
+  { label: "Security", href: "/security" },
+];
+
+const resourceLinks = [
+  { label: "Documentation", href: "/docs" },
+  { label: "Getting Started", href: "/docs/getting-started" },
+  { label: "API Reference", href: "/docs/api" },
+  { label: "Self-Hosting", href: "/docs/self-hosting" },
+  { label: "MCP Integration", href: "/docs/mcp" },
+];
+
+const companyLinks = [
+  { label: "FAQ", href: "/faq" },
+  { label: "Contact", href: "/contact" },
+  { label: "Privacy", href: "/privacy" },
+  { label: "Terms", href: "/terms" },
+];
+
+function FooterLinkGroup({ title, links }: { title: string; links: { label: string; href: string }[] }) {
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <ul className="mt-4 space-y-2.5">
+        {links.map((link) => (
+          <li key={link.href}>
+            <Link
+              href={link.href}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {link.label}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function SiteFooter() {
+  return (
+    <footer className="bg-muted/30">
+      <div className="h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+      <div className="container mx-auto px-4 md:px-6 py-16 md:py-20">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-12">
+          {/* Brand */}
+          <div className="col-span-2 md:col-span-1">
             <Link href="/" className="flex items-center gap-2">
               <Image
                 src="/android-chrome-192x192.png"
                 alt="PageSpace"
-                width={32}
-                height={32}
-                className="rounded-lg"
+                width={20}
+                height={20}
+                className="rounded"
               />
-              <span className="font-semibold">PageSpace</span>
+              <span className="font-semibold text-foreground">PageSpace</span>
             </Link>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-muted-foreground">
-              <Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link>
-              <Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link>
-              <Link href="/docs" className="hover:text-foreground transition-colors">Docs</Link>
-              <Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link>
-            </nav>
-            <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
+            <p className="mt-3 text-sm text-muted-foreground max-w-[220px]">
+              AI-powered workspace for docs, code, and collaboration.
             </p>
+            <a
+              href="https://github.com/2witstudios/PageSpace"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-block text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="PageSpace on GitHub"
+            >
+              <Github className="size-5" />
+            </a>
           </div>
-        </div>
-      </footer>
-    );
-  }
 
-  return (
-    <footer className="border-t border-border bg-muted/30 py-12 md:py-16">
-      <div className="container mx-auto px-4 md:px-6">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-12">
           {/* Product */}
-          <div>
-            <h3 className="font-semibold mb-4">Product</h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="/tour" className="hover:text-foreground transition-colors">Product Tour</Link></li>
-              <li><Link href="/pricing" className="hover:text-foreground transition-colors">Pricing</Link></li>
-              <li><Link href="/downloads" className="hover:text-foreground transition-colors">Downloads</Link></li>
-              <li><Link href="/integrations" className="hover:text-foreground transition-colors">Integrations</Link></li>
-              <li><Link href="/changelog" className="hover:text-foreground transition-colors">Changelog</Link></li>
-            </ul>
-          </div>
+          <FooterLinkGroup title="Product" links={productLinks} />
 
           {/* Resources */}
-          <div>
-            <h3 className="font-semibold mb-4">Resources</h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="/docs" className="hover:text-foreground transition-colors">Documentation</Link></li>
-              <li><Link href="/blog" className="hover:text-foreground transition-colors">Blog</Link></li>
-              <li><Link href="/faq" className="hover:text-foreground transition-colors">FAQ</Link></li>
-            </ul>
-          </div>
+          <FooterLinkGroup title="Resources" links={resourceLinks} />
 
           {/* Company */}
-          <div>
-            <h3 className="font-semibold mb-4">Company</h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="/contact" className="hover:text-foreground transition-colors">Contact</Link></li>
-              <li><Link href="/security" className="hover:text-foreground transition-colors">Security</Link></li>
-            </ul>
-          </div>
-
-          {/* Legal */}
-          <div>
-            <h3 className="font-semibold mb-4">Legal</h3>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="/privacy" className="hover:text-foreground transition-colors">Privacy Policy</Link></li>
-              <li><Link href="/terms" className="hover:text-foreground transition-colors">Terms of Service</Link></li>
-            </ul>
+          <div className="col-span-2 md:col-span-1">
+            <FooterLinkGroup title="Company" links={companyLinks} />
           </div>
         </div>
 
-        {/* Bottom Bar */}
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-8 border-t border-border">
-          <Link href="/" className="flex items-center gap-2">
-            <Image
-              src="/android-chrome-192x192.png"
-              alt="PageSpace"
-              width={32}
-              height={32}
-              className="rounded-lg"
-            />
-            <span className="font-semibold">PageSpace</span>
-          </Link>
+        {/* Bottom bar */}
+        <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
-            &copy; {new Date().getFullYear()} PageSpace. All rights reserved.
+            &copy; 2026 PageSpace. All rights reserved.
           </p>
+          <ThemeToggle />
         </div>
       </div>
     </footer>

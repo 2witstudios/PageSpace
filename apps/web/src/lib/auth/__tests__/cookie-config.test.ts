@@ -3,6 +3,8 @@ import {
   COOKIE_CONFIG,
   createSessionCookie,
   createClearSessionCookie,
+  createLoggedInIndicatorCookie,
+  createClearLoggedInIndicatorCookie,
   appendSessionCookie,
   appendClearCookies,
   getSessionFromCookies,
@@ -112,13 +114,21 @@ describe('cookie-config', () => {
       expect(sessionCookie).toContain('session=ps_sess_test123');
     });
 
-    it('should set only the session cookie', () => {
+    it('should set session and indicator cookies', () => {
       const headers = new Headers();
       appendSessionCookie(headers, 'ps_sess_test123');
 
       const setCookieHeaders = headers.getSetCookie();
-      // Should only set the session cookie
-      expect(setCookieHeaders.length).toBe(1);
+      expect(setCookieHeaders.length).toBe(2);
+    });
+
+    it('should include logged-in indicator cookie', () => {
+      const headers = new Headers();
+      appendSessionCookie(headers, 'ps_sess_test123');
+
+      const setCookieHeaders = headers.getSetCookie();
+      const indicatorCookie = setCookieHeaders.find((c) => c.startsWith('ps_logged_in=1'));
+      expect(indicatorCookie).toBeDefined();
     });
   });
 
@@ -133,13 +143,22 @@ describe('cookie-config', () => {
       expect(sessionClearCookie).toContain('Expires=Thu, 01 Jan 1970');
     });
 
-    it('should set only the session clear cookie', () => {
+    it('should set session and indicator clear cookies', () => {
       const headers = new Headers();
       appendClearCookies(headers);
 
       const setCookieHeaders = headers.getSetCookie();
-      // Should only clear the session cookie
-      expect(setCookieHeaders.length).toBe(1);
+      expect(setCookieHeaders.length).toBe(2);
+    });
+
+    it('should include logged-in indicator clear cookie', () => {
+      const headers = new Headers();
+      appendClearCookies(headers);
+
+      const setCookieHeaders = headers.getSetCookie();
+      const indicatorCookie = setCookieHeaders.find((c) => c.startsWith('ps_logged_in='));
+      expect(indicatorCookie).toBeDefined();
+      expect(indicatorCookie).toContain('Expires=Thu, 01 Jan 1970');
     });
 
     it('should expire the session cookie', () => {
@@ -150,6 +169,56 @@ describe('cookie-config', () => {
       setCookieHeaders.forEach((cookie) => {
         expect(cookie).toContain('Expires=Thu, 01 Jan 1970');
       });
+    });
+  });
+
+  describe('createLoggedInIndicatorCookie', () => {
+    it('should NOT be httpOnly (readable by client JS)', () => {
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).not.toContain('HttpOnly');
+    });
+
+    it('should use sameSite strict', () => {
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).toContain('SameSite=Strict');
+    });
+
+    it('should set value to 1', () => {
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).toContain('ps_logged_in=1');
+    });
+
+    it('should include secure flag in production', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).toContain('Secure');
+    });
+
+    it('should include domain in production when COOKIE_DOMAIN is set', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('COOKIE_DOMAIN', '.example.com');
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).toContain('Domain=.example.com');
+    });
+
+    it('should NOT include domain when COOKIE_DOMAIN is not set', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).not.toContain('Domain=');
+    });
+
+  });
+
+  describe('createClearLoggedInIndicatorCookie', () => {
+    it('should expire the indicator cookie', () => {
+      const cookie = createClearLoggedInIndicatorCookie();
+      expect(cookie).toContain('ps_logged_in=');
+      expect(cookie).toContain('Expires=Thu, 01 Jan 1970');
+    });
+
+    it('should NOT be httpOnly', () => {
+      const cookie = createClearLoggedInIndicatorCookie();
+      expect(cookie).not.toContain('HttpOnly');
     });
   });
 

@@ -29,6 +29,12 @@ export const COOKIE_CONFIG = {
     maxAge: SESSION_MAX_AGE,
     path: '/',
   },
+  loggedIn: {
+    name: 'ps_logged_in',
+    value: '1',
+    maxAge: SESSION_MAX_AGE,
+    path: '/',
+  },
 } as const;
 
 /**
@@ -59,6 +65,42 @@ export function createSessionCookie(token: string): string {
 }
 
 /**
+ * Create a logged-in indicator cookie.
+ * Non-httpOnly for client-side auth detection across same-domain apps.
+ * Contains no sensitive data -- just signals "a session exists".
+ *
+ * @remarks This cookie is informational only. It can be stale if a session
+ * is revoked server-side without an explicit logout (e.g., suspension, token
+ * rotation). Never use it to gate access -- only for UI hints.
+ */
+export function createLoggedInIndicatorCookie(): string {
+  const isProduction = process.env.NODE_ENV === 'production';
+  return serialize(COOKIE_CONFIG.loggedIn.name, COOKIE_CONFIG.loggedIn.value, {
+    httpOnly: false,
+    secure: isProduction,
+    sameSite: 'strict' as const,
+    path: COOKIE_CONFIG.loggedIn.path,
+    maxAge: COOKIE_CONFIG.loggedIn.maxAge,
+    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
+  });
+}
+
+/**
+ * Create a cookie that clears the logged-in indicator
+ */
+export function createClearLoggedInIndicatorCookie(): string {
+  const isProduction = process.env.NODE_ENV === 'production';
+  return serialize(COOKIE_CONFIG.loggedIn.name, '', {
+    httpOnly: false,
+    secure: isProduction,
+    sameSite: 'strict' as const,
+    path: COOKIE_CONFIG.loggedIn.path,
+    expires: new Date(0),
+    ...(isProduction && process.env.COOKIE_DOMAIN && { domain: process.env.COOKIE_DOMAIN }),
+  });
+}
+
+/**
  * Create a cookie that clears the session
  *
  * @returns Serialized cookie string that expires the session
@@ -79,6 +121,7 @@ export function createClearSessionCookie(): string {
  */
 export function appendSessionCookie(headers: Headers, sessionToken: string): void {
   headers.append('Set-Cookie', createSessionCookie(sessionToken));
+  headers.append('Set-Cookie', createLoggedInIndicatorCookie());
 }
 
 /**
@@ -88,6 +131,7 @@ export function appendSessionCookie(headers: Headers, sessionToken: string): voi
  */
 export function appendClearCookies(headers: Headers): void {
   headers.append('Set-Cookie', createClearSessionCookie());
+  headers.append('Set-Cookie', createClearLoggedInIndicatorCookie());
 }
 
 /**

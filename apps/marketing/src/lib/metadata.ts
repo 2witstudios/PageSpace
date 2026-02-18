@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 const SITE_NAME = "PageSpace";
-const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
+export const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 const TWITTER_HANDLE = "@PageSpaceAI";
 
@@ -150,14 +150,10 @@ export const siteMetadata: Metadata = {
       "Your AI-powered workspace for documents, tasks, calendar, and team collaboration. Work with AI that understands your entire workspace.",
     images: [DEFAULT_OG_IMAGE],
   },
-  verification: {
-    // TODO: Add verification code from Google Search Console dashboard
-    // google: 'your-google-verification-code',
-  },
   category: "technology",
 };
 
-export const LEGAL_LAST_UPDATED = "November 1, 2025";
+export const LEGAL_LAST_UPDATED = "February 17, 2026";
 
 /**
  * Pre-defined metadata for common pages
@@ -186,22 +182,6 @@ export const pageMetadata = {
     keywords: ["download", "desktop app", "mobile app", "macOS", "Windows", "Linux", "iOS", "Android"],
   }),
 
-  tour: createMetadata({
-    title: "Product Tour",
-    description:
-      "Take a guided tour of PageSpace features. See how AI collaboration, document editing, and team coordination work together.",
-    path: "/tour",
-    keywords: ["product tour", "features", "demo", "walkthrough"],
-  }),
-
-  integrations: createMetadata({
-    title: "Integrations",
-    description:
-      "Connect PageSpace with your favorite tools. MCP servers, Google Calendar, and more integrations coming soon.",
-    path: "/integrations",
-    keywords: ["integrations", "MCP", "API", "Google Calendar", "third-party"],
-  }),
-
   blog: createMetadata({
     title: "Blog",
     description:
@@ -216,22 +196,6 @@ export const pageMetadata = {
       "PageSpace developer documentation. Learn how to use the API, integrate MCP servers, and extend your workspace.",
     path: "/docs",
     keywords: ["documentation", "API", "developers", "MCP", "integration"],
-  }),
-
-  gettingStarted: createMetadata({
-    title: "Getting Started",
-    description:
-      "Learn how to set up PageSpace and create your first AI-powered workspace in minutes.",
-    path: "/docs/getting-started",
-    keywords: ["getting started", "setup", "quickstart", "tutorial"],
-  }),
-
-  changelog: createMetadata({
-    title: "Changelog",
-    description:
-      "See what's new in PageSpace. Release notes, feature updates, and improvements.",
-    path: "/changelog",
-    keywords: ["changelog", "release notes", "updates", "features"],
   }),
 
   faq: createMetadata({
@@ -265,4 +229,5 @@ export const pageMetadata = {
     path: "/contact",
     keywords: ["contact", "support", "sales", "help"],
   }),
+
 };

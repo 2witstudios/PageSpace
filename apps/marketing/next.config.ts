@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@pagespace/lib"],
+  output: 'standalone',
+  assetPrefix: '/_marketing',
 };
 
 export default nextConfig;
