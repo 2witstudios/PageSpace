@@ -95,10 +95,19 @@ export function parseNaiveDatetimeInTimezone(naiveDatetime: string, timezone: st
     throw new Error(`Invalid datetime: "${naiveDatetime}"`);
   }
   const tz = normalizeTimezone(timezone);
-  // Offset is positive east of UTC, negative west (e.g., America/Chicago = -360)
-  const offsetMinutes = getTimezoneOffsetMinutes(tz, asUtc);
-  // Convert local → UTC: subtract the offset
-  return new Date(asUtc.getTime() - offsetMinutes * 60 * 1000);
+
+  // Two-pass offset resolution keeps results stable across DST boundaries.
+  // The offset at the provisional UTC instant may differ from the offset at
+  // the actual target instant when a DST transition falls between them.
+  const firstOffsetMs = getTimezoneOffsetMilliseconds(asUtc, tz);
+  const firstGuess = new Date(asUtc.getTime() - firstOffsetMs);
+
+  const secondOffsetMs = getTimezoneOffsetMilliseconds(firstGuess, tz);
+  if (secondOffsetMs !== firstOffsetMs) {
+    return new Date(asUtc.getTime() - secondOffsetMs);
+  }
+
+  return firstGuess;
 }
 
 /**
