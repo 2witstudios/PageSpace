@@ -209,9 +209,11 @@ export async function GET(req: Request) {
       loggers.auth.info('New user created via Google OAuth', { userId: user.id, name: user.name });
     }
 
+    let isNewlyProvisioned = false;
     try {
       const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
+        isNewlyProvisioned = true;
         returnUrl = `/dashboard/${provisionedDrive.driveId}`;
       }
     } catch (error) {
@@ -314,14 +316,14 @@ export async function GET(req: Request) {
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'google');
-      if (provisionedDrive) {
+      if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
       loggers.auth.info('Desktop OAuth deep link redirect', {
         userId: user.id,
         provider: 'google',
-        hasNewUserFlag: !!provisionedDrive,
+        hasNewUserFlag: isNewlyProvisioned,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());
@@ -369,14 +371,14 @@ export async function GET(req: Request) {
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'google');
-      if (provisionedDrive) {
+      if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
       loggers.auth.info('iOS OAuth deep link redirect', {
         userId: user.id,
         provider: 'google',
-        hasNewUserFlag: !!provisionedDrive,
+        hasNewUserFlag: isNewlyProvisioned,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());
