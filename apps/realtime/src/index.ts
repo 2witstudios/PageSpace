@@ -476,21 +476,24 @@ io.on('connection', (socket: AuthSocket) => {
     socketRegistry.registerSocket(user.id, socket.id);
   }
 
-  // Auto-join user's notification room and task room
+  // Auto-join user's notification, task, and personal calendar rooms
   if (user?.id) {
     const notificationRoom = `notifications:${user.id}`;
     const taskRoom = `user:${user.id}:tasks`;
+    const calendarRoom = `user:${user.id}:calendar`;
     const userDrivesRoom = `user:${user.id}:drives`;
     socket.join(notificationRoom);
     socket.join(taskRoom);
+    socket.join(calendarRoom);
     socket.join(userDrivesRoom);
     // Track in registry (these are always-on rooms, not permission-gated)
     socketRegistry.trackRoomJoin(socket.id, notificationRoom);
     socketRegistry.trackRoomJoin(socket.id, taskRoom);
+    socketRegistry.trackRoomJoin(socket.id, calendarRoom);
     socketRegistry.trackRoomJoin(socket.id, userDrivesRoom);
-    loggers.realtime.debug('User joined notification, task, and drives rooms', {
+    loggers.realtime.debug('User joined notification, task, calendar, and drives rooms', {
       userId: user.id,
-      rooms: [notificationRoom, taskRoom, userDrivesRoom]
+      rooms: [notificationRoom, taskRoom, calendarRoom, userDrivesRoom]
     });
   }
 
@@ -538,9 +541,15 @@ io.on('connection', (socket: AuthSocket) => {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
       if (hasAccess) {
         const driveRoom = `drive:${driveId}`;
+        const driveCalendarRoom = `drive:${driveId}:calendar`;
         socket.join(driveRoom);
+        socket.join(driveCalendarRoom);
         socketRegistry.trackRoomJoin(socket.id, driveRoom);
-        loggers.realtime.debug('User joined drive room', { userId: user.id, room: driveRoom });
+        socketRegistry.trackRoomJoin(socket.id, driveCalendarRoom);
+        loggers.realtime.debug('User joined drive and drive calendar rooms', {
+          userId: user.id,
+          rooms: [driveRoom, driveCalendarRoom],
+        });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
       }
@@ -627,9 +636,15 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     const driveRoom = `drive:${driveId}`;
+    const driveCalendarRoom = `drive:${driveId}:calendar`;
     socket.leave(driveRoom);
+    socket.leave(driveCalendarRoom);
     socketRegistry.trackRoomLeave(socket.id, driveRoom);
-    loggers.realtime.debug('User left drive room', { userId: user.id, room: driveRoom });
+    socketRegistry.trackRoomLeave(socket.id, driveCalendarRoom);
+    loggers.realtime.debug('User left drive and drive calendar rooms', {
+      userId: user.id,
+      rooms: [driveRoom, driveCalendarRoom],
+    });
   });
 
   // Activity channel handlers - for real-time activity feed updates

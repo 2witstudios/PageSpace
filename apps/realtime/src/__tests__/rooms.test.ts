@@ -70,8 +70,10 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
       if (user?.id) {
         const notificationRoom = `notifications:${user.id}`;
         const taskRoom = `user:${user.id}:tasks`;
+        const calendarRoom = `user:${user.id}:calendar`;
         socket.join(notificationRoom);
         socket.join(taskRoom);
+        socket.join(calendarRoom);
       }
     },
 
@@ -99,7 +101,9 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
         const hasAccess = await getUserDriveAccess(user.id, driveId);
         if (hasAccess) {
           const driveRoom = `drive:${driveId}`;
+          const driveCalendarRoom = `drive:${driveId}:calendar`;
           socket.join(driveRoom);
+          socket.join(driveCalendarRoom);
         }
       } catch {
         // Silently deny on error
@@ -131,7 +135,9 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
       if (!user?.id) return;
 
       const driveRoom = `drive:${driveId}`;
+      const driveCalendarRoom = `drive:${driveId}:calendar`;
       socket.leave(driveRoom);
+      socket.leave(driveCalendarRoom);
     },
 
     // join_global_drives handler
@@ -158,7 +164,7 @@ describe('Room Management', () => {
   });
 
   describe('auto-join on connect', () => {
-    it('given authenticated user connects, should join notifications and tasks rooms', () => {
+    it('given authenticated user connects, should join notifications, tasks, and calendar rooms', () => {
       const userId = 'test-user-123';
       const socket = createMockSocket(userId);
       const handlers = createRoomHandlers(socket);
@@ -167,6 +173,7 @@ describe('Room Management', () => {
 
       expect(socket.hasJoinedRoom(`notifications:${userId}`)).toBe(true);
       expect(socket.hasJoinedRoom(`user:${userId}:tasks`)).toBe(true);
+      expect(socket.hasJoinedRoom(`user:${userId}:calendar`)).toBe(true);
     });
 
     it('given unauthenticated socket, should not join any rooms', () => {
@@ -233,7 +240,7 @@ describe('Room Management', () => {
   });
 
   describe('join_drive', () => {
-    it('given user is drive member, should join drive room', async () => {
+    it('given user is drive member, should join drive and drive calendar rooms', async () => {
       const userId = 'test-user-123';
       const driveId = 'test-drive-456';
       const socket = createMockSocket(userId);
@@ -245,6 +252,7 @@ describe('Room Management', () => {
 
       expect(getUserDriveAccess).toHaveBeenCalledWith(userId, driveId);
       expect(socket.hasJoinedRoom(`drive:${driveId}`)).toBe(true);
+      expect(socket.hasJoinedRoom(`drive:${driveId}:calendar`)).toBe(true);
     });
 
     it('given user not drive member, should silently deny (no room join)', async () => {
@@ -258,6 +266,7 @@ describe('Room Management', () => {
       await handlers.joinDrive(driveId);
 
       expect(socket.hasJoinedRoom(`drive:${driveId}`)).toBe(false);
+      expect(socket.hasJoinedRoom(`drive:${driveId}:calendar`)).toBe(false);
       expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
@@ -352,12 +361,15 @@ describe('Room Management', () => {
       vi.mocked(getUserDriveAccess).mockResolvedValue(true);
       await handlers.joinDrive(driveId);
       expect(socket.hasJoinedRoom(`drive:${driveId}`)).toBe(true);
+      expect(socket.hasJoinedRoom(`drive:${driveId}:calendar`)).toBe(true);
 
       // Then leave
       handlers.leaveDrive(driveId);
 
       expect(socket.leave).toHaveBeenCalledWith(`drive:${driveId}`);
+      expect(socket.leave).toHaveBeenCalledWith(`drive:${driveId}:calendar`);
       expect(socket.hasJoinedRoom(`drive:${driveId}`)).toBe(false);
+      expect(socket.hasJoinedRoom(`drive:${driveId}:calendar`)).toBe(false);
     });
   });
 

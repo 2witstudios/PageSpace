@@ -3,6 +3,7 @@
 import { useRef, useCallback, useMemo } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
+import { useCalendarSocket } from '@/hooks/useCalendarSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { CalendarEvent, TaskWithDueDate } from './calendar-types';
 import {
@@ -191,6 +192,14 @@ export function useCalendarData({
       mutate(tasksUrl);
     }
   }, [eventsUrl, tasksUrl]);
+
+  useCalendarSocket({
+    context,
+    driveId,
+    onCalendarChanged: () => {
+      mutate(eventsUrl);
+    },
+  });
 
   return {
     events: eventsData?.events ?? [],
