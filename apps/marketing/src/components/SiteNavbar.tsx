@@ -1,16 +1,15 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { APP_URL } from "@/lib/metadata";
+import { SearchTrigger } from "@/components/SearchTrigger";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { NavbarAuthButtons } from "@/components/NavbarAuthButtons";
 
 const navLinks = [
-  { href: "/tour", label: "Product" },
   { href: "/pricing", label: "Pricing" },
   { href: "/docs", label: "Docs" },
   { href: "/blog", label: "Blog" },
-  { href: "/changelog", label: "Changelog" },
+  { href: "/faq", label: "FAQ" },
 ];
 
 export function SiteNavbar() {
@@ -18,7 +17,7 @@ export function SiteNavbar() {
     <header className="sticky top-0 z-50 pt-[env(safe-area-inset-top)] liquid-glass-thin border-b border-[var(--separator)] text-card-foreground shadow-[var(--shadow-ambient)] dark:shadow-none">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          {/* Logo + Search */}
+          {/* Logo */}
           <Link
             href="/"
             className="flex items-center gap-2 text-sm"
@@ -35,28 +34,21 @@ export function SiteNavbar() {
           </Link>
           <span className="text-muted-foreground">/</span>
 
-          {/* InlineSearch */}
+          {/* Search trigger (desktop) */}
           <div className="hidden min-w-[200px] flex-1 md:flex">
-            <div className="relative w-96">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <Input
-                  readOnly
-                  placeholder="Search... (⌘K)"
-                  className="pl-8 pr-8"
-                />
-              </div>
-            </div>
+            <SearchTrigger className="relative w-96 flex items-center rounded-md border border-input bg-transparent px-3 py-1.5 text-sm text-muted-foreground shadow-xs hover:bg-accent transition-colors cursor-pointer">
+              <Search className="mr-2 h-4 w-4" />
+              <span className="flex-1 text-left">Search...</span>
+              <kbd className="ml-auto hidden sm:inline-flex h-5 items-center gap-0.5 rounded border border-border bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+                <span>⌘</span>K
+              </kbd>
+            </SearchTrigger>
           </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="md:hidden"
-            aria-label="Open search"
-          >
+          {/* Search trigger (mobile) */}
+          <SearchTrigger className="inline-flex items-center justify-center h-9 w-9 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors md:hidden" aria-label="Open search">
             <Search className="h-5 w-5" />
-          </Button>
+          </SearchTrigger>
         </div>
 
         {/* Center: Nav Links */}
@@ -73,12 +65,8 @@ export function SiteNavbar() {
         </nav>
 
         <div className="flex flex-shrink-0 items-center gap-2">
-          <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
-            <a href={`${APP_URL}/auth/signin`}>Log in</a>
-          </Button>
-          <Button size="sm" asChild>
-            <a href={`${APP_URL}/auth/signup`}>Get Started</a>
-          </Button>
+          <ThemeToggle />
+          <NavbarAuthButtons />
         </div>
       </div>
     </header>

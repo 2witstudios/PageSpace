@@ -581,6 +581,8 @@ export {
   COOKIE_CONFIG,
   createSessionCookie,
   createClearSessionCookie,
+  createLoggedInIndicatorCookie,
+  createClearLoggedInIndicatorCookie,
   appendSessionCookie,
   appendClearCookies,
   getSessionFromCookies,
