@@ -40,7 +40,7 @@ export default function SignUp() {
         transition={{ duration: 0.4 }}
       >
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
-          Get on the same Page.
+          Get on the same page.
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Create your free workspace in seconds
