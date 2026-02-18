@@ -62,9 +62,13 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     // If there's already a refresh in progress globally, wait for it
     if (globalRefreshPromise) {
       console.log('Token refresh already in progress, waiting...');
-      const result = await globalRefreshPromise;
-      setIsRefreshing(false);
-      return result;
+      setIsRefreshing(true);
+      try {
+        const result = await globalRefreshPromise;
+        return result;
+      } finally {
+        setIsRefreshing(false);
+      }
     }
 
     // Create a new refresh promise

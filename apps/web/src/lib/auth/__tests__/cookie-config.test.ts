@@ -188,6 +188,25 @@ describe('cookie-config', () => {
       expect(cookie).toContain('ps_logged_in=1');
     });
 
+    it('should include secure flag in production', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).toContain('Secure');
+    });
+
+    it('should include domain in production when COOKIE_DOMAIN is set', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('COOKIE_DOMAIN', '.example.com');
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).toContain('Domain=.example.com');
+    });
+
+    it('should NOT include domain when COOKIE_DOMAIN is not set', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      const cookie = createLoggedInIndicatorCookie();
+      expect(cookie).not.toContain('Domain=');
+    });
+
   });
 
   describe('createClearLoggedInIndicatorCookie', () => {

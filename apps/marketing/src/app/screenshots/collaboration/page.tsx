@@ -23,7 +23,7 @@ export default function CollaborationScreenshot() {
 
       {/* Presence indicators */}
       <div className="absolute top-[580px] left-1/2 -translate-x-1/2 flex -space-x-3 z-10">
-        <div className="w-14 h-14 rounded-full bg-primary border-4 border-background flex items-center justify-center text-white font-semibold">
+        <div className="w-14 h-14 rounded-full bg-primary border-4 border-background flex items-center justify-center text-primary-foreground font-semibold">
           J
         </div>
         <div className="w-14 h-14 rounded-full bg-emerald-500 border-4 border-background flex items-center justify-center text-white font-semibold">

@@ -400,7 +400,7 @@ describe('Security Headers', () => {
   });
 
   describe('route classification', () => {
-    it('isPublicPageRoute identifies root and auth routes as public', () => {
+    it('isPublicPageRoute identifies auth routes as public (root is not public)', () => {
       expect(isPublicPageRoute('/')).toBe(false);
       expect(isPublicPageRoute('/auth/signin')).toBe(true);
       expect(isPublicPageRoute('/auth/signup')).toBe(true);

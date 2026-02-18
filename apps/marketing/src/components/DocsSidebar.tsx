@@ -87,7 +87,11 @@ export function DocsSidebar() {
         </SheetTrigger>
         <SheetContent side="left" className="w-72 p-4">
           <SheetTitle className="text-base font-semibold mb-2">Documentation</SheetTitle>
-          <div onClick={() => setOpen(false)}>
+          <div onClick={(e) => {
+            if ((e.target as HTMLElement).closest("a")) {
+              setOpen(false);
+            }
+          }}>
             <SidebarContent />
           </div>
         </SheetContent>

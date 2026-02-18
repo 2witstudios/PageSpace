@@ -25,7 +25,7 @@ export default async function AdminLayout({
   const adminAuthResult = await verifyAdminAuth(request);
 
   if (isAdminAuthError(adminAuthResult)) {
-    // Redirect non-admin users to home page
+    // Redirect non-admin users to the dashboard
     redirect('/dashboard');
   }
 

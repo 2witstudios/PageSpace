@@ -73,24 +73,6 @@ Search for mentionable entities (@mentions) with cross-drive capability.
 \`\`\`
 
 Results include both pages and users, filtered by permissions. This powers the @mention autocomplete in documents and channels.
-
-## Batch Permissions
-
-### POST /api/permissions/batch
-
-Update permissions for multiple pages or users in a single operation.
-
-**Body:**
-\`\`\`json
-{
-  "operations": [{
-    "pageId": "string",
-    "userId": "string",
-    "canView": true,
-    "canEdit": false
-  }]
-}
-\`\`\`
 `;
 
 export default function SearchApiPage() {

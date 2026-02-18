@@ -68,6 +68,10 @@ export function createSessionCookie(token: string): string {
  * Create a logged-in indicator cookie.
  * Non-httpOnly for client-side auth detection across same-domain apps.
  * Contains no sensitive data -- just signals "a session exists".
+ *
+ * @remarks This cookie is informational only. It can be stale if a session
+ * is revoked server-side without an explicit logout (e.g., suspension, token
+ * rotation). Never use it to gate access -- only for UI hints.
  */
 export function createLoggedInIndicatorCookie(): string {
   const isProduction = process.env.NODE_ENV === 'production';

@@ -32,13 +32,15 @@ If \`REDIS_URL\` is not set, the permission cache falls back to in-memory only. 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | \`SESSION_SECRET\` | Yes | Secret for session token signing (min 32 chars) |
-| \`COOKIE_DOMAIN\` | No | Domain for authentication cookies |
+| \`COOKIE_DOMAIN\` | No | Domain for server-side authentication cookies |
+| \`NEXT_PUBLIC_COOKIE_DOMAIN\` | No | Domain for client-side cookies (theme sync) |
 | \`GOOGLE_CLIENT_ID\` | No | Google OAuth client ID |
 | \`GOOGLE_CLIENT_SECRET\` | No | Google OAuth client secret |
 
 \`\`\`bash
 SESSION_SECRET=your-random-secret-at-least-32-characters-long
 COOKIE_DOMAIN=.example.com
+NEXT_PUBLIC_COOKIE_DOMAIN=.example.com
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 \`\`\`

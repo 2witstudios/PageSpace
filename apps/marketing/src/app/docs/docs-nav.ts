@@ -109,6 +109,7 @@ export const flatNavItems: NavItem[] = docsNav.flatMap((section) => section.item
 
 export function getNavContext(href: string) {
   const idx = flatNavItems.findIndex((item) => item.href === href);
+  if (idx === -1) return { current: null, prev: null, next: null };
   return {
     current: flatNavItems[idx] ?? null,
     prev: idx > 0 ? flatNavItems[idx - 1] : null,
@@ -122,7 +123,10 @@ export function getBreadcrumbs(href: string): { title: string; href: string }[] 
     if (item) {
       const crumbs = [{ title: "Docs", href: "/docs" }];
       if (item.href !== "/docs") {
-        crumbs.push({ title: section.title, href: section.items[0].href });
+        const sectionHref = section.items[0].href;
+        if (sectionHref !== "/docs") {
+          crumbs.push({ title: section.title, href: sectionHref });
+        }
         if (item.href !== section.items[0].href) {
           crumbs.push({ title: item.title, href: item.href });
         }

@@ -45,9 +45,6 @@ export default function EmailVerified() {
             <Button asChild className="w-full">
               <Link href="/dashboard">Go to Dashboard</Link>
             </Button>
-            <Button asChild variant="outline" className="w-full">
-              <Link href="/dashboard">Return to Home</Link>
-            </Button>
           </div>
         </CardContent>
       </Card>

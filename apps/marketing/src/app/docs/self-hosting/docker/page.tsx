@@ -16,8 +16,6 @@ Deploy all PageSpace services with Docker Compose.
 ## docker-compose.yml
 
 \`\`\`yaml
-version: "3.8"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -152,6 +150,8 @@ For production, place a reverse proxy (nginx, Caddy, Traefik) in front of PageSp
 server {
     listen 443 ssl;
     server_name pagespace.example.com;
+
+    client_max_body_size 100M;
 
     # Web app
     location / {

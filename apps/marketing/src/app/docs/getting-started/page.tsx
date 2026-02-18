@@ -93,7 +93,7 @@ If you use Claude Desktop, Claude Code, Cursor, or other MCP-compatible tools, y
       "command": "npx",
       "args": ["-y", "pagespace-mcp@latest"],
       "env": {
-        "PAGESPACE_API_URL": "https://www.pagespace.ai",
+        "PAGESPACE_API_URL": "https://pagespace.ai",
         "PAGESPACE_AUTH_TOKEN": "mcp_your_token_here"
       }
     }

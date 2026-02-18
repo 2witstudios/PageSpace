@@ -22,7 +22,7 @@ PageSpace AI agents have access to 13+ workspace automation tools. Tools let AI 
 | \`list_drives\` | Read | List all accessible workspaces |
 | \`list_pages\` | Read | Navigate page hierarchies with tree structure |
 | \`read_page\` | Read | Read page content with metadata |
-| \`create_page\` | Write | Create pages of any type (DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS, SHEET, TASK_LIST) |
+| \`create_page\` | Write | Create pages of any type (DOCUMENT, FOLDER, AI_CHAT, CHANNEL, CANVAS, SHEET, TASK_LIST, CODE) |
 | \`rename_page\` | Edit | Update page titles |
 | \`move_page\` | Edit | Reorganize page hierarchy and ordering |
 

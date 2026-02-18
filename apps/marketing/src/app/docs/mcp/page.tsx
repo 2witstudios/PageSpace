@@ -47,7 +47,7 @@ Add the PageSpace MCP server to your tool's configuration:
       "command": "npx",
       "args": ["-y", "pagespace-mcp@latest"],
       "env": {
-        "PAGESPACE_API_URL": "https://www.pagespace.ai",
+        "PAGESPACE_API_URL": "https://pagespace.ai",
         "PAGESPACE_AUTH_TOKEN": "mcp_your_token_here"
       }
     }
