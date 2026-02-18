@@ -143,7 +143,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id' }),
+  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
 vi.mock('react', () => ({

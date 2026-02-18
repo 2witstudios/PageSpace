@@ -113,6 +113,7 @@ describe('/api/auth/login redirect', () => {
     vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
+      created: true,
     });
 
     vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
@@ -168,7 +169,10 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given user already has drives, should not include redirectTo', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      driveId: 'existing-drive',
+      created: false,
+    });
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',

@@ -16,7 +16,7 @@ import {
 } from '@pagespace/lib/security';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -142,7 +142,7 @@ export async function POST(req: Request) {
     const { userId, passkeyId } = result.data;
 
     // Provision getting started drive for new user
-    let provisionedDrive: { driveId: string } | null = null;
+    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
     try {
       provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
     } catch (error) {

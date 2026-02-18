@@ -132,6 +132,7 @@ describe('/api/auth/google/callback redirect', () => {
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
+      created: true,
     });
 
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
@@ -184,7 +185,10 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given existing user with drives, should redirect to default dashboard', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      driveId: 'existing-drive',
+      created: false,
+    });
     vi.mocked(db.query.users.findFirst).mockResolvedValue({
       id: 'user-123',
       name: 'Existing User',

@@ -17,7 +17,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
@@ -162,7 +162,7 @@ export async function POST(req: Request) {
       tosAcceptedAt: new Date(),
     }).returning().then(res => res[0]);
 
-    let provisionedDrive: { driveId: string } | null = null;
+    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
     try {
       provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
     } catch (error) {

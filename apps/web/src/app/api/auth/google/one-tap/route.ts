@@ -12,7 +12,7 @@ import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
@@ -200,7 +200,7 @@ export async function POST(req: Request) {
     }
 
     // Provision Getting Started drive for new or existing users without drives
-    let provisionedDrive: { driveId: string } | null = null;
+    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
     try {
       provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
     } catch (error) {
@@ -231,7 +231,7 @@ export async function POST(req: Request) {
       userAgent: req.headers.get('user-agent'),
     });
 
-    const redirectTo = provisionedDrive ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
+    const redirectTo = provisionedDrive?.created ? `/dashboard/${provisionedDrive.driveId}` : '/dashboard';
 
     // DESKTOP PLATFORM: Return device token in response body
     // Desktop uses device tokens, not web sessions

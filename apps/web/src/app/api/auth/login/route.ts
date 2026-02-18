@@ -213,7 +213,7 @@ export async function POST(req: Request) {
     let redirectTo: string | undefined;
     try {
       const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
-      if (provisionedDrive) {
+      if (provisionedDrive.created) {
         redirectTo = `/dashboard/${provisionedDrive.driveId}`;
       }
     } catch (error) {

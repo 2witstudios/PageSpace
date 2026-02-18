@@ -216,10 +216,11 @@ export async function POST(req: Request) {
     }
 
     // Provision getting started drive for new users
-    let provisionedDrive: { driveId: string } | null = null;
+    let isNewlyProvisioned = false;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
-      if (provisionedDrive) {
+      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      if (provisionedDrive.created) {
+        isNewlyProvisioned = true;
         returnUrl = `/dashboard/${provisionedDrive.driveId}`;
       }
     } catch (provisionError) {
@@ -304,14 +305,14 @@ export async function POST(req: Request) {
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
-      if (provisionedDrive) {
+      if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
       loggers.auth.info('Desktop Apple OAuth deep link redirect', {
         userId: user.id,
         provider: 'apple',
-        hasNewUserFlag: !!provisionedDrive,
+        hasNewUserFlag: isNewlyProvisioned,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());
@@ -344,14 +345,14 @@ export async function POST(req: Request) {
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
-      if (provisionedDrive) {
+      if (isNewlyProvisioned) {
         deepLinkUrl.searchParams.set('isNewUser', 'true');
       }
 
       loggers.auth.info('iOS Apple OAuth deep link redirect', {
         userId: user.id,
         provider: 'apple',
-        hasNewUserFlag: !!provisionedDrive,
+        hasNewUserFlag: isNewlyProvisioned,
       });
 
       return NextResponse.redirect(deepLinkUrl.toString());

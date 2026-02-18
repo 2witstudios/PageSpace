@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { MentionHighlightOverlay } from '@/components/ui/mention-highlight-overlay';
 import { useMentionOverlay } from '@/hooks/useMentionOverlay';
 import { useMentionTracker } from '@/hooks/useMentionTracker';
+import { useEnterToSend } from '@/hooks/useEnterToSend';
 
 export interface ChatTextareaProps {
   /** Current input value (markdown format with @[label](id:type) mentions) */
@@ -70,6 +71,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     const context = useSuggestionContext();
     // Track IME composition state to prevent accidental sends during predictive text
     const [isComposing, setIsComposing] = useState(false);
+    const enterToSend = useEnterToSend();
 
     // Convert between markdown (parent) and display text (textarea)
     const {
@@ -105,8 +107,9 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
       suggestion.handleKeyDown(e);
 
       // Send on Enter (without Shift) when suggestions are closed
-      // Also check for IME composition to prevent sends during predictive text selection
-      if (!context.isOpen && e.key === 'Enter' && !e.shiftKey) {
+      // On mobile phones (and iPad with on-screen keyboard), Enter inserts a newline instead;
+      // users send via the send button. Desktop and iPad with external keyboard keep Enter-to-send.
+      if (!context.isOpen && e.key === 'Enter' && !e.shiftKey && enterToSend) {
         // Don't send during IME composition (predictive text, etc.)
         if (isComposing || e.nativeEvent.isComposing) {
           return;
@@ -209,7 +212,7 @@ ChatTextareaInner.displayName = 'ChatTextareaInner';
  * Provides:
  * - Auto-growing textarea
  * - @ mention suggestions with search
- * - Enter to send, Shift+Enter for newline
+ * - Platform-aware Enter key: sends on desktop/external keyboard, newline on mobile
  * - Cross-drive mention support
  */
 export const ChatTextarea = forwardRef<ChatTextareaRef, ChatTextareaProps>(
