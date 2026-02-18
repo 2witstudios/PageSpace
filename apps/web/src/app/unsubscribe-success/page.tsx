@@ -53,7 +53,7 @@ function UnsubscribeContent() {
         </Link>
 
         <Link
-          href="/"
+          href="/dashboard"
           className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2.5 px-4 rounded-lg transition-colors"
         >
           Return to PageSpace

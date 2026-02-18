@@ -26,7 +26,7 @@ export default async function AdminLayout({
 
   if (isAdminAuthError(adminAuthResult)) {
     // Redirect non-admin users to home page
-    redirect('/');
+    redirect('/dashboard');
   }
 
   return <AdminLayoutClient>{children}</AdminLayoutClient>;

@@ -58,7 +58,6 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
     }
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const refreshToken = useCallback(async (): Promise<boolean> => {
     // If there's already a refresh in progress globally, wait for it
     if (globalRefreshPromise) {
@@ -129,6 +128,7 @@ export function useTokenRefresh(options: TokenRefreshOptions = {}) {
 
     return globalRefreshPromise;
   // Stable — uses refs and module-level state internally
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const scheduleTokenRefresh = useCallback(() => {

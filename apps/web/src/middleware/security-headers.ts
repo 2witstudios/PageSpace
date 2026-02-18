@@ -116,7 +116,6 @@ export const applySecurityHeaders = (
 };
 
 export const isPublicPageRoute = (pathname: string): boolean =>
-  pathname === '/' ||
   pathname === '/auth' ||
   pathname.startsWith('/auth/');
 
