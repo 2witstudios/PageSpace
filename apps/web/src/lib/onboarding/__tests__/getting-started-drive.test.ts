@@ -1,13 +1,14 @@
 import { describe, expect, test, beforeEach, vi } from 'vitest';
 
 vi.mock('@pagespace/db', () => ({
-  drives: { ownerId: 'ownerId', isTrashed: 'isTrashed' },
+  drives: { ownerId: 'ownerId', isTrashed: 'isTrashed', createdAt: 'createdAt' },
   users: { id: 'id' },
   db: {
     transaction: vi.fn(),
   },
   and: vi.fn((...conditions: unknown[]) => conditions),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+  asc: vi.fn((field: unknown) => ({ field, direction: 'asc' })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
     strings,
     values,
@@ -36,7 +37,7 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
     vi.mocked(slugify).mockReturnValue('getting-started');
   });
 
-  test('given user already owns a drive, should return null', async () => {
+  test('given user already owns a drive, should return existing drive id with created false', async () => {
     const tx = {
       execute: vi.fn().mockResolvedValue(undefined),
       query: {
@@ -54,7 +55,7 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
     expect(sql).toHaveBeenCalled();
     expect(tx.execute).toHaveBeenCalled();
     expect(slugify).toHaveBeenCalledWith(GETTING_STARTED_DRIVE_NAME);
-    expect(result).toBeNull();
+    expect(result).toEqual({ driveId: 'drive-existing', created: false });
     expect(tx.insert).not.toHaveBeenCalled();
     expect(populateUserDrive).not.toHaveBeenCalled();
   });
@@ -86,6 +87,6 @@ describe('provisionGettingStartedDriveIfNeeded', () => {
     expect(values).toHaveBeenCalled();
     expect(returning).toHaveBeenCalled();
     expect(populateUserDrive).toHaveBeenCalledWith('user-123', 'drive-123', tx);
-    expect(result).toEqual({ driveId: 'drive-123' });
+    expect(result).toEqual({ driveId: 'drive-123', created: true });
   });
 });

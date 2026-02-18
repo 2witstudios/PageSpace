@@ -107,7 +107,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123' }),
+  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({

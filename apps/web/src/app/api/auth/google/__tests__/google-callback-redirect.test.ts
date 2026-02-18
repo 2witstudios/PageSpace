@@ -192,7 +192,7 @@ describe('GET /api/auth/google/callback', () => {
 
     // Default mocks for successful flow
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
     // Default to existing user
     vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
@@ -271,6 +271,7 @@ describe('GET /api/auth/google/callback', () => {
     it('given provisioned drive, should redirect to that drive', async () => {
       vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive-123',
+        created: true,
       });
 
       const state = createSignedState({

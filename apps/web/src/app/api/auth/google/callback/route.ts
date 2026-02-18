@@ -209,10 +209,9 @@ export async function GET(req: Request) {
       loggers.auth.info('New user created via Google OAuth', { userId: user.id, name: user.name });
     }
 
-    let provisionedDrive: { driveId: string } | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
-      if (provisionedDrive) {
+      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      if (provisionedDrive.created) {
         returnUrl = `/dashboard/${provisionedDrive.driveId}`;
       }
     } catch (error) {

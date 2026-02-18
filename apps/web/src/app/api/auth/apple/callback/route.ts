@@ -216,10 +216,9 @@ export async function POST(req: Request) {
     }
 
     // Provision getting started drive for new users
-    let provisionedDrive: { driveId: string } | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
-      if (provisionedDrive) {
+      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      if (provisionedDrive.created) {
         returnUrl = `/dashboard/${provisionedDrive.driveId}`;
       }
     } catch (provisionError) {

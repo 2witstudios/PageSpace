@@ -111,7 +111,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
+  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'existing-drive', created: false }),
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';

@@ -399,6 +399,11 @@ export const useAuthStore = create<AuthState>()(
 
             if (response.ok) {
               const userData = await response.json();
+
+              // Clear persisted stores if a different user is now authenticated
+              const { clearStoresIfUserChanged } = await import('@/lib/auth/clear-user-stores');
+              clearStoresIfUserChanged(userData.id);
+
               const currentUser = get().user;
 
               // Check if user data actually changed (prevent unnecessary re-renders)

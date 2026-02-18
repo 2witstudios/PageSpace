@@ -1,4 +1,4 @@
-import { db, drives, users, and, eq, sql } from '@pagespace/db';
+import { db, drives, users, and, eq, sql, asc } from '@pagespace/db';
 import { slugify } from '@pagespace/lib/server';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 
@@ -8,6 +8,7 @@ type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export interface ProvisionGettingStartedDriveResult {
   driveId: string;
+  created: boolean;
 }
 
 /**
@@ -17,7 +18,7 @@ export interface ProvisionGettingStartedDriveResult {
  */
 export async function provisionGettingStartedDriveIfNeeded(
   userId: string
-): Promise<ProvisionGettingStartedDriveResult | null> {
+): Promise<ProvisionGettingStartedDriveResult> {
   const driveSlug = slugify(GETTING_STARTED_DRIVE_NAME);
 
   return db.transaction(async (tx: TransactionType) => {
@@ -28,10 +29,11 @@ export async function provisionGettingStartedDriveIfNeeded(
       columns: {
         id: true,
       },
+      orderBy: asc(drives.createdAt),
     });
 
     if (existingOwnedDrive) {
-      return null;
+      return { driveId: existingOwnedDrive.id, created: false };
     }
 
     const [newDrive] = await tx
@@ -46,6 +48,6 @@ export async function provisionGettingStartedDriveIfNeeded(
 
     await populateUserDrive(userId, newDrive.id, tx);
 
-    return { driveId: newDrive.id };
+    return { driveId: newDrive.id, created: true };
   });
 }

@@ -144,6 +144,7 @@ describe('/api/auth/signup redirect', () => {
 
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
+      created: true,
     });
 
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
@@ -206,8 +207,11 @@ describe('/api/auth/signup redirect', () => {
     expect(response.headers.get('Location')).toContain('auth=success');
   });
 
-  test('given signup when provisioning returns null, should redirect to default dashboard', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
+  test('given signup when user already has a drive, should redirect to existing drive', async () => {
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      driveId: 'existing-drive',
+      created: false,
+    });
 
     const request = new Request('http://localhost/api/auth/signup', {
       method: 'POST',
@@ -228,8 +232,7 @@ describe('/api/auth/signup redirect', () => {
     const response = await POST(request);
 
     expect(response.status).toBe(303);
-    expect(response.headers.get('Location')).toContain('/dashboard');
-    expect(response.headers.get('Location')).not.toContain('/dashboard/drive-');
+    expect(response.headers.get('Location')).toContain('/dashboard/existing-drive');
   });
 
   test('given signup when provisioning throws, should still redirect to dashboard', async () => {
