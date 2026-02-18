@@ -6,9 +6,14 @@ import { pageMetadata, APP_URL } from "@/lib/metadata";
 
 export const metadata = pageMetadata.downloads;
 
-// Version info - would come from API/config in production
-const VERSION = "1.2.0";
-const RELEASE_DATE = "February 10, 2026";
+// ─── Release Config ─────────────────────────────────────────
+// Update RELEASE_TAG to point all download links to a new release.
+const RELEASE_TAG = "desktop-v1.0.18";
+const VERSION = "1.0.18";
+const RELEASE_DATE = "February 9, 2026";
+const DOWNLOAD_BASE = `https://github.com/2witstudios/PageSpace/releases/download/${RELEASE_TAG}`;
+
+const TESTFLIGHT_URL = "https://testflight.apple.com/join/HdNDfpCC";
 
 interface DownloadOption {
   platform: string;
@@ -17,55 +22,59 @@ interface DownloadOption {
   filename: string;
   size: string;
   icon: React.ReactNode;
+  url: string;
 }
 
 const desktopDownloads: DownloadOption[] = [
   {
     platform: "macOS",
-    arch: "Apple Silicon",
-    label: "Mac (Apple Silicon)",
-    filename: `PageSpace-${VERSION}-arm64.dmg`,
-    size: "95 MB",
+    label: "Mac",
+    filename: "PageSpace.dmg",
+    size: "177 MB",
     icon: <Apple className="h-5 w-5" />,
-  },
-  {
-    platform: "macOS",
-    arch: "Intel",
-    label: "Mac (Intel)",
-    filename: `PageSpace-${VERSION}-x64.dmg`,
-    size: "98 MB",
-    icon: <Apple className="h-5 w-5" />,
+    url: `${DOWNLOAD_BASE}/PageSpace.dmg`,
   },
   {
     platform: "Windows",
-    arch: "x64",
     label: "Windows",
-    filename: `PageSpace-${VERSION}-x64.exe`,
-    size: "102 MB",
+    filename: "PageSpace.exe",
+    size: "80 MB",
     icon: <Monitor className="h-5 w-5" />,
+    url: `${DOWNLOAD_BASE}/PageSpace.exe`,
   },
   {
     platform: "Linux",
     arch: "AppImage",
     label: "Linux (AppImage)",
-    filename: `PageSpace-${VERSION}-x86_64.AppImage`,
-    size: "105 MB",
+    filename: "PageSpace.AppImage",
+    size: "106 MB",
     icon: <Monitor className="h-5 w-5" />,
+    url: `${DOWNLOAD_BASE}/PageSpace.AppImage`,
   },
   {
     platform: "Linux",
     arch: "deb",
     label: "Linux (Debian/Ubuntu)",
-    filename: `PageSpace-${VERSION}-amd64.deb`,
-    size: "98 MB",
+    filename: "PageSpace.deb",
+    size: "73 MB",
     icon: <Monitor className="h-5 w-5" />,
+    url: `${DOWNLOAD_BASE}/PageSpace.deb`,
+  },
+  {
+    platform: "Linux",
+    arch: "rpm",
+    label: "Linux (Fedora/RHEL)",
+    filename: "PageSpace.rpm",
+    size: "73 MB",
+    icon: <Monitor className="h-5 w-5" />,
+    url: `${DOWNLOAD_BASE}/PageSpace.rpm`,
   },
 ];
 
 const systemRequirements = {
   macOS: {
     os: "macOS 12 (Monterey) or later",
-    processor: "Apple Silicon or Intel Core i5+",
+    processor: "Apple Silicon or Intel",
     memory: "4 GB RAM minimum, 8 GB recommended",
     storage: "500 MB available space",
   },
@@ -174,9 +183,11 @@ export default function DownloadsPage() {
                       </div>
                     </div>
                   </div>
-                  <Button className="w-full" variant="outline" disabled>
-                    <Download className="mr-2 h-4 w-4" />
-                    Coming Soon
+                  <Button className="w-full" variant="outline" asChild>
+                    <a href={download.url} download>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download {download.filename}
+                    </a>
                   </Button>
                 </div>
               ))}
@@ -242,7 +253,7 @@ export default function DownloadsPage() {
                   <span className="text-xs bg-amber-500/10 text-amber-600 px-2 py-1 rounded">TestFlight</span>
                 </div>
                 <Button variant="outline" className="w-full" asChild>
-                  <a href="https://testflight.apple.com/join/pagespace" target="_blank" rel="noopener noreferrer">
+                  <a href={TESTFLIGHT_URL} target="_blank" rel="noopener noreferrer">
                     Join TestFlight
                     <ExternalLink className="ml-2 h-4 w-4" />
                   </a>
@@ -263,11 +274,8 @@ export default function DownloadsPage() {
                   </div>
                   <span className="text-xs bg-amber-500/10 text-amber-600 px-2 py-1 rounded">Beta</span>
                 </div>
-                <Button variant="outline" className="w-full" asChild>
-                  <a href="https://play.google.com/apps/testing/ai.pagespace" target="_blank" rel="noopener noreferrer">
-                    Join Beta
-                    <ExternalLink className="ml-2 h-4 w-4" />
-                  </a>
+                <Button variant="outline" className="w-full" disabled>
+                  Coming Soon
                 </Button>
               </div>
             </div>
