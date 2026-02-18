@@ -134,6 +134,48 @@ describe('timestamp-utils', () => {
     });
   });
 
+  describe('isNaiveISODatetime', () => {
+    it('matches naive datetime with seconds', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00')).toBe(true);
+    });
+
+    it('matches naive datetime without seconds', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00')).toBe(true);
+    });
+
+    it('matches naive datetime with milliseconds', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00.000')).toBe(true);
+    });
+
+    it('trims whitespace before matching', () => {
+      expect(isNaiveISODatetime('  2026-02-19T19:00:00  ')).toBe(true);
+    });
+
+    it('rejects datetime with Z suffix', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00Z')).toBe(false);
+    });
+
+    it('rejects datetime with positive UTC offset', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00+05:00')).toBe(false);
+    });
+
+    it('rejects datetime with negative UTC offset', () => {
+      expect(isNaiveISODatetime('2026-02-19T19:00:00-06:00')).toBe(false);
+    });
+
+    it('rejects date-only strings', () => {
+      expect(isNaiveISODatetime('2026-02-19')).toBe(false);
+    });
+
+    it('rejects natural language', () => {
+      expect(isNaiveISODatetime('tomorrow at 3pm')).toBe(false);
+    });
+
+    it('rejects empty string', () => {
+      expect(isNaiveISODatetime('')).toBe(false);
+    });
+  });
+
   describe('parseNaiveDatetimeInTimezone', () => {
     it('interprets a naive datetime in a standard timezone', () => {
       // 7pm Central (CST, UTC-6) = 2026-02-20T01:00:00Z
