@@ -8,6 +8,10 @@ const webSearchLogger = loggers.ai.child({ module: 'web-search-tools' });
 
 const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 
+function safeHostname(url: string): string {
+  try { return new URL(url).hostname; } catch { return ''; }
+}
+
 /** Map internal recency filter values to Brave's freshness parameter */
 const FRESHNESS_MAP: Record<string, string | undefined> = {
   noLimit: undefined,
@@ -157,7 +161,7 @@ Returns structured search results with titles, links, summaries, and publication
             result.description,
             ...(result.extra_snippets || []),
           ].filter(Boolean).join('\n\n'),
-          source: result.meta_url?.hostname || new URL(result.url).hostname,
+          source: result.meta_url?.hostname || safeHostname(result.url),
           favicon: result.meta_url?.favicon,
           publishDate: result.page_age || result.age || 'Unknown',
         }));
