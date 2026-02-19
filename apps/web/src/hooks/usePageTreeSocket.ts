@@ -159,10 +159,10 @@ export function usePageTreeSocket(driveId?: string, trashView?: boolean) {
     return () => {
       console.log('🌳 usePageTreeSocket: Cleaning up listeners for drive:', driveId);
 
-      // Leave the drive room (using drive ID)
-      if (driveId) {
-        socket.emit('leave_drive', driveId);
-      }
+      // Note: We don't leave the drive on unmount because:
+      // 1. Other hooks (useCalendarSocket, usePageContentSocket) may share the drive room
+      // 2. Server cleans up room membership on disconnect
+      // 3. Leaving prematurely could cause missed events for other components
 
       // Remove all event listeners
       events.forEach(event => {
