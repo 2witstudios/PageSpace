@@ -716,7 +716,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             isProviderConfigured={isProviderConfigured}
             onSavingChange={setIsSettingsSaving}
           />
-          <AgentIntegrationsPanel pageId={page.id} driveId={driveId} />
+          <div className="px-4 pb-4">
+            <AgentIntegrationsPanel pageId={page.id} driveId={driveId} />
+          </div>
         </TabsContent>
       </Tabs>
 
