@@ -3,7 +3,7 @@
  * Handles permission revocation by removing users from Socket.IO rooms.
  *
  * Supports multiple revocation scenarios:
- * - Drive member removal: kick from drive:*, activity:drive:*
+ * - Drive member removal: kick from drive:*, drive:*:calendar, activity:drive:*
  * - Page permission revocation: kick from specific page room
  * - Full user revocation: kick from all rooms
  */
@@ -100,6 +100,7 @@ export function roomMatchesPattern(room: string, pattern: string): boolean {
 export function getRoomsForDriveKick(driveId: string): string[] {
   return [
     `drive:${driveId}`,
+    `drive:${driveId}:calendar`,
     `activity:drive:${driveId}`,
   ];
 }
