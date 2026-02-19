@@ -55,6 +55,7 @@ describe('auth', () => {
         role: 'user',
         tokenVersion: 1,
         adminRoleVersion: 0,
+        authTransport: 'cookie',
       });
       expect(mockAuthenticateWebRequest).toHaveBeenCalledWith(request);
     });
@@ -78,6 +79,7 @@ describe('auth', () => {
         role: 'admin',
         tokenVersion: 2,
         adminRoleVersion: 1,
+        authTransport: 'cookie',
       });
     });
 
@@ -133,6 +135,7 @@ describe('auth', () => {
         role: 'admin',
         tokenVersion: 1,
         adminRoleVersion: 0,
+        authTransport: 'cookie',
       });
       expect(mockValidateAdminAccess).toHaveBeenCalledWith('admin-123', 0);
     });
