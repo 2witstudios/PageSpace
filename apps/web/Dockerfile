@@ -72,6 +72,9 @@ ENV NODE_ENV=production
 # This matches the processor container's UID for shared volume access
 RUN mkdir -p /app/storage && chown -R node:node /app/storage
 
+# Ensure Next.js image cache directory is writable by node user
+RUN mkdir -p /app/apps/web/.next/cache && chown -R node:node /app/apps/web/.next
+
 # Copy the standalone output
 COPY --from=builder /app/apps/web/.next/standalone .
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
