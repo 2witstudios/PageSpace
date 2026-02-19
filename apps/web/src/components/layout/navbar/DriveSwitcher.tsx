@@ -131,21 +131,40 @@ export default function DriveSwitcher() {
     return <Skeleton className="h-9 w-40" />;
   }
 
+  const handleNavigateToDriveRoot = () => {
+    if (currentDriveId) {
+      router.push(`/dashboard/${currentDriveId}`);
+    } else {
+      setIsOpen(true);
+    }
+  };
+
   return (
     <>
-      <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            className="flex items-center gap-2 px-2 h-9 max-w-[200px]"
-          >
-            <Folder className="h-4 w-4 shrink-0" />
-            <span className="truncate font-medium">
-              {currentDrive ? currentDrive.name : "Select Drive"}
-            </span>
-            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-          </Button>
-        </DropdownMenuTrigger>
+      <div className="flex items-center h-9 rounded-md">
+        {/* Clicking folder + name navigates to drive root */}
+        <button
+          onClick={handleNavigateToDriveRoot}
+          className="flex items-center gap-2 pl-2 pr-1 h-9 max-w-[170px] hover:bg-accent rounded-l-md transition-colors"
+          title={currentDrive ? `Go to ${currentDrive.name} root` : "Select a drive"}
+        >
+          <Folder className="h-4 w-4 shrink-0" />
+          <span className="truncate font-medium">
+            {currentDrive ? currentDrive.name : "Select Drive"}
+          </span>
+        </button>
+
+        {/* Chevron opens the drive switcher dropdown */}
+        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="px-1 h-9 w-7 shrink-0 rounded-l-none rounded-r-md"
+              title="Switch drive"
+            >
+              <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">
           {/* Search */}
           <div className="p-2">
@@ -246,7 +265,8 @@ export default function DriveSwitcher() {
             Create Drive
           </DropdownMenuItem>
         </DropdownMenuContent>
-      </DropdownMenu>
+        </DropdownMenu>
+      </div>
 
       <CreateDriveDialog isOpen={isCreateDriveOpen} setIsOpen={setCreateDriveOpen} />
     </>
