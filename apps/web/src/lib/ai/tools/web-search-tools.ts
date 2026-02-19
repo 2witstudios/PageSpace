@@ -1,100 +1,93 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { type ToolExecutionContext, getDefaultPageSpaceSettings, getUserGLMSettings } from '../core';
+import { type ToolExecutionContext } from '../core';
 import { loggers } from '@pagespace/lib/server';
 import { maskIdentifier } from '@/lib/logging/mask';
 
 const webSearchLogger = loggers.ai.child({ module: 'web-search-tools' });
 
-interface WebSearchResult {
+const BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
+
+/** Map internal recency filter values to Brave's freshness parameter */
+const FRESHNESS_MAP: Record<string, string | undefined> = {
+  noLimit: undefined,
+  oneDay: 'pd',
+  oneWeek: 'pw',
+  oneMonth: 'pm',
+  oneYear: 'py',
+};
+
+interface BraveSearchResult {
   title: string;
-  link: string;
-  content: string;
-  media: string;
-  icon: string;
-  publish_date?: string;
-  refer: string;
+  url: string;
+  description: string;
+  meta_url?: { hostname?: string; favicon?: string };
+  page_age?: string;
+  age?: string;
+  extra_snippets?: string[];
 }
 
-interface WebSearchResponse {
-  created: number;
-  id: string;
-  request_id: string;
-  search_result: WebSearchResult[];
+interface BraveSearchResponse {
+  web?: { results: BraveSearchResult[] };
+  query?: { original: string };
 }
 
 /**
- * Performs web search using GLM's Web Search API
- * Requires GLM API key to be configured (either default PageSpace key or user's own key)
+ * Performs web search using Brave Search API.
+ * Requires BRAVE_API_KEY environment variable.
  */
 async function performWebSearch({
   query,
   count = 10,
-  searchEngine = 'search-prime',
   domainFilter,
   recencyFilter = 'noLimit',
   userId,
 }: {
   query: string;
   count?: number;
-  searchEngine?: 'search-prime';
   domainFilter?: string;
   recencyFilter?: 'noLimit' | 'oneDay' | 'oneWeek' | 'oneMonth' | 'oneYear';
   userId: string;
-}): Promise<WebSearchResponse> {
-  // Get GLM API key - try default PageSpace settings first, then user settings
-  let glmApiKey: string | undefined;
-
-  const defaultSettings = await getDefaultPageSpaceSettings();
-  if (defaultSettings?.provider === 'glm') {
-    glmApiKey = defaultSettings.apiKey;
-  } else {
-    // Try user's personal GLM settings
-    const userSettings = await getUserGLMSettings(userId);
-    if (userSettings?.apiKey) {
-      glmApiKey = userSettings.apiKey;
-    }
+}): Promise<BraveSearchResponse> {
+  const apiKey = process.env.BRAVE_API_KEY;
+  if (!apiKey) {
+    throw new Error('BRAVE_API_KEY is not configured. Web search requires a Brave Search API key.');
   }
 
-  if (!glmApiKey) {
-    throw new Error('GLM API key not configured. Web search requires a GLM API key to be set in PageSpace settings or your personal AI settings.');
-  }
+  // Prepend site: filter to query when domain filter is specified
+  const searchQuery = domainFilter ? `site:${domainFilter} ${query}` : query;
 
   webSearchLogger.debug('Performing web search', {
     userId: maskIdentifier(userId),
     query: query.substring(0, 100),
     count,
-    searchEngine,
     hasDomainFilter: !!domainFilter,
     recencyFilter,
   });
 
   try {
-    // Build request body according to GLM Web Search API spec
-    const requestBody: Record<string, unknown> = {
-      search_engine: searchEngine,
-      search_query: query,
-      count,
-      search_recency_filter: recencyFilter,
-    };
+    const params = new URLSearchParams({
+      q: searchQuery,
+      count: String(count),
+      extra_snippets: 'true',
+    });
 
-    if (domainFilter) {
-      requestBody.search_domain_filter = domainFilter;
+    const freshness = FRESHNESS_MAP[recencyFilter];
+    if (freshness) {
+      params.set('freshness', freshness);
     }
 
-    // Call GLM Web Search API - matches OpenAPI spec
-    const response = await fetch('https://api.z.ai/api/paas/v4/web_search', {
-      method: 'POST',
+    const response = await fetch(`${BRAVE_SEARCH_URL}?${params}`, {
+      method: 'GET',
       headers: {
-        'Authorization': `Bearer ${glmApiKey}`,
-        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-Subscription-Token': apiKey,
       },
-      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      webSearchLogger.error('GLM Web Search API error', undefined, {
+      webSearchLogger.error('Brave Search API error', undefined, {
         userId: maskIdentifier(userId),
         status: response.status,
         statusText: response.statusText,
@@ -103,12 +96,11 @@ async function performWebSearch({
       throw new Error(`Web search failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json() as WebSearchResponse;
+    const data = await response.json() as BraveSearchResponse;
 
     webSearchLogger.info('Web search completed successfully', {
       userId: maskIdentifier(userId),
-      resultsCount: data.search_result?.length || 0,
-      requestId: data.request_id,
+      resultsCount: data.web?.results?.length || 0,
     });
 
     return data;
@@ -123,7 +115,7 @@ async function performWebSearch({
 
 export const webSearchTools = {
   /**
-   * Search the web for current information using GLM's Web Search API
+   * Search the web for current information using Brave Search API
    */
   web_search: tool({
     description: `Search the web for current information, news, documentation, and real-time data. Use this when:
@@ -136,7 +128,7 @@ export const webSearchTools = {
 Returns structured search results with titles, links, summaries, and publication dates.`,
     inputSchema: z.object({
       query: z.string().describe('Search query - be specific and use natural language (e.g., "latest developments in AI safety 2025", "best practices for React Server Components")'),
-      count: z.number().min(1).max(50).optional().default(10).describe('Number of results to return (1-50, default 10)'),
+      count: z.number().min(1).max(20).optional().default(10).describe('Number of results to return (1-20, default 10)'),
       domainFilter: z.string().optional().describe('Optional: Limit search to specific domain (e.g., "docs.python.org", "github.com")'),
       recencyFilter: z.enum(['noLimit', 'oneDay', 'oneWeek', 'oneMonth', 'oneYear']).optional().default('noLimit').describe('Filter by recency: "oneDay" (last 24h), "oneWeek", "oneMonth", "oneYear", or "noLimit"'),
     }),
@@ -155,15 +147,19 @@ Returns structured search results with titles, links, summaries, and publication
           userId,
         });
 
-        // Format results for the AI to use
-        const formattedResults = searchResponse.search_result.map((result, index) => ({
+        const results = searchResponse.web?.results || [];
+
+        const formattedResults = results.map((result, index) => ({
           position: index + 1,
           title: result.title,
-          url: result.link,
-          summary: result.content,
-          source: result.media,
-          publishDate: result.publish_date || 'Unknown',
-          reference: result.refer,
+          url: result.url,
+          summary: [
+            result.description,
+            ...(result.extra_snippets || []),
+          ].filter(Boolean).join('\n\n'),
+          source: result.meta_url?.hostname || new URL(result.url).hostname,
+          favicon: result.meta_url?.favicon,
+          publishDate: result.page_age || result.age || 'Unknown',
         }));
 
         return {
@@ -173,15 +169,13 @@ Returns structured search results with titles, links, summaries, and publication
           results: formattedResults,
           summary: `Found ${formattedResults.length} web results for "${query}"`,
           metadata: {
-            searchEngine: 'search-prime',
+            searchEngine: 'brave',
             recencyFilter,
             domainFilter: domainFilter || 'all domains',
-            requestId: searchResponse.request_id,
-            timestamp: new Date(searchResponse.created * 1000).toISOString(),
           },
           nextSteps: [
             'Analyze the search results and synthesize key information',
-            'Cite sources using the reference numbers (e.g., [ref_1])',
+            'Cite sources using the URLs provided',
             'If results are not relevant, try refining the search query',
             'Use domainFilter to focus on specific authoritative sources',
             'Use recencyFilter to find more recent information if needed',
@@ -193,7 +187,6 @@ Returns structured search results with titles, links, summaries, and publication
           query: query.substring(0, 100),
         });
 
-        // Return error information to the AI
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Unknown error occurred',
@@ -202,7 +195,7 @@ Returns structured search results with titles, links, summaries, and publication
           results: [],
           summary: `Web search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
           nextSteps: [
-            'Check if GLM API key is configured in PageSpace settings',
+            'Check if BRAVE_API_KEY environment variable is configured',
             'Try a different search query',
             'If the error persists, inform the user that web search is temporarily unavailable',
           ],
