@@ -257,8 +257,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   }
 
   return (
-    <div className="h-full p-4">
-      <form onSubmit={handleSubmit(onSubmit)} className="h-full flex flex-col space-y-6">
+    <div className="p-4">
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col space-y-6">
         {/* AI Provider & Model Selection */}
         <Card>
           <CardHeader>
@@ -350,16 +350,16 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         )}
 
         {/* System Prompt */}
-        <Card className="flex-1 flex flex-col">
+        <Card>
           <CardHeader>
             <CardTitle className="text-lg">System Prompt</CardTitle>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col">
+          <CardContent>
             <label className="text-sm font-medium mb-2 block">Custom Instructions</label>
             <Textarea
               {...register('systemPrompt')}
               placeholder="Define your AI agent's behavior, personality, and instructions here..."
-              className="flex-1 min-h-[200px] resize-none"
+              className="min-h-[200px] resize-none w-full"
             />
             <p className="text-xs text-muted-foreground mt-2">
               Describe how you want your AI agent to behave, its role, expertise, and any specific instructions.
