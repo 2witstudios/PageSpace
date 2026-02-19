@@ -193,12 +193,14 @@ export function useCalendarData({
     }
   }, [eventsUrl, tasksUrl]);
 
+  const handleCalendarChanged = useCallback(() => {
+    mutate(eventsUrl);
+  }, [eventsUrl]);
+
   useCalendarSocket({
     context,
     driveId,
-    onCalendarChanged: () => {
-      mutate(eventsUrl);
-    },
+    onCalendarChanged: handleCalendarChanged,
   });
 
   return {

@@ -51,19 +51,33 @@ export function useCalendarSocket({ context, driveId, onCalendarChanged }: UseCa
   }, [socket, debouncedRefresh]);
 
   useEffect(() => {
-    if (!socket || !socket.connected || context !== 'drive' || !driveId) {
+    if (!socket || context !== 'drive' || !driveId) {
       return;
     }
 
-    if (joinedDriveIdRef.current && joinedDriveIdRef.current !== driveId) {
-      socket.emit('leave_drive', joinedDriveIdRef.current);
-      joinedDriveIdRef.current = null;
-    }
+    const joinDrive = () => {
+      if (!socket.connected) return;
 
-    if (joinedDriveIdRef.current !== driveId) {
-      socket.emit('join_drive', driveId);
-      joinedDriveIdRef.current = driveId;
-    }
+      if (joinedDriveIdRef.current && joinedDriveIdRef.current !== driveId) {
+        socket.emit('leave_drive', joinedDriveIdRef.current);
+        joinedDriveIdRef.current = null;
+      }
+
+      if (joinedDriveIdRef.current !== driveId) {
+        socket.emit('join_drive', driveId);
+        joinedDriveIdRef.current = driveId;
+      }
+    };
+
+    // Join immediately if already connected
+    joinDrive();
+
+    // Re-join on reconnection (socket object persists across reconnects)
+    socket.on('connect', joinDrive);
+
+    return () => {
+      socket.off('connect', joinDrive);
+    };
   }, [socket, context, driveId]);
 
   useEffect(() => {
@@ -71,11 +85,10 @@ export function useCalendarSocket({ context, driveId, onCalendarChanged }: UseCa
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
-
-      if (socket?.connected && joinedDriveIdRef.current) {
-        socket.emit('leave_drive', joinedDriveIdRef.current);
-        joinedDriveIdRef.current = null;
-      }
+      // Note: We don't leave the drive on unmount because:
+      // 1. Other hooks (usePageTreeSocket, usePageContentSocket) may share the drive room
+      // 2. Server cleans up room membership on disconnect
+      // 3. Leaving prematurely could cause missed events for other components
     };
-  }, [socket]);
+  }, []);
 }
