@@ -9,6 +9,7 @@ export interface VerifiedUser {
   role: 'user' | 'admin';
   tokenVersion: number;
   adminRoleVersion: number;
+  authTransport: 'cookie' | 'bearer';
 }
 
 /** Type guard to check if result is an error response */
@@ -22,11 +23,15 @@ export async function verifyAuth(request: Request): Promise<VerifiedUser | null>
     return null;
   }
 
+  const authHeader = request.headers.get('authorization');
+  const hasSessionBearerToken = authHeader?.startsWith('Bearer ps_sess_') ?? false;
+
   return {
     id: result.userId,
     role: result.role,
     tokenVersion: result.tokenVersion,
     adminRoleVersion: result.adminRoleVersion,
+    authTransport: hasSessionBearerToken ? 'bearer' : 'cookie',
   } satisfies VerifiedUser;
 }
 
@@ -57,7 +62,7 @@ export type AdminRouteContext = { params: Promise<Record<string, string>> };
  *
  * Usage:
  * ```typescript
- * // For routes WITHOUT dynamic params:
+ * // For routes WITHOUT context:
  * export const GET = withAdminAuth(async (adminUser, request) => {
  *   return Response.json({ userId: adminUser.id });
  * });
@@ -100,10 +105,13 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
   }
 
   // Defense-in-depth: CSRF validation for state-changing admin operations
-  // Even with SameSite=Strict cookies, we add explicit CSRF validation for zero-trust security
+  // CSRF is required only for cookie-authenticated browser sessions.
+  // Bearer tokens must be explicitly provided by the client and are not sent automatically cross-site.
   const method = request.method.toUpperCase();
   const isStateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
-  if (isStateChanging) {
+  const requiresCSRF = isStateChanging && user.authTransport === 'cookie';
+
+  if (requiresCSRF) {
     const csrfError = await validateCSRF(request);
     if (csrfError) {
       logSecurityEvent('unauthorized', {
