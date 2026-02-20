@@ -19,8 +19,8 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
 
     const navigation = [
         {
-            name: "Dashboard",
-            href: "/dashboard",
+            name: driveId ? "Drive Home" : "Dashboard",
+            href: driveId ? `/dashboard/${driveId}` : "/dashboard",
             icon: Home,
             exact: true,
         },

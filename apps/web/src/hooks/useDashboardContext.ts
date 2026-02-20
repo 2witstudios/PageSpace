@@ -4,7 +4,7 @@ import { useParams, usePathname } from 'next/navigation';
 
 // Full-page routes that render their own content in the center panel
 // (no GlobalAssistantView). The sidebar should show the chat tab for these.
-const FULL_PAGE_ROUTE_PATTERN = /\/(calendar|tasks|inbox)(\/|$)/;
+const FULL_PAGE_ROUTE_PATTERN = /\/(calendar|drives|tasks|inbox)(\/|$)/;
 
 /**
  * Hook to detect if we're on a "dashboard context" where GlobalAssistantView

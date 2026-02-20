@@ -135,6 +135,14 @@ describe('useDashboardContext', () => {
       expect(result.current.isDashboardContext).toBe(false);
     });
 
+    it('should return false for /dashboard/drives', () => {
+      vi.mocked(useParams).mockReturnValue({});
+      vi.mocked(usePathname).mockReturnValue('/dashboard/drives');
+
+      const { result } = renderHook(() => useDashboardContext());
+      expect(result.current.isDashboardContext).toBe(false);
+    });
+
     it('should return false for drive-level calendar /dashboard/[driveId]/calendar', () => {
       vi.mocked(useParams).mockReturnValue({ driveId: 'drive-123' });
       vi.mocked(usePathname).mockReturnValue('/dashboard/drive-123/calendar');
