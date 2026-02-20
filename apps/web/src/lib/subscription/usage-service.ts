@@ -10,9 +10,12 @@ const usageLogger = loggers.api.child({ module: 'subscription-usage' });
 const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.env.NODE_ENV !== 'production';
 
 /**
- * Get usage limits based on subscription tier
+ * Get usage limits based on subscription tier.
+ * Returns -1 (unlimited) for on-prem deployments.
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
+  if (process.env.DEPLOYMENT_MODE === 'onprem') return -1;
+
   if (providerType === 'standard') {
     // Standard AI calls per day by tier
     if (subscriptionTier === 'business') return 1000;
@@ -72,6 +75,11 @@ export async function incrementUsage(
       subscriptionTier,
       limit
     });
+  }
+
+  // Unlimited (on-prem)
+  if (limit === -1) {
+    return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
   }
 
   // No access (free tier trying pro AI)

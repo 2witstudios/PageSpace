@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "motion/react";
@@ -14,6 +14,7 @@ import {
 } from "@/components/auth";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
+import { isOnPrem } from "@/lib/deployment-mode";
 
 export default function SignUp() {
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +28,13 @@ export default function SignUp() {
     });
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
+
+  // On-prem: redirect to signin with a message (self-registration disabled)
+  useEffect(() => {
+    if (isOnPrem()) {
+      router.replace("/auth/signin?onprem=contact_admin");
+    }
+  }, [router]);
 
   return (
     <AuthShell>

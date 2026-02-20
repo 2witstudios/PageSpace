@@ -2,6 +2,7 @@ import { db, sessions, users } from '@pagespace/db';
 import { eq, and, isNull, gt, lt } from 'drizzle-orm';
 import { generateOpaqueToken, isValidTokenFormat, type TokenType } from './opaque-tokens';
 import { hashToken } from './token-utils';
+import { IDLE_TIMEOUT_MS } from './constants';
 
 const SESSION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -106,6 +107,16 @@ export class SessionService {
     if (session.tokenVersion !== session.user.tokenVersion) {
       await this.revokeSession(token, 'token_version_mismatch');
       return null;
+    }
+
+    // HIPAA idle timeout: revoke session if idle too long
+    if (IDLE_TIMEOUT_MS > 0 && session.lastUsedAt) {
+      const lastUsed = session.lastUsedAt instanceof Date ? session.lastUsedAt : new Date(session.lastUsedAt);
+      const idleDuration = Date.now() - lastUsed.getTime();
+      if (idleDuration > IDLE_TIMEOUT_MS) {
+        await this.revokeSession(token, 'idle_timeout');
+        return null;
+      }
     }
 
     // Note: adminRoleVersion is NOT checked here - it's validated at the auth layer

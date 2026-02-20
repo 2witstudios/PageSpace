@@ -217,6 +217,11 @@ export async function writeAiUsage(usage: {
       messageCount: usage.messageCount,
       wasTruncated: usage.wasTruncated,
       truncationStrategy: usage.truncationStrategy,
+
+      // On-prem: set retention expiry for HIPAA compliance (default 90 days)
+      ...(process.env.DEPLOYMENT_MODE === 'onprem' ? {
+        expiresAt: new Date(Date.now() + (parseInt(process.env.AI_LOG_RETENTION_DAYS || '90', 10) * 24 * 60 * 60 * 1000)),
+      } : {}),
     });
   } catch (error) {
     console.error('[Logger] Failed to write AI usage:', error);

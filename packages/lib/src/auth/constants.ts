@@ -13,3 +13,16 @@ export const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
  * Must be consistent across signup and password-change flows.
  */
 export const BCRYPT_COST = 12;
+
+/**
+ * Idle session timeout in milliseconds.
+ * HIPAA requires automatic logoff after a period of inactivity.
+ * Configurable via SESSION_IDLE_TIMEOUT_MS env var. Defaults to 15 minutes on-prem.
+ * Set to 0 to disable idle timeout (cloud default).
+ */
+export const IDLE_TIMEOUT_MS: number = (() => {
+  const envVal = process.env.SESSION_IDLE_TIMEOUT_MS;
+  if (envVal) return parseInt(envVal, 10);
+  // On-prem default: 15 minutes. Cloud: disabled (0).
+  return process.env.DEPLOYMENT_MODE === 'onprem' ? 15 * 60 * 1000 : 0;
+})();

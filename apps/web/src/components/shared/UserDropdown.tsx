@@ -22,6 +22,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { LogOut, MessageSquareText, Settings, LayoutDashboard, Sun, Moon, Monitor, HardDrive, CreditCard, Sparkles } from 'lucide-react';
 import { useTheme } from "next-themes";
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import { isOnPrem } from '@/lib/deployment-mode';
 import useSWR from 'swr';
 import { Progress } from "@/components/ui/progress";
 import { FeedbackDialog } from './FeedbackDialog';
@@ -134,10 +135,12 @@ export default function UserDropdown() {
               </span>
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
-            <MessageSquareText className="mr-2 h-4 w-4" />
-            <span>Feedback</span>
-          </DropdownMenuItem>
+          {!isOnPrem() && (
+            <DropdownMenuItem onClick={() => setFeedbackOpen(true)}>
+              <MessageSquareText className="mr-2 h-4 w-4" />
+              <span>Feedback</span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={() => router.push('/settings')}>
             <Settings className="mr-2 h-4 w-4" />
             <span>Settings</span>

@@ -18,6 +18,9 @@
  * - utils/        - General utilities
  */
 
+// Deployment mode
+export { isOnPrem, isCloud } from './deployment-mode';
+
 // Content processing
 export * from './content';
 

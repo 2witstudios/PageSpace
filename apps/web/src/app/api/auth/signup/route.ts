@@ -39,6 +39,14 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
+  // On-prem: self-registration is disabled (admin creates accounts)
+  if (process.env.DEPLOYMENT_MODE === 'onprem') {
+    return Response.json(
+      { error: 'Self-registration is disabled. Contact your administrator for an account.' },
+      { status: 403 }
+    );
+  }
+
   const clientIP = getClientIP(req);
   let email: string | undefined;
 

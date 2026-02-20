@@ -5,8 +5,10 @@ import { UsersTable } from "@/components/admin/UsersTable";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Users, AlertCircle, Shield, MessageCircle, Database } from "lucide-react";
+import { Users, AlertCircle, Shield, MessageCircle, Database, UserPlus } from "lucide-react";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+import { CreateUserForm } from "@/components/admin/CreateUserForm";
+import { isOnPrem } from "@/lib/deployment-mode";
 
 interface SubscriptionData {
   id: string;
@@ -66,22 +68,22 @@ export default function AdminUsersPage() {
     );
   };
 
-  useEffect(() => {
-    async function fetchUsers() {
-      try {
-        const response = await fetchWithAuth('/api/admin/users');
-        if (!response.ok) {
-          throw new Error('Failed to fetch users data');
-        }
-        const data = await response.json();
-        setUsers(data.users);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      } finally {
-        setLoading(false);
+  async function fetchUsers() {
+    try {
+      const response = await fetchWithAuth('/api/admin/users');
+      if (!response.ok) {
+        throw new Error('Failed to fetch users data');
       }
+      const data = await response.json();
+      setUsers(data.users);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setLoading(false);
     }
+  }
 
+  useEffect(() => {
     fetchUsers();
   }, []);
 
@@ -189,6 +191,23 @@ export default function AdminUsersPage() {
           </div>
         </CardContent>
       </Card>
+
+      {isOnPrem() && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <UserPlus className="h-5 w-5" />
+              <span>Create User Account</span>
+            </CardTitle>
+            <CardDescription>
+              Create staff accounts for your team. Users cannot self-register on this deployment.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CreateUserForm onSuccess={() => fetchUsers()} />
+          </CardContent>
+        </Card>
+      )}
 
       <UsersTable users={users} onUserUpdate={handleUserUpdate} />
     </div>

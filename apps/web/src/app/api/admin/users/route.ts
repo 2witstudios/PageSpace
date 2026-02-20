@@ -143,36 +143,37 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
       }
     }
 
-    // Fetch Stripe subscription details to check if gifted
+    // Fetch Stripe subscription details to check if gifted (skip on-prem - no Stripe)
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
 
-    // Batch fetch Stripe subscriptions for users with active subscriptions
-    const usersWithSubscriptions = allUsers.filter(user =>
-      subscriptionsByUserId.has(user.id)
-    );
-
-    const STRIPE_LOOKUP_CONCURRENCY = 10;
-    for (let i = 0; i < usersWithSubscriptions.length; i += STRIPE_LOOKUP_CONCURRENCY) {
-      const batch = usersWithSubscriptions.slice(i, i + STRIPE_LOOKUP_CONCURRENCY);
-      await Promise.all(
-        batch.map(async (user) => {
-          const sub = subscriptionsByUserId.get(user.id);
-          if (!sub) return;
-
-          try {
-            const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
-            const metadata = stripeSub.metadata || {};
-            stripeSubscriptionDetails.set(user.id, {
-              isGifted: metadata.type === 'gift_subscription',
-              giftedBy: metadata.giftedBy,
-              reason: metadata.reason,
-            });
-          } catch {
-            // Subscription may not exist in Stripe anymore
-            stripeSubscriptionDetails.set(user.id, { isGifted: false });
-          }
-        })
+    if (process.env.DEPLOYMENT_MODE !== 'onprem') {
+      const usersWithSubscriptions = allUsers.filter(user =>
+        subscriptionsByUserId.has(user.id)
       );
+
+      const STRIPE_LOOKUP_CONCURRENCY = 10;
+      for (let i = 0; i < usersWithSubscriptions.length; i += STRIPE_LOOKUP_CONCURRENCY) {
+        const batch = usersWithSubscriptions.slice(i, i + STRIPE_LOOKUP_CONCURRENCY);
+        await Promise.all(
+          batch.map(async (user) => {
+            const sub = subscriptionsByUserId.get(user.id);
+            if (!sub) return;
+
+            try {
+              const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
+              const metadata = stripeSub.metadata || {};
+              stripeSubscriptionDetails.set(user.id, {
+                isGifted: metadata.type === 'gift_subscription',
+                giftedBy: metadata.giftedBy,
+                reason: metadata.reason,
+              });
+            } catch {
+              // Subscription may not exist in Stripe anymore
+              stripeSubscriptionDetails.set(user.id, { isGifted: false });
+            }
+          })
+        );
+      }
     }
 
     // Combine the data

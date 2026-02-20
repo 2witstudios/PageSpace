@@ -19,11 +19,34 @@ import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 const MCP_BEARER_PREFIX = 'Bearer mcp_';
 const SESSION_BEARER_PREFIX = 'Bearer ps_sess_';
 
+const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
+
+/**
+ * Routes blocked in on-prem mode. These return 404 to prevent probing.
+ * Stripe, OAuth, magic-link, passkey, and self-registration routes are
+ * all inaccessible on-prem - the middleware blocks them before any
+ * route handler code executes.
+ */
+const ONPREM_BLOCKED_ROUTE_PREFIXES = [
+  '/api/stripe/',
+  '/api/auth/google/',
+  '/api/auth/apple/',
+  '/api/auth/magic-link/',
+  '/api/auth/passkey/',
+  '/api/auth/signup',
+];
+
 export async function middleware(req: NextRequest) {
   return monitoringMiddleware(req, async () => {
     const { pathname } = req.nextUrl;
     const isProduction = process.env.NODE_ENV === 'production';
     const isAPIRoute = pathname.startsWith('/api');
+
+    // On-prem route blocking (defense-in-depth)
+    // Runs before all other checks to prevent cloud-only routes from executing
+    if (IS_ONPREM && ONPREM_BLOCKED_ROUTE_PREFIXES.some(prefix => pathname.startsWith(prefix))) {
+      return new NextResponse(null, { status: 404 });
+    }
     const ip =
       req.headers.get('x-forwarded-for')?.split(',')[0] ||
       req.headers.get('x-real-ip') ||

@@ -36,9 +36,21 @@ export function getStorageQuotaFromSubscription(subscriptionTier: SubscriptionTi
 }
 
 /**
- * Get complete storage configuration from subscription tier
+ * Get complete storage configuration from subscription tier.
+ * On-prem: always returns business-tier limits regardless of stored tier.
  */
 export function getStorageConfigFromSubscription(subscriptionTier: SubscriptionTier): StorageConfig {
+  if (process.env.DEPLOYMENT_MODE === 'onprem') {
+    return {
+      tier: 'business',
+      quotaBytes: 50 * 1024 * 1024 * 1024,    // 50GB
+      maxFileSize: 100 * 1024 * 1024,         // 100MB
+      maxConcurrentUploads: 10,
+      maxFileCount: 5000,
+      features: ['50GB storage', '100MB per file']
+    };
+  }
+
   if (subscriptionTier === 'business') {
     return {
       tier: 'business',
