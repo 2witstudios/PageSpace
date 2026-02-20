@@ -27,7 +27,7 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
   // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
     pathname === route || pathname?.startsWith(route + '/')
-  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|inbox|tasks|trash|settings|members)/);
+  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|files|inbox|tasks|trash|settings|members)/);
 
   return (
     <>

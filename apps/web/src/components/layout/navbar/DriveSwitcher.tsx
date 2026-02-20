@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
 import { ChevronsUpDown, Folder, Plus, Search, Star } from "lucide-react";
 import {
   DropdownMenu,
@@ -132,20 +131,6 @@ export default function DriveSwitcher() {
     return <Skeleton className="h-9 w-40" />;
   }
 
-  // Dashboard level (no drive selected): render a simple link to the Drives page
-  if (!currentDriveId) {
-    return (
-      <Link
-        href="/dashboard/drives"
-        className="flex items-center gap-2 px-2 h-9 max-w-[170px] hover:bg-accent rounded-md transition-colors"
-      >
-        <Folder className="h-4 w-4 shrink-0" />
-        <span className="truncate font-medium">Drives</span>
-      </Link>
-    );
-  }
-
-  // Inside a drive: render the dropdown trigger
   return (
     <>
       <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>

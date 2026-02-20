@@ -75,7 +75,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
         codeBlock: false,
       }),
       CodeBlockShiki,
-      ...(isMarkdownMode ? [Markdown] : []),
+      Markdown,
       ...(readOnly ? [] : [Placeholder.configure({
         placeholder: 'Start writing...',
       })]),

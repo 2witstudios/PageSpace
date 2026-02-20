@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, CheckSquare, Home, Inbox } from "lucide-react";
+import { Calendar, CheckSquare, Folder, Home, Inbox } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/useLayoutStore";
@@ -28,6 +28,12 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             name: "Inbox",
             href: driveId ? `/dashboard/${driveId}/inbox` : "/dashboard/inbox",
             icon: Inbox,
+            exact: false,
+        },
+        {
+            name: "Files",
+            href: driveId ? `/dashboard/${driveId}/files` : "/dashboard/drives",
+            icon: Folder,
             exact: false,
         },
         {
