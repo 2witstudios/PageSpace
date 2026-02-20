@@ -29,6 +29,7 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
     pathname === route || pathname?.startsWith(route + '/')
   ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|files|inbox|tasks|trash|settings|members)/);
 
+
   return (
     <>
       <PushNotificationManager />
