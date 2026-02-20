@@ -3,7 +3,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowUpDown,
+  ArrowDown,
+  ArrowUp,
   Folder,
   Grip,
   List,
@@ -29,6 +30,30 @@ import { Skeleton } from "@/components/ui/skeleton";
 type ViewMode = "grid" | "list";
 type SortKey = "name" | "role" | "lastAccessedAt" | "createdAt";
 type SortDirection = "asc" | "desc";
+
+export function DrivesSkeleton() {
+  return (
+    <div className="h-full overflow-y-auto overflow-x-hidden">
+      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-full">
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-8 w-32" />
+            <div className="flex gap-2">
+              <Skeleton className="h-9 w-9" />
+              <Skeleton className="h-9 w-9" />
+              <Skeleton className="h-9 w-28" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-square rounded-lg" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function formatRole(role: string) {
   return role.charAt(0) + role.slice(1).toLowerCase();
@@ -126,26 +151,13 @@ export default function DrivesBrowser() {
       .getState()
       .updateDrive(drive.id, { lastAccessedAt: new Date().toISOString() });
     fetchWithAuth(`/api/drives/${drive.id}/access`, { method: "POST" }).catch(
-      () => {}
+      (err) => console.warn("Failed to record drive access:", err)
     );
     router.push(`/dashboard/${drive.id}`);
   };
 
   if (isLoading && drives.length === 0) {
-    return (
-      <div className="h-full overflow-y-auto overflow-x-hidden">
-        <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-full">
-          <div className="space-y-6">
-            <Skeleton className="h-8 w-32" />
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="aspect-square rounded-lg" />
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return <DrivesSkeleton />;
   }
 
   const renderSortHeader = (key: SortKey, title: string, className?: string) => (
@@ -156,13 +168,12 @@ export default function DrivesBrowser() {
         className="px-2 py-1 h-auto"
       >
         {title}
-        {sortKey === key && (
-          <ArrowUpDown
-            className={`ml-2 h-4 w-4 transition-transform ${
-              sortDirection === "desc" ? "rotate-180" : ""
-            }`}
-          />
-        )}
+        {sortKey === key &&
+          (sortDirection === "asc" ? (
+            <ArrowUp className="ml-2 h-4 w-4" />
+          ) : (
+            <ArrowDown className="ml-2 h-4 w-4" />
+          ))}
       </Button>
     </TableHead>
   );

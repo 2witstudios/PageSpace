@@ -25,6 +25,7 @@ export type PathType =
   | 'dashboard-trash'
   | 'dashboard-connections'
   | 'dashboard-calendar'
+  | 'dashboard-drives'
   // Inbox routes
   | 'inbox'
   | 'inbox-dm'
@@ -63,7 +64,7 @@ export interface TabMeta {
 }
 
 // Global dashboard routes (not drive-specific)
-const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'inbox'] as const;
+const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'inbox', 'drives'] as const;
 
 // Drive-specific special routes
 const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'inbox'] as const;
@@ -171,6 +172,7 @@ export const parseTabPath = (path: string): ParsedPath => {
       trash: 'dashboard-trash',
       connections: 'dashboard-connections',
       calendar: 'dashboard-calendar',
+      drives: 'dashboard-drives',
     };
     return { type: globalTypeMap[secondSegment] };
   }
@@ -276,6 +278,9 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
 
     case 'dashboard-calendar':
       return { title: 'Calendar', iconName: 'Calendar' };
+
+    case 'dashboard-drives':
+      return { title: 'Drives', iconName: 'Folder' };
 
     // Drive-specific routes
     case 'drive-tasks':

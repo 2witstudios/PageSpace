@@ -153,6 +153,12 @@ describe('tab-title', () => {
       expect(result.type).toBe('dashboard-calendar');
     });
 
+    it('given global drives path, should return dashboard-drives type', () => {
+      const result = parseTabPath('/dashboard/drives');
+
+      expect(result.type).toBe('dashboard-drives');
+    });
+
     // Drive calendar and inbox
     it('given drive calendar path, should return drive-calendar type', () => {
       const result = parseTabPath('/dashboard/drive-123/calendar');
@@ -391,6 +397,13 @@ describe('tab-title', () => {
 
       expect(meta!.title).toBe('Calendar');
       expect(meta!.iconName).toBe('Calendar');
+    });
+
+    it('given dashboard-drives type, should return Drives title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-drives' });
+
+      expect(meta!.title).toBe('Drives');
+      expect(meta!.iconName).toBe('Folder');
     });
 
     // Drive calendar and inbox

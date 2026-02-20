@@ -26,7 +26,7 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
   // Check if current route should render its children directly
   // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
-    pathname?.startsWith(route)
+    pathname === route || pathname?.startsWith(route + '/')
   ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|inbox|tasks|trash|settings|members)/);
 
   return (
