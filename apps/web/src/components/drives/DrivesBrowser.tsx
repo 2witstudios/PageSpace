@@ -302,6 +302,7 @@ export default function DrivesBrowser() {
               variant={viewMode === "list" ? "secondary" : "ghost"}
               size="icon"
               onClick={() => setViewMode("list")}
+              aria-label="List view"
             >
               <List className="h-4 w-4" />
             </Button>
@@ -309,6 +310,7 @@ export default function DrivesBrowser() {
               variant={viewMode === "grid" ? "secondary" : "ghost"}
               size="icon"
               onClick={() => setViewMode("grid")}
+              aria-label="Grid view"
             >
               <Grip className="h-4 w-4" />
             </Button>
