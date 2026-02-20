@@ -10,6 +10,7 @@ const FULL_PAGE_ROUTES = [
   '/dashboard/activity',
   '/dashboard/calendar',
   '/dashboard/connections',
+  '/dashboard/drives',
   '/dashboard/inbox',
   '/dashboard/storage',
   '/dashboard/tasks',
