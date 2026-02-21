@@ -396,11 +396,11 @@ export function getDefaultModel(provider: string): string {
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return 'glm-4.7'; // fallback default to GLM 4.7
+    return '';
   }
 
   const models = Object.keys(providerConfig.models);
-  return models[0] ?? 'glm-4.7';
+  return models[0] ?? '';
 }
 
 /**
@@ -461,7 +461,7 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
 /**
  * Providers allowed in on-prem mode (local + BAA-eligible cloud).
  */
-const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
+export const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
 
 /**
  * Returns the provider entries visible in the current deployment mode.

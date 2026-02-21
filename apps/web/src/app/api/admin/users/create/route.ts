@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { db, users, userAiSettings, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { BCRYPT_COST } from '@pagespace/lib/auth';
-import { isOnPrem } from '@pagespace/lib';
+import { isOnPrem, getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { loggers } from '@pagespace/lib/server';
@@ -59,7 +59,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       password: hashedPassword,
       role,
       emailVerified: new Date(), // Admin-created accounts are pre-verified
-      subscriptionTier: onPrem ? 'business' : 'free',
+      ...(onPrem ? getOnPremUserDefaults() : { subscriptionTier: 'free' }),
     });
 
     // Create default Ollama AI settings (on-prem default local provider)
@@ -67,8 +67,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       await db.insert(userAiSettings).values({
         id: createId(),
         userId,
-        provider: 'ollama',
-        baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+        ...getOnPremOllamaSettings(),
       });
     }
 

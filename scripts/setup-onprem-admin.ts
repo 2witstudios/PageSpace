@@ -16,6 +16,7 @@ import { db, users, userAiSettings, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import bcrypt from 'bcryptjs';
 import { BCRYPT_COST } from '@pagespace/lib/auth';
+import { getOnPremUserDefaults, getOnPremOllamaSettings } from '@pagespace/lib';
 import { parseArgs } from 'node:util';
 
 async function main() {
@@ -88,7 +89,7 @@ async function main() {
       // Promote to admin and update password
       const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
       await db.update(users)
-        .set({ role: 'admin', subscriptionTier: 'business', password: hashedPassword })
+        .set({ role: 'admin', password: hashedPassword, ...getOnPremUserDefaults() })
         .where(eq(users.id, existing.id));
 
       // Ensure default Ollama AI settings exist for promoted user
@@ -99,8 +100,7 @@ async function main() {
         await db.insert(userAiSettings).values({
           id: createId(),
           userId: existing.id,
-          provider: 'ollama',
-          baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+          ...getOnPremOllamaSettings(),
         });
       }
 
@@ -119,15 +119,14 @@ async function main() {
     password: hashedPassword,
     role: 'admin',
     emailVerified: new Date(),
-    subscriptionTier: 'business',
+    ...getOnPremUserDefaults(),
   });
 
   // Create default Ollama AI settings
   await db.insert(userAiSettings).values({
     id: createId(),
     userId,
-    provider: 'ollama',
-    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+    ...getOnPremOllamaSettings(),
   });
 
   console.log('');

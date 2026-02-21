@@ -20,6 +20,7 @@
 
 // Deployment mode
 export { isOnPrem, isCloud } from './deployment-mode';
+export { getOnPremUserDefaults, getOnPremOllamaSettings } from './onprem-defaults';
 
 // Content processing
 export * from './content';
