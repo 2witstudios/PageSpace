@@ -39,9 +39,27 @@ async function main() {
   const password = values.password;
   const name = values.name.trim();
 
+  // Validate trimmed values are non-empty and email format is valid
+  if (!email) {
+    console.error('Error: --email cannot be blank or whitespace only');
+    process.exit(1);
+  }
+  if (!name) {
+    console.error('Error: --name cannot be blank or whitespace only');
+    process.exit(1);
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    console.error('Error: --email does not appear to be a valid email address');
+    process.exit(1);
+  }
+
   // Validate password strength
   if (password.length < 12) {
     console.error('Error: Password must be at least 12 characters long');
+    process.exit(1);
+  }
+  if (Buffer.byteLength(password, 'utf8') > 72) {
+    console.error('Error: Password must be at most 72 bytes (bcrypt limit)');
     process.exit(1);
   }
   if (!/[A-Z]/.test(password)) {
