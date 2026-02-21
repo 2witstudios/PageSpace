@@ -944,7 +944,7 @@ export async function createAzureOpenAISettings(
   const { encrypt } = await import('@pagespace/lib/server');
   const encryptedApiKey = await encrypt(apiKey);
 
-  let formattedUrl = baseUrl.trim().replace(/\/$/, '');
+  const formattedUrl = baseUrl.trim().replace(/\/$/, '');
 
   const existingSettings = await db.query.userAiSettings.findFirst({
     where: and(

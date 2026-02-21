@@ -35,7 +35,6 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
   getUserAzureOpenAISettings,
-  createAzureOpenAISettings,
 } from './ai-utils';
 import { resolvePageSpaceModel } from './ai-providers-config';
 
