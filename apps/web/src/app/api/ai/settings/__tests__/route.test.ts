@@ -108,9 +108,6 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
   deleteMiniMaxSettings,
-  getUserAzureOpenAISettings,
-  createAzureOpenAISettings,
-  deleteAzureOpenAISettings,
 } from '@/lib/ai/core';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
