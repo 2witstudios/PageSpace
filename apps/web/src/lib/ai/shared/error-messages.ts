@@ -13,6 +13,11 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
     return 'Authentication failed. Please refresh the page and try again.';
   }
 
+  // Context length errors
+  if (isContextLengthError(errorMessage)) {
+    return 'The conversation is too long for this model\'s context window. Older messages have been trimmed to fit — try sending your message again.';
+  }
+
   // Rate limit errors
   if (
     errorMessage.toLowerCase().includes('rate') ||
@@ -34,6 +39,26 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
 export function isAuthenticationError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
   return errorMessage.includes('Unauthorized') || errorMessage.includes('401');
+}
+
+/**
+ * Check if error is a context length / token limit error
+ */
+export function isContextLengthError(errorMessage: string | undefined): boolean {
+  if (!errorMessage) return false;
+  const msg = errorMessage.toLowerCase();
+  return (
+    msg.includes('context_length') ||     // API error key: context_length_exceeded
+    msg.includes('context length') ||     // Human-readable variant
+    msg.includes('context window') ||
+    msg.includes('maximum context') ||
+    msg.includes('token limit') ||
+    msg.includes('tokens exceeds') ||
+    msg.includes('too many tokens') ||
+    errorMessage.includes('413') ||
+    // OpenRouter / provider-specific phrasing
+    (msg.includes('maximum') && msg.includes('tokens'))
+  );
 }
 
 /**

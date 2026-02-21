@@ -71,6 +71,13 @@ import {
 } from '@/lib/ai/core/stream-abort-registry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import {
+  determineMessagesToInclude,
+  getContextWindowSize,
+  estimateSystemPromptTokens,
+  estimateToolDefinitionTokens,
+} from '@pagespace/lib/ai-context-calculator';
+import { isContextLengthError } from '@/lib/ai/shared/error-messages';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -741,13 +748,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // Convert UIMessages to ModelMessages for the AI model
-    // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
+    // Sanitize messages to remove tool parts without results (prevents "input-available" state errors)
     // NOTE: We use database-loaded messages, NOT messages from client
+    // modelMessages is computed after system prompt is built so we can apply context truncation
     const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
-    const modelMessages = convertToModelMessages(sanitizedMessages, {
-      tools: filteredTools  // Use original tools - no wrapping needed
-    });
 
     // Fetch user personalization for AI system prompt injection
     const personalization = await getUserPersonalization(userId);
@@ -818,8 +822,43 @@ export async function POST(request: Request) {
     }
 
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
+
+    // Context-length guard: proactively truncate oldest messages to fit within the model's context window.
+    // This prevents AI_APICallError from providers when a conversation grows too long.
+    // We build modelMessages here (after system prompt) so we have accurate token budgeting.
+    const fullSystemPrompt = systemPrompt + timestampSystemPrompt + pageTreePrompt;
+    const contextWindow = getContextWindowSize(currentModel, currentProvider);
+    const systemPromptTokens = estimateSystemPromptTokens(fullSystemPrompt);
+    // Cast needed because filteredTools is a ToolSet (Vercel AI SDK type) but calculator expects plain object
+    const toolTokens = estimateToolDefinitionTokens(filteredTools as Record<string, unknown>);
+    // Reserve 25% headroom for output tokens and tokenizer inaccuracies
+    const inputBudget = Math.floor(contextWindow * 0.75);
+    const { includedMessages, wasTruncated } = determineMessagesToInclude(
+      sanitizedMessages,
+      inputBudget,
+      systemPromptTokens,
+      toolTokens
+    );
+
+    if (wasTruncated) {
+      loggers.ai.warn('AI Chat API: Conversation truncated to fit context window', {
+        originalMessageCount: sanitizedMessages.length,
+        includedMessageCount: includedMessages.length,
+        model: currentModel,
+        provider: currentProvider,
+        contextWindow,
+        inputBudget,
+        systemPromptTokens,
+        toolTokens,
+      });
+    }
+
+    const modelMessages = convertToModelMessages(includedMessages, {
+      tools: filteredTools  // Use original tools - no wrapping needed
+    });
+
     loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
-    
+
     // Create UI message stream with visual content injection support
     // This handles the case where tools return visual content that needs to be injected into the stream
     let result;
@@ -1199,8 +1238,15 @@ export async function POST(request: Request) {
     });
     
     // Return a proper error response
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+    const errorMsg = error instanceof Error ? error.message : '';
+    if (isContextLengthError(errorMsg)) {
+      return NextResponse.json(
+        { error: 'context_length_exceeded', details: errorMsg },
+        { status: 413 }
+      );
+    }
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
   }
 }

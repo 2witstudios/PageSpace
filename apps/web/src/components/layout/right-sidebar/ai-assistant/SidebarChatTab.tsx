@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { UIMessage } from 'ai';
+import { getAIErrorMessage } from '@/lib/ai/shared/error-messages';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
@@ -787,16 +788,7 @@ const SidebarChatTab: React.FC = () => {
         {error && showError && (
           <div className="p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs flex items-center justify-between">
             <p className="text-red-700 dark:text-red-300">
-              {error.message?.includes('Unauthorized') || error.message?.includes('401')
-                ? 'Authentication failed. Please refresh the page and try again.'
-                : (error.message?.toLowerCase().includes('rate') ||
-                   error.message?.toLowerCase().includes('limit') ||
-                   error.message?.includes('429') ||
-                   error.message?.includes('402') ||
-                   error.message?.includes('Failed after') ||
-                   error.message?.includes('Provider returned error'))
-                ? 'Free tier rate limit hit. Please try again in a few seconds or subscribe for premium models and access.'
-                : 'Something went wrong. Please try again.'}
+              {getAIErrorMessage(error.message)}
             </p>
             <button
               onClick={() => setShowError(false)}
