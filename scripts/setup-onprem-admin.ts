@@ -65,13 +65,27 @@ async function main() {
 
   if (existing) {
     if (existing.role === 'admin') {
-      console.log(`Admin user ${email} already exists.`);
+      console.log(`Admin user ${email} already exists. Password was not changed.`);
     } else {
       // Promote to admin and update password
       const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
       await db.update(users)
         .set({ role: 'admin', subscriptionTier: 'business', password: hashedPassword })
         .where(eq(users.id, existing.id));
+
+      // Ensure default Ollama AI settings exist for promoted user
+      const existingSettings = await db.query.userAiSettings.findFirst({
+        where: eq(userAiSettings.userId, existing.id),
+      });
+      if (!existingSettings) {
+        await db.insert(userAiSettings).values({
+          id: createId(),
+          userId: existing.id,
+          provider: 'ollama',
+          baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+        });
+      }
+
       console.log(`Existing user ${email} promoted to admin with business tier and password updated.`);
     }
     await (db as any).$client?.end?.();

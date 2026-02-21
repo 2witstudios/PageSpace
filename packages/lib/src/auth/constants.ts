@@ -2,6 +2,8 @@
  * Authentication constants shared across the application
  */
 
+import { isOnPrem } from '../deployment-mode';
+
 /**
  * Default session duration: 7 days in milliseconds
  * Used for web sessions and OAuth authentication flows
@@ -17,19 +19,18 @@ export const BCRYPT_COST = 12;
 /**
  * Idle session timeout in milliseconds.
  * HIPAA requires automatic logoff after a period of inactivity.
- * Configurable via SESSION_IDLE_TIMEOUT_MS env var. Defaults to 15 minutes on-prem.
- * Set to 0 to disable idle timeout (cloud default).
+ * Configurable via SESSION_IDLE_TIMEOUT_MS env var (value in milliseconds).
+ * Defaults to 15 minutes on-prem. Set to 0 to disable idle timeout (cloud default).
  */
 export const IDLE_TIMEOUT_MS: number = (() => {
   const envVal = process.env.SESSION_IDLE_TIMEOUT_MS;
   if (envVal) {
-    const parsed = parseInt(envVal, 10);
-    if (Number.isNaN(parsed)) {
+    const parsed = Number(envVal);
+    if (Number.isNaN(parsed) || parsed < 0) {
       console.warn(`[auth] Invalid SESSION_IDLE_TIMEOUT_MS value "${envVal}", falling back to default`);
     } else {
       return parsed;
     }
   }
-  // On-prem default: 15 minutes. Cloud: disabled (0).
-  return process.env.DEPLOYMENT_MODE === 'onprem' ? 15 * 60 * 1000 : 0;
+  return isOnPrem() ? 15 * 60 * 1000 : 0;
 })();
