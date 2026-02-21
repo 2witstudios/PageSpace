@@ -66,6 +66,9 @@ vi.mock('@/lib/ai/core', () => ({
   getUserMiniMaxSettings: vi.fn(),
   createMiniMaxSettings: vi.fn(),
   deleteMiniMaxSettings: vi.fn(),
+  getUserAzureOpenAISettings: vi.fn(),
+  createAzureOpenAISettings: vi.fn(),
+  deleteAzureOpenAISettings: vi.fn(),
 }));
 
 // Mock subscription middleware (boundary)
@@ -105,6 +108,9 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
   deleteMiniMaxSettings,
+  getUserAzureOpenAISettings,
+  createAzureOpenAISettings,
+  deleteAzureOpenAISettings,
 } from '@/lib/ai/core';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 
