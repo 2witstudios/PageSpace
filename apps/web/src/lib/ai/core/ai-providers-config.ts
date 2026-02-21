@@ -396,7 +396,7 @@ export function getDefaultModel(provider: string): string {
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return '';
+    return 'glm-4.7';
   }
 
   const models = Object.keys(providerConfig.models);
