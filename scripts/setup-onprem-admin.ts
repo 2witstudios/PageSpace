@@ -12,7 +12,7 @@
  * 4. Creates default Ollama AI settings
  */
 
-import { db, users, userAiSettings, eq } from '@pagespace/db';
+import { db, users, userAiSettings, eq, and } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import bcrypt from 'bcryptjs';
 import { BCRYPT_COST } from '@pagespace/lib/auth';
@@ -75,7 +75,7 @@ async function main() {
 
       // Ensure default Ollama AI settings exist for promoted user
       const existingSettings = await db.query.userAiSettings.findFirst({
-        where: eq(userAiSettings.userId, existing.id),
+        where: and(eq(userAiSettings.userId, existing.id), eq(userAiSettings.provider, 'ollama')),
       });
       if (!existingSettings) {
         await db.insert(userAiSettings).values({
@@ -88,7 +88,6 @@ async function main() {
 
       console.log(`Existing user ${email} promoted to admin with business tier and password updated.`);
     }
-    await (db as any).$client?.end?.();
     process.exit(0);
   }
 
@@ -122,7 +121,6 @@ async function main() {
   console.log('');
   console.log('You can now sign in at your PageSpace URL.');
 
-  await (db as any).$client?.end?.();
   process.exit(0);
 }
 

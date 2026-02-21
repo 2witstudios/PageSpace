@@ -26,7 +26,7 @@ export const IDLE_TIMEOUT_MS: number = (() => {
   const envVal = process.env.SESSION_IDLE_TIMEOUT_MS;
   if (envVal) {
     const parsed = Number(envVal);
-    if (Number.isNaN(parsed) || parsed < 0) {
+    if (!Number.isFinite(parsed) || parsed < 0) {
       console.warn(`[auth] Invalid SESSION_IDLE_TIMEOUT_MS value "${envVal}", falling back to default`);
     } else {
       return parsed;
