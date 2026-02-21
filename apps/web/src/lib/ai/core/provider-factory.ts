@@ -353,6 +353,16 @@ export async function createAIProvider(
         };
       }
 
+      // SECURITY: Validate Azure OpenAI URL to prevent SSRF
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const azureUrlValidation = await validateLocalProviderURL(azureSettings.baseUrl);
+      if (!azureUrlValidation.valid) {
+        return {
+          error: `Azure OpenAI endpoint URL blocked: ${azureUrlValidation.error}`,
+          status: 400,
+        };
+      }
+
       const azureProvider = createOpenAICompatible({
         name: 'azure_openai',
         apiKey: azureSettings.apiKey,

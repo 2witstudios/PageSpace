@@ -17,6 +17,23 @@ import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
 
 export default function SignUp() {
+  // On-prem: redirect to signin (self-registration disabled) - early return to avoid flash
+  if (isOnPrem()) {
+    return <OnPremSignUpRedirect />;
+  }
+
+  return <CloudSignUp />;
+}
+
+function OnPremSignUpRedirect() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/auth/signin?onprem=contact_admin");
+  }, [router]);
+  return null;
+}
+
+function CloudSignUp() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
@@ -28,13 +45,6 @@ export default function SignUp() {
     });
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
-
-  // On-prem: redirect to signin with a message (self-registration disabled)
-  useEffect(() => {
-    if (isOnPrem()) {
-      router.replace("/auth/signin?onprem=contact_admin");
-    }
-  }, [router]);
 
   return (
     <AuthShell>

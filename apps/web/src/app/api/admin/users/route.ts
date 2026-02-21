@@ -15,6 +15,7 @@ import {
 } from '@pagespace/db';
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { isOnPrem } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth';
 
 export const GET = withAdminAuth(async (_adminUser, _request) => {
@@ -146,7 +147,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     // Fetch Stripe subscription details to check if gifted (skip on-prem - no Stripe)
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
 
-    if (process.env.DEPLOYMENT_MODE !== 'onprem') {
+    if (!isOnPrem()) {
       const usersWithSubscriptions = allUsers.filter(user =>
         subscriptionsByUserId.has(user.id)
       );

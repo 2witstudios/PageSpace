@@ -399,7 +399,8 @@ export function getDefaultModel(provider: string): string {
     return 'glm-4.7'; // fallback default to GLM 4.7
   }
 
-  return Object.keys(providerConfig.models)[0];
+  const models = Object.keys(providerConfig.models);
+  return models[0] ?? 'glm-4.7';
 }
 
 /**

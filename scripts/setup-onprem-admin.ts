@@ -10,7 +10,6 @@
  * 2. Hashes the password with bcrypt (cost 12)
  * 3. Sets emailVerified (pre-verified for on-prem)
  * 4. Creates default Ollama AI settings
- * 5. Provisions a Getting Started drive
  */
 
 import { db, users, userAiSettings, eq } from '@pagespace/db';
@@ -68,12 +67,14 @@ async function main() {
     if (existing.role === 'admin') {
       console.log(`Admin user ${email} already exists.`);
     } else {
-      // Promote to admin
+      // Promote to admin and update password
+      const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
       await db.update(users)
-        .set({ role: 'admin', subscriptionTier: 'business' })
+        .set({ role: 'admin', subscriptionTier: 'business', password: hashedPassword })
         .where(eq(users.id, existing.id));
-      console.log(`Existing user ${email} promoted to admin with business tier.`);
+      console.log(`Existing user ${email} promoted to admin with business tier and password updated.`);
     }
+    await (db as any).$client?.end?.();
     process.exit(0);
   }
 
@@ -95,7 +96,7 @@ async function main() {
     id: createId(),
     userId,
     provider: 'ollama',
-    baseUrl: 'http://localhost:11434',
+    baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   });
 
   console.log('');
@@ -107,6 +108,7 @@ async function main() {
   console.log('');
   console.log('You can now sign in at your PageSpace URL.');
 
+  await (db as any).$client?.end?.();
   process.exit(0);
 }
 

@@ -176,7 +176,9 @@ export default function UserDropdown() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <FeedbackDialog isOpen={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+      {!isOnPrem() && (
+        <FeedbackDialog isOpen={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+      )}
     </>
     );
   }

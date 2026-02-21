@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { UsersTable } from "@/components/admin/UsersTable";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -68,7 +68,7 @@ export default function AdminUsersPage() {
     );
   };
 
-  async function fetchUsers() {
+  const fetchUsers = useCallback(async () => {
     try {
       const response = await fetchWithAuth('/api/admin/users');
       if (!response.ok) {
@@ -81,11 +81,11 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [fetchUsers]);
 
   if (loading) {
     return (

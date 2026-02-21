@@ -109,7 +109,7 @@ diskutil apfs addVolume disk1 APFS "PGData" -role V
 ```
 
 Enable SSL in PostgreSQL:
-```
+```ini
 # postgresql.conf
 ssl = on
 ssl_cert_file = '/path/to/server.crt'

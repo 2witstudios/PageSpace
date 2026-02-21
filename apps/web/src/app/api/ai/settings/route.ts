@@ -197,8 +197,8 @@ export async function POST(request: Request) {
     const sanitizedApiKey = apiKey?.trim();
     const sanitizedBaseUrl = baseUrl?.trim();
 
-    // SECURITY: Validate base URL for local providers to prevent SSRF
-    if (provider === 'ollama' || provider === 'lmstudio') {
+    // SECURITY: Validate base URL for providers that accept URLs to prevent SSRF
+    if (provider === 'ollama' || provider === 'lmstudio' || provider === 'azure_openai') {
       const { validateLocalProviderURL } = await import('@pagespace/lib/security');
       const urlValidation = await validateLocalProviderURL(sanitizedBaseUrl);
       if (!urlValidation.valid) {
@@ -290,7 +290,7 @@ export async function PATCH(request: Request) {
 
     if (!provider || !validProviders.includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
+        { error: `Invalid provider. Must be one of: ${validProviders.join(', ')}` },
         { status: 400 }
       );
     }

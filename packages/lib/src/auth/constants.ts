@@ -22,7 +22,14 @@ export const BCRYPT_COST = 12;
  */
 export const IDLE_TIMEOUT_MS: number = (() => {
   const envVal = process.env.SESSION_IDLE_TIMEOUT_MS;
-  if (envVal) return parseInt(envVal, 10);
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (Number.isNaN(parsed)) {
+      console.warn(`[auth] Invalid SESSION_IDLE_TIMEOUT_MS value "${envVal}", falling back to default`);
+    } else {
+      return parsed;
+    }
+  }
   // On-prem default: 15 minutes. Cloud: disabled (0).
   return process.env.DEPLOYMENT_MODE === 'onprem' ? 15 * 60 * 1000 : 0;
 })();

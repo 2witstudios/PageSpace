@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { db, users, userAiSettings, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { BCRYPT_COST } from '@pagespace/lib/auth';
+import { isOnPrem } from '@pagespace/lib';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { loggers } from '@pagespace/lib/server';
@@ -26,7 +27,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
 
     if (!parsed.success) {
       return NextResponse.json(
-        { error: 'Validation failed', details: parsed.error.issues },
+        { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
         { status: 400 }
       );
     }
@@ -49,7 +50,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
 
     const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
     const userId = createId();
-    const isOnPrem = process.env.DEPLOYMENT_MODE === 'onprem';
+    const onPrem = isOnPrem();
 
     await db.insert(users).values({
       id: userId,
@@ -58,16 +59,16 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       password: hashedPassword,
       role,
       emailVerified: new Date(), // Admin-created accounts are pre-verified
-      subscriptionTier: isOnPrem ? 'business' : 'free',
+      subscriptionTier: onPrem ? 'business' : 'free',
     });
 
     // Create default Ollama AI settings (on-prem default local provider)
-    if (isOnPrem) {
+    if (onPrem) {
       await db.insert(userAiSettings).values({
         id: createId(),
         userId,
         provider: 'ollama',
-        baseUrl: 'http://localhost:11434',
+        baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
       });
     }
 

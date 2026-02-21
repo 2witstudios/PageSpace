@@ -1,5 +1,6 @@
 import { db, eq, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { isOnPrem } from '@pagespace/lib';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib';
 
@@ -14,7 +15,7 @@ const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.e
  * Returns -1 (unlimited) for on-prem deployments.
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
-  if (process.env.DEPLOYMENT_MODE === 'onprem') return -1;
+  if (isOnPrem()) return -1;
 
   if (providerType === 'standard') {
     // Standard AI calls per day by tier
@@ -141,6 +142,11 @@ export async function getCurrentUsage(
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
+  // Unlimited (on-prem)
+  if (limit === -1) {
+    return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
+  }
+
   // Use Redis-based rate limit cache
   return await rateLimitCache.getCurrentUsage(userId, providerType, limit);
 }
@@ -179,7 +185,7 @@ export async function getUserUsageSummary(userId: string) {
     pro: {
       current: proUsageResult.currentCount,
       limit: proLimit,
-      remaining: proUsageResult.remainingCalls
+      remaining: proLimit === -1 ? -1 : proUsageResult.remainingCalls
     }
   };
 }

@@ -34,6 +34,7 @@ const ONPREM_BLOCKED_ROUTE_PREFIXES = [
   '/api/auth/magic-link/',
   '/api/auth/passkey/',
   '/api/auth/signup',
+  '/api/auth/mobile/signup',
 ];
 
 export async function middleware(req: NextRequest) {
@@ -45,7 +46,8 @@ export async function middleware(req: NextRequest) {
     // On-prem route blocking (defense-in-depth)
     // Runs before all other checks to prevent cloud-only routes from executing
     if (IS_ONPREM && ONPREM_BLOCKED_ROUTE_PREFIXES.some(prefix => pathname.startsWith(prefix))) {
-      return new NextResponse(null, { status: 404 });
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return new NextResponse(null, { status: 404, headers: response.headers });
     }
     const ip =
       req.headers.get('x-forwarded-for')?.split(',')[0] ||

@@ -44,8 +44,10 @@ export function PasswordLoginForm() {
         return;
       }
 
-      // Redirect on success
-      window.location.href = data.redirectTo || '/dashboard';
+      // Redirect on success (validate to prevent open redirect)
+      const redirectTo = data.redirectTo || '/dashboard';
+      const isRelative = redirectTo.startsWith('/') && !redirectTo.startsWith('//');
+      window.location.href = isRelative ? redirectTo : '/dashboard';
     } catch {
       setError('Network error. Please check your connection and try again.');
     } finally {
