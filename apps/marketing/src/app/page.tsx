@@ -658,7 +658,7 @@ export default function Home() {
         </section>
 
         {/* Documents Section */}
-        <section className="border-t border-border bg-muted/30 py-16 md:py-24 lg:py-32">
+        <section className="border-t border-border bg-muted/30 py-16 md:py-24 lg:py-32 overflow-hidden">
           <div className="container mx-auto px-4 md:px-6">
             {/* Section Header */}
             <div className="mx-auto max-w-3xl text-center mb-12 md:mb-16">
@@ -746,7 +746,7 @@ export default function Home() {
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <Wand2 className="h-5 w-5 text-primary" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="font-semibold mb-1">AI-Powered Editing</h3>
                       <p className="text-sm text-muted-foreground">
                         Talk to AI in the sidebar chat and it edits your document directly.
@@ -762,7 +762,7 @@ export default function Home() {
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <PenTool className="h-5 w-5 text-primary" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="font-semibold mb-1">Rich Text & Markdown</h3>
                       <p className="text-sm text-muted-foreground">
                         Toggle between visual editing and markdown with a click.
@@ -778,7 +778,7 @@ export default function Home() {
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <Undo2 className="h-5 w-5 text-primary" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="font-semibold mb-1">One-Click Rollback</h3>
                       <p className="text-sm text-muted-foreground">
                         Every AI edit is versioned. Don&apos;t like what AI suggested? Roll back to any previous
@@ -794,7 +794,7 @@ export default function Home() {
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
                       <Edit3 className="h-5 w-5 text-primary" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="font-semibold mb-1">Beyond Documents</h3>
                       <p className="text-sm text-muted-foreground">
                         Not just rich text—code blocks, spreadsheets, and custom canvases too.
