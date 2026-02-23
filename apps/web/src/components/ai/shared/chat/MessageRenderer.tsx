@@ -337,7 +337,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} className="mb-2" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}>
+      <div key={message.id} className="mb-2">
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;

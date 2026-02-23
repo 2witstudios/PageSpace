@@ -337,7 +337,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
   return (
     <>
-      <div key={message.id} className="mb-1 min-w-0 max-w-full" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 80px' }}>
+      <div key={message.id} className="mb-1 min-w-0 max-w-full">
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
