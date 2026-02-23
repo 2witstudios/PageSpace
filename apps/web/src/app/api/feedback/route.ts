@@ -2,9 +2,13 @@ import { db, feedbackSubmissions } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/server';
+import { sendEmail } from '@pagespace/lib/services/email-service';
+import { FeedbackNotificationEmail } from '@pagespace/lib/email-templates/FeedbackNotificationEmail';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import { ALLOWED_IMAGE_TYPES, validateImageAttachment } from '@/lib/validation/image-validation';
+
+const FEEDBACK_EMAIL = process.env.CONTACT_EMAIL || 'hello@pagespace.ai';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -130,6 +134,25 @@ export async function POST(request: Request) {
       hasAttachments: !!attachments?.length,
       pageUrl: context?.pageUrl,
     });
+
+    // Send email notification (non-blocking — DB write is the priority)
+    try {
+      const appUrl = process.env.WEB_APP_URL || 'http://localhost:3000';
+      await sendEmail({
+        to: FEEDBACK_EMAIL,
+        subject: `[PageSpace Feedback] ${message.slice(0, 80)}${message.length > 80 ? '...' : ''}`,
+        react: FeedbackNotificationEmail({
+          userId,
+          message,
+          pageUrl: context?.pageUrl,
+          appVersion: context?.appVersion,
+          submittedAt: new Date().toISOString(),
+          adminUrl: `${appUrl}/admin/support`,
+        }),
+      });
+    } catch (emailError) {
+      loggers.api.error('Failed to send feedback notification email', emailError as Error);
+    }
 
     return Response.json({
       message: 'Feedback submitted successfully. Thank you!'

@@ -1,7 +1,7 @@
 import { Resend } from "resend";
 
 const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@pagespace.ai";
-const TO_EMAIL = "hello@pagespace.ai";
+const TO_EMAIL = process.env.CONTACT_EMAIL || "hello@pagespace.ai";
 
 let _resend: Resend | null = null;
 function getResend() {
@@ -92,6 +92,24 @@ export async function POST(request: Request) {
         `Sent from: pagespace.ai/contact`,
       ].join("\n"),
     });
+
+    // Save to database via internal API (non-blocking — email delivery is the priority)
+    const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+    if (INTERNAL_API_SECRET) {
+      const WEB_APP_URL = process.env.WEB_APP_URL || "http://localhost:3000";
+      try {
+        await fetch(`${WEB_APP_URL}/api/internal/contact`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${INTERNAL_API_SECRET}`,
+          },
+          body: JSON.stringify({ name, email, subject, message }),
+        });
+      } catch (err) {
+        console.error("Failed to save contact submission:", err);
+      }
+    }
 
     return Response.json(
       { message: "Message sent successfully. We'll get back to you soon!" },

@@ -457,5 +457,19 @@ describe('URL Validator - SSRF Prevention', () => {
       const result = await validateLocalProviderURL('http://my-ollama.local:11434');
       expect(result.valid).toBe(true);
     });
+
+    it('allows http://host.docker.internal:11434 for Ollama in Docker', async () => {
+      vi.mocked(dns.resolve4).mockResolvedValue(['192.168.65.254']);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://host.docker.internal:11434');
+      expect(result.valid).toBe(true);
+    });
+
+    it('allows http://host.docker.internal:1234/v1 for LM Studio in Docker', async () => {
+      vi.mocked(dns.resolve4).mockResolvedValue(['192.168.65.254']);
+      vi.mocked(dns.resolve6).mockResolvedValue([]);
+      const result = await validateLocalProviderURL('http://host.docker.internal:1234/v1');
+      expect(result.valid).toBe(true);
+    });
   });
 });

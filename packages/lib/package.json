@@ -208,6 +208,11 @@
       "import": "./dist/email-templates/MagicLinkEmail.js",
       "require": "./dist/email-templates/MagicLinkEmail.js"
     },
+    "./email-templates/FeedbackNotificationEmail": {
+      "types": "./dist/email-templates/FeedbackNotificationEmail.d.ts",
+      "import": "./dist/email-templates/FeedbackNotificationEmail.js",
+      "require": "./dist/email-templates/FeedbackNotificationEmail.js"
+    },
     "./test/auth-helpers": {
       "types": "./dist/test/auth-helpers.d.ts",
       "import": "./dist/test/auth-helpers.js",
@@ -374,6 +379,9 @@
       ],
       "email-templates/MagicLinkEmail": [
         "./dist/email-templates/MagicLinkEmail.d.ts"
+      ],
+      "email-templates/FeedbackNotificationEmail": [
+        "./dist/email-templates/FeedbackNotificationEmail.d.ts"
       ],
       "test/auth-helpers": [
         "./dist/test/auth-helpers.d.ts"

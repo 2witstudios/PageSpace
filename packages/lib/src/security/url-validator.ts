@@ -156,6 +156,11 @@ function isBlockedHostname(hostname: string): boolean {
     return true;
   }
 
+  // Allow Docker's well-known hostname for reaching the host machine
+  if (normalizedHostname === 'host.docker.internal') {
+    return false;
+  }
+
   // Block .internal domains
   if (normalizedHostname.endsWith('.internal')) {
     return true;
@@ -305,6 +310,11 @@ function isCloudMetadataHostname(hostname: string): boolean {
   // Check explicit cloud metadata hostnames
   if (BLOCKED_HOSTNAMES.includes(normalizedHostname)) {
     return true;
+  }
+
+  // Allow Docker's well-known hostname for reaching the host machine
+  if (normalizedHostname === 'host.docker.internal') {
+    return false;
   }
 
   // Block .internal domains (cloud metadata pattern) but NOT .local
