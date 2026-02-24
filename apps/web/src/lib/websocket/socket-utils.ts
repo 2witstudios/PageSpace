@@ -605,7 +605,7 @@ export async function kickUserFromRooms(payload: KickPayload): Promise<KickResul
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(30000),
     });
 
     const result = await response.json() as KickResult;
