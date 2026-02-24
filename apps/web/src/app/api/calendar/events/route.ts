@@ -145,7 +145,7 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
           count++;
         }
       } catch (err) {
-        loggers.api.warn(`Failed to parse cron for workflow ${wf.id}:`, err as Error);
+        loggers.api.warn(`Failed to parse cron for workflow ${wf.id}:`, { error: err instanceof Error ? err.message : String(err) });
       }
     }
   }

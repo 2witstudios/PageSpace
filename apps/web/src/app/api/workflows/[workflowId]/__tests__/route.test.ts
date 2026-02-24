@@ -147,7 +147,7 @@ describe('GET /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_1');
     const response = await GET(request, createContext('wf_1'));
 
-    expect(response.status).toBe(401);
+    expect(response!.status).toBe(401);
   });
 
   it('should return 404 when workflow not found', async () => {
@@ -156,7 +156,7 @@ describe('GET /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_missing');
     const response = await GET(request, createContext('wf_missing'));
 
-    expect(response.status).toBe(404);
+    expect(response!.status).toBe(404);
   });
 
   it('should return 403 when user is not owner or admin', async () => {
@@ -169,7 +169,7 @@ describe('GET /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_1');
     const response = await GET(request, createContext('wf_1'));
 
-    expect(response.status).toBe(403);
+    expect(response!.status).toBe(403);
   });
 
   it('should return workflow on success', async () => {
@@ -183,7 +183,7 @@ describe('GET /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_1');
     const response = await GET(request, createContext('wf_1'));
 
-    expect(response.status).toBe(200);
+    expect(response!.status).toBe(200);
   });
 });
 
@@ -226,7 +226,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     });
     const response = await PATCH(request, createContext('wf_1'));
 
-    expect(response.status).toBe(401);
+    expect(response!.status).toBe(401);
   });
 
   it('should return 404 when workflow not found', async () => {
@@ -239,7 +239,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     });
     const response = await PATCH(request, createContext('wf_missing'));
 
-    expect(response.status).toBe(404);
+    expect(response!.status).toBe(404);
   });
 
   it('should return 403 when user is not owner or admin', async () => {
@@ -256,7 +256,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     });
     const response = await PATCH(request, createContext('wf_1'));
 
-    expect(response.status).toBe(403);
+    expect(response!.status).toBe(403);
   });
 
   it('should return 400 when setting cronExpression to null on a cron workflow', async () => {
@@ -267,8 +267,8 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     });
     const response = await PATCH(request, createContext('wf_1'));
 
-    expect(response?.status).toBe(400);
-    const body = await response?.json();
+    expect(response!.status).toBe(400);
+    const body = await response!.json();
     expect(body.error).toContain('cron expression');
   });
 
@@ -280,7 +280,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     });
     const response = await PATCH(request, createContext('wf_1'));
 
-    expect(response.status).toBe(200);
+    expect(response!.status).toBe(200);
   });
 });
 
@@ -314,7 +314,7 @@ describe('DELETE /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_1', { method: 'DELETE' });
     const response = await DELETE(request, createContext('wf_1'));
 
-    expect(response.status).toBe(401);
+    expect(response!.status).toBe(401);
   });
 
   it('should return 404 when workflow not found', async () => {
@@ -323,7 +323,7 @@ describe('DELETE /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_1', { method: 'DELETE' });
     const response = await DELETE(request, createContext('wf_1'));
 
-    expect(response.status).toBe(404);
+    expect(response!.status).toBe(404);
   });
 
   it('should return 403 when user is not owner or admin', async () => {
@@ -335,15 +335,15 @@ describe('DELETE /api/workflows/[workflowId]', () => {
     const request = new Request('https://example.com/api/workflows/wf_1', { method: 'DELETE' });
     const response = await DELETE(request, createContext('wf_1'));
 
-    expect(response.status).toBe(403);
+    expect(response!.status).toBe(403);
   });
 
   it('should return success on delete', async () => {
     const request = new Request('https://example.com/api/workflows/wf_1', { method: 'DELETE' });
     const response = await DELETE(request, createContext('wf_1'));
 
-    expect(response.status).toBe(200);
-    const body = await response.json();
+    expect(response!.status).toBe(200);
+    const body = await response!.json();
     expect(body.success).toBe(true);
   });
 });

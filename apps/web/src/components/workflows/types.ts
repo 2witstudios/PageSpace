@@ -1,4 +1,5 @@
-export type { EventTrigger } from '@pagespace/db';
+import type { EventTrigger } from '@pagespace/db';
+export type { EventTrigger };
 
 /** JSON-serialized workflow from the API (dates are strings, not Date objects). */
 export interface Workflow {
