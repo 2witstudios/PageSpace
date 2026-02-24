@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   checkStorageQuota,
@@ -7,6 +8,7 @@ import {
 } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
+import { safeParseBody } from '@/lib/validation/parse-body';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -18,13 +20,17 @@ export async function POST(request: NextRequest) {
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Parse request body
-    const { fileSize } = await request.json();
+    // Parse and validate request body
+    const storageCheckSchema = z.object({
+      fileSize: z.number().positive('Invalid file size'),
+    });
 
-    // Validate input
-    if (!fileSize || fileSize <= 0) {
-      return NextResponse.json({ error: 'Invalid file size' }, { status: 400 });
+    const parsed = await safeParseBody(request, storageCheckSchema);
+    if (!parsed.success) {
+      return parsed.response;
     }
+
+    const { fileSize } = parsed.data;
 
     // Check memory availability first
     const memCheck = await checkMemoryMiddleware();
