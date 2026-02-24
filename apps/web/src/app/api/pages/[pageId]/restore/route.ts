@@ -109,7 +109,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         metadata: isMCP ? { source: 'mcp' } : undefined,
       });
     });
-    deferredTriggers.forEach(t => t());
+    for (const t of deferredTriggers) t();
 
     if (page.drive?.id) {
       await broadcastPageEvent(

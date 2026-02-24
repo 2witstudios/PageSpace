@@ -108,23 +108,32 @@ export async function emitWorkflowEvent(event: WorkflowEvent): Promise<void> {
       // Store context and set debounce timer
       pendingEventContexts.set(workflow.id, contextStr);
 
-      const timer = setTimeout(async () => {
-        debounceTimers.delete(workflow.id);
-        const eventContext = pendingEventContexts.get(workflow.id);
-        pendingEventContexts.delete(workflow.id);
+      const timer = setTimeout(() => {
+        void (async () => {
+          try {
+            debounceTimers.delete(workflow.id);
+            const eventContext = pendingEventContexts.get(workflow.id);
+            pendingEventContexts.delete(workflow.id);
 
-        // Re-validate: workflow may have been disabled or deleted during debounce
-        const [current] = await db
-          .select()
-          .from(workflows)
-          .where(eq(workflows.id, workflow.id));
+            // Re-validate: workflow may have been disabled or deleted during debounce
+            const [current] = await db
+              .select()
+              .from(workflows)
+              .where(eq(workflows.id, workflow.id));
 
-        if (!current || !current.isEnabled) return;
+            if (!current || !current.isEnabled) return;
 
-        // Skip if another execution is already in progress
-        if (current.lastRunStatus === 'running') return;
+            // Skip if another execution is already in progress
+            if (current.lastRunStatus === 'running') return;
 
-        await executeEventWorkflow(current, eventContext ?? contextStr);
+            await executeEventWorkflow(current, eventContext ?? contextStr);
+          } catch (error) {
+            loggers.api.error('Error in debounced workflow execution', {
+              workflowId: workflow.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
       }, debounceSecs * 1000);
 
       debounceTimers.set(workflow.id, timer);

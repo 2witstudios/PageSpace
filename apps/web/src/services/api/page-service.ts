@@ -581,7 +581,7 @@ export const pageService = {
         if (result.deferredTrigger) deferredTriggers.push(result.deferredTrigger);
       }
     });
-    deferredTriggers.forEach(t => t());
+    for (const t of deferredTriggers) t();
 
     return {
       success: true,

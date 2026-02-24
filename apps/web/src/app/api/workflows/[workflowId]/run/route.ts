@@ -46,7 +46,17 @@ export async function POST(
     .where(eq(workflows.id, workflowId));
 
   // Execute
-  const result = await executeWorkflow(workflow);
+  let result;
+  try {
+    result = await executeWorkflow(workflow);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    await db
+      .update(workflows)
+      .set({ lastRunStatus: 'error', lastRunError: errorMsg })
+      .where(eq(workflows.id, workflowId));
+    return NextResponse.json({ success: false, error: errorMsg }, { status: 500 });
+  }
 
   // Update status — only compute nextRunAt for cron workflows
   const nextRunAt = (workflow.triggerType === 'cron' && workflow.isEnabled && workflow.cronExpression)
