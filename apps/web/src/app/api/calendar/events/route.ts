@@ -4,6 +4,7 @@ import {
   db,
   calendarEvents,
   eventAttendees,
+  workflows,
   eq,
   and,
   or,
@@ -19,6 +20,7 @@ import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { CronExpressionParser } from 'cron-parser';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -56,6 +58,100 @@ const createEventSchema = z.object({
   color: z.string().default('default'),
   attendeeIds: z.array(z.string()).optional(),
 });
+
+/**
+ * Expand workflow schedules into virtual calendar events within a date range.
+ * - Cron workflows: expand cron expression into future occurrences
+ * - Event-triggered workflows: show actual past runs (lastRunAt) within the range
+ */
+async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, endDate: Date) {
+  if (driveIds.length === 0) return [];
+
+  const enabledWorkflows = await db
+    .select({
+      id: workflows.id,
+      name: workflows.name,
+      cronExpression: workflows.cronExpression,
+      timezone: workflows.timezone,
+      driveId: workflows.driveId,
+      triggerType: workflows.triggerType,
+      lastRunAt: workflows.lastRunAt,
+      lastRunStatus: workflows.lastRunStatus,
+    })
+    .from(workflows)
+    .where(
+      and(
+        inArray(workflows.driveId, driveIds),
+        eq(workflows.isEnabled, true)
+      )
+    );
+
+  const virtualEvents: Array<{
+    id: string;
+    title: string;
+    startAt: Date;
+    endAt: Date;
+    allDay: boolean;
+    source: 'workflow';
+    workflowId: string;
+    driveId: string;
+    color: string;
+    triggerType?: string;
+  }> = [];
+
+  for (const wf of enabledWorkflows) {
+    if (wf.triggerType === 'event') {
+      // Event-triggered workflows: show past runs as point-in-time events
+      if (wf.lastRunAt && wf.lastRunAt >= startDate && wf.lastRunAt <= endDate) {
+        virtualEvents.push({
+          id: `workflow-event-${wf.id}-${wf.lastRunAt.getTime()}`,
+          title: `Workflow: ${wf.name}`,
+          startAt: wf.lastRunAt,
+          endAt: new Date(wf.lastRunAt.getTime() + 5 * 60 * 1000),
+          allDay: false,
+          source: 'workflow',
+          workflowId: wf.id,
+          driveId: wf.driveId,
+          color: 'amber',
+          triggerType: 'event',
+        });
+      }
+    } else {
+      // Cron workflows: expand cron schedule into future occurrences
+      if (!wf.cronExpression) continue;
+      try {
+        const interval = CronExpressionParser.parse(wf.cronExpression, {
+          tz: wf.timezone,
+          currentDate: startDate,
+          endDate: endDate,
+        });
+
+        let count = 0;
+        while (interval.hasNext() && count < 100) {
+          const next = interval.next().toDate();
+          if (next > endDate) break;
+          virtualEvents.push({
+            id: `workflow-${wf.id}-${next.getTime()}`,
+            title: `Workflow: ${wf.name}`,
+            startAt: next,
+            endAt: new Date(next.getTime() + 5 * 60 * 1000),
+            allDay: false,
+            source: 'workflow',
+            workflowId: wf.id,
+            driveId: wf.driveId,
+            color: 'purple',
+            triggerType: 'cron',
+          });
+          count++;
+        }
+      } catch (err) {
+        loggers.api.warn(`Failed to parse cron for workflow ${wf.id}:`, err as Error);
+      }
+    }
+  }
+
+  return virtualEvents;
+}
 
 /**
  * GET /api/calendar/events
@@ -172,7 +268,10 @@ export async function GET(request: Request) {
         orderBy: [asc(calendarEvents.startAt)],
       });
 
-      return NextResponse.json({ events });
+      // Append workflow virtual events
+      const workflowEvents = await getWorkflowVirtualEvents([params.driveId], params.startDate, params.endDate);
+
+      return NextResponse.json({ events, workflowEvents });
     }
 
     // User context: aggregate events from all sources
@@ -249,7 +348,10 @@ export async function GET(request: Request) {
       orderBy: [asc(calendarEvents.startAt)],
     });
 
-    return NextResponse.json({ events });
+    // Append workflow virtual events
+    const workflowEvents = await getWorkflowVirtualEvents(driveIds, params.startDate, params.endDate);
+
+    return NextResponse.json({ events, workflowEvents });
   } catch (error) {
     loggers.api.error('Error fetching calendar events:', error as Error);
     return NextResponse.json(

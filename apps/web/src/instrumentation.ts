@@ -9,11 +9,14 @@ export async function register() {
   // Only run on the server (Node.js runtime)
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     // Initialize activity broadcast hook for real-time updates
-    const { setActivityBroadcastHook } = await import('@pagespace/lib');
+    const { setActivityBroadcastHook, setWorkflowTriggerHook } = await import('@pagespace/lib');
     const { broadcastActivityEvent } = await import('@/lib/websocket/socket-utils');
+    const { emitWorkflowEvent } = await import('@/lib/workflows/event-trigger');
 
     setActivityBroadcastHook(broadcastActivityEvent);
+    setWorkflowTriggerHook(emitWorkflowEvent);
 
     console.log('[Instrumentation] Activity broadcast hook initialized');
+    console.log('[Instrumentation] Workflow trigger hook initialized');
   }
 }

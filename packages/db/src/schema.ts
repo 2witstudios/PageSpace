@@ -25,6 +25,7 @@ export * from './schema/push-notifications';
 export * from './schema/integrations';
 export * from './schema/personalization';
 export * from './schema/calendar';
+export * from './schema/workflows';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -53,6 +54,7 @@ import * as pushNotifications from './schema/push-notifications';
 import * as integrations from './schema/integrations';
 import * as personalization from './schema/personalization';
 import * as calendar from './schema/calendar';
+import * as workflows from './schema/workflows';
 
 export const schema = {
   ...auth,
@@ -82,4 +84,5 @@ export const schema = {
   ...integrations,
   ...personalization,
   ...calendar,
+  ...workflows,
 };

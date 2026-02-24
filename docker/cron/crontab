@@ -30,3 +30,7 @@
 # Deleted message purge - Daily at 4am UTC
 # Hard-deletes soft-deleted messages and conversations older than 30 days
 0 4 * * * cron-curl POST http://web:3000/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1
+
+# Workflow execution - Every 5 minutes
+# Checks for due scheduled workflows and executes them
+*/5 * * * * cron-curl POST http://web:3000/api/cron/workflows >> /var/log/cron/workflows.log 2>&1

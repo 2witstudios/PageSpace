@@ -10,6 +10,7 @@ import {
   Settings,
   Trash2,
   Users,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,6 +79,12 @@ export default function DriveFooter({ canManage }: DriveFooterProps) {
       icon: Users,
       label: "Members",
       href: `/dashboard/${driveId}/members`,
+      show: canManage,
+    },
+    {
+      icon: Zap,
+      label: "Workflows",
+      href: `/dashboard/${driveId}/workflows`,
       show: canManage,
     },
     {
