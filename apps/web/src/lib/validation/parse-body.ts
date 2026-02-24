@@ -24,9 +24,12 @@ export async function safeParseBody<T>(
 
   const result = schema.safeParse(body);
   if (!result.success) {
+    const message = result.error.issues
+      .map((i) => i.message)
+      .join('; ');
     return {
       success: false,
-      response: Response.json({ error: result.error.issues }, { status: 400 }),
+      response: Response.json({ error: message }, { status: 400 }),
     };
   }
 

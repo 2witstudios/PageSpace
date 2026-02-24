@@ -13,6 +13,10 @@ import { safeParseBody } from '@/lib/validation/parse-body';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+const storageCheckSchema = z.object({
+  fileSize: z.number().positive('Invalid file size'),
+});
+
 export async function POST(request: NextRequest) {
   try {
     // Verify authentication
@@ -21,10 +25,6 @@ export async function POST(request: NextRequest) {
     const userId = auth.userId;
 
     // Parse and validate request body
-    const storageCheckSchema = z.object({
-      fileSize: z.number().positive('Invalid file size'),
-    });
-
     const parsed = await safeParseBody(request, storageCheckSchema);
     if (!parsed.success) {
       return parsed.response;

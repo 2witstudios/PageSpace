@@ -38,7 +38,7 @@ describe('safeParseBody', () => {
     }
   });
 
-  it('given valid JSON that fails schema validation, should return 400 with issues', async () => {
+  it('given valid JSON that fails schema validation, should return 400 with string error', async () => {
     const request = makeRequest(JSON.stringify({ name: '', count: -1 }));
     const result = await safeParseBody(request, testSchema);
 
@@ -46,7 +46,7 @@ describe('safeParseBody', () => {
     if (!result.success) {
       expect(result.response.status).toBe(400);
       const body = await result.response.json();
-      expect(Array.isArray(body.error)).toBe(true);
+      expect(typeof body.error).toBe('string');
       expect(body.error.length).toBeGreaterThan(0);
     }
   });

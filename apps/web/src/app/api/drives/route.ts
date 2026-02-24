@@ -12,6 +12,13 @@ import { safeParseBody } from '@/lib/validation/parse-body';
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
+const createDriveSchema = z.object({
+  name: z.preprocess(
+    (v) => (typeof v === 'string' ? v : ''),
+    z.string().min(1, 'Missing name')
+  ),
+});
+
 export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) {
@@ -58,10 +65,6 @@ export async function POST(request: Request) {
   }
 
   const userId = auth.userId;
-
-  const createDriveSchema = z.object({
-    name: z.string().min(1, 'Missing name'),
-  });
 
   const parsed = await safeParseBody(request, createDriveSchema);
   if (!parsed.success) {
