@@ -39,9 +39,9 @@ COPY --from=deps --chown=worker:nodejs /app .
 
 USER worker
 
-# Health check - verify the worker process is running
+# Health check - verify the main process (PID 1) is alive
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD pgrep -f "file-processor" > /dev/null || exit 1
+  CMD node -e "try { process.kill(1, 0); } catch(e) { process.exit(1); }"
 
 # Run the worker using tsx
 CMD ["pnpm", "tsx", "apps/web/src/workers/file-processor.ts"]
