@@ -290,7 +290,10 @@ export async function GET(req: Request) {
       });
 
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(err => {
-        loggers.auth.warn('Rate limit reset failed', err as Error, { ip: clientIP });
+        loggers.auth.warn('Rate limit reset failed', {
+          error: err instanceof Error ? err.message : String(err),
+          ip: clientIP,
+        });
       });
 
       trackAuthEvent(user.id, 'login', {
@@ -349,7 +352,10 @@ export async function GET(req: Request) {
       });
 
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(err => {
-        loggers.auth.warn('Rate limit reset failed', err as Error, { ip: clientIP });
+        loggers.auth.warn('Rate limit reset failed', {
+          error: err instanceof Error ? err.message : String(err),
+          ip: clientIP,
+        });
       });
 
       trackAuthEvent(user.id, 'login', {

@@ -38,7 +38,10 @@ export async function POST(request: Request) {
 
         // Unregister webhook channels before revoking token
         await unregisterWebhookChannels(userId, accessToken).catch(err => {
-          loggers.auth.warn('Webhook channel unregistration failed', err as Error, { userId });
+          loggers.auth.warn('Webhook channel unregistration failed', {
+            error: err instanceof Error ? err.message : String(err),
+            userId,
+          });
         });
 
         await fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, {

@@ -186,7 +186,10 @@ export async function POST(req: Request) {
 
     // Reset rate limit on success
     await resetDistributedRateLimit(`oauth:apple:native:ip:${clientIP}`).catch(err => {
-      loggers.auth.warn('Rate limit reset failed', err as Error, { ip: clientIP });
+      loggers.auth.warn('Rate limit reset failed', {
+        error: err instanceof Error ? err.message : String(err),
+        ip: clientIP,
+      });
     });
 
     // Log auth events

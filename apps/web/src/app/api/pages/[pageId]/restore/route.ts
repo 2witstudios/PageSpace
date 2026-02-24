@@ -122,7 +122,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
       // Invalidate page tree cache when structure changes
       pageTreeCache.invalidateDriveTree(page.drive.id).catch(err => {
-        loggers.api.warn('Page tree cache invalidation failed', err as Error, { driveId: page.drive.id });
+        loggers.api.warn('Page tree cache invalidation failed', {
+          error: err instanceof Error ? err.message : String(err),
+          driveId: page.drive.id,
+        });
       });
     }
 

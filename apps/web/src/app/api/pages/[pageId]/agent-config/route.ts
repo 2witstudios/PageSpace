@@ -239,7 +239,10 @@ export async function PATCH(
       if (page.type === 'AI_CHAT' &&
           (agentDefinition !== undefined || visibleToGlobalAssistant !== undefined)) {
         agentAwarenessCache.invalidateDriveAgents(page.driveId).catch(err => {
-          loggers.api.warn('Agent awareness cache invalidation failed', err as Error, { driveId: page.driveId });
+          loggers.api.warn('Agent awareness cache invalidation failed', {
+            error: err instanceof Error ? err.message : String(err),
+            driveId: page.driveId,
+          });
         });
       }
 
