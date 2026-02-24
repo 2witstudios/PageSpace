@@ -100,6 +100,9 @@ export async function POST(
     return executeRollback(activityId, userId, rollbackContext as RollbackContext, { tx, force });
   });
 
+  // Fire deferred workflow trigger after transaction commit
+  result.deferredWorkflowTrigger?.();
+
   if (!result.success) {
     loggers.api.debug('[Rollback:Route] Rollback failed', {
       message: result.message,

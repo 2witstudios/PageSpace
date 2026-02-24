@@ -1221,7 +1221,7 @@ export async function logRollbackActivity(
     /** Optional transaction for atomic logging */
     tx?: typeof db;
   }
-): Promise<void> {
+): Promise<DeferredWorkflowTrigger | undefined> {
   const payload: ActivityLogInput = {
     userId,
     actorEmail: actorInfo.actorEmail,
@@ -1255,13 +1255,13 @@ export async function logRollbackActivity(
   };
 
   if (options?.tx) {
-    await logActivityWithTx(payload, options.tx);
-    return;
+    return await logActivityWithTx(payload, options.tx);
   }
 
   logActivity(payload).catch(() => {
     // Silent fail - already logged in logActivity
   });
+  return undefined;
 }
 
 /**

@@ -97,12 +97,16 @@ export async function POST(req: Request) {
       const batchIds = batch.map(w => w.id);
 
       // Atomically claim this batch (UPDATE...RETURNING prevents double-execution)
+      // Re-check eligibility predicates to guard against state changes between discovery and claim
       const claimed = await db
         .update(workflows)
         .set({ lastRunStatus: 'running', lastRunAt: new Date() })
         .where(
           and(
             inArray(workflows.id, batchIds),
+            eq(workflows.isEnabled, true),
+            eq(workflows.triggerType, 'cron'),
+            lte(workflows.nextRunAt, now),
             ne(workflows.lastRunStatus, 'running')
           )
         )

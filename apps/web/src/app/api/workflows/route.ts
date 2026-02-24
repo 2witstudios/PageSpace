@@ -85,11 +85,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
-  // Validate agent page exists and is AI_CHAT in the same drive
+  // Validate agent page exists, is AI_CHAT, not trashed, and in the same drive
   const [agent] = await db
     .select()
     .from(pages)
-    .where(and(eq(pages.id, data.agentPageId), eq(pages.driveId, data.driveId)));
+    .where(and(eq(pages.id, data.agentPageId), eq(pages.driveId, data.driveId), eq(pages.isTrashed, false)));
 
   if (!agent) {
     return NextResponse.json({ error: 'Agent page not found in this drive' }, { status: 400 });

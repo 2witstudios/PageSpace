@@ -6,6 +6,7 @@ import type { WorkflowEvent } from '../event-trigger';
 // ============================================================================
 
 const {
+  mockReturning,
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
@@ -13,7 +14,8 @@ const {
   mockSelectFrom,
   mockSelect,
 } = vi.hoisted(() => ({
-  mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
+  mockReturning: vi.fn().mockResolvedValue([]),
+  mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
   mockSelectWhere: vi.fn().mockResolvedValue([]),
@@ -37,6 +39,7 @@ vi.mock('@pagespace/db', () => ({
   pages: { id: 'id', parentId: 'parentId' },
   eq: vi.fn(),
   and: vi.fn(),
+  ne: vi.fn(),
 }));
 
 vi.mock('../workflow-executor', () => ({
@@ -105,10 +108,18 @@ describe('emitWorkflowEvent', () => {
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockSelectWhere.mockResolvedValue([]);
 
-    // Default update chain: update().set().where()
+    // Default update chain: update().set().where().returning()
+    // mockUpdateWhere must serve as both thenable (for post-exec updates)
+    // and have .returning() (for atomic claim)
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockResolvedValue(undefined);
+    mockUpdateWhere.mockImplementation(() => {
+      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
+      p.returning = mockReturning;
+      return p;
+    });
+    // Default: atomic claim succeeds (returns claimed row)
+    mockReturning.mockResolvedValue([{ id: 'wf_1' }]);
 
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,
@@ -418,7 +429,12 @@ describe('buildEventContext', () => {
     mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockResolvedValue(undefined);
+    mockUpdateWhere.mockImplementation(() => {
+      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
+      p.returning = mockReturning;
+      return p;
+    });
+    mockReturning.mockResolvedValue([{ id: 'wf_1' }]);
 
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,

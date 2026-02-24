@@ -81,12 +81,12 @@ export async function PATCH(
 
   const data = parsed.data;
 
-  // If changing agent, validate it exists and is AI_CHAT in same drive
+  // If changing agent, validate it exists, is AI_CHAT, not trashed, and in same drive
   if (data.agentPageId) {
     const [agent] = await db
       .select()
       .from(pages)
-      .where(and(eq(pages.id, data.agentPageId), eq(pages.driveId, workflow.driveId)));
+      .where(and(eq(pages.id, data.agentPageId), eq(pages.driveId, workflow.driveId), eq(pages.isTrashed, false)));
 
     if (!agent || agent.type !== 'AI_CHAT') {
       return NextResponse.json({ error: 'Invalid agent page' }, { status: 400 });

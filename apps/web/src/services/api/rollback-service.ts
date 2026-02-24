@@ -20,6 +20,7 @@ import {
   getActorInfo,
   type ActivityResourceType,
   type ActivityOperation,
+  type DeferredWorkflowTrigger,
   createChangeGroupId,
   inferChangeGroupType,
 } from '@pagespace/lib/monitoring';
@@ -476,6 +477,8 @@ export interface RollbackResult extends ActivityActionResult {
   success: boolean;
   rollbackActivityId?: string;
   restoredValues?: Record<string, unknown>;
+  /** Deferred workflow trigger to fire after transaction commit */
+  deferredWorkflowTrigger?: DeferredWorkflowTrigger;
 }
 
 /**
@@ -1782,7 +1785,7 @@ export async function executeRollback(
       logOptions.contentSize = pageMutationMeta.contentSizeAfter ?? undefined;
     }
 
-    await logRollbackActivity(
+    const deferredWorkflowTrigger = await logRollbackActivity(
       userId,
       activityId,
       {
@@ -1821,6 +1824,7 @@ export async function executeRollback(
       message: 'Change undone',
       warnings,
       changesApplied: preview.changes,
+      deferredWorkflowTrigger,
     };
   } catch (error) {
     loggers.api.error('[RollbackService] Error executing rollback', {

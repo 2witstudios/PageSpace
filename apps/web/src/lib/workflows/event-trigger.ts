@@ -1,4 +1,4 @@
-import { db, workflows, pages, eq, and } from '@pagespace/db';
+import { db, workflows, pages, eq, and, ne } from '@pagespace/db';
 import type { EventTrigger } from '@pagespace/db';
 import { executeWorkflow } from './workflow-executor';
 import { loggers } from '@pagespace/lib/server';
@@ -175,11 +175,17 @@ async function executeEventWorkflow(
   eventContext: string
 ): Promise<void> {
   try {
-    // Mark as running
-    await db
+    // Atomically claim: only proceed if not already running (prevents double-execution)
+    const [claimed] = await db
       .update(workflows)
       .set({ lastRunStatus: 'running', lastRunAt: new Date() })
-      .where(eq(workflows.id, workflow.id));
+      .where(and(eq(workflows.id, workflow.id), ne(workflows.lastRunStatus, 'running')))
+      .returning();
+
+    if (!claimed) {
+      loggers.api.info('Event workflow already running, skipping', { workflowId: workflow.id });
+      return;
+    }
 
     // Inject event context into prompt
     const enhancedWorkflow = {

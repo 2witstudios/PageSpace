@@ -292,6 +292,8 @@ export async function executeRollbackToPoint(
     // Execute all rollbacks in a single transaction for atomicity
     loggers.api.debug('[RollbackToPoint:Execute] Starting transaction');
 
+    const deferredTriggers: Array<() => void> = [];
+
     await db.transaction(async (tx) => {
       // Rollback activities in reverse chronological order (newest first)
       for (const activity of preview.activitiesAffected) {
@@ -334,6 +336,10 @@ export async function executeRollbackToPoint(
           );
         }
 
+        if (result.deferredWorkflowTrigger) {
+          deferredTriggers.push(result.deferredWorkflowTrigger);
+        }
+
         loggers.api.debug('[RollbackToPoint:Execute] Activity rollback succeeded', {
           activityId: activity.id,
         });
@@ -343,6 +349,11 @@ export async function executeRollbackToPoint(
 
       loggers.api.debug('[RollbackToPoint:Execute] Transaction committing');
     });
+
+    // Fire deferred workflow triggers after transaction commit
+    for (const trigger of deferredTriggers) {
+      trigger();
+    }
 
     loggers.api.debug('[RollbackToPoint:Execute] Transaction committed successfully', {
       activitiesRolledBack,
