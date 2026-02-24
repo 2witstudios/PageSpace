@@ -6,7 +6,7 @@ import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/server';
 
 const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-const maxConcurrentWorkflows = 5;
+const MAX_CONCURRENT_WORKFLOWS = 5;
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
@@ -15,14 +15,16 @@ export async function POST(req: Request) {
   try {
     const now = new Date();
 
-    // Reset stuck workflows (running for >10 min) and advance their nextRunAt
+    // Reset stuck cron workflows (running for >10 min) and advance their nextRunAt
     // so they aren't immediately re-claimed in the same cron invocation.
+    // Scoped to triggerType='cron' to avoid incorrectly resetting long-running event workflows.
     const stuckCutoff = new Date(now.getTime() - STUCK_WORKFLOW_TIMEOUT_MS);
     const stuckWorkflows = await db
       .update(workflows)
       .set({ lastRunStatus: 'error', lastRunError: 'Workflow timed out (stuck in running state)' })
       .where(
         and(
+          eq(workflows.triggerType, 'cron'),
           eq(workflows.lastRunStatus, 'running'),
           lte(workflows.lastRunAt, stuckCutoff)
         )
@@ -62,7 +64,13 @@ export async function POST(req: Request) {
     // Execute due workflows with concurrency limit
     const executeOne = async (workflow: typeof dueWorkflows[number]) => {
       const result = await executeWorkflow(workflow);
-      const nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
+
+      let nextRunAt: Date | undefined;
+      try {
+        nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
+      } catch {
+        loggers.api.error(`Workflow cron: Failed to compute nextRunAt for ${workflow.id}`);
+      }
 
       await db
         .update(workflows)
@@ -71,17 +79,17 @@ export async function POST(req: Request) {
           lastRunStatus: result.success ? 'success' : 'error',
           lastRunError: result.error || null,
           lastRunDurationMs: result.durationMs,
-          nextRunAt,
+          ...(nextRunAt ? { nextRunAt } : {}),
         })
         .where(eq(workflows.id, workflow.id));
 
       return { workflow, result };
     };
 
-    // Process in batches of maxConcurrentWorkflows
+    // Process in batches of MAX_CONCURRENT_WORKFLOWS
     const results: PromiseSettledResult<{ workflow: typeof dueWorkflows[number]; result: Awaited<ReturnType<typeof executeWorkflow>> }>[] = [];
-    for (let i = 0; i < dueWorkflows.length; i += maxConcurrentWorkflows) {
-      const batch = dueWorkflows.slice(i, i + maxConcurrentWorkflows);
+    for (let i = 0; i < dueWorkflows.length; i += MAX_CONCURRENT_WORKFLOWS) {
+      const batch = dueWorkflows.slice(i, i + MAX_CONCURRENT_WORKFLOWS);
       const batchResults = await Promise.allSettled(batch.map(executeOne));
       results.push(...batchResults);
     }
@@ -103,12 +111,17 @@ export async function POST(req: Request) {
         loggers.api.error(`Workflow cron: Failed for workflow ${workflow.id}`, { error: errorMsg });
         errors.push(`${workflow.name}: ${errorMsg}`);
 
+        let nextRunAt: Date | undefined;
+        try {
+          nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
+        } catch { /* invalid cron — leave nextRunAt as-is */ }
+
         await db
           .update(workflows)
           .set({
             lastRunStatus: 'error',
             lastRunError: errorMsg,
-            nextRunAt: getNextRunDate(workflow.cronExpression!, workflow.timezone),
+            ...(nextRunAt ? { nextRunAt } : {}),
           })
           .where(eq(workflows.id, workflow.id));
       }

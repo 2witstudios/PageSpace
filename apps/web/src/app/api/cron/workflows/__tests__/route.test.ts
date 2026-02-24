@@ -62,16 +62,20 @@ import { getNextRunDate } from '@/lib/workflows/cron-utils';
 // Fixtures
 // ============================================================================
 
-const mockWorkflow = {
+const MOCK_WORKFLOW = {
   id: 'wf_1',
   driveId: 'drive_abc',
   name: 'Daily Report',
+  triggerType: 'cron' as const,
   cronExpression: '0 9 * * 1-5',
   timezone: 'UTC',
   isEnabled: true,
   agentPageId: 'page_1',
   prompt: 'Generate report',
   contextPageIds: [],
+  eventTriggers: null,
+  watchedFolderIds: null,
+  eventDebounceSecs: null,
   lastRunStatus: 'never_run',
   lastRunAt: null,
   lastRunError: null,
@@ -126,7 +130,7 @@ describe('POST /api/cron/workflows', () => {
   });
 
   it('should execute due workflows and return counts', async () => {
-    mockReturning.mockResolvedValue([mockWorkflow]);
+    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,
       responseText: 'Report generated',
@@ -142,11 +146,11 @@ describe('POST /api/cron/workflows', () => {
     const body = await response.json();
     expect(body.executed).toBe(1);
     expect(body.total).toBe(1);
-    expect(executeWorkflow).toHaveBeenCalledWith(mockWorkflow);
+    expect(executeWorkflow).toHaveBeenCalledWith(MOCK_WORKFLOW);
   });
 
   it('should handle workflow execution errors gracefully', async () => {
-    mockReturning.mockResolvedValue([mockWorkflow]);
+    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: false,
       durationMs: 1000,
@@ -165,7 +169,7 @@ describe('POST /api/cron/workflows', () => {
   });
 
   it('should handle thrown exceptions during execution', async () => {
-    mockReturning.mockResolvedValue([mockWorkflow]);
+    mockReturning.mockResolvedValue([MOCK_WORKFLOW]);
     vi.mocked(executeWorkflow).mockRejectedValue(new Error('Network error'));
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
 
