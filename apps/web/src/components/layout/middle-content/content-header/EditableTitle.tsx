@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useParams } from 'next/navigation';
 import { patch } from '@/lib/auth/auth-fetch';
+import { useOpenTabsStore } from '@/stores/useOpenTabsStore';
+import { useTabsStore } from '@/stores/useTabsStore';
 
 export function EditableTitle({ pageId: propPageId }: { pageId?: string | null } = {}) {
   const storePageId = usePageStore((state) => state.pageId);
@@ -56,6 +58,15 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
       const updatedPage = await patch<{ id: string; title: string }>(`/api/pages/${page.id}`, { title });
       updateNode(updatedPage.id, { title: updatedPage.title });
       mutate(`/api/pages/${page.id}/breadcrumbs`);
+
+      // Update tab titles in both tab stores
+      useOpenTabsStore.getState().updateTabTitle(updatedPage.id, updatedPage.title);
+      const tabsState = useTabsStore.getState();
+      for (const tab of tabsState.tabs) {
+        if (tab.path.endsWith(`/${updatedPage.id}`)) {
+          tabsState.updateTabMeta(tab.id, { title: updatedPage.title });
+        }
+      }
     } catch (error) {
       console.error(error);
       toast.error('Failed to update title');

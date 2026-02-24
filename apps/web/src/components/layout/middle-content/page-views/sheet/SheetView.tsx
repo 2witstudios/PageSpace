@@ -350,11 +350,13 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     forceSaveRef.current = forceSave;
   }, [forceSave]);
 
-  // Track isDirty in ref for window blur handler
+  // Track isDirty and content in refs for socket handler and window blur
   const isDirtyRef = useRef(false);
+  const contentRef = useRef(documentState?.content ?? '');
   useEffect(() => {
     isDirtyRef.current = documentState?.isDirty || false;
-  }, [documentState?.isDirty]);
+    contentRef.current = documentState?.content ?? '';
+  }, [documentState?.isDirty, documentState?.content]);
 
   // Pull-to-refresh handler
   const handleRefresh = useCallback(async () => {
@@ -1540,10 +1542,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   // Permission check
   useEffect(() => {
+    const abortController = new AbortController();
+
     const checkPermissions = async () => {
       if (!user?.id) return;
       try {
-        const response = await fetchWithAuth(`/api/pages/${page.id}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(
+          `/api/pages/${page.id}/permissions/check?userId=${user.id}`,
+          { signal: abortController.signal }
+        );
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -1555,14 +1562,16 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           }
         }
       } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
         console.error('Failed to check permissions:', error);
       }
     };
 
     checkPermissions();
+    return () => { abortController.abort(); };
   }, [page.id, user?.id]);
 
-  // Socket updates
+  // Socket updates - uses refs to avoid re-subscribing on every content change
   useEffect(() => {
     if (!socket) return;
 
@@ -1572,7 +1581,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         const response = await fetchWithAuth(`/api/pages/${page.id}`);
         if (!response.ok) return;
         const updatedPage = await response.json();
-        if (updatedPage.content !== documentState?.content && !documentState?.isDirty) {
+        if (updatedPage.content !== contentRef.current && !isDirtyRef.current) {
           updateContentFromServer(updatedPage.content, updatedPage.revision);
         }
       } catch (error) {
@@ -1584,7 +1593,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     return () => {
       socket.off('page:content-updated', handleContentUpdate);
     };
-  }, [documentState?.content, documentState?.isDirty, page.id, socket, updateContentFromServer]);
+  }, [page.id, socket, updateContentFromServer]);
 
   // Cleanup on unmount - auto-save any unsaved changes
   // Empty deps array ensures cleanup only runs on TRUE component unmount

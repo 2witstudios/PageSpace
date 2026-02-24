@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, CSSProperties, MouseEvent } from "react";
+import React, { useState, useCallback, useMemo, CSSProperties, MouseEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useTabsStore } from "@/stores/useTabsStore";
@@ -79,7 +79,7 @@ export interface PageTreeItemProps {
   };
 }
 
-export function PageTreeItem({
+export const PageTreeItem = React.memo(function PageTreeItem({
   item,
   depth,
   isActive,
@@ -493,4 +493,4 @@ export function PageTreeItem({
       />
     </>
   );
-}
+});

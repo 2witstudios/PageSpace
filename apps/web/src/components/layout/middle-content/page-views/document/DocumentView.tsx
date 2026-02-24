@@ -126,11 +126,16 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
 
   // Check user permissions
   useEffect(() => {
+    const abortController = new AbortController();
+
     const checkPermissions = async () => {
       if (!user?.id) return;
 
       try {
-        const response = await fetchWithAuth(`/api/pages/${pageId}/permissions/check?userId=${user.id}`);
+        const response = await fetchWithAuth(
+          `/api/pages/${pageId}/permissions/check?userId=${user.id}`,
+          { signal: abortController.signal }
+        );
         if (response.ok) {
           const permissions = await response.json();
           setIsReadOnly(!permissions.canEdit);
@@ -142,11 +147,13 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
           }
         }
       } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
         console.error('Failed to check permissions:', error);
       }
     };
 
     checkPermissions();
+    return () => { abortController.abort(); };
   }, [user?.id, pageId]);
 
   // Handle content updates from other sources (AI, other users)

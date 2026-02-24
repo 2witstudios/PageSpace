@@ -8,7 +8,7 @@ import { useRouter } from 'next/navigation';
 import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { TreePage } from '@/hooks/usePageTree';
-import { useDocumentStore } from '@/stores/useDocumentStore';
+import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
@@ -21,39 +21,66 @@ interface CanvasPageViewProps {
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
 const CanvasPageView = ({ page }: CanvasPageViewProps) => {
-  const content = useDocumentStore((state) => state.content);
-  const setContent = useDocumentStore((state) => state.setContent);
-  const updateContentFromServer = useDocumentStore((state) => state.updateContentFromServer);
-  const setDocument = useDocumentStore((state) => state.setDocument);
-  const setSaveCallback = useDocumentStore((state) => state.setSaveCallback);
+  const documentState = useDocumentManagerStore((state) => state.documents.get(page.id));
+  const content = documentState?.content ?? '';
   const [activeTab, setActiveTab] = useState('view');
   const containerRef = useRef<HTMLDivElement>(null);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const router = useRouter();
   const { user } = useAuth();
   const socket = useSocket();
 
   const saveContent = useCallback(async (pageId: string, newValue: string) => {
-    console.log(`--- Saving Page ${pageId} ---`);
-    console.log('Content:', newValue);
     try {
-      // Include socket ID so server can exclude this client from broadcast
       const headers: Record<string, string> = {};
       if (socket?.id) {
         headers['X-Socket-ID'] = socket.id;
       }
       await patch(`/api/pages/${pageId}`, { content: newValue }, { headers });
-      console.log('Save successful');
     } catch (error) {
       console.error('Failed to save page content:', error);
       toast.error('Failed to save page content.');
     }
   }, [socket]);
 
+  const setContent = useCallback((newContent: string) => {
+    useDocumentManagerStore.getState().updateDocument(page.id, {
+      content: newContent,
+      isDirty: true,
+      lastUpdateTime: Date.now(),
+    });
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveContent(page.id, newContent).catch(console.error);
+    }, 1000);
+  }, [page.id, saveContent]);
+
+  const updateContentFromServer = useCallback((newContent: string) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    useDocumentManagerStore.getState().updateDocument(page.id, {
+      content: newContent,
+      isDirty: false,
+      lastSaved: Date.now(),
+      lastUpdateTime: Date.now(),
+    });
+  }, [page.id]);
+
+  // Initialize document in manager store
   useEffect(() => {
     const initialText = typeof page.content === 'string' ? page.content : '';
-    setDocument(page.id, initialText);
-    setSaveCallback(saveContent);
-  }, [page.id, page.content, setDocument, setSaveCallback, saveContent]);
+    useDocumentManagerStore.getState().createDocument(page.id, initialText, 'html');
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [page.id, page.content]);
 
   // Listen for real-time content updates from AI tools
   useEffect(() => {

@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { type AgentInfo } from '@/stores/page-agents';
@@ -72,6 +72,7 @@ export function usePageAgents(
   } = {}
 ) {
   const { includeSystemPrompt = false, refreshInterval = 60000 } = options;
+  const hasLoadedRef = useRef(false);
   const isAnyActive = useEditingStore(state => state.isAnyActive());
 
   // Build the API URL with query params
@@ -88,7 +89,8 @@ export function usePageAgents(
     swrKey,
     fetcher,
     {
-      isPaused: () => isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyActive,
+      onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval,
       revalidateOnFocus: false,
       dedupingInterval: 5000,
