@@ -397,6 +397,49 @@ export function setActivityBroadcastHook(hook: ActivityBroadcastHook | null): vo
   activityBroadcastHook = hook;
 }
 
+/**
+ * Workflow trigger hook for event-triggered workflows.
+ * Set by the web app to route activity events to the workflow engine.
+ */
+export type WorkflowTriggerEvent = {
+  operation: string;
+  resourceType: string;
+  resourceId: string;
+  driveId: string | null;
+  pageId: string | null;
+  userId: string;
+  isAiGenerated?: boolean;
+  aiConversationId?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+let workflowTriggerHook: ((event: WorkflowTriggerEvent) => Promise<void>) | null = null;
+
+/**
+ * Set the workflow trigger hook.
+ * Called by the web app at startup to enable event-triggered workflows.
+ */
+export function setWorkflowTriggerHook(hook: typeof workflowTriggerHook): void {
+  workflowTriggerHook = hook;
+}
+
+function fireWorkflowTrigger(values: ReturnType<typeof prepareActivityInsert>): void {
+  if (!workflowTriggerHook) return;
+  workflowTriggerHook({
+    operation: values.operation,
+    resourceType: values.resourceType,
+    resourceId: values.resourceId,
+    driveId: values.driveId ?? null,
+    pageId: values.pageId ?? null,
+    userId: values.userId,
+    isAiGenerated: values.isAiGenerated,
+    aiConversationId: values.aiConversationId,
+    metadata: values.metadata,
+  }).catch(() => {
+    // Workflow trigger failure shouldn't break anything
+  });
+}
+
 function prepareActivityInsert(input: ActivityLogInput) {
   let contentSnapshot = input.contentSnapshot;
   let metadata = input.metadata;
@@ -512,6 +555,8 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
         // Broadcast failure shouldn't break anything
       });
     }
+
+    fireWorkflowTrigger(values);
   };
 
   try {
@@ -548,10 +593,13 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
  * Note: Broadcast happens after insert but within the transaction scope.
  * The broadcast is debounced, so it will fire after the transaction commits.
  */
+/** A callback that fires a workflow trigger. Returned by `logActivityWithTx` so callers can invoke it after the transaction commits. */
+export type DeferredWorkflowTrigger = () => void;
+
 export async function logActivityWithTx(
   input: ActivityLogInput,
   tx: typeof db
-): Promise<void> {
+): Promise<DeferredWorkflowTrigger | undefined> {
   const values = prepareActivityInsert(input);
 
   // Get the latest log hash within the transaction for atomic chain computation
@@ -601,6 +649,12 @@ export async function logActivityWithTx(
       // Broadcast failure shouldn't break anything
     });
   }
+
+  // Return a deferred trigger so the caller can fire it after the transaction commits.
+  // Firing inside the transaction risks emitting events for rolled-back writes.
+  return workflowTriggerHook
+    ? () => fireWorkflowTrigger(values)
+    : undefined;
 }
 
 /**
@@ -1167,7 +1221,7 @@ export async function logRollbackActivity(
     /** Optional transaction for atomic logging */
     tx?: typeof db;
   }
-): Promise<void> {
+): Promise<DeferredWorkflowTrigger | undefined> {
   const payload: ActivityLogInput = {
     userId,
     actorEmail: actorInfo.actorEmail,
@@ -1201,13 +1255,13 @@ export async function logRollbackActivity(
   };
 
   if (options?.tx) {
-    await logActivityWithTx(payload, options.tx);
-    return;
+    return await logActivityWithTx(payload, options.tx);
   }
 
   logActivity(payload).catch(() => {
     // Silent fail - already logged in logActivity
   });
+  return undefined;
 }
 
 /**

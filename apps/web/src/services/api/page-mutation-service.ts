@@ -3,6 +3,7 @@ import {
   logActivityWithTx,
   type ActivityOperation,
   type ActivityResourceType,
+  type DeferredWorkflowTrigger,
   inferChangeGroupType,
   createChangeGroupId,
 } from '@pagespace/lib/monitoring';
@@ -64,6 +65,8 @@ export interface ApplyPageMutationResult {
   contentRefAfter: string | null;
   contentFormatBefore: PageContentFormat;
   contentFormatAfter: PageContentFormat;
+  /** Deferred workflow trigger — callers that pass their own `tx` must invoke this after commit. Ignored if undefined. */
+  deferredTrigger?: DeferredWorkflowTrigger;
 }
 
 const STRICT_REVISION = process.env.PAGE_REVISION_STRICT === 'true';
@@ -191,6 +194,7 @@ export async function applyPageMutation({
 
   // Track newly mentioned users to send notifications after transaction commits
   let mentionsResult: SyncMentionsResult | null = null;
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
   const applyMutationInTx = async (transaction: typeof db) => {
     const updateWhere = expectedRevision !== undefined
@@ -220,7 +224,7 @@ export async function applyPageMutation({
       mentionsResult = await syncMentions(pageId, nextContent, transaction, { mentionedByUserId: context.userId });
     }
 
-    await logActivityWithTx({
+    deferredTrigger = await logActivityWithTx({
       userId: context.userId,
       actorEmail: context.actorEmail ?? 'unknown@system',
       actorDisplayName: context.actorDisplayName ?? undefined,
@@ -271,6 +275,9 @@ export async function applyPageMutation({
     await db.transaction(async (transaction) => {
       await applyMutationInTx(transaction);
     });
+    // Fire workflow trigger after self-managed transaction commits
+    deferredTrigger?.();
+    deferredTrigger = undefined;
   }
 
   // Send notifications for newly mentioned users after transaction commits (fire-and-forget)
@@ -296,5 +303,6 @@ export async function applyPageMutation({
     contentRefAfter: contentRefAfter ?? null,
     contentFormatBefore,
     contentFormatAfter,
+    deferredTrigger,
   };
 }

@@ -449,6 +449,8 @@ export async function executeAiUndo(
     // All-or-nothing: if any rollback fails, entire transaction is aborted
     loggers.api.debug('[AiUndo:Execute] Starting transaction');
 
+    const deferredTriggers: Array<() => void> = [];
+
     await db.transaction(async (tx) => {
       // If mode includes changes, rollback activities in reverse chronological order
       if (mode === 'messages_and_changes') {
@@ -497,6 +499,10 @@ export async function executeAiUndo(
               message: result.message,
             });
             throw new Error(`Failed to undo ${activity.operation} on ${activity.resourceTitle || activity.resourceType}: ${result.message}`);
+          }
+
+          if (result.deferredWorkflowTrigger) {
+            deferredTriggers.push(result.deferredWorkflowTrigger);
           }
 
           loggers.api.debug('[AiUndo:Execute] Activity rollback succeeded', {
@@ -551,6 +557,11 @@ export async function executeAiUndo(
 
       loggers.api.debug('[AiUndo:Execute] Transaction committing');
     });
+
+    // Fire deferred workflow triggers after transaction commit
+    for (const trigger of deferredTriggers) {
+      trigger();
+    }
 
     // Get count of deleted messages (Drizzle doesn't return count directly, use preview)
     messagesDeleted = preview.messagesAffected;
