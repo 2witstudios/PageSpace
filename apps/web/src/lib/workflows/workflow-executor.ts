@@ -81,6 +81,7 @@ export async function executeWorkflow(workflow: WorkflowRow): Promise<WorkflowEx
         .where(
           and(
             inArray(pages.id, contextPageIds),
+            eq(pages.driveId, workflow.driveId),
             eq(pages.isTrashed, false)
           )
         );

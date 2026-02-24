@@ -593,10 +593,13 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
  * Note: Broadcast happens after insert but within the transaction scope.
  * The broadcast is debounced, so it will fire after the transaction commits.
  */
+/** A callback that fires a workflow trigger. Returned by `logActivityWithTx` so callers can invoke it after the transaction commits. */
+export type DeferredWorkflowTrigger = () => void;
+
 export async function logActivityWithTx(
   input: ActivityLogInput,
   tx: typeof db
-): Promise<void> {
+): Promise<DeferredWorkflowTrigger | undefined> {
   const values = prepareActivityInsert(input);
 
   // Get the latest log hash within the transaction for atomic chain computation
@@ -647,7 +650,11 @@ export async function logActivityWithTx(
     });
   }
 
-  fireWorkflowTrigger(values);
+  // Return a deferred trigger so the caller can fire it after the transaction commits.
+  // Firing inside the transaction risks emitting events for rolled-back writes.
+  return workflowTriggerHook
+    ? () => fireWorkflowTrigger(values)
+    : undefined;
 }
 
 /**

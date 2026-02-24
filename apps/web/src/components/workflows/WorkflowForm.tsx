@@ -157,7 +157,16 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
     }
   };
 
-  const isValid = name && agentPageId && prompt && (
+  const isTimezoneValid = (() => {
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: timezone });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  const isValid = name && agentPageId && prompt && isTimezoneValid && (
     triggerType === 'cron' ? !!cronExpression : eventTriggers.length > 0
   );
 
@@ -181,18 +190,24 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
 
           <div className="space-y-2">
             <Label htmlFor="wf-agent">AI Agent</Label>
-            <Select value={agentPageId} onValueChange={setAgentPageId} required>
-              <SelectTrigger id="wf-agent">
-                <SelectValue placeholder="Select an agent..." />
-              </SelectTrigger>
-              <SelectContent>
-                {agents.map(agent => (
-                  <SelectItem key={agent.id} value={agent.id}>
-                    {agent.title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {agents.length === 0 && pagesData ? (
+              <p className="text-sm text-muted-foreground py-2">
+                No AI agents in this drive. Create an AI Chat page first.
+              </p>
+            ) : (
+              <Select value={agentPageId} onValueChange={setAgentPageId} required>
+                <SelectTrigger id="wf-agent">
+                  <SelectValue placeholder="Select an agent..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents.map(agent => (
+                    <SelectItem key={agent.id} value={agent.id}>
+                      {agent.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -354,6 +369,9 @@ export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmi
               <option value="Australia/Melbourne" />
               <option value="Pacific/Auckland" />
             </datalist>
+            {timezone && !isTimezoneValid && (
+              <p className="text-xs text-destructive">Invalid timezone. Select from the list or enter a valid IANA timezone.</p>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

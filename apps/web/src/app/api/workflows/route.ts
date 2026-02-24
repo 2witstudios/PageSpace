@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
-import { validateCronExpression, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -96,6 +96,12 @@ export async function POST(request: Request) {
   }
   if (agent.type !== 'AI_CHAT') {
     return NextResponse.json({ error: 'Selected page is not an AI agent' }, { status: 400 });
+  }
+
+  // Validate timezone
+  const tzValidation = validateTimezone(data.timezone);
+  if (!tzValidation.valid) {
+    return NextResponse.json({ error: tzValidation.error }, { status: 400 });
   }
 
   // Validate cron expression for cron-type workflows

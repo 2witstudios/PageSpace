@@ -18,6 +18,15 @@ export function getNextRunDate(expression: string, timezone: string, after?: Dat
   return interval.next().toDate();
 }
 
+export function validateTimezone(timezone: string): { valid: boolean; error?: string } {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    return { valid: true };
+  } catch {
+    return { valid: false, error: `Invalid timezone: ${timezone}` };
+  }
+}
+
 export function getHumanReadableCron(expression: string): string {
   try {
     return cronstrue.toString(expression, { use24HourTimeFormat: false });

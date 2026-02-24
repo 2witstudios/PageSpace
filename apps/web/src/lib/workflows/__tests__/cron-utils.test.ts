@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateCronExpression, getNextRunDate, getHumanReadableCron } from '../cron-utils';
+import { validateCronExpression, validateTimezone, getNextRunDate, getHumanReadableCron } from '../cron-utils';
 
 describe('validateCronExpression', () => {
   it('should return valid for a standard cron expression', () => {
@@ -49,6 +49,28 @@ describe('getNextRunDate', () => {
   it('should work with different timezones', () => {
     const result = getNextRunDate('0 9 * * *', 'America/New_York');
     expect(result).toBeInstanceOf(Date);
+  });
+});
+
+describe('validateTimezone', () => {
+  it('should accept UTC', () => {
+    expect(validateTimezone('UTC')).toEqual({ valid: true });
+  });
+
+  it('should accept a valid IANA timezone', () => {
+    expect(validateTimezone('America/New_York')).toEqual({ valid: true });
+  });
+
+  it('should reject garbage input', () => {
+    const result = validateTimezone('Not/A_Timezone');
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('Invalid timezone');
+  });
+
+  it('should reject empty string', () => {
+    const result = validateTimezone('');
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('Invalid timezone');
   });
 });
 

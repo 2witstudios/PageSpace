@@ -34,6 +34,11 @@ export async function POST(
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
+  // Reject if already running
+  if (workflow.lastRunStatus === 'running') {
+    return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
+  }
+
   // Mark as running
   await db
     .update(workflows)
@@ -44,7 +49,7 @@ export async function POST(
   const result = await executeWorkflow(workflow);
 
   // Update status — only compute nextRunAt for cron workflows
-  const nextRunAt = (workflow.isEnabled && workflow.cronExpression)
+  const nextRunAt = (workflow.triggerType === 'cron' && workflow.isEnabled && workflow.cronExpression)
     ? getNextRunDate(workflow.cronExpression, workflow.timezone)
     : null;
 

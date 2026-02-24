@@ -43,6 +43,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
   validateCronExpression: vi.fn(),
+  validateTimezone: vi.fn().mockReturnValue({ valid: true }),
   getNextRunDate: vi.fn(),
 }));
 
@@ -61,7 +62,7 @@ vi.mock('@pagespace/db', () => ({
 import { GET, PATCH, DELETE } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { validateCronExpression, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 // ============================================================================
 // Fixtures
@@ -205,6 +206,7 @@ describe('PATCH /api/workflows/[workflowId]', () => {
       drive: createDriveFixture({ id: 'drive_abc', name: 'Test' }),
     }));
     vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+    vi.mocked(validateTimezone).mockReturnValue({ valid: true });
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
     mockUpdateSetWhere.mockReturnValue({ returning: mockReturning });
     mockUpdateSet.mockReturnValue({ where: mockUpdateSetWhere });

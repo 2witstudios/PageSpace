@@ -113,7 +113,15 @@ export async function emitWorkflowEvent(event: WorkflowEvent): Promise<void> {
         const eventContext = pendingEventContexts.get(workflow.id);
         pendingEventContexts.delete(workflow.id);
 
-        await executeEventWorkflow(workflow, eventContext ?? contextStr);
+        // Re-validate: workflow may have been disabled or deleted during debounce
+        const [current] = await db
+          .select()
+          .from(workflows)
+          .where(eq(workflows.id, workflow.id));
+
+        if (!current || !current.isEnabled) return;
+
+        await executeEventWorkflow(current, eventContext ?? contextStr);
       }, debounceSecs * 1000);
 
       debounceTimers.set(workflow.id, timer);
@@ -128,16 +136,23 @@ export async function emitWorkflowEvent(event: WorkflowEvent): Promise<void> {
   }
 }
 
+const maxContextFieldLength = 200;
+
+const truncate = (value: unknown, max = maxContextFieldLength): string => {
+  const str = String(value ?? '');
+  return str.length > max ? `${str.slice(0, max)}...` : str;
+};
+
 function buildEventContext(event: WorkflowEvent): string {
-  const parts = [`Event trigger: ${event.operation} on ${event.resourceType}`];
+  const parts = [`Event: ${event.operation} on ${event.resourceType}`];
   if (event.resourceId) parts.push(`Resource ID: ${event.resourceId}`);
   if (event.metadata) {
     const title = event.metadata.resourceTitle || event.metadata.title;
-    if (title) parts.push(`"${title}"`);
+    if (title) parts.push(`Name: ${truncate(title)}`);
     const folder = event.metadata.folderName || event.metadata.parentTitle;
-    if (folder) parts.push(`in "${folder}" folder`);
+    if (folder) parts.push(`Folder: ${truncate(folder)}`);
   }
-  return `[${parts.join(' | ')}]`;
+  return `<event-data>\n${parts.join('\n')}\n</event-data>`;
 }
 
 async function executeEventWorkflow(

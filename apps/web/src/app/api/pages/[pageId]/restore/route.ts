@@ -5,7 +5,7 @@ import { trackPageOperation } from '@pagespace/lib/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring';
+import { createChangeGroupId, inferChangeGroupType, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -13,7 +13,9 @@ async function recursivelyRestore(
   pageId: string,
   tx: typeof db,
   context: { userId: string; actorEmail: string; actorDisplayName?: string; changeGroupId: string; changeGroupType: 'user' | 'ai' | 'automation' | 'system'; metadata?: Record<string, unknown> }
-) {
+): Promise<DeferredWorkflowTrigger[]> {
+  const triggers: DeferredWorkflowTrigger[] = [];
+
   const [pageRecord] = await tx
     .select({ revision: pages.revision })
     .from(pages)
@@ -21,10 +23,10 @@ async function recursivelyRestore(
     .limit(1);
 
   if (!pageRecord) {
-    return;
+    return triggers;
   }
 
-  await applyPageMutation({
+  const restoreResult = await applyPageMutation({
     pageId,
     operation: 'restore',
     updates: { isTrashed: false, trashedAt: null },
@@ -33,6 +35,7 @@ async function recursivelyRestore(
     context,
     tx,
   });
+  if (restoreResult.deferredTrigger) triggers.push(restoreResult.deferredTrigger);
 
   const children = await tx
     .select({ id: pages.id })
@@ -40,7 +43,8 @@ async function recursivelyRestore(
     .where(and(eq(pages.parentId, pageId), eq(pages.isTrashed, true)));
 
   for (const child of children) {
-    await recursivelyRestore(child.id, tx, context);
+    const childTriggers = await recursivelyRestore(child.id, tx, context);
+    triggers.push(...childTriggers);
   }
 
   const orphanedChildren = await tx
@@ -49,7 +53,7 @@ async function recursivelyRestore(
     .where(eq(pages.originalParentId, pageId));
 
   for (const child of orphanedChildren) {
-    await applyPageMutation({
+    const moveResult = await applyPageMutation({
       pageId: child.id,
       operation: 'move',
       updates: { parentId: pageId, originalParentId: null },
@@ -58,7 +62,10 @@ async function recursivelyRestore(
       context,
       tx,
     });
+    if (moveResult.deferredTrigger) triggers.push(moveResult.deferredTrigger);
   }
+
+  return triggers;
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -91,8 +98,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
     const isMCP = isMCPAuthResult(auth);
 
+    let deferredTriggers: DeferredWorkflowTrigger[] = [];
     await db.transaction(async (tx) => {
-      await recursivelyRestore(pageId, tx, {
+      deferredTriggers = await recursivelyRestore(pageId, tx, {
         userId: auth.userId,
         actorEmail: actorInfo.actorEmail,
         actorDisplayName: actorInfo.actorDisplayName ?? undefined,
@@ -101,6 +109,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         metadata: isMCP ? { source: 'mcp' } : undefined,
       });
     });
+    deferredTriggers.forEach(t => t());
 
     if (page.drive?.id) {
       await broadcastPageEvent(

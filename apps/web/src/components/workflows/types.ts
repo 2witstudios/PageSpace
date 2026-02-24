@@ -1,8 +1,6 @@
-export interface EventTrigger {
-  operation: string;
-  resourceType: string;
-}
+export type { EventTrigger } from '@pagespace/db';
 
+/** JSON-serialized workflow from the API (dates are strings, not Date objects). */
 export interface Workflow {
   id: string;
   driveId: string;

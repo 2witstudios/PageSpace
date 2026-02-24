@@ -19,7 +19,7 @@ import {
   isAIChatPage,
   isDriveOwnerOrAdmin,
 } from '@pagespace/lib';
-import { createChangeGroupId, inferChangeGroupType, logActivityWithTx } from '@pagespace/lib/monitoring';
+import { createChangeGroupId, inferChangeGroupType, logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 
@@ -279,11 +279,13 @@ async function recursivelyTrash(
   pageId: string,
   tx: TransactionType | DatabaseType,
   context: PageMutationContext
-) {
+): Promise<DeferredWorkflowTrigger[]> {
+  const triggers: DeferredWorkflowTrigger[] = [];
   const children = await tx.select({ id: pages.id }).from(pages).where(eq(pages.parentId, pageId));
 
   for (const child of children) {
-    await recursivelyTrash(child.id, tx, context);
+    const childTriggers = await recursivelyTrash(child.id, tx, context);
+    triggers.push(...childTriggers);
   }
 
   const [pageRecord] = await tx
@@ -293,10 +295,10 @@ async function recursivelyTrash(
     .limit(1);
 
   if (!pageRecord) {
-    return;
+    return triggers;
   }
 
-  await applyPageMutation({
+  const result = await applyPageMutation({
     pageId,
     operation: 'trash',
     updates: { isTrashed: true, trashedAt: new Date() },
@@ -305,6 +307,9 @@ async function recursivelyTrash(
     context,
     tx,
   });
+  if (result.deferredTrigger) triggers.push(result.deferredTrigger);
+
+  return triggers;
 }
 
 /**
@@ -537,9 +542,11 @@ export const pageService = {
       metadata: { ...options.metadata, trashChildren: options.trashChildren },
     };
 
+    const deferredTriggers: DeferredWorkflowTrigger[] = [];
     await db.transaction(async (tx) => {
       if (options.trashChildren) {
-        await recursivelyTrash(pageId, tx, mutationContext);
+        const triggers = await recursivelyTrash(pageId, tx, mutationContext);
+        deferredTriggers.push(...triggers);
       } else {
         const children = await tx
           .select({ id: pages.id, revision: pages.revision })
@@ -547,7 +554,7 @@ export const pageService = {
           .where(eq(pages.parentId, pageId));
 
         for (const child of children) {
-          await applyPageMutation({
+          const result = await applyPageMutation({
             pageId: child.id,
             operation: 'move',
             updates: {
@@ -559,9 +566,10 @@ export const pageService = {
             context: mutationContext,
             tx,
           });
+          if (result.deferredTrigger) deferredTriggers.push(result.deferredTrigger);
         }
 
-        await applyPageMutation({
+        const result = await applyPageMutation({
           pageId,
           operation: 'trash',
           updates: { isTrashed: true, trashedAt: new Date() },
@@ -570,8 +578,10 @@ export const pageService = {
           context: mutationContext,
           tx,
         });
+        if (result.deferredTrigger) deferredTriggers.push(result.deferredTrigger);
       }
     });
+    deferredTriggers.forEach(t => t());
 
     return {
       success: true,
@@ -670,6 +680,7 @@ export const pageService = {
       ?? inferChangeGroupType({ isAiGenerated: options?.context?.isAiGenerated });
 
     // Create page in transaction
+    let deferredTrigger: DeferredWorkflowTrigger | undefined;
     const newPage = await db.transaction(async (tx) => {
       interface PageInsertData {
         id: string;
@@ -734,7 +745,7 @@ export const pageService = {
 
       const [page] = await tx.insert(pages).values(pageData).returning();
 
-      await logActivityWithTx({
+      deferredTrigger = await logActivityWithTx({
         userId,
         actorEmail: actorInfo.actorEmail,
         actorDisplayName: actorInfo.actorDisplayName,
@@ -775,6 +786,7 @@ export const pageService = {
 
       return page;
     });
+    deferredTrigger?.();
 
     return {
       success: true,

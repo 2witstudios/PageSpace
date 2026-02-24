@@ -6,6 +6,7 @@ import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/server';
 
 const STUCK_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const maxConcurrentWorkflows = 5;
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
@@ -54,26 +55,32 @@ export async function POST(req: Request) {
       )
     );
 
-    // Execute all due workflows in parallel
-    const results = await Promise.allSettled(
-      dueWorkflows.map(async (workflow) => {
-        const result = await executeWorkflow(workflow);
-        const nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
+    // Execute due workflows with concurrency limit
+    const executeOne = async (workflow: typeof dueWorkflows[number]) => {
+      const result = await executeWorkflow(workflow);
+      const nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
 
-        await db
-          .update(workflows)
-          .set({
-            lastRunAt: new Date(),
-            lastRunStatus: result.success ? 'success' : 'error',
-            lastRunError: result.error || null,
-            lastRunDurationMs: result.durationMs,
-            nextRunAt,
-          })
-          .where(eq(workflows.id, workflow.id));
+      await db
+        .update(workflows)
+        .set({
+          lastRunAt: new Date(),
+          lastRunStatus: result.success ? 'success' : 'error',
+          lastRunError: result.error || null,
+          lastRunDurationMs: result.durationMs,
+          nextRunAt,
+        })
+        .where(eq(workflows.id, workflow.id));
 
-        return { workflow, result };
-      })
-    );
+      return { workflow, result };
+    };
+
+    // Process in batches of maxConcurrentWorkflows
+    const results: PromiseSettledResult<{ workflow: typeof dueWorkflows[number]; result: Awaited<ReturnType<typeof executeWorkflow>> }>[] = [];
+    for (let i = 0; i < dueWorkflows.length; i += maxConcurrentWorkflows) {
+      const batch = dueWorkflows.slice(i, i + maxConcurrentWorkflows);
+      const batchResults = await Promise.allSettled(batch.map(executeOne));
+      results.push(...batchResults);
+    }
 
     let executed = 0;
     const errors: string[] = [];

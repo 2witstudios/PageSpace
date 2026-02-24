@@ -5,6 +5,7 @@ import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -191,6 +192,7 @@ export async function PATCH(
 
   // Update task and sync title to linked page if needed
   let updatedTask;
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
   try {
     [updatedTask] = await db.transaction(async (tx) => {
       // Update the task (only if there are field-level updates)
@@ -211,7 +213,7 @@ export async function PATCH(
           .limit(1);
 
         if (linkedPage) {
-          await applyPageMutation({
+          const mutationResult = await applyPageMutation({
             pageId: existingTask.pageId,
             operation: 'update',
             updates: { title: updates.title },
@@ -229,6 +231,7 @@ export async function PATCH(
             },
             tx,
           });
+          deferredTrigger = mutationResult.deferredTrigger;
           linkedPageUpdated = true;
         }
       }
@@ -281,6 +284,7 @@ export async function PATCH(
 
       return [task];
     });
+    deferredTrigger?.();
   } catch (error) {
     if (error instanceof PageRevisionMismatchError) {
       return NextResponse.json(

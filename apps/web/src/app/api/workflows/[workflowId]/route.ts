@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
-import { validateCronExpression, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -96,6 +96,13 @@ export async function PATCH(
   // Determine effective trigger type
   const triggerType = data.triggerType ?? workflow.triggerType;
 
+  // Validate timezone
+  const effectiveTimezone = data.timezone ?? workflow.timezone;
+  const tzValidation = validateTimezone(effectiveTimezone);
+  if (!tzValidation.valid) {
+    return NextResponse.json({ error: tzValidation.error }, { status: 400 });
+  }
+
   // If changing cron expression, validate it
   if (data.cronExpression) {
     const cronValidation = validateCronExpression(data.cronExpression);
@@ -132,6 +139,7 @@ export async function PATCH(
     .set({
       ...data,
       nextRunAt,
+      updatedAt: new Date(),
     })
     .where(eq(workflows.id, workflowId))
     .returning();

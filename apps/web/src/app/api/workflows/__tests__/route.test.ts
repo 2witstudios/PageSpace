@@ -40,6 +40,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
   validateCronExpression: vi.fn(),
+  validateTimezone: vi.fn().mockReturnValue({ valid: true }),
   getNextRunDate: vi.fn(),
 }));
 
@@ -57,7 +58,7 @@ vi.mock('@pagespace/db', () => ({
 import { GET, POST } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { validateCronExpression, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 // ============================================================================
 // Fixtures
@@ -205,6 +206,7 @@ describe('POST /api/workflows', () => {
     mockInsert.mockReturnValue({ values: mockValues });
     mockValues.mockReturnValue({ returning: mockReturning });
     mockReturning.mockResolvedValue([{ id: 'wf_new', name: 'Daily Report' }]);
+    vi.mocked(validateTimezone).mockReturnValue({ valid: true });
   });
 
   it('should return 401 when not authenticated', async () => {
