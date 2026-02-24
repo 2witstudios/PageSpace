@@ -43,6 +43,12 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     }
   }, [socket]);
 
+  // Keep saveContent in a ref so unmount cleanup always uses latest version
+  const saveContentRef = useRef(saveContent);
+  useEffect(() => {
+    saveContentRef.current = saveContent;
+  }, [saveContent]);
+
   const setContent = useCallback((newContent: string) => {
     useDocumentManagerStore.getState().updateDocument(page.id, {
       content: newContent,
@@ -53,8 +59,16 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
-    saveTimeoutRef.current = setTimeout(() => {
-      saveContent(page.id, newContent).catch(console.error);
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await saveContent(page.id, newContent);
+        useDocumentManagerStore.getState().updateDocument(page.id, {
+          isDirty: false,
+          lastSaved: Date.now(),
+        });
+      } catch {
+        // saveContent already logs and toasts on error
+      }
     }, 1000);
   }, [page.id, saveContent]);
 
@@ -75,12 +89,20 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   useEffect(() => {
     const initialText = typeof page.content === 'string' ? page.content : '';
     useDocumentManagerStore.getState().createDocument(page.id, initialText, 'html');
+  }, [page.id, page.content]);
+
+  // Force-save on unmount - empty deps so cleanup only runs on TRUE unmount
+  useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      const doc = useDocumentManagerStore.getState().getDocument(page.id);
+      if (doc?.isDirty) {
+        saveContentRef.current(page.id, doc.content).catch(console.error);
+      }
     };
-  }, [page.id, page.content]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for real-time content updates from AI tools
   useEffect(() => {
