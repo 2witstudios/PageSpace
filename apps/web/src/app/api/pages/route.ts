@@ -84,11 +84,15 @@ export async function POST(request: Request) {
 
     // Invalidate agent awareness cache when an AI_CHAT page is created
     if (result.isAIChatPage) {
-      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(() => {});
+      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(err => {
+        loggers.api.warn('Agent awareness cache invalidation failed', err as Error, { driveId: result.driveId });
+      });
     }
 
     // Invalidate page tree cache when structure changes
-    pageTreeCache.invalidateDriveTree(result.driveId).catch(() => {});
+    pageTreeCache.invalidateDriveTree(result.driveId).catch(err => {
+      loggers.api.warn('Page tree cache invalidation failed', err as Error, { driveId: result.driveId });
+    });
 
     // Track page creation using result values
     trackPageOperation(userId, 'create', result.page.id, {

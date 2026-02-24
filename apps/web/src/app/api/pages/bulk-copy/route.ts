@@ -222,7 +222,9 @@ export async function POST(request: Request) {
     }
 
     // Invalidate cache and broadcast event
-    pageTreeCache.invalidateDriveTree(targetDriveId).catch(() => {});
+    pageTreeCache.invalidateDriveTree(targetDriveId).catch(err => {
+      loggers.api.warn('Page tree cache invalidation failed', err as Error, { driveId: targetDriveId });
+    });
     await broadcastPageEvent(
       createPageEventPayload(targetDriveId, '', 'created')
     );

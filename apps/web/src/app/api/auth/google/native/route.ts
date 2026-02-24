@@ -211,7 +211,9 @@ export async function POST(req: Request) {
     });
 
     // Reset rate limit on success
-    await resetDistributedRateLimit(`oauth:native:ip:${clientIP}`).catch(() => {});
+    await resetDistributedRateLimit(`oauth:native:ip:${clientIP}`).catch(err => {
+      loggers.auth.warn('Rate limit reset failed', err as Error, { ip: clientIP });
+    });
 
     // Log auth events
     logAuthEvent('login', user.id, email, clientIP, `Google OAuth Native (${platform})`);

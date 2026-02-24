@@ -238,7 +238,9 @@ export async function PATCH(
       // visibility or definition changed
       if (page.type === 'AI_CHAT' &&
           (agentDefinition !== undefined || visibleToGlobalAssistant !== undefined)) {
-        agentAwarenessCache.invalidateDriveAgents(page.driveId).catch(() => {});
+        agentAwarenessCache.invalidateDriveAgents(page.driveId).catch(err => {
+          loggers.api.warn('Agent awareness cache invalidation failed', err as Error, { driveId: page.driveId });
+        });
       }
 
       loggers.api.info('Page agent configuration updated', {
