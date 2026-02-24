@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { fetchJSON } from '@/lib/auth/auth-fetch';
 import { getHumanReadableCron } from '@/lib/workflows/cron-utils';
 import type { EventTrigger } from './types';
 
@@ -67,10 +68,7 @@ const EVENT_TRIGGER_PRESETS: { label: string; description: string; operation: st
   { label: 'Member added', description: 'When a new member joins the drive', operation: 'member_add', resourceType: 'member' },
 ];
 
-const fetcher = (url: string) => fetch(url).then(res => {
-  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-  return res.json();
-});
+const fetcher = <T = unknown>(url: string) => fetchJSON<T>(url);
 
 export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmit }: WorkflowFormProps) {
   const [name, setName] = useState(initialData?.name ?? '');

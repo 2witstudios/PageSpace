@@ -120,9 +120,11 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
       // Cron workflows: expand cron schedule into future occurrences
       if (!wf.cronExpression) continue;
       try {
+        // cron-parser next() is exclusive of currentDate, so back up 1ms
+        // to include occurrences exactly at the range start
         const interval = CronExpressionParser.parse(wf.cronExpression, {
           tz: wf.timezone,
-          currentDate: startDate,
+          currentDate: new Date(startDate.getTime() - 1),
           endDate: endDate,
         });
 

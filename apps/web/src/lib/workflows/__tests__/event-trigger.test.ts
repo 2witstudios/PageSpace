@@ -336,6 +336,24 @@ describe('emitWorkflowEvent', () => {
     expect(calledArg.prompt).not.toContain('Old prompt');
   });
 
+  test('workflow trigger type changed to cron during debounce is not executed', async () => {
+    const workflow = createWorkflow({ eventDebounceSecs: 5 });
+
+    let callCount = 0;
+    mockSelectWhere.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return [workflow];
+      // Re-fetch during debounce: trigger type was switched to cron
+      return [{ ...workflow, triggerType: 'cron' }];
+    });
+
+    await emitWorkflowEvent(createEvent());
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   test('workflow already running during debounce is not executed', async () => {
     const workflow = createWorkflow({ eventDebounceSecs: 5 });
 

@@ -123,6 +123,9 @@ export async function emitWorkflowEvent(event: WorkflowEvent): Promise<void> {
 
             if (!current || !current.isEnabled) return;
 
+            // Skip if trigger type was changed away from event during debounce
+            if (current.triggerType !== 'event') return;
+
             // Skip if another execution is already in progress
             if (current.lastRunStatus === 'running') return;
 

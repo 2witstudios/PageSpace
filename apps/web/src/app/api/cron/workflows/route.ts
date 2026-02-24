@@ -15,9 +15,10 @@ export async function POST(req: Request) {
   try {
     const now = new Date();
 
-    // Reset stuck workflows (running for >10 min)
+    // Reset stuck workflows (running for >10 min) and advance their nextRunAt
+    // so they aren't immediately re-claimed in the same cron invocation.
     const stuckCutoff = new Date(now.getTime() - STUCK_WORKFLOW_TIMEOUT_MS);
-    await db
+    const stuckWorkflows = await db
       .update(workflows)
       .set({ lastRunStatus: 'error', lastRunError: 'Workflow timed out (stuck in running state)' })
       .where(
@@ -25,7 +26,18 @@ export async function POST(req: Request) {
           eq(workflows.lastRunStatus, 'running'),
           lte(workflows.lastRunAt, stuckCutoff)
         )
-      );
+      )
+      .returning();
+
+    // Advance nextRunAt for stuck workflows so they schedule their next proper run
+    for (const wf of stuckWorkflows) {
+      if (wf.cronExpression) {
+        try {
+          const nextRunAt = getNextRunDate(wf.cronExpression, wf.timezone);
+          await db.update(workflows).set({ nextRunAt }).where(eq(workflows.id, wf.id));
+        } catch { /* invalid cron — leave nextRunAt as-is */ }
+      }
+    }
 
     // Atomically claim due cron workflows (UPDATE...RETURNING prevents double-execution)
     const dueWorkflows = await db
