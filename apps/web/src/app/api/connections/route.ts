@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, connections, users, userProfiles, eq, and, or, desc } from '@pagespace/db';
+import { db, connections, users, userProfiles, eq, and, or, desc, inArray } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/server';
 import { createNotification, isEmailVerified } from '@pagespace/lib';
@@ -41,18 +41,13 @@ export async function GET(request: Request) {
       )
       .orderBy(desc(connections.acceptedAt), desc(connections.requestedAt));
 
-    // Get user details for each connection
-    const connectionDetails = await Promise.all(
-      userConnections.map(async (conn) => {
-        // Ensure we have valid user IDs
-        if (!conn.user1Id || !conn.user2Id) {
-          console.error('Invalid connection data:', conn);
-          return null;
-        }
+    // Collect all other user IDs and batch-fetch their details
+    const otherUserIds = userConnections
+      .filter(conn => conn.user1Id && conn.user2Id)
+      .map(conn => conn.user1Id === userId ? conn.user2Id : conn.user1Id);
 
-        const otherUserId = conn.user1Id === userId ? conn.user2Id : conn.user1Id;
-
-        const [otherUser] = await db
+    const otherUsers = otherUserIds.length > 0
+      ? await db
           .select({
             id: users.id,
             name: users.name,
@@ -65,25 +60,24 @@ export async function GET(request: Request) {
           })
           .from(users)
           .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-          .where(eq(users.id, otherUserId))
-          .limit(1);
+          .where(inArray(users.id, otherUserIds))
+      : [];
 
-        // Skip if we couldn't find the other user
-        if (!otherUser) {
-          console.error('User not found:', otherUserId);
-          return null;
-        }
+    const userMap = new Map(otherUsers.map(u => [u.id, u]));
 
+    const validConnections = userConnections
+      .filter(conn => conn.user1Id && conn.user2Id)
+      .map(conn => {
+        const otherUserId = conn.user1Id === userId ? conn.user2Id : conn.user1Id;
+        const otherUser = userMap.get(otherUserId);
+        if (!otherUser) return null;
         return {
           ...conn,
           user: otherUser,
           isRequester: conn.requestedBy === userId,
         };
       })
-    );
-
-    // Filter out any null results
-    const validConnections = connectionDetails.filter(conn => conn !== null);
+      .filter(conn => conn !== null);
 
     return NextResponse.json({ connections: validConnections });
   } catch (error) {

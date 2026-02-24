@@ -102,7 +102,7 @@ export default function InboxChannelPage() {
           throw new Error(`Failed to fetch messages: ${res.status}`);
         }
         const data = await res.json();
-        setMessages(data);
+        setMessages(data.messages ?? data);
 
         // Mark channel as read when viewed
         post(`/api/channels/${pageId}/read`, {}).catch(() => {
@@ -224,7 +224,7 @@ export default function InboxChannelPage() {
         throw new Error(`Failed to fetch messages: ${res.status}`);
       }
       const data = await res.json();
-      setMessages(data);
+      setMessages(data.messages ?? data);
     } catch (error) {
       console.error('Failed to refresh messages:', error);
     }

@@ -624,6 +624,13 @@
       "when": 1771980100000,
       "tag": "0088_add_workflow_event_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1771971945331,
+      "tag": "0089_safe_excalibur",
+      "breakpoints": true
     }
   ]
 }

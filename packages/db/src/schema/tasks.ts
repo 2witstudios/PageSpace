@@ -93,6 +93,7 @@ export const taskItems = pgTable('task_items', {
     assigneeIdx: index('task_items_assignee_id_idx').on(table.assigneeId),
     assigneeAgentIdx: index('task_items_assignee_agent_id_idx').on(table.assigneeAgentId),
     pageIdx: index('task_items_page_id_idx').on(table.pageId),
+    dueDateIdx: index('task_items_due_date_idx').on(table.dueDate),
   };
 });
 

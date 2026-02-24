@@ -160,6 +160,7 @@ export const pageVersions = pgTable('page_versions', {
   pageCreatedAtIdx: index('page_versions_page_created_at_idx').on(table.pageId, table.createdAt),
   driveCreatedAtIdx: index('page_versions_drive_created_at_idx').on(table.driveId, table.createdAt),
   pinnedIdx: index('page_versions_pinned_idx').on(table.isPinned),
+  pagePinnedCreatedAtIdx: index('page_versions_page_id_is_pinned_created_at_idx').on(table.pageId, table.isPinned, table.createdAt),
   changeGroupPair: check('page_versions_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
 }));
 

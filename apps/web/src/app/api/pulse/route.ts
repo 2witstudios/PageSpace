@@ -87,97 +87,88 @@ export async function GET(req: Request) {
     const startOfWeek = new Date(startOfToday.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
     const endOfWeek = new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-    // Fetch latest pulse summary
-    const [latestSummary] = await db
-      .select()
-      .from(pulseSummaries)
-      .where(eq(pulseSummaries.userId, userId))
-      .orderBy(desc(pulseSummaries.generatedAt))
-      .limit(1);
-
-    // Calculate real-time stats
-    // Get user's drives
-    const userDrives = await db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(eq(driveMembers.userId, userId));
-    const driveIds = userDrives.map(d => d.driveId);
-
-    // Task counts
-    const [tasksOverdue] = await db
-      .select({ count: count() })
-      .from(taskItems)
-      .where(
-        and(
-          or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-          ne(taskItems.status, 'completed'),
-          lt(taskItems.dueDate, startOfToday)
-        )
-      );
-
-    const [tasksDueToday] = await db
-      .select({ count: count() })
-      .from(taskItems)
-      .where(
-        and(
-          or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-          ne(taskItems.status, 'completed'),
-          gte(taskItems.dueDate, startOfToday),
-          lt(taskItems.dueDate, endOfToday)
-        )
-      );
-
-    const [tasksDueThisWeek] = await db
-      .select({ count: count() })
-      .from(taskItems)
-      .where(
-        and(
-          or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-          ne(taskItems.status, 'completed'),
-          gte(taskItems.dueDate, startOfToday),
-          lt(taskItems.dueDate, endOfWeek)
-        )
-      );
-
-    const [tasksCompletedThisWeek] = await db
-      .select({ count: count() })
-      .from(taskItems)
-      .where(
-        and(
-          or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-          eq(taskItems.status, 'completed'),
-          gte(taskItems.completedAt, startOfWeek)
-        )
-      );
-
-    // Unread messages
-    const userConversations = await db
-      .select({ id: dmConversations.id })
-      .from(dmConversations)
-      .where(
-        or(
-          eq(dmConversations.participant1Id, userId),
-          eq(dmConversations.participant2Id, userId)
-        )
-      );
-
-    let unreadCount = 0;
-    if (userConversations.length > 0) {
-      const conversationIds = userConversations.map(c => c.id);
-      const [unreadResult] = await db
-        .select({ count: count() })
-        .from(directMessages)
+    // Phase 1: Fire all independent queries in parallel
+    // Task queries, summary, drives, and conversations are all independent
+    const [
+      summaryResult,
+      userDrives,
+      tasksOverdueResult,
+      tasksDueTodayResult,
+      tasksDueThisWeekResult,
+      tasksCompletedThisWeekResult,
+      userConversations,
+    ] = await Promise.all([
+      // Latest pulse summary
+      db.select()
+        .from(pulseSummaries)
+        .where(eq(pulseSummaries.userId, userId))
+        .orderBy(desc(pulseSummaries.generatedAt))
+        .limit(1),
+      // User's drives
+      db.select({ driveId: driveMembers.driveId })
+        .from(driveMembers)
+        .where(eq(driveMembers.userId, userId)),
+      // Tasks overdue
+      db.select({ count: count() })
+        .from(taskItems)
         .where(
           and(
-            inArray(directMessages.conversationId, conversationIds),
-            ne(directMessages.senderId, userId),
-            eq(directMessages.isRead, false)
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            lt(taskItems.dueDate, startOfToday)
           )
-        );
-      unreadCount = unreadResult?.count ?? 0;
-    }
+        ),
+      // Tasks due today
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfToday)
+          )
+        ),
+      // Tasks due this week
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfWeek)
+          )
+        ),
+      // Tasks completed this week
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            eq(taskItems.status, 'completed'),
+            gte(taskItems.completedAt, startOfWeek)
+          )
+        ),
+      // User conversations
+      db.select({ id: dmConversations.id })
+        .from(dmConversations)
+        .where(
+          or(
+            eq(dmConversations.participant1Id, userId),
+            eq(dmConversations.participant2Id, userId)
+          )
+        ),
+    ]);
 
-    // Calendar events today - respect visibility settings
+    const latestSummary = summaryResult[0] ?? null;
+    const driveIds = userDrives.map(d => d.driveId);
+    const [tasksOverdue] = tasksOverdueResult;
+    const [tasksDueToday] = tasksDueTodayResult;
+    const [tasksDueThisWeek] = tasksDueThisWeekResult;
+    const [tasksCompletedThisWeek] = tasksCompletedThisWeekResult;
+
+    // Phase 2: Queries that depend on driveIds or conversationIds
     const calendarVisibility = driveIds.length > 0
       ? or(
           and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId)),
@@ -191,60 +182,81 @@ export async function GET(req: Request) {
         )
       : and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId));
 
-    const [upcomingTodayResult] = await db
-      .select({ count: count() })
-      .from(calendarEvents)
-      .where(
-        and(
-          eq(calendarEvents.isTrashed, false),
-          gte(calendarEvents.startAt, now),
-          lt(calendarEvents.startAt, endOfToday),
-          calendarVisibility
-        )
-      );
+    const conversationIds = userConversations.map(c => c.id);
 
-    const [pendingInvitesResult] = await db
-      .select({ count: count() })
-      .from(eventAttendees)
-      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
-      .where(
-        and(
-          eq(eventAttendees.userId, userId),
-          eq(eventAttendees.status, 'PENDING'),
-          eq(calendarEvents.isTrashed, false),
-          gte(calendarEvents.startAt, now),
-        )
-      );
-
-    // Pages updated
-    let pagesUpdatedToday = 0;
-    let pagesUpdatedThisWeek = 0;
-
-    if (driveIds.length > 0) {
-      const [todayResult] = await db
-        .select({ count: count() })
-        .from(pages)
+    const [
+      unreadResult,
+      upcomingTodayArr,
+      pendingInvitesArr,
+      pagesTodayArr,
+      pagesWeekArr,
+    ] = await Promise.all([
+      // Unread messages
+      conversationIds.length > 0
+        ? db.select({ count: count() })
+            .from(directMessages)
+            .where(
+              and(
+                inArray(directMessages.conversationId, conversationIds),
+                ne(directMessages.senderId, userId),
+                eq(directMessages.isRead, false)
+              )
+            )
+        : Promise.resolve([{ count: 0 }]),
+      // Calendar events today
+      db.select({ count: count() })
+        .from(calendarEvents)
         .where(
           and(
-            inArray(pages.driveId, driveIds),
-            eq(pages.isTrashed, false),
-            gte(pages.updatedAt, startOfToday)
+            eq(calendarEvents.isTrashed, false),
+            gte(calendarEvents.startAt, now),
+            lt(calendarEvents.startAt, endOfToday),
+            calendarVisibility
           )
-        );
-      pagesUpdatedToday = todayResult?.count ?? 0;
-
-      const [weekResult] = await db
-        .select({ count: count() })
-        .from(pages)
+        ),
+      // Pending invites
+      db.select({ count: count() })
+        .from(eventAttendees)
+        .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
         .where(
           and(
-            inArray(pages.driveId, driveIds),
-            eq(pages.isTrashed, false),
-            gte(pages.updatedAt, startOfWeek)
+            eq(eventAttendees.userId, userId),
+            eq(eventAttendees.status, 'PENDING'),
+            eq(calendarEvents.isTrashed, false),
+            gte(calendarEvents.startAt, now),
           )
-        );
-      pagesUpdatedThisWeek = weekResult?.count ?? 0;
-    }
+        ),
+      // Pages updated today
+      driveIds.length > 0
+        ? db.select({ count: count() })
+            .from(pages)
+            .where(
+              and(
+                inArray(pages.driveId, driveIds),
+                eq(pages.isTrashed, false),
+                gte(pages.updatedAt, startOfToday)
+              )
+            )
+        : Promise.resolve([{ count: 0 }]),
+      // Pages updated this week
+      driveIds.length > 0
+        ? db.select({ count: count() })
+            .from(pages)
+            .where(
+              and(
+                inArray(pages.driveId, driveIds),
+                eq(pages.isTrashed, false),
+                gte(pages.updatedAt, startOfWeek)
+              )
+            )
+        : Promise.resolve([{ count: 0 }]),
+    ]);
+
+    const unreadCount = unreadResult[0]?.count ?? 0;
+    const [upcomingTodayResult] = upcomingTodayArr;
+    const [pendingInvitesResult] = pendingInvitesArr;
+    const pagesUpdatedToday = pagesTodayArr[0]?.count ?? 0;
+    const pagesUpdatedThisWeek = pagesWeekArr[0]?.count ?? 0;
 
     // Determine if summary is stale
     const isStale = latestSummary

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildTree } from '@pagespace/lib/server';
-import { pages, drives, pagePermissions, driveMembers, taskItems, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
+import { pages, drives, pagePermissions, driveMembers, taskItems, taskLists, db, and, eq, inArray, asc, sql, isNotNull } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
@@ -127,10 +127,15 @@ export async function GET(
       pageResults = await getPermittedPages(drive.id, userId);
     }
 
-    // Get all task-linked page IDs to mark them in the tree
+    // Get task-linked page IDs scoped to this drive (join through taskLists → pages in drive)
     const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
       .from(taskItems)
-      .where(isNotNull(taskItems.pageId));
+      .innerJoin(taskLists, eq(taskItems.taskListId, taskLists.id))
+      .innerJoin(pages, eq(taskLists.pageId, pages.id))
+      .where(and(
+        isNotNull(taskItems.pageId),
+        eq(pages.driveId, drive.id)
+      ));
     const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
 
     // Query activity logs to find pages with changes by OTHER users or AI since last view
