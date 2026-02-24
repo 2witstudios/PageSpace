@@ -6,19 +6,15 @@ import { NextResponse } from 'next/server';
 // ============================================================================
 
 const {
+  mockReturning,
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
-  mockSelectWhere,
-  mockSelectFrom,
-  mockSelect,
 } = vi.hoisted(() => ({
-  mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
+  mockReturning: vi.fn().mockResolvedValue([]),
+  mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
-  mockSelectWhere: vi.fn().mockResolvedValue([]),
-  mockSelectFrom: vi.fn(),
-  mockSelect: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -41,7 +37,6 @@ vi.mock('@pagespace/lib/server', () => ({
 
 vi.mock('@pagespace/db', () => ({
   db: {
-    select: mockSelect,
     update: mockUpdate,
   },
   workflows: {
@@ -50,6 +45,7 @@ vi.mock('@pagespace/db', () => ({
     nextRunAt: 'nextRunAt',
     lastRunStatus: 'lastRunStatus',
     lastRunAt: 'lastRunAt',
+    triggerType: 'triggerType',
   },
   eq: vi.fn(),
   and: vi.fn(),
@@ -94,11 +90,17 @@ describe('POST /api/cron/workflows', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockSelect.mockReturnValue({ from: mockSelectFrom });
-    mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockResolvedValue(undefined);
+    // mockUpdateWhere must work as both a thenable (await for non-returning calls)
+    // and an object with .returning() (for atomic claim). We achieve this by
+    // making it return a promise-like that also has a returning property.
+    mockUpdateWhere.mockImplementation(() => {
+      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
+      p.returning = mockReturning;
+      return p;
+    });
+    mockReturning.mockResolvedValue([]);
   });
 
   it('should return auth error when cron request is invalid', async () => {
@@ -112,7 +114,7 @@ describe('POST /api/cron/workflows', () => {
   });
 
   it('should return success with 0 executed when no workflows are due', async () => {
-    mockSelectWhere.mockResolvedValue([]);
+    // mockReturning defaults to [] — no due workflows claimed
 
     const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
     const response = await POST(request);
@@ -124,7 +126,7 @@ describe('POST /api/cron/workflows', () => {
   });
 
   it('should execute due workflows and return counts', async () => {
-    mockSelectWhere.mockResolvedValue([mockWorkflow]);
+    mockReturning.mockResolvedValue([mockWorkflow]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: true,
       responseText: 'Report generated',
@@ -144,7 +146,7 @@ describe('POST /api/cron/workflows', () => {
   });
 
   it('should handle workflow execution errors gracefully', async () => {
-    mockSelectWhere.mockResolvedValue([mockWorkflow]);
+    mockReturning.mockResolvedValue([mockWorkflow]);
     vi.mocked(executeWorkflow).mockResolvedValue({
       success: false,
       durationMs: 1000,
@@ -163,7 +165,7 @@ describe('POST /api/cron/workflows', () => {
   });
 
   it('should handle thrown exceptions during execution', async () => {
-    mockSelectWhere.mockResolvedValue([mockWorkflow]);
+    mockReturning.mockResolvedValue([mockWorkflow]);
     vi.mocked(executeWorkflow).mockRejectedValue(new Error('Network error'));
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-01-02T09:00:00Z'));
 

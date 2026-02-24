@@ -27,10 +27,10 @@ export async function POST(req: Request) {
         )
       );
 
-    // Find due cron workflows (event-triggered workflows are handled by the event engine)
+    // Atomically claim due cron workflows (UPDATE...RETURNING prevents double-execution)
     const dueWorkflows = await db
-      .select()
-      .from(workflows)
+      .update(workflows)
+      .set({ lastRunStatus: 'running', lastRunAt: now })
       .where(
         and(
           eq(workflows.isEnabled, true),
@@ -38,22 +38,14 @@ export async function POST(req: Request) {
           lte(workflows.nextRunAt, now),
           ne(workflows.lastRunStatus, 'running')
         )
-      );
+      )
+      .returning();
 
     if (dueWorkflows.length === 0) {
       return NextResponse.json({ message: 'No workflows due', executed: 0 });
     }
 
     loggers.api.info(`Workflow cron: Found ${dueWorkflows.length} due workflows`);
-
-    // Mark all due workflows as running before execution
-    await Promise.all(
-      dueWorkflows.map(wf =>
-        db.update(workflows)
-          .set({ lastRunStatus: 'running', lastRunAt: new Date() })
-          .where(eq(workflows.id, wf.id))
-      )
-    );
 
     // Execute due workflows with concurrency limit
     const executeOne = async (workflow: typeof dueWorkflows[number]) => {

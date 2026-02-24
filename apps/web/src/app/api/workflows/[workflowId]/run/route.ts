@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/server';
-import { db, workflows, eq } from '@pagespace/db';
+import { db, workflows, eq, and, ne } from '@pagespace/db';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 
@@ -34,16 +34,16 @@ export async function POST(
     return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
   }
 
-  // Reject if already running
-  if (workflow.lastRunStatus === 'running') {
-    return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
-  }
-
-  // Mark as running
-  await db
+  // Atomically claim: only mark as running if not already running
+  const [claimed] = await db
     .update(workflows)
     .set({ lastRunStatus: 'running', lastRunAt: new Date() })
-    .where(eq(workflows.id, workflowId));
+    .where(and(eq(workflows.id, workflowId), ne(workflows.lastRunStatus, 'running')))
+    .returning({ id: workflows.id });
+
+  if (!claimed) {
+    return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
+  }
 
   // Execute
   let result;

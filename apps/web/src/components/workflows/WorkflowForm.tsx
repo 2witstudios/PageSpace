@@ -67,7 +67,10 @@ const EVENT_TRIGGER_PRESETS: { label: string; description: string; operation: st
   { label: 'Member added', description: 'When a new member joins the drive', operation: 'member_add', resourceType: 'member' },
 ];
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+const fetcher = (url: string) => fetch(url).then(res => {
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+});
 
 export function WorkflowForm({ open, onOpenChange, driveId, initialData, onSubmit }: WorkflowFormProps) {
   const [name, setName] = useState(initialData?.name ?? '');

@@ -8,6 +8,7 @@ import type { DriveAccessResult } from '@pagespace/lib/server';
 // ============================================================================
 
 const {
+  mockReturning,
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
@@ -15,7 +16,8 @@ const {
   mockSelectFrom,
   mockSelect,
 } = vi.hoisted(() => ({
-  mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
+  mockReturning: vi.fn().mockResolvedValue([{ id: 'wf_1' }]),
+  mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
   mockSelectWhere: vi.fn(),
@@ -28,8 +30,10 @@ vi.mock('@pagespace/db', () => ({
     select: mockSelect,
     update: mockUpdate,
   },
-  workflows: { id: 'id', driveId: 'driveId' },
+  workflows: { id: 'id', driveId: 'driveId', lastRunStatus: 'lastRunStatus' },
   eq: vi.fn(),
+  and: vi.fn(),
+  ne: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -138,7 +142,14 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     }));
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockResolvedValue(undefined);
+    // mockUpdateWhere must serve as both thenable (for post-execution updates)
+    // and have .returning() (for atomic claim)
+    mockUpdateWhere.mockImplementation(() => {
+      const p = Promise.resolve(undefined) as Promise<undefined> & { returning: typeof mockReturning };
+      p.returning = mockReturning;
+      return p;
+    });
+    mockReturning.mockResolvedValue([{ id: 'wf_1' }]);
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
   });
 
@@ -174,7 +185,8 @@ describe('POST /api/workflows/[workflowId]/run', () => {
   });
 
   test('returns 409 when workflow is already running', async () => {
-    mockSelectWhere.mockResolvedValue([{ ...mockWorkflow, lastRunStatus: 'running' }]);
+    // Atomic claim returns empty array = workflow was already running
+    mockReturning.mockResolvedValue([]);
 
     const request = new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' });
     const response = await POST(request, createContext('wf_1'));
