@@ -77,8 +77,12 @@ export default function InboxChannelPage() {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithUser[]>([]);
   const [inputValue, setInputValue] = useState('');
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const channelInputRef = useRef<ChannelInputRef>(null);
+  const skipAutoScrollRef = useRef(false);
 
   const socket = useSocketStore((state) => state.socket);
   const connectionStatus = useSocketStore((state) => state.connectionStatus);
@@ -103,6 +107,8 @@ export default function InboxChannelPage() {
         }
         const data = await res.json();
         setMessages(data.messages ?? data);
+        setHasMore(data.hasMore ?? false);
+        setNextCursor(data.nextCursor ?? null);
 
         // Mark channel as read when viewed
         post(`/api/channels/${pageId}/read`, {}).catch(() => {
@@ -146,8 +152,12 @@ export default function InboxChannelPage() {
     };
   }, [socket, connectionStatus, pageId]);
 
-  // Auto-scroll
+  // Auto-scroll (skip when loading older messages)
   useEffect(() => {
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
@@ -225,10 +235,31 @@ export default function InboxChannelPage() {
       }
       const data = await res.json();
       setMessages(data.messages ?? data);
+      setHasMore(data.hasMore ?? false);
+      setNextCursor(data.nextCursor ?? null);
     } catch (error) {
       console.error('Failed to refresh messages:', error);
     }
   }, [pageId]);
+
+  const handleLoadOlder = useCallback(async () => {
+    if (!nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const res = await fetchWithAuth(`/api/channels/${pageId}/messages?cursor=${encodeURIComponent(nextCursor)}`);
+      if (!res.ok) throw new Error(`Failed to fetch older messages: ${res.status}`);
+      const data = await res.json();
+      const olderMessages: MessageWithUser[] = data.messages ?? data;
+      skipAutoScrollRef.current = true;
+      setMessages((prev) => [...olderMessages, ...prev]);
+      setHasMore(data.hasMore ?? false);
+      setNextCursor(data.nextCursor ?? null);
+    } catch (error) {
+      console.error('Failed to load older messages:', error);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [pageId, nextCursor, loadingOlder]);
 
   const handleAddReaction = useCallback(async (messageId: string, emoji: string) => {
     if (!user) return;
@@ -399,6 +430,18 @@ export default function InboxChannelPage() {
       <PullToRefresh direction="top" onRefresh={handleRefresh}>
         <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
           <div className="p-4 space-y-4 max-w-4xl mx-auto">
+            {hasMore && (
+              <div className="flex justify-center py-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleLoadOlder}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? 'Loading...' : 'Load older messages'}
+                </Button>
+              </div>
+            )}
             {messages.map((m) => {
               const isAi = !!m.aiMeta;
               const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;

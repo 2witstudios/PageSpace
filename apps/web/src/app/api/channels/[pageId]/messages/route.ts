@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, channelReadStatus, db, eq, and, asc, desc, or, isNull, gt, lt, inArray, files, pages, driveMembers, pagePermissions } from '@pagespace/db';
+import { channelMessages, channelReadStatus, db, eq, and, desc, or, isNull, gt, lt, inArray, files, pages, driveMembers, pagePermissions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -38,10 +38,25 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const cursor = searchParams.get('cursor');
   const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 200);
 
-  // Build where clause with optional cursor (fetch messages older than cursor)
+  // Build where clause with optional composite cursor (createdAt|id)
   const conditions = [eq(channelMessages.pageId, pageId), eq(channelMessages.isActive, true)];
   if (cursor) {
-    conditions.push(lt(channelMessages.createdAt, new Date(cursor)));
+    const separatorIdx = cursor.lastIndexOf('|');
+    if (separatorIdx === -1) {
+      return NextResponse.json({ error: 'Invalid cursor format' }, { status: 400 });
+    }
+    const cursorDate = new Date(cursor.slice(0, separatorIdx));
+    const cursorId = cursor.slice(separatorIdx + 1);
+    if (isNaN(cursorDate.getTime()) || !cursorId) {
+      return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+    }
+    // Composite cursor: (createdAt < cursorDate) OR (createdAt = cursorDate AND id < cursorId)
+    conditions.push(
+      or(
+        lt(channelMessages.createdAt, cursorDate),
+        and(eq(channelMessages.createdAt, cursorDate), lt(channelMessages.id, cursorId))
+      )!
+    );
   }
 
   // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
@@ -73,7 +88,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         },
       },
     },
-    orderBy: [desc(channelMessages.createdAt)],
+    orderBy: [desc(channelMessages.createdAt), desc(channelMessages.id)],
     limit: limit + 1,
   });
 
@@ -82,7 +97,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Reverse to chronological order (oldest first) for display
   page.reverse();
 
-  const nextCursor = hasMore && page.length > 0 ? page[0].createdAt.toISOString() : null;
+  // Composite cursor: createdAt|id
+  const nextCursor = hasMore && page.length > 0
+    ? `${page[0].createdAt.toISOString()}|${page[0].id}`
+    : null;
 
   return NextResponse.json({ messages: page, nextCursor, hasMore });
 }
@@ -246,8 +264,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         ? messageContent.substring(0, 100) + '...'
         : messageContent;
 
-      // Batch permission check: determine which members can view this page
-      // Drive owner and admins always have access; others need explicit page permissions
+      // Batch permission check: mirrors getUserAccessLevel logic from @pagespace/lib.
+      // If that logic changes (e.g. new roles), update this batch version in sync.
+      // Drive owner and admins always have access; others need explicit page permissions.
       const otherMemberIds = members
         .filter(m => m.userId !== userId)
         .map(m => m.userId);

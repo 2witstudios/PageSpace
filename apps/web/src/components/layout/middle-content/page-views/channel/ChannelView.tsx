@@ -65,6 +65,7 @@ function ChannelView({ page }: ChannelViewProps) {
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const skipAutoScrollRef = useRef(false);
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -116,6 +117,10 @@ function ChannelView({ page }: ChannelViewProps) {
   }, [socket, connectionStatus, page.id]);
 
   useEffect(() => {
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
@@ -200,6 +205,7 @@ function ChannelView({ page }: ChannelViewProps) {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages?cursor=${encodeURIComponent(nextCursor)}`);
       const data = await res.json();
       const olderMessages: MessageWithReactions[] = data.messages ?? data;
+      skipAutoScrollRef.current = true;
       setMessages((prev) => [...olderMessages, ...prev]);
       setHasMore(data.hasMore ?? false);
       setNextCursor(data.nextCursor ?? null);
