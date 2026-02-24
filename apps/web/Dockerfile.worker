@@ -39,9 +39,9 @@ COPY --from=deps --chown=worker:nodejs /app .
 
 USER worker
 
-# Health check
+# Health check - verify the worker process is running
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD node -e "console.log('Worker health check')" || exit 1
+  CMD pgrep -f "file-processor" > /dev/null || exit 1
 
 # Run the worker using tsx
 CMD ["pnpm", "tsx", "apps/web/src/workers/file-processor.ts"]

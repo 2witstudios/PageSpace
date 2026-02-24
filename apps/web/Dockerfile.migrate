@@ -34,6 +34,3 @@ COPY tsconfig.json ./
 
 # Build the database package to ensure latest schema changes are compiled
 RUN pnpm --filter @pagespace/db build
-
-# Copy .env file for tsx --env-file
-COPY .env ./

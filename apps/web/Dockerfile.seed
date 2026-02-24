@@ -26,8 +26,5 @@ COPY packages ./packages
 COPY apps ./apps
 COPY tsconfig.json ./
 
-# Copy .env file for tsx --env-file
-COPY .env ./
-
 # Run seed
 CMD ["pnpm", "--filter", "@pagespace/db", "db:seed"]
