@@ -64,7 +64,6 @@ const EVENT_TRIGGER_PRESETS: { label: string; description: string; operation: st
   { label: 'Page created', description: 'When a new page is created', operation: 'create', resourceType: 'page' },
   { label: 'File uploaded', description: 'When a file is uploaded', operation: 'upload', resourceType: 'file' },
   { label: 'Page moved', description: 'When a page is moved to a folder', operation: 'move', resourceType: 'page' },
-  { label: 'Agent created', description: 'When a new AI agent is created', operation: 'create', resourceType: 'agent' },
   { label: 'Member added', description: 'When a new member joins the drive', operation: 'member_add', resourceType: 'member' },
 ];
 

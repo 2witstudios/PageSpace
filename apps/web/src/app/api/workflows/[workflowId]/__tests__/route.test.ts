@@ -104,6 +104,7 @@ const mockWorkflow = {
   id: 'wf_1',
   driveId: 'drive_abc',
   name: 'Test Workflow',
+  triggerType: 'cron' as const,
   cronExpression: '0 9 * * 1-5',
   timezone: 'UTC',
   isEnabled: true,
@@ -256,6 +257,19 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     const response = await PATCH(request, createContext('wf_1'));
 
     expect(response.status).toBe(403);
+  });
+
+  it('should return 400 when setting cronExpression to null on a cron workflow', async () => {
+    const request = new Request('https://example.com/api/workflows/wf_1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cronExpression: null }),
+    });
+    const response = await PATCH(request, createContext('wf_1'));
+
+    expect(response?.status).toBe(400);
+    const body = await response?.json();
+    expect(body.error).toContain('cron expression');
   });
 
   it('should return updated workflow on success', async () => {

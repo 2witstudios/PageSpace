@@ -121,6 +121,9 @@ export async function emitWorkflowEvent(event: WorkflowEvent): Promise<void> {
 
         if (!current || !current.isEnabled) return;
 
+        // Skip if another execution is already in progress
+        if (current.lastRunStatus === 'running') return;
+
         await executeEventWorkflow(current, eventContext ?? contextStr);
       }, debounceSecs * 1000);
 

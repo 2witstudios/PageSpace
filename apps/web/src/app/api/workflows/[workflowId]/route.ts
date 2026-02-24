@@ -113,7 +113,8 @@ export async function PATCH(
 
   // Validate: cron workflows need a cron expression, event workflows need triggers
   if (triggerType === 'cron') {
-    const cronExpr = data.cronExpression ?? workflow.cronExpression;
+    // Resolve effective cronExpression: explicit null from payload means "clear it"
+    const cronExpr = data.cronExpression !== undefined ? data.cronExpression : workflow.cronExpression;
     if (!cronExpr) {
       return NextResponse.json({ error: 'Cron workflows require a cron expression' }, { status: 400 });
     }

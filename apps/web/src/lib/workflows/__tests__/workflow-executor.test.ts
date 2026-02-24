@@ -287,8 +287,6 @@ describe('executeWorkflow', () => {
     // The third select call is for context pages — verify `and()` was called
     // with driveId filter (eq(pages.driveId, workflow.driveId))
     expect(and).toHaveBeenCalled();
-    const andCalls = vi.mocked(and).mock.calls;
-    // Find the call that includes driveId filtering
     expect(eq).toHaveBeenCalledWith('driveId', 'drive_abc');
     expect(inArray).toHaveBeenCalledWith('id', ['ctx_1']);
   });

@@ -336,6 +336,24 @@ describe('emitWorkflowEvent', () => {
     expect(calledArg.prompt).not.toContain('Old prompt');
   });
 
+  test('workflow already running during debounce is not executed', async () => {
+    const workflow = createWorkflow({ eventDebounceSecs: 5 });
+
+    let callCount = 0;
+    mockSelectWhere.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return [workflow];
+      // Re-fetch during debounce: workflow is currently running
+      return [{ ...workflow, lastRunStatus: 'running' }];
+    });
+
+    await emitWorkflowEvent(createEvent());
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   // --------------------------------------------------------------------------
   // Workflow status updates
   // --------------------------------------------------------------------------
