@@ -6,13 +6,25 @@ describe('validateCronExpression', () => {
     expect(validateCronExpression('0 9 * * 1-5')).toEqual({ valid: true });
   });
 
-  it('should return valid for every-minute expression', () => {
-    expect(validateCronExpression('* * * * *')).toEqual({ valid: true });
+  it('should return valid for every-5-minutes expression', () => {
+    expect(validateCronExpression('*/5 * * * *')).toEqual({ valid: true });
   });
 
   it('should return valid for complex expressions', () => {
-    expect(validateCronExpression('*/5 * * * *')).toEqual({ valid: true });
     expect(validateCronExpression('0 9 1 * *')).toEqual({ valid: true });
+    expect(validateCronExpression('0 */6 * * *')).toEqual({ valid: true });
+  });
+
+  it('should reject expressions more frequent than 5 minutes', () => {
+    const result = validateCronExpression('* * * * *');
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('too frequent');
+  });
+
+  it('should reject every-2-minute expressions', () => {
+    const result = validateCronExpression('*/2 * * * *');
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('minimum interval');
   });
 
   it('should return invalid for a malformed expression', () => {
@@ -87,9 +99,9 @@ describe('getHumanReadableCron', () => {
     expect(result).toBe('not-valid');
   });
 
-  it('should describe every-minute cron', () => {
-    const result = getHumanReadableCron('* * * * *');
-    expect(result.toLowerCase()).toContain('every minute');
+  it('should describe every-5-minutes cron', () => {
+    const result = getHumanReadableCron('*/5 * * * *');
+    expect(result.toLowerCase()).toContain('5 minutes');
   });
 
   it('should describe hourly cron', () => {

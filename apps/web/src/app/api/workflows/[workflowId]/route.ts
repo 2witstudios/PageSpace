@@ -120,7 +120,9 @@ export async function PATCH(
     }
   }
   if (triggerType === 'event') {
-    const triggers = data.eventTriggers ?? (workflow.eventTriggers as Array<{ operation: string; resourceType: string }> | null);
+    const triggers = data.eventTriggers !== undefined
+      ? data.eventTriggers
+      : (workflow.eventTriggers as Array<{ operation: string; resourceType: string }> | null);
     if (!triggers || triggers.length === 0) {
       return NextResponse.json({ error: 'Event workflows require at least one event trigger' }, { status: 400 });
     }

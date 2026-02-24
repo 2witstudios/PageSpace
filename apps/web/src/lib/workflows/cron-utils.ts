@@ -1,9 +1,18 @@
 import { CronExpressionParser } from 'cron-parser';
 import cronstrue from 'cronstrue';
 
+const MIN_INTERVAL_MINUTES = 5;
+
 export function validateCronExpression(expression: string): { valid: boolean; error?: string } {
   try {
-    CronExpressionParser.parse(expression);
+    const interval = CronExpressionParser.parse(expression);
+    // Ensure minimum interval matches the cron polling cadence
+    const first = interval.next().toDate();
+    const second = interval.next().toDate();
+    const gapMinutes = (second.getTime() - first.getTime()) / 60_000;
+    if (gapMinutes < MIN_INTERVAL_MINUTES) {
+      return { valid: false, error: `Schedule is too frequent — minimum interval is ${MIN_INTERVAL_MINUTES} minutes` };
+    }
     return { valid: true };
   } catch (err) {
     return { valid: false, error: err instanceof Error ? err.message : 'Invalid cron expression' };

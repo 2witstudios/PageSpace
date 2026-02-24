@@ -272,6 +272,22 @@ describe('PATCH /api/workflows/[workflowId]', () => {
     expect(body.error).toContain('cron expression');
   });
 
+  it('should return 400 when setting eventTriggers to null on an event workflow', async () => {
+    const eventWorkflow = { ...mockWorkflow, triggerType: 'event' as const, eventTriggers: [{ operation: 'update', resourceType: 'page' }] };
+    mockSelectWhere.mockResolvedValue([eventWorkflow]);
+
+    const request = new Request('https://example.com/api/workflows/wf_1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventTriggers: null }),
+    });
+    const response = await PATCH(request, createContext('wf_1'));
+
+    expect(response!.status).toBe(400);
+    const body = await response!.json();
+    expect(body.error).toContain('event trigger');
+  });
+
   it('should return updated workflow on success', async () => {
     const request = new Request('https://example.com/api/workflows/wf_1', {
       method: 'PATCH',

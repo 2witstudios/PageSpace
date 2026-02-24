@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db, workflows, eq, and, lte, ne } from '@pagespace/db';
+import { db, workflows, eq, and, lte, ne, inArray } from '@pagespace/db';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
@@ -41,10 +41,10 @@ export async function POST(req: Request) {
       }
     }
 
-    // Atomically claim due cron workflows (UPDATE...RETURNING prevents double-execution)
+    // Discover which cron workflows are due (read-only query)
     const dueWorkflows = await db
-      .update(workflows)
-      .set({ lastRunStatus: 'running', lastRunAt: now })
+      .select()
+      .from(workflows)
       .where(
         and(
           eq(workflows.isEnabled, true),
@@ -52,8 +52,7 @@ export async function POST(req: Request) {
           lte(workflows.nextRunAt, now),
           ne(workflows.lastRunStatus, 'running')
         )
-      )
-      .returning();
+      );
 
     if (dueWorkflows.length === 0) {
       return NextResponse.json({ message: 'No workflows due', executed: 0 });
@@ -61,8 +60,9 @@ export async function POST(req: Request) {
 
     loggers.api.info(`Workflow cron: Found ${dueWorkflows.length} due workflows`);
 
-    // Execute due workflows with concurrency limit
-    const executeOne = async (workflow: typeof dueWorkflows[number]) => {
+    type WorkflowRow = typeof dueWorkflows[number];
+
+    const executeOne = async (workflow: WorkflowRow) => {
       const result = await executeWorkflow(workflow);
 
       let nextRunAt: Date | undefined;
@@ -86,53 +86,70 @@ export async function POST(req: Request) {
       return { workflow, result };
     };
 
-    // Process in batches of MAX_CONCURRENT_WORKFLOWS
-    const results: PromiseSettledResult<{ workflow: typeof dueWorkflows[number]; result: Awaited<ReturnType<typeof executeWorkflow>> }>[] = [];
-    for (let i = 0; i < dueWorkflows.length; i += MAX_CONCURRENT_WORKFLOWS) {
-      const batch = dueWorkflows.slice(i, i + MAX_CONCURRENT_WORKFLOWS);
-      const batchResults = await Promise.allSettled(batch.map(executeOne));
-      results.push(...batchResults);
-    }
-
+    // Claim and execute in batches to avoid the stuck-workflow timeout racing
+    // against not-yet-started items from a single large claim.
     let executed = 0;
+    let totalClaimed = 0;
     const errors: string[] = [];
 
-    for (let i = 0; i < results.length; i++) {
-      const settled = results[i];
-      if (settled.status === 'fulfilled') {
-        if (settled.value.result.success) {
-          executed++;
+    for (let i = 0; i < dueWorkflows.length; i += MAX_CONCURRENT_WORKFLOWS) {
+      const batch = dueWorkflows.slice(i, i + MAX_CONCURRENT_WORKFLOWS);
+      const batchIds = batch.map(w => w.id);
+
+      // Atomically claim this batch (UPDATE...RETURNING prevents double-execution)
+      const claimed = await db
+        .update(workflows)
+        .set({ lastRunStatus: 'running', lastRunAt: new Date() })
+        .where(
+          and(
+            inArray(workflows.id, batchIds),
+            ne(workflows.lastRunStatus, 'running')
+          )
+        )
+        .returning();
+
+      if (claimed.length === 0) continue;
+      totalClaimed += claimed.length;
+
+      const batchResults = await Promise.allSettled(claimed.map(executeOne));
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const settled = batchResults[j];
+        if (settled.status === 'fulfilled') {
+          if (settled.value.result.success) {
+            executed++;
+          } else {
+            errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
+          }
         } else {
-          errors.push(`${settled.value.workflow.name}: ${settled.value.result.error}`);
+          const workflow = claimed[j];
+          const errorMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
+          loggers.api.error(`Workflow cron: Failed for workflow ${workflow.id}`, { error: errorMsg });
+          errors.push(`${workflow.name}: ${errorMsg}`);
+
+          let nextRunAt: Date | undefined;
+          try {
+            nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
+          } catch { /* invalid cron — leave nextRunAt as-is */ }
+
+          await db
+            .update(workflows)
+            .set({
+              lastRunStatus: 'error',
+              lastRunError: errorMsg,
+              ...(nextRunAt ? { nextRunAt } : {}),
+            })
+            .where(eq(workflows.id, workflow.id));
         }
-      } else {
-        const workflow = dueWorkflows[i];
-        const errorMsg = settled.reason instanceof Error ? settled.reason.message : String(settled.reason);
-        loggers.api.error(`Workflow cron: Failed for workflow ${workflow.id}`, { error: errorMsg });
-        errors.push(`${workflow.name}: ${errorMsg}`);
-
-        let nextRunAt: Date | undefined;
-        try {
-          nextRunAt = getNextRunDate(workflow.cronExpression!, workflow.timezone);
-        } catch { /* invalid cron — leave nextRunAt as-is */ }
-
-        await db
-          .update(workflows)
-          .set({
-            lastRunStatus: 'error',
-            lastRunError: errorMsg,
-            ...(nextRunAt ? { nextRunAt } : {}),
-          })
-          .where(eq(workflows.id, workflow.id));
       }
     }
 
-    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${dueWorkflows.length}`);
+    loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalClaimed}`);
 
     return NextResponse.json({
       message: 'Workflow cron complete',
       executed,
-      total: dueWorkflows.length,
+      total: totalClaimed,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
