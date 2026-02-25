@@ -26,6 +26,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   const [activeTab, setActiveTab] = useState('view');
   const containerRef = useRef<HTMLDivElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const saveVersionRef = useRef(0);
   const router = useRouter();
   const { user } = useAuth();
   const socket = useSocket();
@@ -40,6 +41,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     } catch (error) {
       console.error('Failed to save page content:', error);
       toast.error('Failed to save page content.');
+      throw error;
     }
   }, [socket]);
 
@@ -50,6 +52,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   }, [saveContent]);
 
   const setContent = useCallback((newContent: string) => {
+    const version = ++saveVersionRef.current;
     useDocumentManagerStore.getState().updateDocument(page.id, {
       content: newContent,
       isDirty: true,
@@ -62,12 +65,15 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     saveTimeoutRef.current = setTimeout(async () => {
       try {
         await saveContent(page.id, newContent);
-        useDocumentManagerStore.getState().updateDocument(page.id, {
-          isDirty: false,
-          lastSaved: Date.now(),
-        });
+        // Only clear isDirty if no newer edits arrived while saving
+        if (saveVersionRef.current === version) {
+          useDocumentManagerStore.getState().updateDocument(page.id, {
+            isDirty: false,
+            lastSaved: Date.now(),
+          });
+        }
       } catch {
-        // saveContent already logs and toasts on error
+        // saveContent already logged and toasted - isDirty stays true for retry/unmount-save
       }
     }, 1000);
   }, [page.id, saveContent]);
@@ -85,22 +91,35 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     });
   }, [page.id]);
 
-  // Initialize document in manager store
+  // Initialize or refresh document in manager store
   useEffect(() => {
     const initialText = typeof page.content === 'string' ? page.content : '';
-    useDocumentManagerStore.getState().createDocument(page.id, initialText, 'html');
+    const store = useDocumentManagerStore.getState();
+    const existing = store.getDocument(page.id);
+    if (!existing) {
+      store.createDocument(page.id, initialText, 'html');
+    } else if (!existing.isDirty && existing.content !== initialText) {
+      // Refresh from prop if doc exists but isn't dirty (e.g. out-of-band server update)
+      store.updateDocument(page.id, {
+        content: initialText,
+        lastUpdateTime: Date.now(),
+      });
+    }
   }, [page.id, page.content]);
 
-  // Force-save on unmount - empty deps so cleanup only runs on TRUE unmount
+  // Force-save on unmount and clean up cached document
+  // Empty deps so cleanup only runs on TRUE unmount (component wrapped in React.memo by id)
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      const doc = useDocumentManagerStore.getState().getDocument(page.id);
+      const store = useDocumentManagerStore.getState();
+      const doc = store.getDocument(page.id);
       if (doc?.isDirty) {
         saveContentRef.current(page.id, doc.content).catch(console.error);
       }
+      store.clearDocument(page.id);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
