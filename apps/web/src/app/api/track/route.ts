@@ -128,7 +128,7 @@ export async function POST(request: Request) {
         break;
 
       case 'feature_used':
-        trackFeature(userId, data.feature, enrichedData);
+        trackFeature(userId, data.feature || 'unknown', enrichedData);
         break;
 
       case 'user_action':
@@ -158,7 +158,7 @@ export async function POST(request: Request) {
         break;
 
       case 'client_error':
-        trackError(userId, data.type || 'client', data.message, enrichedData);
+        trackError(userId, data.type || 'client', data.message || 'Unknown error', enrichedData);
         break;
 
       case 'timing':
