@@ -9,6 +9,7 @@ import { ShadowCanvas } from '@/components/canvas/ShadowCanvas';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { TreePage } from '@/hooks/usePageTree';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
@@ -45,11 +46,11 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     }
   }, [socket]);
 
-  // Keep saveContent in a ref so unmount cleanup always uses latest version
+  // Keep refs in sync for unmount cleanup (avoids stale closures in empty-deps effects)
   const saveContentRef = useRef(saveContent);
-  useEffect(() => {
-    saveContentRef.current = saveContent;
-  }, [saveContent]);
+  const pageIdRef = useRef(page.id);
+  useEffect(() => { saveContentRef.current = saveContent; }, [saveContent]);
+  useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
 
   const setContent = useCallback((newContent: string) => {
     const version = ++saveVersionRef.current;
@@ -107,21 +108,33 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     }
   }, [page.id, page.content]);
 
+  // Register editing state to prevent SWR revalidation during edits
+  useEffect(() => {
+    if (documentState?.isDirty) {
+      useEditingStore.getState().startEditing(page.id, 'document');
+    } else {
+      useEditingStore.getState().endEditing(page.id);
+    }
+    return () => useEditingStore.getState().endEditing(page.id);
+  }, [documentState?.isDirty, page.id]);
+
   // Force-save on unmount and clean up cached document
-  // Empty deps so cleanup only runs on TRUE unmount (component wrapped in React.memo by id)
+  // Empty deps — parent renders with key={page.id} so this only runs on TRUE unmount
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      const id = pageIdRef.current;
       const store = useDocumentManagerStore.getState();
-      const doc = store.getDocument(page.id);
+      const doc = store.getDocument(id);
       if (doc?.isDirty) {
-        saveContentRef.current(page.id, doc.content).catch(console.error);
+        saveContentRef.current(id, doc.content).catch(console.error);
       }
-      store.clearDocument(page.id);
+      store.clearDocument(id);
+      useEditingStore.getState().endEditing(id);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Listen for real-time content updates from AI tools
   useEffect(() => {
