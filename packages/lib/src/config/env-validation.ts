@@ -47,6 +47,7 @@ export const serverEnvSchema = z
     // Optional monitoring
     MONITORING_INGEST_KEY: z.string().optional(),
     MONITORING_INGEST_PATH: z.string().optional(),
+    MONITORING_INGEST_DISABLED: z.enum(['true', 'false']).optional(),
 
     // Optional OAuth state
     OAUTH_STATE_SECRET: z.string().min(1).optional(),
@@ -79,6 +80,7 @@ export const serverEnvSchema = z
         });
       }
     }
+
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -126,6 +128,27 @@ export const getEnvErrors = (): string[] => {
 export const isEnvValid = (): boolean => {
   const result = serverEnvSchema.safeParse(process.env);
   return result.success;
+};
+
+/**
+ * Returns non-fatal environment warnings (e.g. misconfigured monitoring).
+ * These do NOT prevent startup but indicate degraded functionality.
+ */
+export const getEnvWarnings = (): string[] => {
+  const warnings: string[] = [];
+
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  const hasIngestKey = Boolean(process.env.MONITORING_INGEST_KEY);
+  const isDisabled = process.env.MONITORING_INGEST_DISABLED === 'true';
+
+  if (nodeEnv === 'production' && !hasIngestKey && !isDisabled) {
+    warnings.push(
+      'MONITORING_INGEST_KEY is not set and MONITORING_INGEST_DISABLED is not true. ' +
+      'Monitoring will be silently degraded. Set MONITORING_INGEST_KEY or MONITORING_INGEST_DISABLED=true.'
+    );
+  }
+
+  return warnings;
 };
 
 // Cached validated env - validated once on first access

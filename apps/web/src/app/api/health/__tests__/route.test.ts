@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
 const mockExecute = vi.hoisted(() => vi.fn());
+const mockGetMonitoringIngestStatus = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db', () => ({
   db: {
@@ -19,9 +20,14 @@ vi.mock('@pagespace/lib/server', () => ({
   },
 }));
 
+vi.mock('@/middleware/monitoring', () => ({
+  getMonitoringIngestStatus: mockGetMonitoringIngestStatus,
+}));
+
 describe('GET /api/health', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetMonitoringIngestStatus.mockReturnValue('active');
   });
 
   describe('healthy system', () => {
@@ -113,6 +119,50 @@ describe('GET /api/health', () => {
       expect(response.status).toBe(503);
       expect(body.status).toBe('degraded');
       expect(body.error).toContain('Database');
+    });
+  });
+
+  describe('monitoring status', () => {
+    it('given monitoring is active, should report healthy with monitoring active', async () => {
+      mockExecute.mockResolvedValue([{ '1': 1 }]);
+      mockGetMonitoringIngestStatus.mockReturnValue('active');
+
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.status).toBe('healthy');
+      expect(body.checks.monitoring).toBe('active');
+      expect(body.warnings).toBeUndefined();
+    });
+
+    it('given monitoring is explicitly disabled, should report healthy', async () => {
+      mockExecute.mockResolvedValue([{ '1': 1 }]);
+      mockGetMonitoringIngestStatus.mockReturnValue('disabled');
+
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.status).toBe('healthy');
+      expect(body.checks.monitoring).toBe('disabled');
+    });
+
+    it('given monitoring is misconfigured, should report degraded with warning', async () => {
+      mockExecute.mockResolvedValue([{ '1': 1 }]);
+      mockGetMonitoringIngestStatus.mockReturnValue('misconfigured');
+
+      const request = new Request('https://example.com/api/health', { method: 'GET' });
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body.status).toBe('degraded');
+      expect(body.checks.monitoring).toBe('misconfigured');
+      expect(body.warnings).toBeDefined();
+      expect(body.warnings[0]).toContain('MONITORING_INGEST_KEY');
     });
   });
 

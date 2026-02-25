@@ -1,5 +1,6 @@
 import { db, sql } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { getMonitoringIngestStatus } from '@/middleware/monitoring';
 
 interface HealthResponse {
   status: 'healthy' | 'degraded';
@@ -8,12 +9,14 @@ interface HealthResponse {
   timestamp: string;
   checks: {
     database: 'connected' | 'disconnected';
+    monitoring: 'active' | 'disabled' | 'misconfigured';
   };
   memory: {
     heapUsed: number;
     heapTotal: number;
     rss: number;
   };
+  warnings?: string[];
   error?: string;
 }
 
@@ -31,15 +34,27 @@ export async function GET(_request: Request): Promise<Response> {
 
   try {
     const dbHealthy = await checkDatabase();
+    const monitoringStatus = getMonitoringIngestStatus();
     const memoryUsage = process.memoryUsage();
+    const warnings: string[] = [];
+
+    if (monitoringStatus === 'misconfigured') {
+      warnings.push(
+        'MONITORING_INGEST_KEY is not set and MONITORING_INGEST_DISABLED is not true. ' +
+        'Monitoring is silently degraded.'
+      );
+    }
+
+    const isHealthy = dbHealthy && monitoringStatus !== 'misconfigured';
 
     const response: HealthResponse = {
-      status: dbHealthy ? 'healthy' : 'degraded',
+      status: isHealthy ? 'healthy' : 'degraded',
       service: 'pagespace-web',
       version: process.env.npm_package_version || '0.0.0',
       timestamp: new Date().toISOString(),
       checks: {
         database: dbHealthy ? 'connected' : 'disconnected',
+        monitoring: monitoringStatus,
       },
       memory: {
         heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024),
@@ -48,6 +63,10 @@ export async function GET(_request: Request): Promise<Response> {
       },
     };
 
+    if (warnings.length > 0) {
+      response.warnings = warnings;
+    }
+
     if (!dbHealthy) {
       response.error = 'Database connectivity check failed';
       loggers.api.warn('Health check degraded: database disconnected', {
@@ -55,7 +74,13 @@ export async function GET(_request: Request): Promise<Response> {
       });
     }
 
-    const statusCode = dbHealthy ? 200 : 503;
+    if (monitoringStatus === 'misconfigured') {
+      loggers.api.warn('Health check degraded: monitoring ingest misconfigured', {
+        duration: Date.now() - startTime,
+      });
+    }
+
+    const statusCode = isHealthy ? 200 : 503;
 
     return Response.json(response, {
       status: statusCode,
@@ -73,6 +98,7 @@ export async function GET(_request: Request): Promise<Response> {
       timestamp: new Date().toISOString(),
       checks: {
         database: 'disconnected',
+        monitoring: getMonitoringIngestStatus(),
       },
       memory: {
         heapUsed: 0,
