@@ -60,8 +60,7 @@ io.use(async (socket: AuthSocket, next) => {
 -   **`join_channel`:** Client emits with a `pageId`. Server verifies user has access via `getUserAccessLevel()` before joining the room
 -   **`join_drive`:** Client emits with a `driveId`. Server verifies access via `getUserDriveAccess()` before joining `drive:${driveId}` room
 -   **`leave_drive`:** Client leaves a specific drive room
--   **`join_global_drives`:** Client joins the global drives room for system-wide drive updates
--   **`leave_global_drives`:** Client leaves the global drives room
+-   **User drives room:** Each user is auto-joined to `user:${userId}:drives` on connection for scoped drive event delivery
 -   **`disconnect`:** Standard event for logging when a user disconnects
 
 ### 4. Broadcast Endpoint (`/api/broadcast`)
@@ -122,8 +121,7 @@ socket.on('new_message', handleNewMessage);
 | `join_channel`          | Client → Server     | Requests to join a specific page's room. Server validates permissions before allowing the join.         |
 | `join_drive`            | Client → Server     | Requests to join a drive room. Server validates drive access before allowing the join.                 |
 | `leave_drive`           | Client → Server     | Leaves a specific drive room.                                                                           |
-| `join_global_drives`    | Client → Server     | Joins the global drives room for system-wide updates.                                                  |
-| `leave_global_drives`   | Client → Server     | Leaves the global drives room.                                                                          |
+| *(auto-joined)*         | Server → Client     | User auto-joins `user:${userId}:drives` on connect for scoped drive events.                            |
 | `new_message`           | Server → Client     | Broadcasts a new message to all clients in a specific channel room.                                     |
 | `notification:new`      | Server → Client     | Broadcasts a new notification to a user's personal notification room.                                  |
 
