@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "motion/react";
@@ -14,8 +14,26 @@ import {
 } from "@/components/auth";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
+import { isOnPrem } from "@/lib/deployment-mode";
 
 export default function SignUp() {
+  // On-prem: redirect to signin (self-registration disabled) - early return to avoid flash
+  if (isOnPrem()) {
+    return <OnPremSignUpRedirect />;
+  }
+
+  return <CloudSignUp />;
+}
+
+function OnPremSignUpRedirect() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/auth/signin?onprem=contact_admin");
+  }, [router]);
+  return null;
+}
+
+function CloudSignUp() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();

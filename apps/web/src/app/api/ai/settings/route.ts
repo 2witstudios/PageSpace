@@ -30,9 +30,48 @@ import {
   getUserMiniMaxSettings,
   createMiniMaxSettings,
   deleteMiniMaxSettings,
+  getUserAzureOpenAISettings,
+  createAzureOpenAISettings,
+  deleteAzureOpenAISettings,
 } from '@/lib/ai/core';
+import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { isOnPrem } from '@pagespace/lib';
+
+function isProviderBlocked(provider: string): boolean {
+  return isOnPrem() && !ONPREM_ALLOWED_PROVIDERS.has(provider);
+}
+
+/** Providers that accept API key / base-URL configuration (POST + DELETE). */
+const CONFIGURABLE_PROVIDERS = [
+  'openrouter', 'google', 'openai', 'anthropic', 'xai',
+  'ollama', 'lmstudio', 'glm', 'minimax', 'azure_openai',
+] as const;
+
+/** Providers valid for model-selection (PATCH) — includes virtual providers. */
+const SELECTABLE_PROVIDERS = [
+  'pagespace', 'openrouter_free', ...CONFIGURABLE_PROVIDERS,
+] as const;
+
+/** Providers whose model list is discovered dynamically (empty model OK). */
+const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'azure_openai']);
+
+/** Providers that accept a base URL (need SSRF validation). */
+const URL_PROVIDERS = LOCAL_PROVIDERS;
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  openrouter: 'OpenRouter',
+  google: 'Google AI',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  xai: 'xAI',
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  glm: 'GLM Coder Plan',
+  minimax: 'MiniMax',
+  azure_openai: 'Azure OpenAI',
+};
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -80,6 +119,9 @@ export async function GET(request: Request) {
     // Check MiniMax settings
     const minimaxSettings = await getUserMiniMaxSettings(userId);
 
+    // Check Azure OpenAI settings
+    const azureOpenAISettings = await getUserAzureOpenAISettings(userId);
+
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || 'pagespace',
       currentModel: user?.currentAiModel || 'glm-4.5-air',
@@ -125,8 +167,13 @@ export async function GET(request: Request) {
           isConfigured: !!minimaxSettings?.isConfigured,
           hasApiKey: !!minimaxSettings?.apiKey,
         },
+        azure_openai: {
+          isConfigured: !!azureOpenAISettings?.isConfigured,
+          hasApiKey: !!azureOpenAISettings?.apiKey,
+          hasBaseUrl: !!azureOpenAISettings?.baseUrl,
+        },
       },
-      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || lmstudioSettings?.isConfigured || glmSettings?.isConfigured || minimaxSettings?.isConfigured),
+      isAnyProviderConfigured: !!(pageSpaceSettings?.isConfigured || openRouterSettings?.isConfigured || googleSettings?.isConfigured || openAISettings?.isConfigured || anthropicSettings?.isConfigured || xaiSettings?.isConfigured || ollamaSettings?.isConfigured || lmstudioSettings?.isConfigured || glmSettings?.isConfigured || minimaxSettings?.isConfigured || azureOpenAISettings?.isConfigured),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
@@ -151,15 +198,29 @@ export async function POST(request: Request) {
     const { provider, apiKey, baseUrl } = body;
 
     // Validate input
-    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'].includes(provider)) {
+    if (!provider || !(CONFIGURABLE_PROVIDERS as readonly string[]).includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
+        { error: 'Invalid provider' },
         { status: 400 }
       );
     }
 
+    if (isProviderBlocked(provider)) {
+      return NextResponse.json(
+        { error: 'This provider is not available in on-premise mode' },
+        { status: 403 }
+      );
+    }
+
     // Validate based on provider type
-    if (provider === 'ollama' || provider === 'lmstudio') {
+    if (provider === 'azure_openai') {
+      if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+        return NextResponse.json({ error: 'API key is required for Azure OpenAI' }, { status: 400 });
+      }
+      if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
+        return NextResponse.json({ error: 'Endpoint URL is required for Azure OpenAI' }, { status: 400 });
+      }
+    } else if (provider === 'ollama' || provider === 'lmstudio') {
       if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
         return NextResponse.json(
           { error: `Base URL is required for ${provider === 'ollama' ? 'Ollama' : 'LM Studio'}` },
@@ -179,8 +240,8 @@ export async function POST(request: Request) {
     const sanitizedApiKey = apiKey?.trim();
     const sanitizedBaseUrl = baseUrl?.trim();
 
-    // SECURITY: Validate base URL for local providers to prevent SSRF
-    if (provider === 'ollama' || provider === 'lmstudio') {
+    // SECURITY: Validate base URL for providers that accept URLs to prevent SSRF
+    if (URL_PROVIDERS.has(provider)) {
       const { validateLocalProviderURL } = await import('@pagespace/lib/security');
       const urlValidation = await validateLocalProviderURL(sanitizedBaseUrl);
       if (!urlValidation.valid) {
@@ -211,26 +272,15 @@ export async function POST(request: Request) {
         await createGLMSettings(userId, sanitizedApiKey);
       } else if (provider === 'minimax') {
         await createMiniMaxSettings(userId, sanitizedApiKey);
+      } else if (provider === 'azure_openai') {
+        await createAzureOpenAISettings(userId, sanitizedApiKey, sanitizedBaseUrl);
       }
 
-      // Return success with minimal information (don't echo back the key/URL)
-      const providerName: Record<string, string> = {
-        openrouter: 'OpenRouter',
-        google: 'Google AI',
-        openai: 'OpenAI',
-        anthropic: 'Anthropic',
-        xai: 'xAI',
-        ollama: 'Ollama',
-        lmstudio: 'LM Studio',
-        glm: 'GLM Coder Plan',
-        minimax: 'MiniMax'
-      };
-      
       return NextResponse.json(
-        { 
+        {
           success: true,
           provider,
-          message: `${providerName[provider]} API key saved successfully`
+          message: `${PROVIDER_DISPLAY_NAMES[provider] ?? provider} API key saved successfully`
         },
         { status: 201 }
       );
@@ -263,19 +313,22 @@ export async function PATCH(request: Request) {
     const body = await request.json();
     const { provider, model } = body;
 
-    // Validate input - pagespace and openrouter_free are valid providers
-    const validProviders = ['pagespace', 'openrouter', 'openrouter_free', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'];
-    const localProviders = ['ollama', 'lmstudio'];
-
-    if (!provider || !validProviders.includes(provider)) {
+    if (!provider || !(SELECTABLE_PROVIDERS as readonly string[]).includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "pagespace", "openrouter", "openrouter_free", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
+        { error: `Invalid provider. Must be one of: ${SELECTABLE_PROVIDERS.join(', ')}` },
         { status: 400 }
       );
     }
 
+    if (isProviderBlocked(provider)) {
+      return NextResponse.json(
+        { error: 'This provider is not available in on-premise mode' },
+        { status: 403 }
+      );
+    }
+
     // Local providers can have empty model (models discovered dynamically)
-    const isLocalProvider = localProviders.includes(provider);
+    const isLocalProvider = LOCAL_PROVIDERS.has(provider);
     if (!isLocalProvider && (!model || typeof model !== 'string')) {
       return NextResponse.json(
         { error: 'Model is required' },
@@ -346,10 +399,9 @@ export async function DELETE(request: Request) {
     const body = await request.json();
     const { provider } = body;
 
-    // Validate input
-    if (!provider || !['openrouter', 'google', 'openai', 'anthropic', 'xai', 'ollama', 'lmstudio', 'glm', 'minimax'].includes(provider)) {
+    if (!provider || !(CONFIGURABLE_PROVIDERS as readonly string[]).includes(provider)) {
       return NextResponse.json(
-        { error: 'Invalid provider. Must be "openrouter", "google", "openai", "anthropic", "xai", "ollama", "lmstudio", "glm", or "minimax"' },
+        { error: 'Invalid provider' },
         { status: 400 }
       );
     }
@@ -374,6 +426,8 @@ export async function DELETE(request: Request) {
         await deleteGLMSettings(userId);
       } else if (provider === 'minimax') {
         await deleteMiniMaxSettings(userId);
+      } else if (provider === 'azure_openai') {
+        await deleteAzureOpenAISettings(userId);
       }
 
       // Return success with 204 No Content

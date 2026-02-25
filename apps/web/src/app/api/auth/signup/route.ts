@@ -2,6 +2,7 @@ import { users, userAiSettings, db, eq } from '@pagespace/db';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import { sessionService, SESSION_DURATION_MS, BCRYPT_COST } from '@pagespace/lib/auth';
+import { isOnPrem } from '@pagespace/lib';
 import { createNotification } from '@pagespace/lib/server';
 import {
   checkDistributedRateLimit,
@@ -39,6 +40,19 @@ const signupSchema = z.object({
 });
 
 export async function POST(req: Request) {
+  // On-prem: self-registration is disabled (admin creates accounts)
+  if (isOnPrem()) {
+    const clientIP = getClientIP(req);
+    logSecurityEvent('signup_blocked_onprem', {
+      ip: clientIP,
+      reason: 'Self-registration disabled in on-prem mode',
+    });
+    return Response.json(
+      { error: 'Self-registration is disabled. Contact your administrator for an account.' },
+      { status: 403 }
+    );
+  }
+
   const clientIP = getClientIP(req);
   let email: string | undefined;
 

@@ -205,7 +205,8 @@ export function logSecurityEvent(
          'magic_link_csrf_missing' | 'magic_link_csrf_mismatch' | 'magic_link_csrf_invalid' |
          'magic_link_rate_limit_ip' | 'magic_link_rate_limit_email' | 'magic_link_suspended_user' |
          'passkey_csrf_invalid' | 'passkey_rate_limit_auth' | 'passkey_rate_limit_options' | 'passkey_rate_limit_register' |
-         'passkey_rate_limit_signup_ip' | 'passkey_rate_limit_signup_email',
+         'passkey_rate_limit_signup_ip' | 'passkey_rate_limit_signup_email' |
+         'signup_blocked_onprem',
   details: LogInput
 ): void {
   loggers.security.warn(`Security event: ${event}`, details);

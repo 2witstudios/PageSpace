@@ -66,6 +66,9 @@ vi.mock('@/lib/ai/core', () => ({
   getUserMiniMaxSettings: vi.fn(),
   createMiniMaxSettings: vi.fn(),
   deleteMiniMaxSettings: vi.fn(),
+  getUserAzureOpenAISettings: vi.fn(),
+  createAzureOpenAISettings: vi.fn(),
+  deleteAzureOpenAISettings: vi.fn(),
 }));
 
 // Mock subscription middleware (boundary)

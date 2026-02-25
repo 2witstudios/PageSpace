@@ -16,6 +16,7 @@ import {
   AI_PROVIDERS,
   getModelDisplayName,
   getDefaultModel,
+  getVisibleProviders,
 } from '@/lib/ai/core/ai-providers-config';
 
 interface ProviderStatus {
@@ -36,18 +37,20 @@ const PROVIDER_CATEGORIES: Record<string, 'default' | 'cloud' | 'local'> = {
   pagespace: 'default',
   ollama: 'local',
   lmstudio: 'local',
+  azure_openai: 'cloud',
   // All others default to 'cloud'
 };
 
-/** Derive provider groups from AI_PROVIDERS configuration */
-const PROVIDER_GROUPS = (() => {
+/** Derive provider groups from visible providers (filtered by deployment mode) */
+function buildProviderGroups() {
+  const visibleProviders = getVisibleProviders();
   const groups: { label: string; providers: { id: string; name: string }[] }[] = [
     { label: 'Default', providers: [] },
     { label: 'Cloud Providers', providers: [] },
     { label: 'Local', providers: [] },
   ];
 
-  for (const [id, config] of Object.entries(AI_PROVIDERS)) {
+  for (const [id, config] of Object.entries(visibleProviders)) {
     const category = PROVIDER_CATEGORIES[id] || 'cloud';
     const provider = { id, name: config.name };
 
@@ -60,8 +63,12 @@ const PROVIDER_GROUPS = (() => {
     }
   }
 
-  return groups;
-})();
+  // Filter out empty groups
+  return groups.filter(g => g.providers.length > 0);
+}
+
+// Computed once at module load (deployment mode doesn't change at runtime)
+const PROVIDER_GROUPS = buildProviderGroups();
 
 export interface ProviderModelSelectorProps {
   /** Currently selected provider */

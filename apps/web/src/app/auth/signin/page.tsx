@@ -12,10 +12,12 @@ import {
   OAuthButtons,
   GoogleOneTap,
   MagicLinkForm,
+  PasswordLoginForm,
   PasskeyLoginButton,
 } from "@/components/auth";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
+import { isOnPrem } from "@/lib/deployment-mode";
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
@@ -23,10 +25,16 @@ function SignInForm() {
   const { csrfToken, refreshToken } = useAuthCSRF();
   const { handleGoogleSignIn, handleAppleSignIn, isGoogleLoading, isAppleLoading } =
     useOAuthSignIn();
+  const onPrem = isOnPrem();
 
   useEffect(() => {
     const error = searchParams.get("error");
     const newAccount = searchParams.get("newAccount");
+    const onpremMessage = searchParams.get("onprem");
+
+    if (onpremMessage === "contact_admin") {
+      toast.info("Contact your administrator for an account.");
+    }
 
     if (newAccount) {
       toast.info(
@@ -73,6 +81,29 @@ function SignInForm() {
       }
     }
   }, [searchParams]);
+
+  // On-prem: password-only sign-in
+  if (onPrem) {
+    return (
+      <AuthShell>
+        <motion.div
+          className="mb-8 text-center"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+        >
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+            Welcome back
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Sign in to your workspace
+          </p>
+        </motion.div>
+
+        <PasswordLoginForm />
+      </AuthShell>
+    );
+  }
 
   return (
     <AuthShell>

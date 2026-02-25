@@ -34,6 +34,7 @@ import {
   createGLMSettings,
   getUserMiniMaxSettings,
   createMiniMaxSettings,
+  getUserAzureOpenAISettings,
 } from './ai-utils';
 import { resolvePageSpaceModel } from './ai-providers-config';
 
@@ -339,6 +340,34 @@ export async function createAIProvider(
         baseURL: lmstudioSettings.baseUrl,
       });
       model = lmstudioProvider(currentModel);
+
+    } else if (currentProvider === 'azure_openai') {
+      // Handle Azure OpenAI setup - uses OpenAI-compatible API with Azure endpoint
+      const azureSettings = await getUserAzureOpenAISettings(userId);
+
+      if (!azureSettings) {
+        return {
+          error: 'Azure OpenAI not configured. Please provide your API key and endpoint URL in Settings > AI.',
+          status: 400,
+        };
+      }
+
+      // SECURITY: Validate Azure OpenAI URL to prevent SSRF
+      const { validateLocalProviderURL } = await import('@pagespace/lib/security');
+      const azureUrlValidation = await validateLocalProviderURL(azureSettings.baseUrl);
+      if (!azureUrlValidation.valid) {
+        return {
+          error: `Azure OpenAI endpoint URL blocked: ${azureUrlValidation.error}`,
+          status: 400,
+        };
+      }
+
+      const azureProvider = createOpenAICompatible({
+        name: 'azure_openai',
+        apiKey: azureSettings.apiKey,
+        baseURL: azureSettings.baseUrl,
+      });
+      model = azureProvider(currentModel);
 
     } else if (currentProvider === 'glm') {
       // Handle GLM Coder Plan setup

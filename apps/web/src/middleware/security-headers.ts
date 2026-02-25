@@ -42,23 +42,35 @@ const buildCSPString = (directives: CSPDirectives): string =>
     .map(([key, values]) => `${key} ${values.join(' ')}`)
     .join('; ');
 
+const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
+
 export const buildCSPPolicy = (nonce: string): string => {
+  const scriptSrc = [
+    "'self'",
+    `'nonce-${nonce}'`,
+    "'strict-dynamic'",
+    "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
+  ];
+  const styleSrc = ["'self'", "'unsafe-inline'"];
+  const frameSrc: string[] = [];
+
+  // On-prem: no Google or Stripe external origins needed
+  if (!IS_ONPREM) {
+    scriptSrc.push('https://accounts.google.com');
+    styleSrc.push('https://accounts.google.com');
+    frameSrc.push('https://accounts.google.com', 'https://js.stripe.com');
+  }
+
   const directives: CSPDirectives = {
     'default-src': ["'self'"],
-    'script-src': [
-      "'self'",
-      `'nonce-${nonce}'`,
-      "'strict-dynamic'",
-      "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
-      'https://accounts.google.com', // Google One Tap authentication
-    ],
-    'style-src': ["'self'", "'unsafe-inline'", 'https://accounts.google.com'],
+    'script-src': scriptSrc,
+    'style-src': styleSrc,
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
     'font-src': ["'self'", 'data:'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
-    'frame-src': ['https://accounts.google.com', 'https://js.stripe.com'], // Google One Tap + Stripe Elements iframes
+    ...(frameSrc.length > 0 ? { 'frame-src': frameSrc } : {}),
     'frame-ancestors': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],

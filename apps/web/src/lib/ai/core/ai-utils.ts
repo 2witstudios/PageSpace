@@ -897,5 +897,99 @@ export async function deleteMiniMaxSettings(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Gets user's Azure OpenAI settings
+ * Returns decrypted API key and base URL for Azure OpenAI endpoint
+ */
+export async function getUserAzureOpenAISettings(userId: string): Promise<{
+  apiKey: string;
+  baseUrl: string;
+  isConfigured: boolean;
+} | null> {
+  const settings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'azure_openai')
+    ),
+  });
+
+  if (!settings || !settings.encryptedApiKey || !settings.baseUrl) {
+    return null;
+  }
+
+  try {
+    const apiKey = await decrypt(settings.encryptedApiKey);
+    return {
+      apiKey,
+      baseUrl: settings.baseUrl,
+      isConfigured: true,
+    };
+  } catch (error) {
+    aiLogger.error('Failed to decrypt Azure OpenAI API key', error instanceof Error ? error : undefined, {
+      userId: maskIdentifier(userId),
+    });
+    return null;
+  }
+}
+
+/**
+ * Creates Azure OpenAI provider settings for a user
+ * Encrypts and stores the API key, stores the endpoint URL
+ */
+export async function createAzureOpenAISettings(
+  userId: string,
+  apiKey: string,
+  baseUrl: string
+): Promise<void> {
+  const { encrypt } = await import('@pagespace/lib/server');
+  const encryptedApiKey = await encrypt(apiKey);
+
+  const formattedUrl = baseUrl.trim().replace(/\/$/, '');
+
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'azure_openai')
+    ),
+  });
+
+  if (existingSettings) {
+    await db
+      .update(userAiSettings)
+      .set({
+        encryptedApiKey,
+        baseUrl: formattedUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(userAiSettings.id, existingSettings.id));
+  } else {
+    await db.insert(userAiSettings).values({
+      id: createId(),
+      userId,
+      provider: 'azure_openai',
+      encryptedApiKey,
+      baseUrl: formattedUrl,
+    });
+  }
+}
+
+/**
+ * Deletes Azure OpenAI provider settings for a user
+ */
+export async function deleteAzureOpenAISettings(userId: string): Promise<void> {
+  const existingSettings = await db.query.userAiSettings.findFirst({
+    where: and(
+      eq(userAiSettings.userId, userId),
+      eq(userAiSettings.provider, 'azure_openai')
+    ),
+  });
+
+  if (existingSettings) {
+    await db
+      .delete(userAiSettings)
+      .where(eq(userAiSettings.id, existingSettings.id));
+  }
+}
+
 // Note: Message management functions are now in ChatStorageAdapter
 // This provides a cleaner separation of concerns

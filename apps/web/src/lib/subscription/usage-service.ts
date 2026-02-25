@@ -1,5 +1,6 @@
 import { db, eq, users } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { isOnPrem } from '@pagespace/lib';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { rateLimitCache, type ProviderType, type UsageTrackingResult } from '@pagespace/lib';
 
@@ -10,9 +11,12 @@ const usageLogger = loggers.api.child({ module: 'subscription-usage' });
 const verboseUsageLogging = process.env.AI_DEBUG_LOGGING === 'true' || process.env.NODE_ENV !== 'production';
 
 /**
- * Get usage limits based on subscription tier
+ * Get usage limits based on subscription tier.
+ * Returns -1 (unlimited) for on-prem deployments.
  */
 export function getUsageLimits(subscriptionTier: string, providerType: ProviderType): number {
+  if (isOnPrem()) return -1;
+
   if (providerType === 'standard') {
     // Standard AI calls per day by tier
     if (subscriptionTier === 'business') return 1000;
@@ -74,6 +78,11 @@ export async function incrementUsage(
     });
   }
 
+  // Unlimited (on-prem)
+  if (limit === -1) {
+    return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
+  }
+
   // No access (free tier trying pro AI)
   if (limit === 0) {
     if (verboseUsageLogging) {
@@ -133,6 +142,11 @@ export async function getCurrentUsage(
   const subscriptionTier = user[0].subscriptionTier;
   const limit = getUsageLimits(subscriptionTier, providerType);
 
+  // Unlimited (on-prem)
+  if (limit === -1) {
+    return { success: true, currentCount: 0, limit: -1, remainingCalls: -1 };
+  }
+
   // Use Redis-based rate limit cache
   return await rateLimitCache.getCurrentUsage(userId, providerType, limit);
 }
@@ -171,7 +185,7 @@ export async function getUserUsageSummary(userId: string) {
     pro: {
       current: proUsageResult.currentCount,
       limit: proLimit,
-      remaining: proUsageResult.remainingCalls
+      remaining: proLimit === -1 ? -1 : proUsageResult.remainingCalls
     }
   };
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { incrementUsage } from './usage-service';
-import { getTomorrowMidnightUTC, type ProviderType } from '@pagespace/lib';
+import { getTomorrowMidnightUTC, isOnPrem, type ProviderType } from '@pagespace/lib';
 import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 
 export interface RateLimitResult {
@@ -89,9 +89,12 @@ export function createRateLimitResponse(
 }
 
 /**
- * Check if provider requires Pro subscription
+ * Check if provider requires Pro subscription.
+ * On-prem: no subscription gating.
  */
 export function requiresProSubscription(provider: string, model: string | undefined, subscriptionTier: string | undefined): boolean {
+  if (isOnPrem()) return false;
+
   // Check if model is a Pro tier model using centralized alias config
   const modelTier = provider === 'pagespace' && model ? getPageSpaceModelTier(model) : null;
   if (modelTier !== 'pro') {

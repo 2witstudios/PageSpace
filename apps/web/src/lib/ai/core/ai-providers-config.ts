@@ -333,6 +333,13 @@ export const AI_PROVIDERS = {
       // No fallback models - requires LM Studio server to be running
     },
   },
+  azure_openai: {
+    name: 'Azure OpenAI',
+    models: {
+      // Model list depends on the user's Azure deployment - discovered dynamically
+      // Users configure their deployment name as the model ID
+    },
+  },
   glm: {
     name: 'GLM Coder Plan',
     models: {
@@ -389,10 +396,11 @@ export function getDefaultModel(provider: string): string {
 
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) {
-    return 'glm-4.7'; // fallback default to GLM 4.7
+    return 'glm-4.7';
   }
 
-  return Object.keys(providerConfig.models)[0];
+  const models = Object.keys(providerConfig.models);
+  return models[0] ?? '';
 }
 
 /**
@@ -448,5 +456,29 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
   // For all other providers, abstract away the model details
   // Users shouldn't see the underlying model names (GLM, Claude, GPT, etc.)
   return 'PageSpace AI';
+}
+
+/**
+ * Providers allowed in on-prem mode (local + BAA-eligible cloud).
+ */
+export const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
+
+/**
+ * Returns the provider entries visible in the current deployment mode.
+ * On-prem: only local providers and Azure OpenAI.
+ * Cloud: all providers.
+ */
+export function getVisibleProviders(): Partial<typeof AI_PROVIDERS> {
+  // Client-side check uses NEXT_PUBLIC_ prefix; server-side uses DEPLOYMENT_MODE
+  const isOnPremMode =
+    typeof window !== 'undefined'
+      ? process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === 'onprem'
+      : process.env.DEPLOYMENT_MODE === 'onprem';
+
+  if (!isOnPremMode) return AI_PROVIDERS;
+
+  return Object.fromEntries(
+    Object.entries(AI_PROVIDERS).filter(([key]) => ONPREM_ALLOWED_PROVIDERS.has(key))
+  ) as Partial<typeof AI_PROVIDERS>;
 }
 

@@ -7,6 +7,7 @@ import { db, systemLogs, apiMetrics, aiUsageLogs, errorLogs, userActivities } fr
 import type { LogEntry, LogContext } from './logger';
 import type { LogInput, HttpMethod } from './logger-types';
 import { createId } from '@paralleldrive/cuid2';
+import { isOnPrem } from '../deployment-mode';
 
 interface DatabaseLogEntry {
   id: string;
@@ -217,6 +218,14 @@ export async function writeAiUsage(usage: {
       messageCount: usage.messageCount,
       wasTruncated: usage.wasTruncated,
       truncationStrategy: usage.truncationStrategy,
+
+      // On-prem: set retention expiry for HIPAA compliance (default 90 days)
+      ...(isOnPrem() ? {
+        expiresAt: (() => {
+          const days = parseInt(process.env.AI_LOG_RETENTION_DAYS || '90', 10);
+          return new Date(Date.now() + ((Number.isNaN(days) ? 90 : days) * 24 * 60 * 60 * 1000));
+        })(),
+      } : {}),
     });
   } catch (error) {
     console.error('[Logger] Failed to write AI usage:', error);
