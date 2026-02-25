@@ -67,6 +67,7 @@ export const pages = pgTable('pages', {
         driveIdx: index('pages_drive_id_idx').on(table.driveId),
         parentIdx: index('pages_parent_id_idx').on(table.parentId),
         parentPositionIdx: index('pages_parent_id_position_idx').on(table.parentId, table.position),
+        driveTrashedTypeIdx: index('pages_drive_id_is_trashed_type_idx').on(table.driveId, table.isTrashed, table.type),
     }
 });
 

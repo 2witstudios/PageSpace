@@ -62,12 +62,18 @@ function ChannelView({ page }: ChannelViewProps) {
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const skipAutoScrollRef = useRef(false);
 
   useEffect(() => {
     const fetchMessages = async () => {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
       const data = await res.json();
-      setMessages(data);
+      setMessages(data.messages ?? data);
+      setHasMore(data.hasMore ?? false);
+      setNextCursor(data.nextCursor ?? null);
 
       // Mark channel as read when viewed
       post(`/api/channels/${page.id}/read`, {}).catch(() => {
@@ -111,6 +117,10 @@ function ChannelView({ page }: ChannelViewProps) {
   }, [socket, connectionStatus, page.id]);
 
   useEffect(() => {
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
@@ -187,12 +197,33 @@ function ChannelView({ page }: ChannelViewProps) {
     setInputValue('');
   };
 
+  // Load older messages when scrolling to top
+  const handleLoadOlder = useCallback(async () => {
+    if (!hasMore || loadingOlder || !nextCursor) return;
+    setLoadingOlder(true);
+    try {
+      const res = await fetchWithAuth(`/api/channels/${page.id}/messages?cursor=${encodeURIComponent(nextCursor)}`);
+      const data = await res.json();
+      const olderMessages: MessageWithReactions[] = data.messages ?? data;
+      skipAutoScrollRef.current = true;
+      setMessages((prev) => [...olderMessages, ...prev]);
+      setHasMore(data.hasMore ?? false);
+      setNextCursor(data.nextCursor ?? null);
+    } catch (error) {
+      console.error('Failed to load older messages:', error);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [page.id, hasMore, loadingOlder, nextCursor]);
+
   // Pull-to-refresh handler for mobile - re-fetch messages if real-time missed any
   const handleRefresh = useCallback(async () => {
     try {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
       const data = await res.json();
-      setMessages(data);
+      setMessages(data.messages ?? data);
+      setHasMore(data.hasMore ?? false);
+      setNextCursor(data.nextCursor ?? null);
     } catch (error) {
       console.error('Failed to refresh messages:', error);
     }
@@ -332,6 +363,17 @@ function ChannelView({ page }: ChannelViewProps) {
         <PullToRefresh direction="top" onRefresh={handleRefresh}>
           <ScrollArea className="h-full flex-grow" ref={scrollAreaRef}>
               <div className="p-4 space-y-4 max-w-4xl mx-auto">
+                  {hasMore && (
+                    <div className="flex justify-center py-2">
+                      <button
+                        onClick={handleLoadOlder}
+                        disabled={loadingOlder}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                      >
+                        {loadingOlder ? 'Loading...' : 'Load older messages'}
+                      </button>
+                    </div>
+                  )}
                   {messages.map((m) => {
                       const isAi = !!m.aiMeta;
                       const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;

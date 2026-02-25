@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { channelMessages, channelReadStatus, db, eq, and, asc, files, pages, driveMembers } from '@pagespace/db';
+import { channelMessages, channelReadStatus, db, eq, and, desc, or, isNull, gt, lt, inArray, files, pages, driveMembers, pagePermissions } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
@@ -33,8 +33,35 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }, { status: 403 });
   }
 
+  // Pagination params
+  const { searchParams } = new URL(req.url);
+  const cursor = searchParams.get('cursor');
+  const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 200);
+
+  // Build where clause with optional composite cursor (createdAt|id)
+  const conditions = [eq(channelMessages.pageId, pageId), eq(channelMessages.isActive, true)];
+  if (cursor) {
+    const separatorIdx = cursor.lastIndexOf('|');
+    if (separatorIdx === -1) {
+      return NextResponse.json({ error: 'Invalid cursor format' }, { status: 400 });
+    }
+    const cursorDate = new Date(cursor.slice(0, separatorIdx));
+    const cursorId = cursor.slice(separatorIdx + 1);
+    if (isNaN(cursorDate.getTime()) || !cursorId) {
+      return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 });
+    }
+    // Composite cursor: (createdAt < cursorDate) OR (createdAt = cursorDate AND id < cursorId)
+    conditions.push(
+      or(
+        lt(channelMessages.createdAt, cursorDate),
+        and(eq(channelMessages.createdAt, cursorDate), lt(channelMessages.id, cursorId))
+      )!
+    );
+  }
+
+  // Fetch limit+1 in DESC order to determine if more exist, then reverse for chronological display
   const messages = await db.query.channelMessages.findMany({
-    where: and(eq(channelMessages.pageId, pageId), eq(channelMessages.isActive, true)),
+    where: and(...conditions),
     with: {
       user: {
         columns: {
@@ -61,9 +88,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         },
       },
     },
-    orderBy: [asc(channelMessages.createdAt)],
+    orderBy: [desc(channelMessages.createdAt), desc(channelMessages.id)],
+    limit: limit + 1,
   });
-  return NextResponse.json(messages);
+
+  const hasMore = messages.length > limit;
+  const page = hasMore ? messages.slice(0, limit) : messages;
+  // Reverse to chronological order (oldest first) for display
+  page.reverse();
+
+  // Composite cursor: createdAt|id
+  const nextCursor = hasMore && page.length > 0
+    ? `${page[0].createdAt.toISOString()}|${page[0].id}`
+    : null;
+
+  return NextResponse.json({ messages: page, nextCursor, hasMore });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -225,21 +264,56 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         ? messageContent.substring(0, 100) + '...'
         : messageContent;
 
-      // Filter to members with view permission and broadcast
-      // Check permissions in parallel for efficiency
-      const memberPermissions = await Promise.all(
-        members
-          .filter(m => m.userId !== userId)
-          .map(async member => ({
-            userId: member.userId,
-            canView: await canUserViewPage(member.userId, pageId),
-          }))
-      );
+      // Batch permission check: mirrors getUserAccessLevel logic from @pagespace/lib.
+      // If that logic changes (e.g. new roles), update this batch version in sync.
+      // Drive owner and admins always have access; others need explicit page permissions.
+      const otherMemberIds = members
+        .filter(m => m.userId !== userId)
+        .map(m => m.userId);
 
-      const broadcastPromises = memberPermissions
-        .filter(m => m.canView)
-        .map(member =>
-          broadcastInboxEvent(member.userId, {
+      let viewableUserIds: Set<string>;
+      if (otherMemberIds.length === 0) {
+        viewableUserIds = new Set();
+      } else {
+        // Drive owner always has access
+        viewableUserIds = new Set<string>();
+        if (driveOwnerId && otherMemberIds.includes(driveOwnerId)) {
+          viewableUserIds.add(driveOwnerId);
+        }
+
+        // Drive admins always have access
+        const adminMembers = await db.select({ userId: driveMembers.userId })
+          .from(driveMembers)
+          .where(and(
+            eq(driveMembers.driveId, channel.driveId),
+            inArray(driveMembers.userId, otherMemberIds),
+            eq(driveMembers.role, 'ADMIN')
+          ));
+        for (const admin of adminMembers) {
+          viewableUserIds.add(admin.userId);
+        }
+
+        // Check explicit page permissions for remaining members
+        const remainingIds = otherMemberIds.filter(id => !viewableUserIds.has(id));
+        if (remainingIds.length > 0) {
+          const permittedMembers = await db.select({ userId: pagePermissions.userId })
+            .from(pagePermissions)
+            .where(and(
+              eq(pagePermissions.pageId, pageId),
+              inArray(pagePermissions.userId, remainingIds),
+              eq(pagePermissions.canView, true),
+              or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date()))
+            ));
+          for (const pm of permittedMembers) {
+            viewableUserIds.add(pm.userId);
+          }
+        }
+      }
+
+      const broadcastPromises = otherMemberIds
+        .filter(id => viewableUserIds.has(id))
+        .map(memberId =>
+          broadcastInboxEvent(memberId, {
             operation: 'channel_updated',
             type: 'channel',
             id: pageId,
