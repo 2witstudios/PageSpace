@@ -58,7 +58,12 @@ export async function PATCH(request: Request) {
       }),
     );
 
-    pageTreeCache.invalidateDriveTree(result.driveId).catch(() => {});
+    pageTreeCache.invalidateDriveTree(result.driveId).catch(err => {
+      loggers.api.warn('Page tree cache invalidation failed', {
+        error: err instanceof Error ? err.message : String(err),
+        driveId: result.driveId,
+      });
+    });
 
     return NextResponse.json({ message: 'Page reordered successfully' });
   } catch (error) {

@@ -104,7 +104,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
       // Invalidate agent awareness cache when an AI_CHAT page's title changes
       if (result.isAIChatPage) {
-        agentAwarenessCache.invalidateDriveAgents(driveId).catch(() => {});
+        agentAwarenessCache.invalidateDriveAgents(driveId).catch(err => {
+          loggers.api.warn('Agent awareness cache invalidation failed', {
+            error: err instanceof Error ? err.message : String(err),
+            driveId,
+          });
+        });
       }
     }
 
@@ -121,7 +126,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     // Invalidate page tree cache when structure changes (title or parent)
     if (safeBody.title || safeBody.parentId !== undefined) {
-      pageTreeCache.invalidateDriveTree(driveId).catch(() => {});
+      pageTreeCache.invalidateDriveTree(driveId).catch(err => {
+        loggers.api.warn('Page tree cache invalidation failed', {
+          error: err instanceof Error ? err.message : String(err),
+          driveId,
+        });
+      });
     }
 
     // Track page update
@@ -190,11 +200,21 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
     // Invalidate agent awareness cache when an AI_CHAT page is trashed
     if (result.isAIChatPage) {
-      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(() => {});
+      agentAwarenessCache.invalidateDriveAgents(result.driveId).catch(err => {
+        loggers.api.warn('Agent awareness cache invalidation failed', {
+          error: err instanceof Error ? err.message : String(err),
+          driveId: result.driveId,
+        });
+      });
     }
 
     // Invalidate page tree cache when structure changes
-    pageTreeCache.invalidateDriveTree(result.driveId).catch(() => {});
+    pageTreeCache.invalidateDriveTree(result.driveId).catch(err => {
+      loggers.api.warn('Page tree cache invalidation failed', {
+        error: err instanceof Error ? err.message : String(err),
+        driveId: result.driveId,
+      });
+    });
 
     // Track page deletion/trash
     trackPageOperation(userId, 'trash', pageId, {

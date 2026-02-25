@@ -198,7 +198,12 @@ export async function POST(request: Request) {
 
     // Invalidate caches and broadcast events
     for (const driveId of affectedDriveIds) {
-      pageTreeCache.invalidateDriveTree(driveId).catch(() => {});
+      pageTreeCache.invalidateDriveTree(driveId).catch(err => {
+        loggers.api.warn('Page tree cache invalidation failed', {
+          error: err instanceof Error ? err.message : String(err),
+          driveId,
+        });
+      });
       await broadcastPageEvent(
         createPageEventPayload(driveId, '', 'moved')
       );

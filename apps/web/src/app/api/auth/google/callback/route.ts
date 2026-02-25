@@ -289,7 +289,12 @@ export async function GET(req: Request) {
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
 
-      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
+      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(err => {
+        loggers.auth.warn('Rate limit reset failed', {
+          error: err instanceof Error ? err.message : String(err),
+          ip: clientIP,
+        });
+      });
 
       trackAuthEvent(user.id, 'login', {
         email,
@@ -346,7 +351,12 @@ export async function GET(req: Request) {
         ipAddress: clientIP !== 'unknown' ? clientIP : undefined,
       });
 
-      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(() => {});
+      await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`).catch(err => {
+        loggers.auth.warn('Rate limit reset failed', {
+          error: err instanceof Error ? err.message : String(err),
+          ip: clientIP,
+        });
+      });
 
       trackAuthEvent(user.id, 'login', {
         email,

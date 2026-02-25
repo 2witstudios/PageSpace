@@ -153,6 +153,7 @@ export async function broadcastPageEvent(payload: PageEventPayload): Promise<voi
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
+      signal: AbortSignal.timeout(5000),
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
@@ -209,6 +210,7 @@ export async function broadcastDriveEvent(
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
+          signal: AbortSignal.timeout(5000),
         });
       })
     );
@@ -268,6 +270,7 @@ export async function broadcastDriveMemberEvent(payload: DriveMemberEventPayload
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
+      signal: AbortSignal.timeout(5000),
     });
 
     if (verboseRealtimeLogging) {
@@ -375,6 +378,7 @@ export async function broadcastTaskEvent(payload: TaskEventPayload): Promise<voi
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
+      signal: AbortSignal.timeout(5000),
     });
   } catch (error) {
     // Log error but don't throw - broadcasting failures shouldn't break operations
@@ -414,6 +418,7 @@ export async function broadcastUsageEvent(payload: UsageEventPayload): Promise<v
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
+      signal: AbortSignal.timeout(5000),
     });
 
     if (verboseRealtimeLogging) {
@@ -464,6 +469,7 @@ export async function broadcastInboxEvent(userId: string, payload: InboxEventPay
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
+      signal: AbortSignal.timeout(5000),
     });
 
     if (verboseRealtimeLogging) {
@@ -544,6 +550,7 @@ export async function broadcastActivityEvent(payload: ActivityEventPayload): Pro
           method: 'POST',
           headers: createSignedBroadcastHeaders(requestBody),
           body: requestBody,
+          signal: AbortSignal.timeout(5000),
         });
 
         if (verboseRealtimeLogging) {
@@ -598,6 +605,7 @@ export async function kickUserFromRooms(payload: KickPayload): Promise<KickResul
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
+      signal: AbortSignal.timeout(30000),
     });
 
     const result = await response.json() as KickResult;

@@ -152,6 +152,7 @@ export async function POST(
         'Authorization': `Bearer ${serviceToken}`
       },
       body: processorFormData,
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!processorResponse.ok) {
