@@ -19,6 +19,8 @@ interface RequestMetrics {
   duration: number;
   timestamp: Date;
   userId?: string;
+  sessionId?: string;
+  requestId?: string;
   ip?: string;
   userAgent?: string;
   requestSize?: number;
@@ -93,6 +95,8 @@ class MetricsCollector {
           duration: metric.duration,
           timestamp: metric.timestamp,
           userId: metric.userId,
+          sessionId: metric.sessionId,
+          requestId: metric.requestId,
           ip: metric.ip,
           userAgent: metric.userAgent,
           requestSize: metric.requestSize,
@@ -332,6 +336,8 @@ export async function monitoringMiddleware(
       duration,
       timestamp: startedAt,
       userId,
+      sessionId: context.sessionId,
+      requestId,
       ip: context.ip,
       userAgent: context.userAgent,
       requestSize,
@@ -395,6 +401,8 @@ export async function monitoringMiddleware(
       duration,
       timestamp: startedAt,
       userId,
+      sessionId: context.sessionId,
+      requestId,
       ip: context.ip,
       userAgent: context.userAgent,
       error: errorMessage
