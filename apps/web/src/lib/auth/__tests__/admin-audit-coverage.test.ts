@@ -146,6 +146,42 @@ describe('Admin audit coverage (withAdminAuth)', () => {
       expect(details).toEqual(expect.objectContaining({ ipAddress: '203.0.113.50' }));
     });
 
+    it('logs write operation for POST requests', async () => {
+      mockAdminAuth();
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users/create', {
+        method: 'POST',
+      });
+
+      await wrappedHandler(request);
+
+      expect(mockLogDataAccess).toHaveBeenCalledWith(
+        'admin-123',
+        'write',
+        'admin-endpoint',
+        '/api/admin/users/create',
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+
+    it('logs delete operation for DELETE requests', async () => {
+      mockAdminAuth();
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users/123/gift-subscription', {
+        method: 'DELETE',
+      });
+
+      await wrappedHandler(request);
+
+      expect(mockLogDataAccess).toHaveBeenCalledWith(
+        'admin-123',
+        'delete',
+        'admin-endpoint',
+        '/api/admin/users/123/gift-subscription',
+        expect.objectContaining({ method: 'DELETE' })
+      );
+    });
+
     it('does not emit denied audit event on success', async () => {
       mockAdminAuth();
       const wrappedHandler = withAdminAuth(handler);
@@ -197,6 +233,17 @@ describe('Admin audit coverage (withAdminAuth)', () => {
       );
     });
 
+    it('does not include userId in denied event for unauthenticated requests', async () => {
+      mockAuthDenied();
+      const wrappedHandler = withAdminAuth(handler);
+      const request = new Request('http://localhost/api/admin/users');
+
+      await wrappedHandler(request);
+
+      const eventArg = mockLogEvent.mock.calls[0][0];
+      expect(eventArg.userId).toBeUndefined();
+    });
+
     it('does not emit success audit event on denial', async () => {
       mockAuthDenied();
       const wrappedHandler = withAdminAuth(handler);
@@ -209,7 +256,7 @@ describe('Admin audit coverage (withAdminAuth)', () => {
   });
 
   describe('denied admin access - insufficient role', () => {
-    it('emits authz.access.denied audit event for non-admin user', async () => {
+    it('emits authz.access.denied audit event with userId for non-admin user', async () => {
       mockAdminRoleDenied();
       const wrappedHandler = withAdminAuth(handler);
       const request = new Request('http://localhost/api/admin/users');
@@ -221,6 +268,7 @@ describe('Admin audit coverage (withAdminAuth)', () => {
       expect(mockLogEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           eventType: 'authz.access.denied',
+          userId: 'user-456',
           resourceType: 'admin-endpoint',
           resourceId: '/api/admin/users',
           riskScore: 0.5,

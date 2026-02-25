@@ -92,10 +92,11 @@ export function withAdminAuth<T extends AdminRouteContext>(
   return async (request: Request, context?: T): Promise<Response> => {
     const endpoint = new URL(request.url).pathname;
     const ipAddress = getRequestIp(request);
+    const authenticatedUser = await verifyAuth(request);
     const result = await verifyAdminAuth(request);
 
     if (isAdminAuthError(result)) {
-      emitAdminAuditDenied(request, endpoint, ipAddress);
+      emitAdminAuditDenied(request, endpoint, ipAddress, authenticatedUser?.id);
       return result;
     }
 
@@ -166,19 +167,27 @@ function getRequestIp(request: Request): string | undefined {
     ?? undefined;
 }
 
+function getAuditOperation(method: string): 'read' | 'write' | 'delete' {
+  const map: Record<string, 'read' | 'write' | 'delete'> = {
+    GET: 'read', POST: 'write', PUT: 'write', PATCH: 'write', DELETE: 'delete',
+  };
+  return map[method.toUpperCase()] ?? 'read';
+}
+
 function emitAdminAuditAccess(user: VerifiedUser, request: Request, endpoint: string, ipAddress?: string): void {
   securityAudit.logDataAccess(
     user.id,
-    'read',
+    getAuditOperation(request.method),
     'admin-endpoint',
     endpoint,
     { method: request.method, ipAddress }
   ).catch(() => {});
 }
 
-function emitAdminAuditDenied(request: Request, endpoint: string, ipAddress?: string): void {
+function emitAdminAuditDenied(request: Request, endpoint: string, ipAddress?: string, userId?: string): void {
   securityAudit.logEvent({
     eventType: 'authz.access.denied',
+    userId,
     resourceType: 'admin-endpoint',
     resourceId: endpoint,
     ipAddress,

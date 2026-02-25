@@ -98,6 +98,11 @@
       "import": "./dist/utils/api-utils.js",
       "require": "./dist/utils/api-utils.js"
     },
+    "./audit/security-audit": {
+      "types": "./dist/audit/security-audit.d.ts",
+      "import": "./dist/audit/security-audit.js",
+      "require": "./dist/audit/security-audit.js"
+    },
     "./broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
@@ -313,6 +318,9 @@
       ],
       "api-utils": [
         "./dist/utils/api-utils.d.ts"
+      ],
+      "audit/security-audit": [
+        "./dist/audit/security-audit.d.ts"
       ],
       "broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
