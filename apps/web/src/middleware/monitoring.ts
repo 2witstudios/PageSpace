@@ -219,13 +219,8 @@ function logMonitoringStatus(): void {
 function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPayload): void {
   const status = getMonitoringIngestStatus();
 
-  if (status === 'disabled') {
-    return;
-  }
-
-  const ingestKey = process.env.MONITORING_INGEST_KEY;
-  if (!ingestKey) {
-    if (!hasWarnedMissingIngestKey) {
+  if (status !== 'active') {
+    if (status === 'misconfigured' && !hasWarnedMissingIngestKey) {
       hasWarnedMissingIngestKey = true;
       loggers.system.warn(
         'MONITORING_INGEST_KEY is not configured; monitoring ingest is disabled. ' +
@@ -234,6 +229,8 @@ function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPa
     }
     return;
   }
+
+  const ingestKey = process.env.MONITORING_INGEST_KEY!;
 
   try {
     const ingestPath = process.env.MONITORING_INGEST_PATH || DEFAULT_INGEST_PATH;

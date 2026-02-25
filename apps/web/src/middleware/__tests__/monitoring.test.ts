@@ -2,8 +2,9 @@
  * Tests for monitoring middleware
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { db, apiMetrics } from '@pagespace/db';
+import { getMonitoringIngestStatus } from '../monitoring';
 
 // Mock the database
 vi.mock('@pagespace/db', () => ({
@@ -48,6 +49,11 @@ vi.mock('@pagespace/lib/server', () => ({
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn()
+    },
+    system: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
     }
   },
   extractRequestContext: vi.fn(() => ({
@@ -60,6 +66,51 @@ vi.mock('@pagespace/lib/server', () => ({
   })),
   logResponse: vi.fn()
 }));
+
+// Mock request-id (has transitive dep on @paralleldrive/cuid2)
+vi.mock('@/lib/request-id/request-id', () => ({
+  getOrCreateRequestId: vi.fn(() => 'test-request-id'),
+  REQUEST_ID_HEADER: 'X-Request-Id',
+}));
+
+describe('getMonitoringIngestStatus', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.MONITORING_INGEST_KEY;
+    delete process.env.MONITORING_INGEST_DISABLED;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('given MONITORING_INGEST_KEY is set, should return active', () => {
+    process.env.MONITORING_INGEST_KEY = 'test-key-abc123';
+    expect(getMonitoringIngestStatus()).toBe('active');
+  });
+
+  it('given MONITORING_INGEST_DISABLED is true, should return disabled', () => {
+    process.env.MONITORING_INGEST_DISABLED = 'true';
+    expect(getMonitoringIngestStatus()).toBe('disabled');
+  });
+
+  it('given MONITORING_INGEST_DISABLED is true with key also set, should return disabled', () => {
+    process.env.MONITORING_INGEST_KEY = 'test-key-abc123';
+    process.env.MONITORING_INGEST_DISABLED = 'true';
+    expect(getMonitoringIngestStatus()).toBe('disabled');
+  });
+
+  it('given no key and no opt-out, should return misconfigured', () => {
+    expect(getMonitoringIngestStatus()).toBe('misconfigured');
+  });
+
+  it('given MONITORING_INGEST_DISABLED is false, should not count as disabled', () => {
+    process.env.MONITORING_INGEST_DISABLED = 'false';
+    expect(getMonitoringIngestStatus()).toBe('misconfigured');
+  });
+});
 
 describe('Monitoring Middleware - Database Persistence', () => {
   beforeEach(() => {

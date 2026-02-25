@@ -1,5 +1,5 @@
 // Environment validation
-export { validateEnv, getEnvErrors, getEnvWarnings, isEnvValid, getValidatedEnv } from './config/env-validation';
+export { validateEnv, getEnvErrors, isEnvValid, getValidatedEnv } from './config/env-validation';
 
 // All exports including Node.js-only utilities
 export * from './auth/device-auth-utils';

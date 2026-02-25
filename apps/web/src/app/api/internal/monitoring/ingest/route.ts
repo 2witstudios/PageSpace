@@ -40,7 +40,7 @@ function unauthorized(message: string, status: number = 401) {
 export async function POST(request: Request) {
   const isDisabled = process.env.MONITORING_INGEST_DISABLED === 'true';
   if (isDisabled) {
-    return NextResponse.json({ error: 'Monitoring ingest explicitly disabled' }, { status: 503 });
+    return NextResponse.json({ error: 'Monitoring ingest explicitly disabled' }, { status: 404 });
   }
 
   const ingestKey = process.env.MONITORING_INGEST_KEY;
