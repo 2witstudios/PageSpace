@@ -399,10 +399,16 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.SERVICE_TOKEN.windowMs).toBe(60 * 1000);
     });
 
-    it('CONTACT_FORM has 5 attempts per hour', () => {
-      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.maxAttempts).toBe(5);
-      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.windowMs).toBe(60 * 60 * 1000);
+    it('CONTACT_FORM has 10 attempts per minute', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.maxAttempts).toBe(10);
+      expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.windowMs).toBe(60 * 1000);
       expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.progressiveDelay).toBe(false);
+    });
+
+    it('TRACKING has 100 attempts per minute', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.TRACKING.maxAttempts).toBe(100);
+      expect(DISTRIBUTED_RATE_LIMITS.TRACKING.windowMs).toBe(60 * 1000);
+      expect(DISTRIBUTED_RATE_LIMITS.TRACKING.progressiveDelay).toBe(false);
     });
 
     it('EMAIL_RESEND has 3 attempts per hour', () => {
