@@ -48,9 +48,18 @@ export const serverEnvSchema = z
     MONITORING_INGEST_KEY: z.string().optional(),
     MONITORING_INGEST_PATH: z.string().optional(),
 
+    // Optional OAuth state
+    OAUTH_STATE_SECRET: z.string().min(1).optional(),
+    APPLE_SERVICE_ID: z.string().min(1).optional(),
+
     // Optional Stripe
-    STRIPE_SECRET_KEY: z.string().optional(),
-    STRIPE_WEBHOOK_SECRET: z.string().optional(),
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+    // Optional real-time / cron / cookie
+    REALTIME_BROADCAST_SECRET: z.string().min(1).optional(),
+    CRON_SECRET: z.string().min(1).optional(),
+    COOKIE_DOMAIN: z.string().min(1).optional(),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY

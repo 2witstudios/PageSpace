@@ -244,7 +244,7 @@ describe('agent-communication-tools', () => {
         toolCallId: '1', messages: [],
         experimental_context: {
           userId: 'user-123',
-          agentCallDepth: 3, // MAX_AGENT_DEPTH
+          agentCallDepth: 2, // MAX_AGENT_DEPTH
         } as ToolExecutionContext & { agentCallDepth: number },
       };
 

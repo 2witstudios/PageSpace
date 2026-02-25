@@ -25,7 +25,7 @@ import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/server';
 
 // Constants
-const MAX_AGENT_DEPTH = 3;
+const MAX_AGENT_DEPTH = 2;
 
 /**
  * Get configured AI model for agent using the centralized provider factory
@@ -550,7 +550,7 @@ export const agentCommunicationTools = {
               messages: convertToModelMessages(sanitizedMessages),
               tools: agentTools as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
-              stopWhen: stepCountIs(100), // Match main conversation tool depth
+              stopWhen: stepCountIs(20), // Capped lower than top-level to prevent step explosion
               maxRetries: 3,
               onStepFinish: ({ toolCalls }) => {
                 if (toolCalls?.length > 0) {

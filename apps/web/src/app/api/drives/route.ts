@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/server';
@@ -6,9 +7,17 @@ import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPCreateScope } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { safeParseBody } from '@/lib/validation/parse-body';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+const createDriveSchema = z.object({
+  name: z.preprocess(
+    (v) => (typeof v === 'string' ? v : ''),
+    z.string().min(1, 'Missing name')
+  ),
+});
 
 export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
@@ -57,13 +66,14 @@ export async function POST(request: Request) {
 
   const userId = auth.userId;
 
+  const parsed = await safeParseBody(request, createDriveSchema);
+  if (!parsed.success) {
+    return parsed.response;
+  }
+
+  const { name } = parsed.data;
+
   try {
-    const { name } = await request.json();
-
-    if (!name) {
-      return NextResponse.json({ error: 'Missing name' }, { status: 400 });
-    }
-
     if (name.toLowerCase() === 'personal') {
       return NextResponse.json({ error: 'Cannot create a drive named "Personal".' }, { status: 400 });
     }
