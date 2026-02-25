@@ -51,9 +51,9 @@ export async function POST(request: Request) {
       );
     }
 
-    // Read body as text first to verify actual size
+    // Read body as text first to verify actual byte size
     const rawBody = await request.text();
-    if (rawBody.length > MAX_PAYLOAD_BYTES) {
+    if (Buffer.byteLength(rawBody, 'utf-8') > MAX_PAYLOAD_BYTES) {
       return Response.json(
         { error: 'Payload too large' },
         { status: 413 }
@@ -93,9 +93,11 @@ export async function POST(request: Request) {
       message: message.trim(),
     });
 
+    const trimmedEmail = email.trim();
+    const maskedEmail = trimmedEmail.replace(/(.{2}).*(@.*)/, '$1***$2');
     loggers.api.info('Contact submission received', {
       ip,
-      email: email.trim(),
+      email: maskedEmail,
     });
 
     return Response.json(
