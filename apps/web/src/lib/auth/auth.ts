@@ -3,6 +3,7 @@ import { authenticateSessionRequest, isAuthError } from './index';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';
 import { logSecurityEvent } from '@pagespace/lib/server';
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
 
 export interface VerifiedUser {
   id: string;
@@ -89,8 +90,16 @@ export function withAdminAuth<T extends AdminRouteContext>(
   handler: (user: VerifiedUser, request: Request, context?: T) => Promise<Response>
 ) {
   return async (request: Request, context?: T): Promise<Response> => {
+    const endpoint = new URL(request.url).pathname;
+    const ipAddress = getRequestIp(request);
     const result = await verifyAdminAuth(request);
-    if (isAdminAuthError(result)) return result;
+
+    if (isAdminAuthError(result)) {
+      emitAdminAuditDenied(request, endpoint, ipAddress);
+      return result;
+    }
+
+    emitAdminAuditAccess(result, request, endpoint, ipAddress);
     return handler(result, request, context);
   };
 }
@@ -149,4 +158,31 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
   }
 
   return user;
+}
+
+function getRequestIp(request: Request): string | undefined {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    ?? request.headers.get('x-real-ip')
+    ?? undefined;
+}
+
+function emitAdminAuditAccess(user: VerifiedUser, request: Request, endpoint: string, ipAddress?: string): void {
+  securityAudit.logDataAccess(
+    user.id,
+    'read',
+    'admin-endpoint',
+    endpoint,
+    { method: request.method, ipAddress }
+  ).catch(() => {});
+}
+
+function emitAdminAuditDenied(request: Request, endpoint: string, ipAddress?: string): void {
+  securityAudit.logEvent({
+    eventType: 'authz.access.denied',
+    resourceType: 'admin-endpoint',
+    resourceId: endpoint,
+    ipAddress,
+    details: { method: request.method, reason: 'admin_auth_denied' },
+    riskScore: 0.5,
+  }).catch(() => {});
 }
