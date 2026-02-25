@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateSessionRequest, isAuthError } from './index';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';
-import { logSecurityEvent } from '@pagespace/lib/server';
+import { logSecurityEvent, securityAudit } from '@pagespace/lib/server';
 
 export interface VerifiedUser {
   id: string;
@@ -121,6 +121,7 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
         authType: 'session',
         action: 'deny_access',
       });
+      securityAudit.logAccessDenied(user.id, 'admin_route', method, 'csrf_validation_failed').catch(() => {});
       // Return the CSRF error response directly to preserve error codes
       return csrfError;
     }
@@ -142,6 +143,12 @@ export async function verifyAdminAuth(request: Request): Promise<VerifiedUser | 
       authType: 'session',
       action: 'deny_access',
     });
+    securityAudit.logAccessDenied(
+      user.id,
+      'admin_route',
+      'admin_access',
+      validationResult.reason ?? 'admin_role_version_validation_failed'
+    ).catch(() => {});
     return NextResponse.json(
       { error: 'Forbidden: Admin access required' },
       { status: 403 }

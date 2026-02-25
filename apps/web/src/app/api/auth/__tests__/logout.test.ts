@@ -53,6 +53,10 @@ vi.mock('@pagespace/lib/server', () => ({
     },
   },
   logAuthEvent: vi.fn(),
+  securityAudit: {
+    logLogout: vi.fn().mockResolvedValue(undefined),
+    logTokenRevoked: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock('@pagespace/lib/activity-tracker', () => ({

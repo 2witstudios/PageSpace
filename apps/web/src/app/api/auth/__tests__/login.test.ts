@@ -73,6 +73,12 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   logAuthEvent: vi.fn(),
   logSecurityEvent: vi.fn(),
+  securityAudit: {
+    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
+    logAuthFailure: vi.fn().mockResolvedValue(undefined),
+    logTokenCreated: vi.fn().mockResolvedValue(undefined),
+    logAccessDenied: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 // Mock distributed rate limiting (P1-T5)

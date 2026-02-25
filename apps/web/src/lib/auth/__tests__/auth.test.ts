@@ -22,6 +22,9 @@ vi.mock('../csrf-validation', () => ({
 // Mock security event logging
 vi.mock('@pagespace/lib/server', () => ({
   logSecurityEvent: vi.fn(),
+  securityAudit: {
+    logAccessDenied: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 import { authenticateSessionRequest } from '../index';

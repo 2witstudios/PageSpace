@@ -1,5 +1,5 @@
 import { sessionService } from '@pagespace/lib/auth';
-import { loggers, logAuthEvent } from '@pagespace/lib/server';
+import { loggers, logAuthEvent, securityAudit } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
@@ -38,6 +38,8 @@ export async function POST(req: Request) {
       ip: clientIP,
       userAgent: req.headers.get('user-agent')
     });
+    securityAudit.logLogout(userId, sessionClaims?.sessionId ?? 'unknown', clientIP).catch(() => {});
+    securityAudit.logTokenRevoked(userId, 'session', 'user_logout').catch(() => {});
   }
 
   const headers = new Headers();
