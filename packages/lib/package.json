@@ -223,6 +223,11 @@
       "import": "./dist/auth/secure-compare.js",
       "require": "./dist/auth/secure-compare.js"
     },
+    "./audit": {
+      "types": "./dist/audit/index.d.ts",
+      "import": "./dist/audit/index.js",
+      "require": "./dist/audit/index.js"
+    },
     "./security": {
       "types": "./dist/security/index.d.ts",
       "import": "./dist/security/index.js",
@@ -388,6 +393,9 @@
       ],
       "secure-compare": [
         "./dist/auth/secure-compare.d.ts"
+      ],
+      "audit": [
+        "./dist/audit/index.d.ts"
       ],
       "security": [
         "./dist/security/index.d.ts"
