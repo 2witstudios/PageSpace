@@ -14,6 +14,7 @@ import { generateCSRFToken } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
+import { securityAudit, maskEmail } from '@pagespace/lib/audit';
 import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 
@@ -49,6 +50,12 @@ export async function POST(req: Request) {
     ]);
 
     if (!distributedIpLimit.allowed) {
+      securityAudit.logEvent({
+        eventType: 'security.rate.limited',
+        ipAddress: clientIP,
+        details: { limiter: 'ip', endpoint: '/api/auth/mobile/login', email: maskEmail(email) },
+        riskScore: 0.4,
+      }).catch(() => {});
       return Response.json(
         {
           error: 'Too many login attempts from this IP address. Please try again later.',
@@ -66,6 +73,12 @@ export async function POST(req: Request) {
     }
 
     if (!distributedEmailLimit.allowed) {
+      securityAudit.logEvent({
+        eventType: 'security.rate.limited',
+        ipAddress: clientIP,
+        details: { limiter: 'email', endpoint: '/api/auth/mobile/login', email: maskEmail(email) },
+        riskScore: 0.4,
+      }).catch(() => {});
       return Response.json(
         {
           error: 'Too many login attempts for this email. Please try again later.',

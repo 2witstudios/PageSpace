@@ -55,6 +55,18 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/audit', () => ({
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+  },
+  maskEmail: vi.fn((email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    const visibleChars = Math.min(2, local.length);
+    return `${local.slice(0, visibleChars)}***@${domain}`;
+  }),
+}));
+
 // Mock distributed rate limiting (P1-T5)
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn().mockResolvedValue({
@@ -81,6 +93,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { securityAudit } from '@pagespace/lib/audit';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
 describe('/api/auth/mobile/login', () => {
@@ -498,6 +511,86 @@ describe('/api/auth/mobile/login', () => {
       // Assert
       expect(response.status).toBe(429);
       expect(body.error).toContain('Too many login attempts for this email');
+    });
+
+    it('emits security audit event when IP rate limit triggers', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': '192.168.1.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      await POST(request);
+
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          ipAddress: '192.168.1.1',
+          details: expect.objectContaining({
+            limiter: 'ip',
+            endpoint: '/api/auth/mobile/login',
+          }),
+          riskScore: 0.4,
+        })
+      );
+    });
+
+    it('emits security audit event when email rate limit triggers', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-forwarded-for': '10.0.0.1',
+        },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      await POST(request);
+
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          ipAddress: '10.0.0.1',
+          details: expect.objectContaining({
+            limiter: 'email',
+            endpoint: '/api/auth/mobile/login',
+          }),
+          riskScore: 0.4,
+        })
+      );
+    });
+
+    it('masks email in security audit event details', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
+
+      const request = new Request('http://localhost/api/auth/mobile/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validLoginPayload),
+      });
+
+      await POST(request);
+
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            email: 'te***@example.com',
+          }),
+        })
+      );
     });
   });
 
