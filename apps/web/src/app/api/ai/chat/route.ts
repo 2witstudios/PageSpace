@@ -843,6 +843,26 @@ export async function POST(request: Request) {
     const { includedMessages } = truncationResult;
     wasTruncated = truncationResult.wasTruncated;
 
+    // Guard: if truncation left zero messages, the budget is too small for even one message
+    if (includedMessages.length === 0) {
+      loggers.ai.warn('AI Chat API: Context budget exhausted — no messages fit after truncation', {
+        model: currentModel,
+        provider: currentProvider,
+        contextWindow,
+        inputBudget,
+        systemPromptTokens,
+        toolTokens,
+      });
+      return NextResponse.json(
+        {
+          error: 'context_length_exceeded',
+          message: 'The system prompt and tool definitions alone exceed this model\'s context window. Please switch to a model with a larger context window.',
+          details: 'context_length_exceeded',
+        },
+        { status: 413 }
+      );
+    }
+
     if (wasTruncated) {
       loggers.ai.warn('AI Chat API: Conversation truncated to fit context window', {
         originalMessageCount: sanitizedMessages.length,
@@ -1247,8 +1267,8 @@ export async function POST(request: Request) {
         {
           error: 'context_length_exceeded',
           message: wasTruncated
-            ? 'The conversation still exceeds this model\'s context window even after trimming. Please start a new conversation.'
-            : 'The conversation is too long for this model\'s context window. Older messages have been trimmed — try sending your message again.',
+            ? 'The conversation is too long for this model\'s context window. Older messages were trimmed but the remaining content still exceeds the limit. Please start a new conversation or switch to a model with a larger context window.'
+            : 'The conversation exceeds this model\'s context window. Please start a new conversation or switch to a model with a larger context window.',
           details: 'context_length_exceeded',
         },
         { status: 413 }

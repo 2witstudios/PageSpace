@@ -7,13 +7,15 @@ export * from './activity-tracker';
 export * from './activity-logger';
 export * from './change-group';
 
+// Export model context window map (single source of truth)
+export * from './model-context-windows';
+
 // Export ai-context-calculator (has the primary estimateTokens)
 export * from './ai-context-calculator';
 
 // Export ai-monitoring but exclude estimateTokens (duplicate)
 export {
   AI_PRICING,
-  MODEL_CONTEXT_WINDOWS,
   getContextWindow,
   calculateCost,
   trackAIUsage,

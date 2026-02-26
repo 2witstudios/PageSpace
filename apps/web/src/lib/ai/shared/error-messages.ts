@@ -55,7 +55,9 @@ export function isContextLengthError(errorMessage: string | undefined): boolean 
     msg.includes('token limit') ||
     msg.includes('tokens exceeds') ||
     msg.includes('too many tokens') ||
-    errorMessage.includes('413') ||
+    // Only match 413 when paired with context/token indicators to avoid
+    // misclassifying body-size 413s from the same route
+    (msg.includes('413') && (msg.includes('context') || msg.includes('token'))) ||
     // OpenRouter / provider-specific phrasing
     (msg.includes('maximum') && msg.includes('tokens'))
   );

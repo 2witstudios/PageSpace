@@ -5,6 +5,8 @@
  * Tracks which messages are included in each API call to determine real context window usage.
  */
 
+import { MODEL_CONTEXT_WINDOWS } from './model-context-windows';
+
 /**
  * Minimal UIMessage type for token estimation
  * (Compatible with Vercel AI SDK UIMessage)
@@ -17,8 +19,13 @@ export interface UIMessage {
     text?: string;
     toolCallId?: string;
     toolName?: string;
+    // AI SDK canonical format
     args?: unknown;
     result?: unknown;
+    // PageSpace DB format (tool-{toolName} parts)
+    input?: unknown;
+    output?: unknown;
+    state?: string;
   }>;
 }
 
@@ -55,9 +62,14 @@ export interface ContextCalculation {
 export function estimateTokens(text: string): number {
   if (!text) return 0;
 
-  // Detect non-ASCII heavy content (CJK, emoji, etc.)
-  // CJK Unified Ideographs, Hiragana, Katakana, Hangul, etc.
-  const nonAsciiCount = (text.match(/[^\x00-\x7F]/g) || []).length;
+  // Count non-ASCII characters with a for-loop instead of regex to avoid
+  // allocating a large match array on big strings.
+  let nonAsciiCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) {
+      nonAsciiCount++;
+    }
+  }
   const nonAsciiRatio = nonAsciiCount / text.length;
 
   // Use 2 chars/token when >20% non-ASCII (CJK-heavy), else 4 chars/token
@@ -107,7 +119,7 @@ export function estimateMessageTokens(message: UIMessage): number {
       if (part.type === 'text' && part.text) {
         tokens += estimateTokens(part.text);
       } else if (part.type === 'tool-call' && part.toolCallId) {
-        // Tool call: function name + args
+        // AI SDK canonical tool-call format
         tokens += 10; // Tool call ID
         if (part.toolName) {
           tokens += estimateTokens(part.toolName);
@@ -116,13 +128,28 @@ export function estimateMessageTokens(message: UIMessage): number {
           tokens += estimateTokens(JSON.stringify(part.args));
         }
       } else if (part.type === 'tool-result' && part.toolCallId) {
-        // Tool result: result data
+        // AI SDK canonical tool-result format
         tokens += 10; // Tool call ID
         if (part.result) {
           const resultStr = typeof part.result === 'string'
             ? part.result
             : JSON.stringify(part.result);
           tokens += estimateTokens(resultStr);
+        }
+      } else if (part.type.startsWith('tool-')) {
+        // PageSpace DB format: tool-{toolName} parts with input/output/state fields
+        tokens += 10; // Tool call ID overhead
+        if (part.toolName) {
+          tokens += estimateTokens(part.toolName);
+        }
+        if (part.input) {
+          tokens += estimateTokens(JSON.stringify(part.input));
+        }
+        if (part.output) {
+          const outputStr = typeof part.output === 'string'
+            ? part.output
+            : JSON.stringify(part.output);
+          tokens += estimateTokens(outputStr);
         }
       }
     }
@@ -139,6 +166,16 @@ export function estimateMessageTokens(message: UIMessage): number {
  * Returns the maximum number of tokens the model can handle
  */
 export function getContextWindowSize(model: string, provider?: string): number {
+  // First, check canonical MODEL_CONTEXT_WINDOWS map for exact match
+  const fullKey = provider ? `${provider}/${model}` : '';
+  if (fullKey && fullKey in MODEL_CONTEXT_WINDOWS) {
+    return MODEL_CONTEXT_WINDOWS[fullKey as keyof typeof MODEL_CONTEXT_WINDOWS];
+  }
+  if (model in MODEL_CONTEXT_WINDOWS) {
+    return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS];
+  }
+
+  // Fallback to heuristic pattern matching for unknown models
   const providerLower = provider?.toLowerCase() || '';
   const modelLower = model.toLowerCase();
 
