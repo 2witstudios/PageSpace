@@ -59,6 +59,18 @@ vi.mock('@pagespace/lib/server', () => ({
   logSecurityEvent: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/audit', () => ({
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+  },
+  maskEmail: vi.fn((email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    const visibleChars = Math.min(2, local.length);
+    return `${local.slice(0, visibleChars)}***@${domain}`;
+  }),
+}));
+
 vi.mock('@pagespace/lib/security', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),

@@ -12,6 +12,11 @@ export {
   type QueryEventsOptions,
 } from './security-audit';
 
+export {
+  auditAuthEvent,
+  auditSecurityEvent,
+} from './security-audit-adapter';
+
 /** Mask email to prevent PII in audit logs (e.g., john@example.com -> jo***@example.com) */
 export function maskEmail(email: string): string {
   const [local, domain] = email.split('@');

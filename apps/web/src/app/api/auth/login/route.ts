@@ -162,6 +162,7 @@ export async function POST(req: Request) {
       const reason = !user ? 'invalid_email' : 'invalid_password';
       logAuthEvent('failed', user?.id, email, clientIP, reason === 'invalid_email' ? 'Invalid email' : 'Invalid password');
       trackAuthEvent(user?.id, 'failed_login', { reason, email, ip: clientIP });
+      securityAudit.logAuthFailure(email, clientIP, reason).catch(() => {});
 
       // Record failed attempt for lockout tracking (only for existing users to avoid info leakage)
       if (user) {
@@ -217,6 +218,13 @@ export async function POST(req: Request) {
       ip: clientIP,
       userAgent: req.headers.get('user-agent')
     });
+    securityAudit.logAuthSuccess(
+      user.id,
+      sessionClaims.sessionId,
+      clientIP,
+      req.headers.get('user-agent') || 'unknown'
+    ).catch(() => {});
+    securityAudit.logTokenCreated(user.id, 'session', clientIP).catch(() => {});
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
