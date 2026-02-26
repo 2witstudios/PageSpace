@@ -15,7 +15,7 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
 
   // Context length errors
   if (isContextLengthError(errorMessage)) {
-    return 'The conversation is too long for this model\'s context window. Older messages have been trimmed to fit — try sending your message again.';
+    return 'The conversation is too long for this model\'s context window. Please start a new conversation or switch to a model with a larger context window.';
   }
 
   // Rate limit errors
@@ -55,7 +55,8 @@ export function isContextLengthError(errorMessage: string | undefined): boolean 
     msg.includes('token limit') ||
     msg.includes('tokens exceeds') ||
     msg.includes('too many tokens') ||
-    errorMessage.includes('413') ||
+    // Match HTTP 413 only in status-code patterns (e.g. "status 413", "HTTP 413", "code 413")
+    /\b(?:status|http|code|error)\s*413\b/i.test(errorMessage) ||
     // OpenRouter / provider-specific phrasing
     (msg.includes('maximum') && msg.includes('tokens'))
   );

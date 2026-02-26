@@ -5,9 +5,14 @@
  * Tracks which messages are included in each API call to determine real context window usage.
  */
 
+import { MODEL_CONTEXT_WINDOWS } from './model-context-windows';
+
 /**
  * Minimal UIMessage type for token estimation
  * (Compatible with Vercel AI SDK UIMessage)
+ *
+ * Tool parts in the Vercel AI SDK use type `tool-{toolName}` (e.g. "tool-search")
+ * with fields: toolCallId, toolName, input, output, state.
  */
 export interface UIMessage {
   id?: string;
@@ -15,8 +20,13 @@ export interface UIMessage {
   parts?: Array<{
     type: string;
     text?: string;
+    // Tool invocation fields (Vercel AI SDK DynamicToolUIPart)
     toolCallId?: string;
     toolName?: string;
+    input?: unknown;
+    output?: unknown;
+    state?: string;
+    // Legacy fields for backwards compatibility
     args?: unknown;
     result?: unknown;
   }>;
@@ -55,9 +65,11 @@ export interface ContextCalculation {
 export function estimateTokens(text: string): number {
   if (!text) return 0;
 
-  // Detect non-ASCII heavy content (CJK, emoji, etc.)
-  // CJK Unified Ideographs, Hiragana, Katakana, Hangul, etc.
-  const nonAsciiCount = (text.match(/[^\x00-\x7F]/g) || []).length;
+  // Count non-ASCII characters efficiently via charCode loop (avoids regex array allocation)
+  let nonAsciiCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) nonAsciiCount++;
+  }
   const nonAsciiRatio = nonAsciiCount / text.length;
 
   // Use 2 chars/token when >20% non-ASCII (CJK-heavy), else 4 chars/token
@@ -106,22 +118,24 @@ export function estimateMessageTokens(message: UIMessage): number {
     for (const part of message.parts) {
       if (part.type === 'text' && part.text) {
         tokens += estimateTokens(part.text);
-      } else if (part.type === 'tool-call' && part.toolCallId) {
-        // Tool call: function name + args
-        tokens += 10; // Tool call ID
+      } else if (part.type.startsWith('tool-')) {
+        // Vercel AI SDK tool invocation parts: type is "tool-{toolName}"
+        // Fields: toolCallId, toolName, input, output, state
+        tokens += 10; // Tool call ID overhead
         if (part.toolName) {
           tokens += estimateTokens(part.toolName);
         }
-        if (part.args) {
-          tokens += estimateTokens(JSON.stringify(part.args));
+        // Input (tool arguments)
+        const inputData = part.input ?? part.args;
+        if (inputData) {
+          tokens += estimateTokens(JSON.stringify(inputData));
         }
-      } else if (part.type === 'tool-result' && part.toolCallId) {
-        // Tool result: result data
-        tokens += 10; // Tool call ID
-        if (part.result) {
-          const resultStr = typeof part.result === 'string'
-            ? part.result
-            : JSON.stringify(part.result);
+        // Output (tool result) — only present when state is 'output-available'
+        const outputData = part.output ?? part.result;
+        if (outputData) {
+          const resultStr = typeof outputData === 'string'
+            ? outputData
+            : JSON.stringify(outputData);
           tokens += estimateTokens(resultStr);
         }
       }
@@ -135,127 +149,129 @@ export function estimateMessageTokens(message: UIMessage): number {
 }
 
 /**
- * Get context window size for a model
- * Returns the maximum number of tokens the model can handle
+ * Get context window size for a model.
+ *
+ * Uses MODEL_CONTEXT_WINDOWS from ai-monitoring.ts as the canonical source of truth.
+ * Falls back to heuristic matching for models not in the map.
  */
 export function getContextWindowSize(model: string, provider?: string): number {
-  const providerLower = provider?.toLowerCase() || '';
+  // 1. Try exact match against the canonical map (imported at bottom of file to avoid circular deps)
+  const canonical = getCanonicalContextWindow(model, provider);
+  if (canonical !== undefined) return canonical;
+
+  // 2. Heuristic fallbacks for models not in the canonical map
   const modelLower = model.toLowerCase();
+  const providerLower = provider?.toLowerCase() || '';
 
   // OpenAI models
   if (providerLower === 'openai' || modelLower.includes('gpt')) {
-    // GPT-5.2 models (400k/256k context)
     if (modelLower.includes('gpt-5.2')) {
-      if (modelLower.includes('mini') || modelLower.includes('nano')) {
-        return 256_000;
-      }
-      return 400_000;
+      return (modelLower.includes('mini') || modelLower.includes('nano')) ? 256_000 : 400_000;
     }
-    // GPT-5.1 models (400k context)
-    if (modelLower.includes('gpt-5.1')) {
-      return 400_000;
-    }
-    // GPT-5.0 models (272k/128k context)
+    if (modelLower.includes('gpt-5.1')) return 400_000;
     if (modelLower.includes('gpt-5')) {
-      if (modelLower.includes('mini') || modelLower.includes('nano')) {
-        return 128_000;
-      }
-      return 272_000;
+      return (modelLower.includes('mini') || modelLower.includes('nano')) ? 128_000 : 272_000;
     }
-    if (modelLower.includes('gpt-4o')) return 128_000;
-    if (modelLower.includes('gpt-4-turbo')) return 128_000;
+    if (modelLower.includes('gpt-4o') || modelLower.includes('gpt-4-turbo')) return 128_000;
     if (modelLower.includes('gpt-4')) return 8_192;
     if (modelLower.includes('gpt-3.5')) return 16_385;
-    return 200_000; // Default for newer OpenAI models
+    return 200_000;
   }
 
   // Anthropic models
   if (providerLower === 'anthropic' || modelLower.includes('claude')) {
-    if (modelLower.includes('claude-sonnet-4') || modelLower.includes('claude-4')) {
-      return 200_000;
-    }
-    if (modelLower.includes('claude-3-5') || modelLower.includes('claude-3')) {
-      return 200_000;
-    }
-    return 200_000; // Default for Anthropic
+    return 200_000;
   }
 
   // Google models
   if (providerLower === 'google' || modelLower.includes('gemini')) {
-    if (modelLower.includes('gemini-2.5-pro') || modelLower.includes('gemini-2-5-pro')) {
-      return 2_000_000;
-    }
-    if (modelLower.includes('gemini-2.5-flash') || modelLower.includes('gemini-2-5-flash')) {
-      return 1_000_000;
-    }
-    if (modelLower.includes('gemini-2.0-pro') || modelLower.includes('gemini-2-pro')) {
-      return 2_000_000;
-    }
-    if (modelLower.includes('gemini-2.0-flash') || modelLower.includes('gemini-2-flash')) {
-      return 1_000_000;
-    }
+    if (modelLower.includes('gemini-2.5-pro') || modelLower.includes('gemini-2-5-pro')) return 2_000_000;
+    if (modelLower.includes('gemini-2.5-flash') || modelLower.includes('gemini-2-5-flash')) return 1_000_000;
+    if (modelLower.includes('gemini-2.0-pro') || modelLower.includes('gemini-2-pro')) return 2_000_000;
+    if (modelLower.includes('gemini-2.0-flash') || modelLower.includes('gemini-2-flash')) return 1_000_000;
     if (modelLower.includes('gemini-1.5-pro')) return 2_000_000;
     if (modelLower.includes('gemini-1.5-flash')) return 1_000_000;
     if (modelLower.includes('gemini-pro')) return 32_000;
-    return 1_000_000; // Default for Google
+    return 1_000_000;
   }
 
   // xAI models
   if (providerLower === 'xai' || modelLower.includes('grok')) {
     if (modelLower.includes('grok-4-fast')) return 2_000_000;
-    if (modelLower.includes('grok')) return 128_000;
     return 128_000;
   }
 
   // PageSpace (GLM models)
   if (providerLower === 'pagespace' || modelLower.includes('glm')) {
-    if (modelLower.includes('glm-5')) return 200_000;
-    if (modelLower.includes('glm-4.7')) return 200_000;
-    if (modelLower.includes('glm-4.6')) return 200_000;
     if (modelLower.includes('glm-4.5')) return 128_000;
-    return 200_000; // Updated default for GLM
+    return 200_000;
   }
 
   // MiniMax models
   if (providerLower === 'minimax' || modelLower.includes('minimax')) {
-    if (modelLower.includes('m2.5')) return 1_000_000;
-    return 128_000; // Default for older MiniMax models
-  }
-
-  // OpenRouter - use model-specific limits where known, else 200k conservative default
-  if (providerLower === 'openrouter') {
-    // Claude models via OpenRouter
-    if (modelLower.includes('claude')) return 200_000;
-    // Gemini models via OpenRouter
-    if (modelLower.includes('gemini-2.5')) return 1_000_000;
-    if (modelLower.includes('gemini-2.0') || modelLower.includes('gemini-1.5')) return 1_000_000;
-    // GPT models via OpenRouter
-    if (modelLower.includes('gpt-5.2')) {
-      return modelLower.includes('mini') || modelLower.includes('nano') ? 256_000 : 400_000;
-    }
-    if (modelLower.includes('gpt-5.1')) return 400_000;
-    if (modelLower.includes('gpt-5')) {
-      return modelLower.includes('mini') || modelLower.includes('nano') ? 128_000 : 272_000;
-    }
-    if (modelLower.includes('gpt-4o') || modelLower.includes('gpt-4-turbo')) return 128_000;
-    // DeepSeek models - commonly 64k or 128k
-    if (modelLower.includes('deepseek-r1') || modelLower.includes('deepseek-v3')) return 128_000;
-    if (modelLower.includes('deepseek')) return 64_000;
-    // Qwen models
-    if (modelLower.includes('qwen-2.5') || modelLower.includes('qwq')) return 128_000;
-    if (modelLower.includes('qwen')) return 32_000;
-    // Llama models
-    if (modelLower.includes('llama-3') || modelLower.includes('llama3')) return 128_000;
-    if (modelLower.includes('llama')) return 32_000;
-    // Mistral models
-    if (modelLower.includes('mistral-large') || modelLower.includes('mistral-nemo')) return 128_000;
-    if (modelLower.includes('mistral')) return 32_000;
-    // OpenRouter platform hard cap is 400k for many endpoints - use 200k as safe default
-    return 200_000;
+    return 128_000;
   }
 
   // Unknown provider/model - conservative default
   return 200_000;
+}
+
+/**
+ * Attempt exact lookup in MODEL_CONTEXT_WINDOWS from ai-monitoring.
+ * Tries the model directly, then with provider prefix (e.g. "openai/gpt-5").
+ */
+function getCanonicalContextWindow(model: string, provider?: string): number | undefined {
+  const windows = MODEL_CONTEXT_WINDOWS as Record<string, number>;
+
+  // Direct match (e.g. "gpt-5.2" or "anthropic/claude-opus-4.5")
+  if (windows[model] !== undefined) {
+    return windows[model];
+  }
+
+  // Try with provider prefix (e.g. provider="openrouter", model="gpt-5.2" → "openai/gpt-5.2")
+  if (provider) {
+    const providerPrefixes = getProviderPrefixes(provider, model);
+    for (const prefix of providerPrefixes) {
+      const key = `${prefix}/${model}`;
+      if (windows[key] !== undefined) {
+        return windows[key];
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Map provider/model to possible MODEL_CONTEXT_WINDOWS key prefixes
+ */
+function getProviderPrefixes(provider: string, model: string): string[] {
+  const p = provider.toLowerCase();
+  const m = model.toLowerCase();
+
+  if (p === 'openai') return ['openai'];
+  if (p === 'anthropic') return ['anthropic'];
+  if (p === 'google') return ['google'];
+  if (p === 'xai') return ['x-ai'];
+  if (p === 'minimax') return ['minimax'];
+  if (p === 'pagespace') return ['z-ai'];
+
+  // OpenRouter: model strings already include the provider prefix (e.g. "anthropic/claude-3.5-sonnet")
+  // but some may be bare model names — try common prefixes based on model name
+  if (p === 'openrouter') {
+    if (m.includes('claude')) return ['anthropic'];
+    if (m.includes('gpt') || m.includes('o3') || m.includes('o4') || m.includes('o1')) return ['openai'];
+    if (m.includes('gemini')) return ['google'];
+    if (m.includes('grok')) return ['x-ai'];
+    if (m.includes('llama')) return ['meta-llama'];
+    if (m.includes('mistral') || m.includes('codestral') || m.includes('devstral')) return ['mistralai'];
+    if (m.includes('deepseek')) return ['deepseek'];
+    if (m.includes('qwen') || m.includes('qwq')) return ['qwen'];
+    if (m.includes('minimax')) return ['minimax'];
+    if (m.includes('glm')) return ['z-ai'];
+  }
+
+  return [];
 }
 
 /**
