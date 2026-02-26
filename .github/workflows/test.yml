@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: '22'
+  NODE_VERSION: '22.17.0'
 
 jobs:
   unit-tests:
@@ -17,7 +17,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17.5-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: pagespace_test
