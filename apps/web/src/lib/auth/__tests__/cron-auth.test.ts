@@ -238,8 +238,57 @@ describe('cron-auth', () => {
       expect(data.error).toContain('signature');
     });
 
-    it('given missing headers, should return 403', async () => {
+    it('given missing timestamp header, should return 403', async () => {
       const request = createSignedRequest({ omitHeaders: ['x-cron-timestamp'] });
+      const response = validateSignedCronRequest(request);
+
+      expect(response).not.toBeNull();
+      expect(response!.status).toBe(403);
+      const data = await response!.json();
+      expect(data.error).toContain('missing');
+    });
+
+    it('given completely unsigned request (no cron headers), should return 403', async () => {
+      const request = new Request('http://web:3000/api/cron/test', {
+        method: 'POST',
+        headers: { host: 'web:3000' },
+      });
+      const response = validateSignedCronRequest(request);
+
+      expect(response).not.toBeNull();
+      expect(response!.status).toBe(403);
+      const data = await response!.json();
+      expect(data.error).toContain('missing cron authentication headers');
+    });
+
+    it('given request with only Authorization header (no cron signature), should return 403', async () => {
+      const request = new Request('http://web:3000/api/cron/test', {
+        method: 'POST',
+        headers: {
+          host: 'web:3000',
+          authorization: 'Bearer some-token',
+        },
+      });
+      const response = validateSignedCronRequest(request);
+
+      expect(response).not.toBeNull();
+      expect(response!.status).toBe(403);
+      const data = await response!.json();
+      expect(data.error).toContain('missing cron authentication headers');
+    });
+
+    it('given missing nonce header, should return 403', async () => {
+      const request = createSignedRequest({ omitHeaders: ['x-cron-nonce'] });
+      const response = validateSignedCronRequest(request);
+
+      expect(response).not.toBeNull();
+      expect(response!.status).toBe(403);
+      const data = await response!.json();
+      expect(data.error).toContain('missing');
+    });
+
+    it('given missing signature header, should return 403', async () => {
+      const request = createSignedRequest({ omitHeaders: ['x-cron-signature'] });
       const response = validateSignedCronRequest(request);
 
       expect(response).not.toBeNull();
