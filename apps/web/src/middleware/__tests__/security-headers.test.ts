@@ -157,6 +157,25 @@ describe('Security Headers', () => {
       expect(csp).not.toContain('https://cdn.jsdelivr.net');
     });
 
+    it('does not use https: wildcard in connect-src', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      // connect-src should list specific domains, not a blanket https: wildcard
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+      expect(connectSrc).toBeDefined();
+      // Ensure 'https:' as a standalone scheme-source is absent
+      expect(connectSrc).not.toMatch(/\bhttps:\s/);
+      expect(connectSrc).not.toMatch(/\bhttps:$/);
+    });
+
+    it('allows Stripe and Google connect-src in cloud mode', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+      expect(connectSrc).toContain('https://accounts.google.com');
+      expect(connectSrc).toContain('https://*.stripe.com');
+    });
+
     it('allows Google accounts and Stripe iframes via frame-src', () => {
       const csp = buildCSPPolicy('test-nonce');
 
