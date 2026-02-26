@@ -101,10 +101,13 @@ describe('Google Calendar Webhook Route', () => {
   });
 
   describe('sync confirmation (resourceState=sync)', () => {
-    it('given sync state, should return 200 without auth check', async () => {
+    it('given sync state with valid token, should return 200', async () => {
+      const userId = 'user-sync-123';
+      const token = generateWebhookToken(userId);
+
       const request = createWebhookRequest({
         resourceState: 'sync',
-        channelToken: null, // No token provided
+        channelToken: token,
       });
 
       const response = await POST(request);
@@ -112,6 +115,47 @@ describe('Google Calendar Webhook Route', () => {
       expect(response.status).toBe(200);
       const data = await response.json();
       expect(data.ok).toBe(true);
+    });
+
+    it('given sync state without token, should return 401', async () => {
+      const request = createWebhookRequest({
+        resourceState: 'sync',
+        channelToken: null,
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(401);
+      const data = await response.json();
+      expect(data.error).toBe('Missing authentication token');
+    });
+
+    it('given sync state with invalid token, should return 401', async () => {
+      const request = createWebhookRequest({
+        resourceState: 'sync',
+        channelToken: 'invalid.token',
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(401);
+      const data = await response.json();
+      expect(data.error).toBe('Invalid authentication token');
+    });
+
+    it('given sync state with valid token, should NOT trigger calendar sync', async () => {
+      const { syncGoogleCalendar } = await import('@/lib/integrations/google-calendar/sync-service');
+      const userId = 'user-sync-456';
+      const token = generateWebhookToken(userId);
+
+      const request = createWebhookRequest({
+        resourceState: 'sync',
+        channelToken: token,
+      });
+
+      await POST(request);
+
+      expect(syncGoogleCalendar).not.toHaveBeenCalled();
     });
   });
 

@@ -17,8 +17,9 @@ import { validateWebhookAuth } from '@/lib/integrations/google-calendar/webhook-
  * - X-Goog-Channel-Token: Secret token we provided during watch registration
  *
  * Zero-trust authentication:
- * - All sync-triggering requests MUST include a valid HMAC token
+ * - ALL requests MUST include a valid HMAC token (including sync confirmations)
  * - No fallback to channel/resource ID lookup
+ * - No unauthenticated code paths
  */
 export async function POST(request: Request) {
   try {
@@ -32,24 +33,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing headers' }, { status: 400 });
     }
 
-    // Initial sync notification - just acknowledge (no auth required for sync confirmation)
-    if (resourceState === 'sync') {
-      loggers.api.info('Google Calendar webhook: sync confirmation received', { channelId, hasToken: !!channelToken });
-      return NextResponse.json({ ok: true });
-    }
-
-    // Zero-trust authentication: require valid HMAC token
+    // Zero-trust authentication: ALL requests MUST have a valid HMAC token
     const authResult = validateWebhookAuth(channelToken);
     if (authResult instanceof NextResponse) {
       loggers.api.warn('Google Calendar webhook: auth failed', {
         channelId,
         resourceId,
+        resourceState,
         hasToken: !!channelToken,
       });
       return authResult;
     }
 
     const { userId } = authResult;
+
+    // Initial sync notification - acknowledge after auth verification
+    if (resourceState === 'sync') {
+      loggers.api.info('Google Calendar webhook: sync confirmation received', { channelId, userId });
+      return NextResponse.json({ ok: true });
+    }
 
     loggers.api.info('Google Calendar webhook: triggering sync', {
       userId,
