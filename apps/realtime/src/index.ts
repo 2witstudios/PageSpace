@@ -19,7 +19,9 @@ import { handleKickRequest } from './kick-handler';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
-dotenv.config({ path: '../../.env' });
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: '../../.env' });
+}
 
 /**
  * Validate a short-lived socket token (ps_sock_* format).

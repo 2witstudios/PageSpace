@@ -26,5 +26,7 @@ COPY packages ./packages
 COPY apps ./apps
 COPY tsconfig.json ./
 
-# Run seed
+# Env vars are injected at runtime (not baked into the image).
+# When running standalone: docker run --env-file .env <image>
+# When running via compose: use env_file: .env in the service definition
 CMD ["pnpm", "--filter", "@pagespace/db", "db:seed"]
