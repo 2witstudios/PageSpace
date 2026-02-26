@@ -97,6 +97,7 @@ export async function POST(request: Request) {
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
+  let wasTruncated = false;
   const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
   const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
 
@@ -833,12 +834,14 @@ export async function POST(request: Request) {
     const toolTokens = estimateToolDefinitionTokens(filteredTools as Record<string, unknown>);
     // Reserve 25% headroom for output tokens and tokenizer inaccuracies
     const inputBudget = Math.floor(contextWindow * 0.75);
-    const { includedMessages, wasTruncated } = determineMessagesToInclude(
+    const truncationResult = determineMessagesToInclude(
       sanitizedMessages,
       inputBudget,
       systemPromptTokens,
       toolTokens
     );
+    const { includedMessages } = truncationResult;
+    wasTruncated = truncationResult.wasTruncated;
 
     if (wasTruncated) {
       loggers.ai.warn('AI Chat API: Conversation truncated to fit context window', {
