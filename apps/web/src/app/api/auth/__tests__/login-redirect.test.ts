@@ -57,12 +57,18 @@ vi.mock('@pagespace/lib/server', () => ({
   },
   logAuthEvent: vi.fn(),
   logSecurityEvent: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/audit', () => ({
   securityAudit: {
-    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
-    logAuthFailure: vi.fn().mockResolvedValue(undefined),
-    logTokenCreated: vi.fn().mockResolvedValue(undefined),
-    logAccessDenied: vi.fn().mockResolvedValue(undefined),
+    logEvent: vi.fn().mockResolvedValue(undefined),
   },
+  maskEmail: vi.fn((email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    const visibleChars = Math.min(2, local.length);
+    return `${local.slice(0, visibleChars)}***@${domain}`;
+  }),
 }));
 
 vi.mock('@pagespace/lib/security', () => ({

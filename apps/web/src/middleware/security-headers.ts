@@ -61,12 +61,19 @@ export const buildCSPPolicy = (nonce: string): string => {
     frameSrc.push('https://accounts.google.com', 'https://js.stripe.com');
   }
 
+  const connectSrc = ["'self'", 'ws:', 'wss:'];
+
+  // Cloud mode: allow Stripe client SDK and Google One Tap connections
+  if (!IS_ONPREM) {
+    connectSrc.push('https://accounts.google.com', 'https://*.stripe.com');
+  }
+
   const directives: CSPDirectives = {
     'default-src': ["'self'"],
     'script-src': scriptSrc,
     'style-src': styleSrc,
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
-    'connect-src': ["'self'", 'ws:', 'wss:', 'https:'],
+    'connect-src': connectSrc,
     'font-src': ["'self'", 'data:'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],

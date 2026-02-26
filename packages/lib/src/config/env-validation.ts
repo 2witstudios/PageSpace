@@ -47,6 +47,7 @@ export const serverEnvSchema = z
     // Optional monitoring
     MONITORING_INGEST_KEY: z.string().optional(),
     MONITORING_INGEST_PATH: z.string().optional(),
+    MONITORING_INGEST_DISABLED: z.enum(['true', 'false']).optional(),
 
     // Optional OAuth state
     OAUTH_STATE_SECRET: z.string().min(1).optional(),
@@ -79,6 +80,7 @@ export const serverEnvSchema = z
         });
       }
     }
+
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

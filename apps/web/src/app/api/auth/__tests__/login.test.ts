@@ -100,6 +100,18 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/audit', () => ({
+  securityAudit: {
+    logEvent: vi.fn().mockResolvedValue(undefined),
+  },
+  maskEmail: vi.fn((email: string) => {
+    const [local, domain] = email.split('@');
+    if (!local || !domain) return '***@***';
+    const visibleChars = Math.min(2, local.length);
+    return `${local.slice(0, visibleChars)}***@${domain}`;
+  }),
+}));
+
 vi.mock('cookie', () => ({
   serialize: vi.fn().mockReturnValue('mock-cookie'),
   parse: vi.fn(() => ({ login_csrf: 'valid-csrf-token' })),
@@ -138,6 +150,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
+import { securityAudit } from '@pagespace/lib/audit';
 
 // Test fixtures
 const mockUser: User = {
@@ -453,6 +466,67 @@ describe('POST /api/auth/login', () => {
 
       // Database should not be queried when rate limited
       expect(authRepository.findUserByEmail).not.toHaveBeenCalled();
+    });
+
+    it('emits security audit event when IP rate limit triggers', async () => {
+      vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 })
+        .mockResolvedValue({ allowed: true, attemptsRemaining: 4 });
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          ipAddress: '192.168.1.1',
+          details: expect.objectContaining({
+            limiter: 'ip',
+            endpoint: '/api/auth/login',
+          }),
+          riskScore: 0.4,
+        })
+      );
+    });
+
+    it('emits security audit event when email rate limit triggers', async () => {
+      vi.mocked(getClientIP).mockReturnValue('10.0.0.1');
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          ipAddress: '10.0.0.1',
+          details: expect.objectContaining({
+            limiter: 'email',
+            endpoint: '/api/auth/login',
+          }),
+          riskScore: 0.4,
+        })
+      );
+    });
+
+    it('masks email in security audit event details', async () => {
+      vi.mocked(checkDistributedRateLimit)
+        .mockResolvedValueOnce({ allowed: true, attemptsRemaining: 4 })
+        .mockResolvedValueOnce({ allowed: false, retryAfter: 900, attemptsRemaining: 0 });
+
+      const request = createLoginRequest(validLoginPayload);
+      await POST(request);
+
+      expect(securityAudit.logEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            email: 'te***@example.com',
+          }),
+        })
+      );
     });
   });
 
