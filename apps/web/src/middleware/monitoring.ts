@@ -185,21 +185,56 @@ interface MonitoringIngestPayload {
 
 const DEFAULT_INGEST_PATH = '/api/internal/monitoring/ingest';
 
+/**
+ * Determines the monitoring ingest configuration state:
+ * - 'active': MONITORING_INGEST_KEY is set, monitoring works normally
+ * - 'disabled': MONITORING_INGEST_DISABLED=true, intentionally opted out
+ * - 'misconfigured': key missing without explicit opt-out (silent degradation risk)
+ */
+export function getMonitoringIngestStatus(): 'active' | 'disabled' | 'misconfigured' {
+  const isDisabled = process.env.MONITORING_INGEST_DISABLED === 'true';
+  if (isDisabled) return 'disabled';
+  const hasKey = Boolean(process.env.MONITORING_INGEST_KEY);
+  return hasKey ? 'active' : 'misconfigured';
+}
+
 // Track whether we've warned about missing ingest key (to avoid log spam)
 let hasWarnedMissingIngestKey = false;
+let hasLoggedStartupStatus = false;
+
+function logMonitoringStatus(): void {
+  if (hasLoggedStartupStatus) return;
+  hasLoggedStartupStatus = true;
+
+  const status = getMonitoringIngestStatus();
+  if (status === 'misconfigured') {
+    const isProduction = process.env.NODE_ENV === 'production';
+    const prefix = isProduction ? '[PRODUCTION WARNING]' : '[WARNING]';
+    loggers.system.warn(
+      `${prefix} MONITORING_INGEST_KEY is not configured and MONITORING_INGEST_DISABLED is not set. ` +
+      'Monitoring ingest is silently degraded. Set MONITORING_INGEST_KEY to enable monitoring, ' +
+      'or set MONITORING_INGEST_DISABLED=true to explicitly opt out.'
+    );
+  } else if (status === 'disabled') {
+    loggers.system.info('Monitoring ingest explicitly disabled via MONITORING_INGEST_DISABLED=true');
+  }
+}
 
 function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPayload): void {
-  const ingestKey = process.env.MONITORING_INGEST_KEY;
-  if (!ingestKey) {
-    if (!hasWarnedMissingIngestKey) {
+  const status = getMonitoringIngestStatus();
+
+  if (status !== 'active') {
+    if (status === 'misconfigured' && !hasWarnedMissingIngestKey) {
       hasWarnedMissingIngestKey = true;
       loggers.system.warn(
         'MONITORING_INGEST_KEY is not configured; monitoring ingest is disabled. ' +
-        'Set MONITORING_INGEST_KEY in your environment to enable API monitoring.'
+        'Set MONITORING_INGEST_KEY to enable monitoring or MONITORING_INGEST_DISABLED=true to silence this warning.'
       );
     }
     return;
   }
+
+  const ingestKey = process.env.MONITORING_INGEST_KEY!;
 
   try {
     const ingestPath = process.env.MONITORING_INGEST_PATH || DEFAULT_INGEST_PATH;
@@ -292,8 +327,11 @@ export async function monitoringMiddleware(
   request: NextRequest,
   next: () => Promise<NextResponse>
 ): Promise<NextResponse> {
+  // Log monitoring configuration status once on first request
+  logMonitoringStatus();
+
   const { pathname } = request.nextUrl;
-  
+
   // Skip monitoring for static assets
   if (!shouldMonitor(pathname)) {
     return next();
