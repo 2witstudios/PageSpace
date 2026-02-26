@@ -61,11 +61,12 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
 
       // Update tab titles in both tab stores
       useOpenTabsStore.getState().updateTabTitle(updatedPage.id, updatedPage.title);
-      const tabsState = useTabsStore.getState();
-      for (const tab of tabsState.tabs) {
-        if (tab.path.endsWith(`/${updatedPage.id}`)) {
-          tabsState.updateTabMeta(tab.id, { title: updatedPage.title });
-        }
+      const { tabs } = useTabsStore.getState();
+      const matchingIds = tabs
+        .filter(tab => tab.path.split('/').pop() === updatedPage.id)
+        .map(tab => tab.id);
+      for (const tabId of matchingIds) {
+        useTabsStore.getState().updateTabMeta(tabId, { title: updatedPage.title });
       }
     } catch (error) {
       console.error(error);

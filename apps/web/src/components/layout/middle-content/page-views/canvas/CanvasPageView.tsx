@@ -80,10 +80,10 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   }, [page.id, saveContent]);
 
   const updateContentFromServer = useCallback((newContent: string) => {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = null;
-    }
+    const doc = useDocumentManagerStore.getState().getDocument(page.id);
+    // Don't overwrite local edits or in-flight saves
+    if (doc?.isDirty || saveTimeoutRef.current) return;
+
     useDocumentManagerStore.getState().updateDocument(page.id, {
       content: newContent,
       isDirty: false,
@@ -129,9 +129,16 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       const store = useDocumentManagerStore.getState();
       const doc = store.getDocument(id);
       if (doc?.isDirty) {
-        saveContentRef.current(id, doc.content).catch(console.error);
+        saveContentRef.current(id, doc.content)
+          .then(() => {
+            useDocumentManagerStore.getState().clearDocument(id);
+          })
+          .catch(() => {
+            // Save failed — keep document in store so it can be recovered on remount
+          });
+      } else {
+        store.clearDocument(id);
       }
-      store.clearDocument(id);
       useEditingStore.getState().endEditing(id);
     };
   }, []);

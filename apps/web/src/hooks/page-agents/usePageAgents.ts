@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { type AgentInfo } from '@/stores/page-agents';
@@ -84,6 +84,11 @@ export function usePageAgents(
     }
     return `/api/ai/page-agents/multi-drive?${params.toString()}`;
   }, [includeSystemPrompt]);
+
+  // Reset hasLoadedRef when SWR key changes so the new key's initial fetch isn't paused
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [swrKey]);
 
   const { data, error, mutate, isLoading } = useSWR<AgentsResponse>(
     swrKey,
