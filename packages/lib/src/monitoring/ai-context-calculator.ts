@@ -48,16 +48,21 @@ export interface ContextCalculation {
 }
 
 /**
- * Estimate tokens in a text string
- * Uses 4 characters per token as a rough estimate
- * This is conservative - actual token count may be slightly lower
+ * Estimate tokens in a text string.
+ * Uses ~4 chars/token for Latin text, ~2 chars/token when significant
+ * non-ASCII / CJK content is detected (CJK characters often tokenize to 1-2 tokens each).
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
 
-  // GPT-style tokenization: ~4 characters per token
-  // This is conservative to avoid underestimating
-  return Math.ceil(text.length / 4);
+  // Detect non-ASCII heavy content (CJK, emoji, etc.)
+  // CJK Unified Ideographs, Hiragana, Katakana, Hangul, etc.
+  const nonAsciiCount = (text.match(/[^\x00-\x7F]/g) || []).length;
+  const nonAsciiRatio = nonAsciiCount / text.length;
+
+  // Use 2 chars/token when >20% non-ASCII (CJK-heavy), else 4 chars/token
+  const charsPerToken = nonAsciiRatio > 0.2 ? 2 : 4;
+  return Math.ceil(text.length / charsPerToken);
 }
 
 /**
@@ -225,6 +230,13 @@ export function getContextWindowSize(model: string, provider?: string): number {
     if (modelLower.includes('gemini-2.5')) return 1_000_000;
     if (modelLower.includes('gemini-2.0') || modelLower.includes('gemini-1.5')) return 1_000_000;
     // GPT models via OpenRouter
+    if (modelLower.includes('gpt-5.2')) {
+      return modelLower.includes('mini') || modelLower.includes('nano') ? 256_000 : 400_000;
+    }
+    if (modelLower.includes('gpt-5.1')) return 400_000;
+    if (modelLower.includes('gpt-5')) {
+      return modelLower.includes('mini') || modelLower.includes('nano') ? 128_000 : 272_000;
+    }
     if (modelLower.includes('gpt-4o') || modelLower.includes('gpt-4-turbo')) return 128_000;
     // DeepSeek models - commonly 64k or 128k
     if (modelLower.includes('deepseek-r1') || modelLower.includes('deepseek-v3')) return 128_000;

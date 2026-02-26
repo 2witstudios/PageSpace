@@ -66,6 +66,8 @@ export function isContextLengthError(errorMessage: string | undefined): boolean 
  */
 export function isRateLimitError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
+  // Exclude context-length errors that also contain "limit"
+  if (isContextLengthError(errorMessage)) return false;
   return (
     errorMessage.toLowerCase().includes('rate') ||
     errorMessage.toLowerCase().includes('limit') ||

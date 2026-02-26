@@ -853,7 +853,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const modelMessages = convertToModelMessages(includedMessages, {
+    const modelMessages = convertToModelMessages(includedMessages as UIMessage[], {
       tools: filteredTools  // Use original tools - no wrapping needed
     });
 
@@ -1241,7 +1241,13 @@ export async function POST(request: Request) {
     const errorMsg = error instanceof Error ? error.message : '';
     if (isContextLengthError(errorMsg)) {
       return NextResponse.json(
-        { error: 'context_length_exceeded', details: errorMsg },
+        {
+          error: 'context_length_exceeded',
+          message: wasTruncated
+            ? 'The conversation still exceeds this model\'s context window even after trimming. Please start a new conversation.'
+            : 'The conversation is too long for this model\'s context window. Older messages have been trimmed — try sending your message again.',
+          details: 'context_length_exceeded',
+        },
         { status: 413 }
       );
     }
