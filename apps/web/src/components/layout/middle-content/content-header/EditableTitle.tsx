@@ -59,15 +59,9 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
       updateNode(updatedPage.id, { title: updatedPage.title });
       mutate(`/api/pages/${page.id}/breadcrumbs`);
 
-      // Update tab titles in both tab stores
+      // Update tab titles in both tab stores (single batched update each)
       useOpenTabsStore.getState().updateTabTitle(updatedPage.id, updatedPage.title);
-      const { tabs } = useTabsStore.getState();
-      const matchingIds = tabs
-        .filter(tab => tab.path.split('/').pop() === updatedPage.id)
-        .map(tab => tab.id);
-      for (const tabId of matchingIds) {
-        useTabsStore.getState().updateTabMeta(tabId, { title: updatedPage.title });
-      }
+      useTabsStore.getState().updateTabMetaByPageId(updatedPage.id, { title: updatedPage.title });
     } catch (error) {
       console.error(error);
       toast.error('Failed to update title');

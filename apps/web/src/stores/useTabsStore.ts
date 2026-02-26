@@ -45,6 +45,7 @@ interface TabsState {
   goForwardInActiveTab: () => void;
   duplicateTab: (tabId: string) => void;
   updateTabMeta: (tabId: string, meta: TabMetaUpdate) => void;
+  updateTabMetaByPageId: (pageId: string, meta: TabMetaUpdate) => void;
 
   // Selectors (attached for convenience)
   selectActiveTab: (state: TabsState) => Tab | null;
@@ -307,6 +308,24 @@ export const useTabsStore = create<TabsState>()(
         newTabs[tabIndex] = updateTabMetaFn(newTabs[tabIndex], meta);
 
         set({ tabs: newTabs });
+      },
+
+      updateTabMetaByPageId: (pageId, meta) => {
+        const { tabs } = get();
+        let changed = false;
+        const newTabs = tabs.map(tab => {
+          // Extract pageId from path: /dashboard/{driveId}/{pageId}
+          const segments = tab.path.split('/');
+          const tabPageId = segments[segments.length - 1];
+          if (tabPageId === pageId) {
+            changed = true;
+            return updateTabMetaFn(tab, meta);
+          }
+          return tab;
+        });
+        if (changed) {
+          set({ tabs: newTabs });
+        }
       },
 
       // Selectors
