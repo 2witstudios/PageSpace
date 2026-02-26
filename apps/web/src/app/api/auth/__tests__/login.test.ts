@@ -103,6 +103,9 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 vi.mock('@pagespace/lib/audit', () => ({
   securityAudit: {
     logEvent: vi.fn().mockResolvedValue(undefined),
+    logAuthSuccess: vi.fn().mockResolvedValue(undefined),
+    logAuthFailure: vi.fn().mockResolvedValue(undefined),
+    logTokenCreated: vi.fn().mockResolvedValue(undefined),
   },
   maskEmail: vi.fn((email: string) => {
     const [local, domain] = email.split('@');

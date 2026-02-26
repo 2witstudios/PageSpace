@@ -20,20 +20,17 @@ vi.mock('../csrf-validation', () => ({
 // Mock security event logging
 vi.mock('@pagespace/lib/server', () => ({
   logSecurityEvent: vi.fn(),
-}));
-
-// Mock the security audit service
-vi.mock('@pagespace/lib/audit/security-audit', () => ({
   securityAudit: {
     logDataAccess: vi.fn().mockResolvedValue(undefined),
     logEvent: vi.fn().mockResolvedValue(undefined),
+    logAccessDenied: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 import { withAdminAuth } from '../auth';
 import { authenticateSessionRequest } from '../index';
 import { validateAdminAccess } from '../admin-role';
-import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { securityAudit } from '@pagespace/lib/server';
 
 const mockAuthenticateRequest = vi.mocked(authenticateSessionRequest);
 const mockValidateAdminAccess = vi.mocked(validateAdminAccess);
