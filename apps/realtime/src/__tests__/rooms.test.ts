@@ -71,9 +71,11 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
         const notificationRoom = `notifications:${user.id}`;
         const taskRoom = `user:${user.id}:tasks`;
         const calendarRoom = `user:${user.id}:calendar`;
+        const userDrivesRoom = `user:${user.id}:drives`;
         socket.join(notificationRoom);
         socket.join(taskRoom);
         socket.join(calendarRoom);
+        socket.join(userDrivesRoom);
       }
     },
 
@@ -140,20 +142,20 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
       socket.leave(driveCalendarRoom);
     },
 
-    // join_global_drives handler
-    joinGlobalDrives: () => {
+    // Auto-join user-specific drives room (on connect)
+    joinUserDrivesRoom: () => {
       if (!user?.id) return;
 
-      const globalDrivesRoom = 'global:drives';
-      socket.join(globalDrivesRoom);
+      const userDrivesRoom = `user:${user.id}:drives`;
+      socket.join(userDrivesRoom);
     },
 
-    // leave_global_drives handler
-    leaveGlobalDrives: () => {
+    // Leave user-specific drives room
+    leaveUserDrivesRoom: () => {
       if (!user?.id) return;
 
-      const globalDrivesRoom = 'global:drives';
-      socket.leave(globalDrivesRoom);
+      const userDrivesRoom = `user:${user.id}:drives`;
+      socket.leave(userDrivesRoom);
     },
   };
 };
@@ -164,7 +166,7 @@ describe('Room Management', () => {
   });
 
   describe('auto-join on connect', () => {
-    it('given authenticated user connects, should join notifications, tasks, and calendar rooms', () => {
+    it('given authenticated user connects, should join notifications, tasks, calendar, and drives rooms', () => {
       const userId = 'test-user-123';
       const socket = createMockSocket(userId);
       const handlers = createRoomHandlers(socket);
@@ -174,6 +176,7 @@ describe('Room Management', () => {
       expect(socket.hasJoinedRoom(`notifications:${userId}`)).toBe(true);
       expect(socket.hasJoinedRoom(`user:${userId}:tasks`)).toBe(true);
       expect(socket.hasJoinedRoom(`user:${userId}:calendar`)).toBe(true);
+      expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(true);
     });
 
     it('given unauthenticated socket, should not join any rooms', () => {
@@ -373,41 +376,106 @@ describe('Room Management', () => {
     });
   });
 
-  describe('join_global_drives', () => {
-    it('given authenticated user, should join global:drives room', () => {
+  describe('user-scoped drives room', () => {
+    it('given authenticated user on connect, should auto-join user:{userId}:drives room', () => {
       const userId = 'test-user-123';
       const socket = createMockSocket(userId);
       const handlers = createRoomHandlers(socket);
 
-      handlers.joinGlobalDrives();
+      handlers.onConnect();
 
-      expect(socket.hasJoinedRoom('global:drives')).toBe(true);
+      expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(true);
     });
 
-    it('given unauthenticated socket, should not join room', () => {
+    it('given authenticated user, should join user:{userId}:drives room', () => {
+      const userId = 'test-user-123';
+      const socket = createMockSocket(userId);
+      const handlers = createRoomHandlers(socket);
+
+      handlers.joinUserDrivesRoom();
+
+      expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(true);
+    });
+
+    it('given unauthenticated socket, should not join user drives room', () => {
       const socket = createMockSocket(undefined);
       const handlers = createRoomHandlers(socket);
 
-      handlers.joinGlobalDrives();
+      handlers.joinUserDrivesRoom();
 
       expect(socket.join).not.toHaveBeenCalled();
     });
-  });
 
-  describe('leave_global_drives', () => {
-    it('given user in global:drives room, should leave the room', () => {
+    it('given user in user drives room, should leave the room', () => {
       const userId = 'test-user-123';
       const socket = createMockSocket(userId);
       const handlers = createRoomHandlers(socket);
 
-      // First join
-      handlers.joinGlobalDrives();
-      expect(socket.hasJoinedRoom('global:drives')).toBe(true);
+      handlers.joinUserDrivesRoom();
+      expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(true);
 
-      // Then leave
-      handlers.leaveGlobalDrives();
+      handlers.leaveUserDrivesRoom();
 
-      expect(socket.leave).toHaveBeenCalledWith('global:drives');
+      expect(socket.leave).toHaveBeenCalledWith(`user:${userId}:drives`);
+      expect(socket.hasJoinedRoom(`user:${userId}:drives`)).toBe(false);
+    });
+  });
+
+  describe('drive event isolation (security)', () => {
+    it('given two users, user A should NOT be in user B drives room', () => {
+      const userA = 'user-a-111';
+      const userB = 'user-b-222';
+      const socketA = createMockSocket(userA);
+      const socketB = createMockSocket(userB);
+      const handlersA = createRoomHandlers(socketA);
+      const handlersB = createRoomHandlers(socketB);
+
+      handlersA.onConnect();
+      handlersB.onConnect();
+
+      // Each user is in their own drives room
+      expect(socketA.hasJoinedRoom(`user:${userA}:drives`)).toBe(true);
+      expect(socketB.hasJoinedRoom(`user:${userB}:drives`)).toBe(true);
+
+      // Neither user is in the other's drives room
+      expect(socketA.hasJoinedRoom(`user:${userB}:drives`)).toBe(false);
+      expect(socketB.hasJoinedRoom(`user:${userA}:drives`)).toBe(false);
+    });
+
+    it('given drive member, should receive events via drive-specific room', async () => {
+      const userId = 'test-user-123';
+      const driveId = 'test-drive-456';
+      const socket = createMockSocket(userId);
+      const handlers = createRoomHandlers(socket);
+
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+
+      await handlers.joinDrive(driveId);
+
+      expect(socket.hasJoinedRoom(`drive:${driveId}`)).toBe(true);
+    });
+
+    it('given non-member, should NOT join drive-specific room', async () => {
+      const userId = 'non-member-999';
+      const driveId = 'test-drive-456';
+      const socket = createMockSocket(userId);
+      const handlers = createRoomHandlers(socket);
+
+      vi.mocked(getUserDriveAccess).mockResolvedValue(false);
+
+      await handlers.joinDrive(driveId);
+
+      expect(socket.hasJoinedRoom(`drive:${driveId}`)).toBe(false);
+      expect(socket.hasJoinedRoom(`drive:${driveId}:calendar`)).toBe(false);
+    });
+
+    it('given no global:drives room exists, no user should be in it', () => {
+      const socket = createMockSocket('any-user');
+      const handlers = createRoomHandlers(socket);
+
+      handlers.onConnect();
+
+      // Verify no global:drives room was joined
       expect(socket.hasJoinedRoom('global:drives')).toBe(false);
     });
   });
