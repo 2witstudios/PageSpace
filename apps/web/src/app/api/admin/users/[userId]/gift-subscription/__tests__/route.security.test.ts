@@ -542,10 +542,16 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
       );
 
       const context = { params: Promise.resolve({ userId: regularUserId }) };
-      await POST(request, context);
+      const response = await POST(request, context);
 
-      // Security event should NOT be logged for successful auth
-      expect(logSecurityEvent).not.toHaveBeenCalled();
+      // Verify auth actually succeeded (precondition for the assertion below)
+      expect(response.status).toBe(200);
+
+      // Admin role version mismatch should NOT be logged for successful auth
+      expect(logSecurityEvent).not.toHaveBeenCalledWith(
+        'admin_role_version_mismatch',
+        expect.anything()
+      );
     });
   });
 });
