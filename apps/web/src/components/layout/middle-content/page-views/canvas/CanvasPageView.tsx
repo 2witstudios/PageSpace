@@ -23,7 +23,7 @@ const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), 
 
 const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   const documentState = useDocumentManagerStore((state) => state.documents.get(page.id));
-  const content = documentState?.content ?? '';
+  const content = documentState?.content ?? (typeof page.content === 'string' ? page.content : '');
   const [activeTab, setActiveTab] = useState('view');
   const containerRef = useRef<HTMLDivElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -32,13 +32,18 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
   const { user } = useAuth();
   const socket = useSocket();
 
-  const saveContent = useCallback(async (pageId: string, newValue: string) => {
+  const saveContent = useCallback(async (pageId: string, newValue: string, expectedRevision?: number) => {
     try {
       const headers: Record<string, string> = {};
       if (socket?.id) {
         headers['X-Socket-ID'] = socket.id;
       }
-      await patch(`/api/pages/${pageId}`, { content: newValue }, { headers });
+      const body: Record<string, unknown> = { content: newValue };
+      if (expectedRevision !== undefined) {
+        body.expectedRevision = expectedRevision;
+      }
+      const savedPage = await patch<{ revision?: number }>(`/api/pages/${pageId}`, body, { headers });
+      return savedPage;
     } catch (error) {
       console.error('Failed to save page content:', error);
       toast.error('Failed to save page content.');
@@ -67,12 +72,22 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       // Timer has fired; clear ref so clean docs can accept server updates again
       saveTimeoutRef.current = null;
       try {
-        await saveContent(page.id, newContent);
+        const doc = useDocumentManagerStore.getState().getDocument(page.id);
+        const savedPage = await saveContent(page.id, newContent, doc?.revision);
         // Only clear isDirty if no newer edits arrived while saving
         if (saveVersionRef.current === version) {
-          useDocumentManagerStore.getState().updateDocument(page.id, {
+          const updates: Record<string, unknown> = {
             isDirty: false,
             lastSaved: Date.now(),
+          };
+          if (savedPage?.revision !== undefined) {
+            updates.revision = savedPage.revision;
+          }
+          useDocumentManagerStore.getState().updateDocument(page.id, updates);
+        } else if (savedPage?.revision !== undefined) {
+          // Newer edits pending, but still update revision to latest server value
+          useDocumentManagerStore.getState().updateDocument(page.id, {
+            revision: savedPage.revision,
           });
         }
       } catch {
@@ -81,17 +96,21 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     }, 1000);
   }, [page.id, saveContent]);
 
-  const updateContentFromServer = useCallback((newContent: string) => {
+  const updateContentFromServer = useCallback((newContent: string, revision?: number) => {
     const doc = useDocumentManagerStore.getState().getDocument(page.id);
     // Don't overwrite local edits or in-flight saves
     if (doc?.isDirty || saveTimeoutRef.current) return;
 
-    useDocumentManagerStore.getState().updateDocument(page.id, {
+    const updates: Partial<{ content: string; isDirty: boolean; lastSaved: number; lastUpdateTime: number; revision: number }> = {
       content: newContent,
       isDirty: false,
       lastSaved: Date.now(),
       lastUpdateTime: Date.now(),
-    });
+    };
+    if (revision !== undefined) {
+      updates.revision = revision;
+    }
+    useDocumentManagerStore.getState().updateDocument(page.id, updates);
   }, [page.id]);
 
   // Initialize or refresh document in manager store
@@ -101,14 +120,18 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
     const existing = store.getDocument(page.id);
     if (!existing) {
       store.createDocument(page.id, initialText, 'html');
+      if (page.revision !== undefined) {
+        store.updateDocument(page.id, { revision: page.revision });
+      }
     } else if (!existing.isDirty && existing.content !== initialText) {
       // Refresh from prop if doc exists but isn't dirty (e.g. out-of-band server update)
       store.updateDocument(page.id, {
         content: initialText,
         lastUpdateTime: Date.now(),
+        ...(page.revision !== undefined ? { revision: page.revision } : {}),
       });
     }
-  }, [page.id, page.content]);
+  }, [page.id, page.content, page.revision]);
 
   // Register editing state to prevent SWR revalidation during edits
   useEffect(() => {
@@ -132,7 +155,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       const doc = store.getDocument(id);
       if (doc?.isDirty) {
         const snapshotLastUpdateTime = doc.lastUpdateTime;
-        saveContentRef.current(id, doc.content)
+        saveContentRef.current(id, doc.content, doc.revision)
           .then(() => {
             const latest = useDocumentManagerStore.getState().getDocument(id);
             // Only clear if no remount created a newer document for this page
@@ -171,7 +194,7 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
             const updatedPage = await response.json();
             const newContent = typeof updatedPage.content === 'string' ? updatedPage.content : '';
             // Use updateContentFromServer to avoid triggering auto-save loop
-            updateContentFromServer(newContent);
+            updateContentFromServer(newContent, updatedPage.revision);
           }
         } catch (error) {
           console.error('Failed to fetch updated canvas content:', error);
@@ -274,5 +297,6 @@ export default React.memo(
   CanvasPageView,
   (prevProps, nextProps) =>
     prevProps.page.id === nextProps.page.id &&
-    prevProps.page.content === nextProps.page.content
+    prevProps.page.content === nextProps.page.content &&
+    prevProps.page.revision === nextProps.page.revision
 );
