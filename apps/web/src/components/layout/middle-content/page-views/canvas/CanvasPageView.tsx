@@ -64,6 +64,8 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       clearTimeout(saveTimeoutRef.current);
     }
     saveTimeoutRef.current = setTimeout(async () => {
+      // Timer has fired; clear ref so clean docs can accept server updates again
+      saveTimeoutRef.current = null;
       try {
         await saveContent(page.id, newContent);
         // Only clear isDirty if no newer edits arrived while saving
