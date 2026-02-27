@@ -27,9 +27,8 @@ COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
 COPY apps/processor/package.json ./apps/processor/
 
-# Install all dependencies
-# Install dependencies (allow lockfile update since processor deps changed)
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --no-frozen-lockfile --prod=false
+# Install dependencies
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod=false
 
 # Now copy source code AFTER dependencies are installed
 COPY tsconfig.json ./

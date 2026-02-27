@@ -47,8 +47,7 @@ ENV NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_
 
 # Next.js collects telemetry data by default.
 # Learn more here: https://nextjs.org/telemetry
-# Uncomment the following line in case you want to disable telemetry.
-# ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # We are installing devDependencies via the --prod=false flag, so this is not needed
 # ENV NODE_ENV=development
@@ -65,8 +64,7 @@ FROM node:22.17.0-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-# Uncomment the following line in case you want to disable telemetry.
-# ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Use the existing node user (UID 1000) from the base image
 # This matches the processor container's UID for shared volume access
