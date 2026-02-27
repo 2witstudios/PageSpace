@@ -8,14 +8,33 @@
 export function getAIErrorMessage(errorMessage: string | undefined): string {
   if (!errorMessage) return 'Something went wrong. Please try again.';
 
+  const msg = errorMessage.toLowerCase();
+
   // Authentication errors
   if (errorMessage.includes('Unauthorized') || errorMessage.includes('401')) {
     return 'Authentication failed. Please refresh the page and try again.';
   }
 
+  // Request size errors (distinct from context-window limits)
+  if (
+    msg.includes('request body too large') ||
+    msg.includes('payload too large') ||
+    msg.includes('entity too large')
+  ) {
+    return 'Your request is too large. Try sending a shorter message or fewer/lower-size attachments.';
+  }
+
   // Context length errors
   if (isContextLengthError(errorMessage)) {
-    return 'The conversation is too long for this model\'s context window. Older messages have been trimmed to fit — try sending your message again.';
+    // Preserve server-provided guidance when present (e.g. "even after trimming", "latest message too large")
+    if (
+      msg.includes('latest message is too large') ||
+      msg.includes('even after trimming') ||
+      msg.includes('too long for this model')
+    ) {
+      return errorMessage;
+    }
+    return 'The conversation is too long for this model\'s context window. Please start a new conversation or use a model with a larger context window.';
   }
 
   // Rate limit errors
@@ -47,6 +66,16 @@ export function isAuthenticationError(errorMessage: string | undefined): boolean
 export function isContextLengthError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
   const msg = errorMessage.toLowerCase();
+
+  // Explicitly exclude non-context 413 payload errors
+  if (
+    msg.includes('request body too large') ||
+    msg.includes('payload too large') ||
+    msg.includes('entity too large')
+  ) {
+    return false;
+  }
+
   return (
     msg.includes('context_length') ||     // API error key: context_length_exceeded
     msg.includes('context length') ||     // Human-readable variant
