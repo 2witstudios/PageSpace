@@ -133,7 +133,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
 
       try {
         const response = await fetchWithAuth(
-          `/api/pages/${pageId}/permissions/check?userId=${user.id}`,
+          `/api/pages/${pageId}/permissions/check?userId=${encodeURIComponent(user.id)}`,
           { signal: abortController.signal }
         );
         if (response.ok) {

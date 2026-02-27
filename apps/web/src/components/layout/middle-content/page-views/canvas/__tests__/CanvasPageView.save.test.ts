@@ -4,6 +4,7 @@
  * and updateContentFromServer conflict detection.
  */
 
+import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 
@@ -49,7 +50,7 @@ vi.mock('@/components/canvas/ShadowCanvas', () => ({
 }));
 
 vi.mock('@/components/ai/shared', () => ({
-  ErrorBoundary: ({ children }: { children: React.ReactNode }) => children,
+  ErrorBoundary: ({ children }: { children: ReactNode }) => children,
 }));
 
 vi.mock('@/lib/navigation/app-navigation', () => ({

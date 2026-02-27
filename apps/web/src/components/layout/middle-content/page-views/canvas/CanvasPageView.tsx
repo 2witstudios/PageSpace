@@ -131,9 +131,14 @@ const CanvasPageView = ({ page }: CanvasPageViewProps) => {
       const store = useDocumentManagerStore.getState();
       const doc = store.getDocument(id);
       if (doc?.isDirty) {
+        const snapshotLastUpdateTime = doc.lastUpdateTime;
         saveContentRef.current(id, doc.content)
           .then(() => {
-            useDocumentManagerStore.getState().clearDocument(id);
+            const latest = useDocumentManagerStore.getState().getDocument(id);
+            // Only clear if no remount created a newer document for this page
+            if (!latest || latest.lastUpdateTime === snapshotLastUpdateTime) {
+              useDocumentManagerStore.getState().clearDocument(id);
+            }
           })
           .catch(() => {
             // Save failed — keep document in store so it can be recovered on remount

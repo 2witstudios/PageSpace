@@ -1548,7 +1548,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if (!user?.id) return;
       try {
         const response = await fetchWithAuth(
-          `/api/pages/${page.id}/permissions/check?userId=${user.id}`,
+          `/api/pages/${page.id}/permissions/check?userId=${encodeURIComponent(user.id)}`,
           { signal: abortController.signal }
         );
         if (response.ok) {
