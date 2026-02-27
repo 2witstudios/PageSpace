@@ -1,0 +1,19 @@
+sessionName: ppg
+defaultAgent: claude
+agents:
+  claude:
+    name: claude
+    command: claude --dangerously-skip-permissions
+    interactive: true
+  codex:
+    name: codex
+    command: codex --yolo
+    interactive: true
+  opencode:
+    name: opencode
+    command: opencode --yolo
+    interactive: true
+envFiles:
+  - .env
+  - .env.local
+symlinkNodeModules: true

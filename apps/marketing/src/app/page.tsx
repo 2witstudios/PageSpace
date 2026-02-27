@@ -672,13 +672,13 @@ export default function Home() {
             </div>
 
             {/* Two Column Layout */}
-            <div className="grid lg:grid-cols-2 gap-12 items-center">
+            <div className="grid lg:grid-cols-2 gap-6 md:gap-12 items-center">
               {/* Left: Document Editor Visual */}
-              <div className="relative order-2 lg:order-1">
+              <div className="relative order-2 lg:order-1 min-w-0">
                 <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
                   {/* Editor Header */}
-                  <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
-                    <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2 sm:px-4 sm:py-3">
+                    <div className="flex items-center gap-2 sm:gap-3">
                       <FileText className="h-4 w-4 text-muted-foreground" />
                       <span className="text-sm font-medium">Editor Overview</span>
                     </div>
@@ -686,30 +686,30 @@ export default function Home() {
                   </div>
 
                   {/* Toolbar — matches real Toolbar.tsx + DocumentView.tsx wrapper */}
-                  <div className="mx-4 mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden">
-                    <div className="w-full overflow-x-auto">
-                      <div className="flex items-center gap-1 p-2 min-w-max">
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Bold size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Italic size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Strikethrough size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Code size={16} /></button>
-                        <div className="w-[1px] h-6 bg-border mx-1" />
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Heading1 size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Heading2 size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Heading3 size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors bg-primary text-primary-foreground"><Pilcrow size={16} /></button>
-                        <div className="w-[1px] h-6 bg-border mx-1" />
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><List size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><ListOrdered size={16} /></button>
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Quote size={16} /></button>
-                        <div className="w-[1px] h-6 bg-border mx-1" />
-                        <button className="p-2 rounded-md transition-colors hover:bg-muted"><Table2 size={16} /></button>
+                  <div className="mx-2 sm:mx-4 mt-2 sm:mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden">
+                    <div className="w-full overflow-x-auto scrollbar-none">
+                      <div className="flex items-center gap-0.5 sm:gap-1 p-1.5 sm:p-2 min-w-max">
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><Bold size={16} /></button>
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><Italic size={16} /></button>
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><Strikethrough size={16} /></button>
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><Code size={16} /></button>
+                        <div className="w-[1px] h-6 bg-border mx-0.5 sm:mx-1" />
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><Heading1 size={16} /></button>
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><Heading2 size={16} /></button>
+                        <button className="hidden sm:inline-flex p-2 rounded-md transition-colors hover:bg-muted"><Heading3 size={16} /></button>
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors bg-primary text-primary-foreground"><Pilcrow size={16} /></button>
+                        <div className="w-[1px] h-6 bg-border mx-0.5 sm:mx-1" />
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><List size={16} /></button>
+                        <button className="p-1.5 sm:p-2 rounded-md transition-colors hover:bg-muted"><ListOrdered size={16} /></button>
+                        <button className="hidden sm:inline-flex p-2 rounded-md transition-colors hover:bg-muted"><Quote size={16} /></button>
+                        <div className="hidden sm:block w-[1px] h-6 bg-border mx-1" />
+                        <button className="hidden sm:inline-flex p-2 rounded-md transition-colors hover:bg-muted"><Table2 size={16} /></button>
                         <div className="ml-auto" />
-                        <div className="w-[1px] h-6 bg-border mx-1" />
-                        <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted transition-colors">
+                        <div className="hidden md:block w-[1px] h-6 bg-border mx-1" />
+                        <button className="hidden md:inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted transition-colors">
                           Sans <ChevronDown size={10} />
                         </button>
-                        <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted transition-colors">
+                        <button className="hidden md:inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:bg-muted transition-colors">
                           16px <ChevronDown size={10} />
                         </button>
                       </div>
@@ -717,19 +717,19 @@ export default function Home() {
                   </div>
 
                   {/* Editor Content */}
-                  <div className="p-6 min-h-[320px]">
-                    <h1 className="text-xl font-bold mb-4">Editor Overview</h1>
-                    <p className="text-muted-foreground mb-4">
+                  <div className="p-4 sm:p-6 min-h-[240px] sm:min-h-[320px]">
+                    <h1 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4">Editor Overview</h1>
+                    <p className="text-sm sm:text-base text-muted-foreground mb-3 sm:mb-4">
                       A rich text editor built on TipTap with full formatting, markdown shortcuts, and code blocks.
                       Write naturally—the toolbar and keyboard shortcuts stay out of your way.
                     </p>
 
-                    <p className="text-muted-foreground mb-4">
+                    <p className="text-sm sm:text-base text-muted-foreground mb-3 sm:mb-4">
                       <span className="text-foreground">AI edits your document directly.</span> Ask the sidebar chat to rewrite a paragraph, expand an outline,
                       or change the tone—changes appear inline so you stay in flow.
                     </p>
 
-                    <p className="text-muted-foreground">
+                    <p className="text-sm sm:text-base text-muted-foreground">
                       Supports headings, lists, tables, blockquotes, and fenced code blocks.
                       Switch between rich text and raw markdown anytime.
                     </p>
@@ -739,12 +739,12 @@ export default function Home() {
               </div>
 
               {/* Right: Feature Points */}
-              <div className="space-y-6 order-1 lg:order-2">
+              <div className="space-y-4 sm:space-y-6 order-1 lg:order-2">
                 {/* AI Chat Editing */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Wand2 className="h-5 w-5 text-primary" />
+                <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
+                  <div className="flex items-start gap-3 sm:gap-4">
+                    <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
+                      <Wand2 className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold mb-1">AI-Powered Editing</h3>
@@ -757,10 +757,10 @@ export default function Home() {
                 </div>
 
                 {/* Rich Text / Markdown */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <PenTool className="h-5 w-5 text-primary" />
+                <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
+                  <div className="flex items-start gap-3 sm:gap-4">
+                    <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
+                      <PenTool className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold mb-1">Rich Text & Markdown</h3>
@@ -773,10 +773,10 @@ export default function Home() {
                 </div>
 
                 {/* Version History */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Undo2 className="h-5 w-5 text-primary" />
+                <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
+                  <div className="flex items-start gap-3 sm:gap-4">
+                    <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
+                      <Undo2 className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold mb-1">One-Click Rollback</h3>
@@ -789,10 +789,10 @@ export default function Home() {
                 </div>
 
                 {/* Multiple Doc Types */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-                      <Edit3 className="h-5 w-5 text-primary" />
+                <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
+                  <div className="flex items-start gap-3 sm:gap-4">
+                    <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
+                      <Edit3 className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold mb-1">Beyond Documents</h3>
@@ -1028,7 +1028,7 @@ export default function Home() {
             {/* Two Column Layout */}
             <div className="grid lg:grid-cols-2 gap-12 items-center">
               {/* Left: Task List Visual - EXACT MATCH to TaskCompactRow.tsx */}
-              <div className="relative order-2 lg:order-1">
+              <div className="relative order-2 lg:order-1 min-w-0">
                 <div className="rounded-xl border border-border bg-card shadow-lg overflow-hidden">
                   {/* Task List Header */}
                   <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-3">
