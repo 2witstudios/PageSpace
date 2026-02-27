@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -28,14 +29,16 @@ const fetcher = async (url: string): Promise<Device[]> => {
 };
 
 export function useDevices() {
+  const hasLoadedRef = useRef(false);
   const isAnyActive = useEditingStore((state) => state.isAnyActive());
 
   const { data, error, mutate } = useSWR<Device[]>(
     '/api/account/devices',
     fetcher,
     {
-      isPaused: () => isAnyActive,
-      refreshInterval: 60000, // Refresh every minute
+      isPaused: () => hasLoadedRef.current && isAnyActive,
+      onSuccess: () => { hasLoadedRef.current = true; },
+      refreshInterval: 60000,
       revalidateOnFocus: true,
       revalidateOnReconnect: true,
     }

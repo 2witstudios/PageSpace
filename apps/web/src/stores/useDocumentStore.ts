@@ -1,3 +1,8 @@
+/**
+ * @deprecated Use useDocumentManagerStore for document content management.
+ * This store has a shared saveTimeoutId that causes data loss with parallel documents.
+ * Only activeView/setActiveView should be used from this store (UI toggle state).
+ */
 import { create } from 'zustand';
 
 interface DocumentState {
