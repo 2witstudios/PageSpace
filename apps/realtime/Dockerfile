@@ -16,7 +16,9 @@ COPY apps/realtime/package.json ./apps/realtime/
 
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod=false
 
-COPY packages ./packages
+COPY types ./types
+COPY packages/db ./packages/db
+COPY packages/lib ./packages/lib
 COPY apps/realtime ./apps/realtime
 COPY tsconfig.json ./
 
@@ -42,9 +44,10 @@ COPY --from=builder /app/apps/realtime/package.json ./apps/realtime/
 # Install production-only dependencies
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile --prod
 
-# Copy built artifacts from builder
-COPY --from=builder /app/packages ./packages
-COPY --from=builder /app/apps/realtime ./apps/realtime
+# Copy only compiled runtime artifacts from builder
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/packages/lib/dist ./packages/lib/dist
+COPY --from=builder /app/apps/realtime/dist ./apps/realtime/dist
 
 ENV NODE_ENV=production
 
