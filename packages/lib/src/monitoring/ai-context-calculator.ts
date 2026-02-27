@@ -142,6 +142,42 @@ export function getContextWindowSize(model: string, provider?: string): number {
   const providerLower = provider?.toLowerCase() || '';
   const modelLower = model.toLowerCase();
 
+  // OpenRouter must be checked first — its models contain names like 'claude', 'gpt', 'gemini'
+  // that would otherwise match the provider-specific branches below.
+  if (providerLower === 'openrouter') {
+    // Claude models via OpenRouter
+    if (modelLower.includes('claude')) return 200_000;
+    // Gemini models via OpenRouter
+    if (modelLower.includes('gemini-2.5')) return 1_000_000;
+    if (modelLower.includes('gemini-2.0') || modelLower.includes('gemini-1.5')) return 1_000_000;
+    // GPT models via OpenRouter
+    if (modelLower.includes('gpt-5.2')) {
+      return modelLower.includes('mini') || modelLower.includes('nano') ? 256_000 : 400_000;
+    }
+    if (modelLower.includes('gpt-5.1')) return 400_000;
+    if (modelLower.includes('gpt-5')) {
+      return modelLower.includes('mini') || modelLower.includes('nano') ? 128_000 : 272_000;
+    }
+    if (modelLower.includes('gpt-4o') || modelLower.includes('gpt-4-turbo')) return 128_000;
+    // Grok models via OpenRouter
+    if (modelLower.includes('grok-4-fast')) return 2_000_000;
+    if (modelLower.includes('grok')) return 128_000;
+    // DeepSeek models - commonly 64k or 128k
+    if (modelLower.includes('deepseek-r1') || modelLower.includes('deepseek-v3')) return 128_000;
+    if (modelLower.includes('deepseek')) return 64_000;
+    // Qwen models
+    if (modelLower.includes('qwen-2.5') || modelLower.includes('qwq')) return 128_000;
+    if (modelLower.includes('qwen')) return 32_000;
+    // Llama models
+    if (modelLower.includes('llama-3') || modelLower.includes('llama3')) return 128_000;
+    if (modelLower.includes('llama')) return 32_000;
+    // Mistral models
+    if (modelLower.includes('mistral-large') || modelLower.includes('mistral-nemo')) return 128_000;
+    if (modelLower.includes('mistral')) return 32_000;
+    // OpenRouter platform hard cap is 400k for many endpoints - use 200k as safe default
+    return 200_000;
+  }
+
   // OpenAI models
   if (providerLower === 'openai' || modelLower.includes('gpt')) {
     // GPT-5.2 models (400k/256k context)
@@ -220,38 +256,6 @@ export function getContextWindowSize(model: string, provider?: string): number {
   if (providerLower === 'minimax' || modelLower.includes('minimax')) {
     if (modelLower.includes('m2.5')) return 1_000_000;
     return 128_000; // Default for older MiniMax models
-  }
-
-  // OpenRouter - use model-specific limits where known, else 200k conservative default
-  if (providerLower === 'openrouter') {
-    // Claude models via OpenRouter
-    if (modelLower.includes('claude')) return 200_000;
-    // Gemini models via OpenRouter
-    if (modelLower.includes('gemini-2.5')) return 1_000_000;
-    if (modelLower.includes('gemini-2.0') || modelLower.includes('gemini-1.5')) return 1_000_000;
-    // GPT models via OpenRouter
-    if (modelLower.includes('gpt-5.2')) {
-      return modelLower.includes('mini') || modelLower.includes('nano') ? 256_000 : 400_000;
-    }
-    if (modelLower.includes('gpt-5.1')) return 400_000;
-    if (modelLower.includes('gpt-5')) {
-      return modelLower.includes('mini') || modelLower.includes('nano') ? 128_000 : 272_000;
-    }
-    if (modelLower.includes('gpt-4o') || modelLower.includes('gpt-4-turbo')) return 128_000;
-    // DeepSeek models - commonly 64k or 128k
-    if (modelLower.includes('deepseek-r1') || modelLower.includes('deepseek-v3')) return 128_000;
-    if (modelLower.includes('deepseek')) return 64_000;
-    // Qwen models
-    if (modelLower.includes('qwen-2.5') || modelLower.includes('qwq')) return 128_000;
-    if (modelLower.includes('qwen')) return 32_000;
-    // Llama models
-    if (modelLower.includes('llama-3') || modelLower.includes('llama3')) return 128_000;
-    if (modelLower.includes('llama')) return 32_000;
-    // Mistral models
-    if (modelLower.includes('mistral-large') || modelLower.includes('mistral-nemo')) return 128_000;
-    if (modelLower.includes('mistral')) return 32_000;
-    // OpenRouter platform hard cap is 400k for many endpoints - use 200k as safe default
-    return 200_000;
   }
 
   // Unknown provider/model - conservative default

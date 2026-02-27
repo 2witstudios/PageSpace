@@ -856,6 +856,27 @@ export async function POST(request: Request) {
       });
     }
 
+    // Guard: if truncation left zero messages, the latest message alone exceeds the budget
+    if (includedMessages.length === 0) {
+      loggers.ai.error('AI Chat API: No messages fit within context budget', {
+        model: currentModel,
+        provider: currentProvider,
+        contextWindow,
+        inputBudget,
+        systemPromptTokens,
+        toolTokens,
+        originalMessageCount: sanitizedMessages.length,
+      });
+      return NextResponse.json(
+        {
+          error: 'context_length_exceeded',
+          message: 'Your latest message is too large to fit within this model\'s context window. Try shortening your message or starting a new conversation.',
+          details: 'context_length_exceeded',
+        },
+        { status: 413 }
+      );
+    }
+
     const modelMessages = convertToModelMessages(includedMessages as UIMessage[], {
       tools: filteredTools  // Use original tools - no wrapping needed
     });
@@ -1248,7 +1269,7 @@ export async function POST(request: Request) {
           error: 'context_length_exceeded',
           message: wasTruncated
             ? 'The conversation still exceeds this model\'s context window even after trimming. Please start a new conversation.'
-            : 'The conversation is too long for this model\'s context window. Older messages have been trimmed — try sending your message again.',
+            : 'The conversation is too long for this model\'s context window. Please start a new conversation or try a model with a larger context window.',
           details: 'context_length_exceeded',
         },
         { status: 413 }
