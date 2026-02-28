@@ -139,6 +139,7 @@ const createPageFixture = (overrides: Partial<{
   stateHash: null,
   parentId: null,
   originalParentId: null,
+  excludeFromSearch: false,
 });
 
 const createTaskListFixture = (overrides: Partial<{

@@ -82,8 +82,6 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       logUserActivity(adminUser.id, 'account_delete', {
         targetUserId: userId,
         targetUserEmail: user.email,
-        adminAction: true,
-        reason,
       }, actorInfo);
 
       // Anonymize activity logs

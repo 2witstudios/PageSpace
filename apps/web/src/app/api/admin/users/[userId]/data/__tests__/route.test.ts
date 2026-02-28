@@ -95,10 +95,8 @@ describe('/api/admin/users/[userId]/data', () => {
     mockAdminAuth();
     mockFindById.mockResolvedValue({
       id: 'user-1',
-      name: 'Target User',
       email: 'target@example.com',
       image: null,
-      password: 'hashed',
     });
 
     const request = new Request('http://localhost/api/admin/users/user-1/data', {
@@ -123,10 +121,8 @@ describe('/api/admin/users/[userId]/data', () => {
     mockAdminAuth('admin-123');
     mockFindById.mockResolvedValue({
       id: 'admin-123',
-      name: 'Admin',
       email: 'admin@example.com',
       image: null,
-      password: 'hashed',
     });
 
     const request = new Request('http://localhost/api/admin/users/admin-123/data', {
@@ -178,10 +174,8 @@ describe('/api/admin/users/[userId]/data', () => {
     mockAdminAuth();
     mockFindById.mockResolvedValue({
       id: 'user-1',
-      name: 'Target',
       email: 'target@example.com',
       image: null,
-      password: 'hashed',
     });
     vi.mocked(accountRepository.getOwnedDrives).mockResolvedValue([
       { id: 'drive-1', name: 'Shared Drive' },
