@@ -37,7 +37,6 @@ vi.mock('@pagespace/db', () => ({
   db: {},
 }));
 
-import { withAdminAuth } from '@/lib/auth/auth';
 import { authenticateSessionRequest } from '@/lib/auth/index';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 

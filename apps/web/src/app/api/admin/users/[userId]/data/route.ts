@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { withAdminAuth, type AdminRouteContext } from '@/lib/auth/auth';
+import { withAdminAuth } from '@/lib/auth/auth';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { deleteAiUsageLogsForUser } from '@pagespace/lib';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';

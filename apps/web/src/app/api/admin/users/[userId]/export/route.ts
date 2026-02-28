@@ -1,4 +1,4 @@
-import { withAdminAuth, type AdminRouteContext } from '@/lib/auth/auth';
+import { withAdminAuth } from '@/lib/auth/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';

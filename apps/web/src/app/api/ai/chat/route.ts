@@ -322,12 +322,10 @@ export async function POST(request: Request) {
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
-    let userPromptContent: string | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
         const messageContent = extractMessageContent(userMessage);
-        userPromptContent = messageContent;
         
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
