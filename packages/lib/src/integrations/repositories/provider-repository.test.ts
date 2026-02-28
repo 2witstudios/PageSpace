@@ -401,7 +401,7 @@ const seedBuiltinProviders = async (
   builtins: BuiltinConfig[],
 ): Promise<MockProvider[]> => {
   const existing: MockProvider[] = await db.query.integrationProviders.findMany({
-    where: { enabled: true },
+    columns: { slug: true },
   }) ?? [];
 
   const installedSlugs = new Set(existing.map((p) => p.slug));

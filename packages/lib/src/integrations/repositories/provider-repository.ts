@@ -145,10 +145,10 @@ export const seedBuiltinProviders = async (
   builtins: IntegrationProviderConfig[]
 ): Promise<IntegrationProvider[]> => {
   const existing = await database.query.integrationProviders.findMany({
-    where: eq(integrationProviders.enabled, true),
+    columns: { slug: true },
   });
 
-  const installedSlugs = new Set(existing.map((p: IntegrationProvider) => p.slug));
+  const installedSlugs = new Set(existing.map((p) => p.slug));
   const toSeed = builtins.filter((b) => !installedSlugs.has(b.id));
 
   if (toSeed.length === 0) return [];
