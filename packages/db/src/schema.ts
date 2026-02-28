@@ -26,6 +26,7 @@ export * from './schema/integrations';
 export * from './schema/personalization';
 export * from './schema/calendar';
 export * from './schema/workflows';
+export * from './schema/organizations';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -55,6 +56,7 @@ import * as integrations from './schema/integrations';
 import * as personalization from './schema/personalization';
 import * as calendar from './schema/calendar';
 import * as workflows from './schema/workflows';
+import * as organizations from './schema/organizations';
 
 export const schema = {
   ...auth,
@@ -85,4 +87,5 @@ export const schema = {
   ...personalization,
   ...calendar,
   ...workflows,
+  ...organizations,
 };

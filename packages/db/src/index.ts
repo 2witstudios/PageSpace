@@ -93,6 +93,17 @@ export {
   type NewPushNotificationToken,
 } from './schema/push-notifications';
 
+// Organizations re-exports
+export {
+  organizations,
+  organizationsRelations,
+  orgMembers,
+  orgMembersRelations,
+  orgInvitations,
+  orgInvitationsRelations,
+  orgMemberRole,
+} from './schema/organizations';
+
 // Note: Auth transaction functions are exported from '@pagespace/db/transactions/auth-transactions'
 // They are NOT re-exported here to avoid circular dependency issues
 // Import directly: import { atomicDeviceTokenRotation, ... } from '@pagespace/db/transactions/auth-transactions';
