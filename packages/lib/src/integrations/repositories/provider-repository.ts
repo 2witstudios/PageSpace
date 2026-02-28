@@ -14,6 +14,7 @@ import {
   type IntegrationProvider,
   type NewIntegrationProvider,
 } from '@pagespace/db';
+import type { IntegrationProviderConfig } from '../types';
 
 /**
  * Get a provider by ID.
@@ -133,6 +134,45 @@ export const deleteProvider = async (
     .returning();
 
   return deleted ?? null;
+};
+
+/**
+ * Seed builtin providers that are not yet installed.
+ * Idempotent — skips providers whose slug already exists in the database.
+ */
+export const seedBuiltinProviders = async (
+  database: typeof defaultDb,
+  builtins: IntegrationProviderConfig[]
+): Promise<IntegrationProvider[]> => {
+  const existing = await database.query.integrationProviders.findMany({
+    where: eq(integrationProviders.enabled, true),
+  });
+
+  const installedSlugs = new Set(existing.map((p: IntegrationProvider) => p.slug));
+  const toSeed = builtins.filter((b) => !installedSlugs.has(b.id));
+
+  if (toSeed.length === 0) return [];
+
+  const seeded: IntegrationProvider[] = [];
+  for (const builtin of toSeed) {
+    const [provider] = await database
+      .insert(integrationProviders)
+      .values({
+        slug: builtin.id,
+        name: builtin.name,
+        description: builtin.description ?? null,
+        iconUrl: builtin.iconUrl ?? null,
+        documentationUrl: builtin.documentationUrl ?? null,
+        providerType: 'builtin',
+        config: builtin as unknown as Record<string, unknown>,
+        isSystem: true,
+        enabled: true,
+      })
+      .returning();
+    seeded.push(provider);
+  }
+
+  return seeded;
 };
 
 /**
