@@ -1,4 +1,4 @@
-import { db, eq, and, organizations, orgSubscriptions } from '@pagespace/db';
+import { db, eq, organizations, orgSubscriptions } from '@pagespace/db';
 import type Stripe from 'stripe';
 
 export async function handleOrgSubscriptionChange(subscription: Stripe.Subscription) {

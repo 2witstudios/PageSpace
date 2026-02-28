@@ -1,4 +1,4 @@
-import { db, eq, and, organizations, orgMembers, orgSubscriptions } from '@pagespace/db';
+import { db, eq, and, organizations, orgSubscriptions } from '@pagespace/db';
 import { stripe } from '../stripe';
 import { getOrgMemberCount } from './guardrails';
 
