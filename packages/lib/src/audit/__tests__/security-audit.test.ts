@@ -2,35 +2,39 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'crypto';
 
 // Use vi.hoisted to create shared state that can be accessed from the hoisted mock
-const { testState } = vi.hoisted(() => {
+const { testState, createMockTxFn } = vi.hoisted(() => {
   const state = {
     capturedInserts: [] as Array<{ previousHash: string; eventHash: string }>,
+    executedSql: [] as Array<{ strings: TemplateStringsArray; values: unknown[] }>,
   };
-  return { testState: state };
+
+  const createMockTx = () => {
+    const insertValuesMock = {
+      fn: null as ReturnType<typeof import('vitest')['vi']['fn']> | null,
+    };
+
+    return {
+      execute: (sqlObj: { strings: TemplateStringsArray; values: unknown[] }) => {
+        state.executedSql.push(sqlObj);
+        return Promise.resolve({ rows: [] });
+      },
+      insert: () => ({
+        values: (value: { previousHash: string; eventHash: string }) => {
+          state.capturedInserts.push({
+            previousHash: value.previousHash,
+            eventHash: value.eventHash,
+          });
+          return Promise.resolve(undefined);
+        },
+      }),
+    };
+  };
+
+  return { testState: state, createMockTxFn: createMockTx };
 });
 
 // Mock the database module
 vi.mock('@pagespace/db', () => {
-  // Create a mock transaction context that mirrors the main db interface
-  const createMockTx = () => {
-    const insertValuesMock = vi.fn().mockImplementation((value) => {
-      testState.capturedInserts.push({
-        previousHash: value.previousHash,
-        eventHash: value.eventHash,
-      });
-      return Promise.resolve(undefined);
-    });
-
-    const insertMock = vi.fn().mockReturnValue({
-      values: insertValuesMock,
-    });
-
-    return {
-      execute: vi.fn().mockResolvedValue({ rows: [] }),
-      insert: insertMock,
-    };
-  };
-
   return {
     db: {
       query: {
@@ -52,8 +56,8 @@ vi.mock('@pagespace/db', () => {
           }),
         }),
       }),
-      transaction: vi.fn().mockImplementation(async (callback) => {
-        const tx = createMockTx();
+      transaction: vi.fn().mockImplementation(async (callback: (tx: ReturnType<typeof createMockTxFn>) => Promise<void>) => {
+        const tx = createMockTxFn();
         return callback(tx);
       }),
     },
@@ -83,7 +87,13 @@ describe('Security Audit Service', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    testState.capturedInserts.length = 0; // Clear captured inserts
+    // Restore transaction implementation after clearAllMocks removes it
+    vi.mocked(db.transaction).mockImplementation(async (callback: (tx: ReturnType<typeof createMockTxFn>) => Promise<void>) => {
+      const tx = createMockTxFn();
+      return callback(tx);
+    });
+    testState.capturedInserts.length = 0;
+    testState.executedSql.length = 0;
     service = new SecurityAuditService();
   });
 
@@ -235,15 +245,47 @@ describe('Security Audit Service', () => {
     });
 
     it('handles concurrent logging (all use transactions)', async () => {
-      // Simulate concurrent logging
       await Promise.all([
         service.logEvent({ eventType: 'auth.login.success', userId: 'user1' }),
         service.logEvent({ eventType: 'auth.login.success', userId: 'user2' }),
         service.logEvent({ eventType: 'auth.login.success', userId: 'user3' }),
       ]);
 
-      // All 3 events should have used transactions for serialized writes
       expect(db.transaction).toHaveBeenCalledTimes(3);
+    });
+
+    it('acquires advisory lock before reading last hash (#542)', async () => {
+      await service.logEvent({
+        eventType: 'auth.login.success',
+        userId: 'user123',
+      });
+
+      // First SQL execute call should be the advisory lock
+      expect(testState.executedSql.length).toBeGreaterThanOrEqual(2);
+      const lockSql = testState.executedSql[0];
+      expect(lockSql).toBeDefined();
+      // The template string should contain pg_advisory_xact_lock
+      const joinedSql = lockSql!.strings.join('');
+      expect(joinedSql).toContain('pg_advisory_xact_lock');
+    });
+
+    it('uses fixed lock key for all events (#542)', async () => {
+      expect(SecurityAuditService.CHAIN_LOCK_KEY).toBe(8370291546);
+    });
+
+    it('reads latest hash after acquiring lock, not with FOR UPDATE (#542)', async () => {
+      await service.logEvent({
+        eventType: 'auth.login.success',
+        userId: 'user123',
+      });
+
+      // Second SQL call reads latest hash (without FOR UPDATE)
+      const selectSql = testState.executedSql[1];
+      expect(selectSql).toBeDefined();
+      const joinedSql = selectSql!.strings.join('');
+      expect(joinedSql).toContain('SELECT');
+      expect(joinedSql).toContain('eventHash');
+      expect(joinedSql).not.toContain('FOR UPDATE');
     });
   });
 

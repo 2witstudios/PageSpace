@@ -1,4 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Mock @pagespace/db to avoid resolution errors (maskEmail doesn't need DB)
+vi.mock('@pagespace/db', () => ({}));
+
 import { maskEmail } from '../index';
 
 describe('maskEmail', () => {

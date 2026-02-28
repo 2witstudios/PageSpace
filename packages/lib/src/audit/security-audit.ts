@@ -145,15 +145,22 @@ export class SecurityAuditService {
   }
 
   /**
+   * Advisory lock key for serializing hash chain writes.
+   * Uses a fixed bigint derived from the string 'security_audit_chain'.
+   * pg_advisory_xact_lock holds the lock until the transaction commits/rolls back.
+   */
+  static readonly CHAIN_LOCK_KEY = 8370291546;
+
+  /**
    * Log a security event with hash chain integrity.
    *
-   * Uses database transaction with FOR UPDATE locking to serialize concurrent writes
-   * and prevent hash chain forking (where multiple events share the same previousHash).
+   * Uses a PostgreSQL advisory lock to serialize concurrent writes and prevent
+   * hash chain forking. Advisory locks work even when the table is empty (genesis),
+   * unlike FOR UPDATE which requires an existing row to lock.
    *
    * @param event - The security event to log
    */
   async logEvent(event: AuditEvent): Promise<void> {
-    // Ensure initialized (fallback for lazy init, but prefer explicit init)
     if (!this.initialized) {
       await this.initialize();
     }
@@ -161,23 +168,22 @@ export class SecurityAuditService {
     const timestamp = new Date();
 
     await db.transaction(async (tx) => {
-      // Get last hash from DB with lock to serialize concurrent writes.
-      // FOR UPDATE on the most recent row prevents concurrent inserts from reading
-      // the same previousHash, which would fork the hash chain.
+      // Acquire advisory lock scoped to this transaction.
+      // Blocks concurrent writers until this transaction completes.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${SecurityAuditService.CHAIN_LOCK_KEY})`);
+
+      // Read the latest hash — safe from races under the advisory lock
       const lastRecord = await tx.execute(sql`
         SELECT "eventHash"
         FROM security_audit_log
         ORDER BY timestamp DESC
         LIMIT 1
-        FOR UPDATE
       `);
 
       const previousHash = (lastRecord.rows[0] as { eventHash: string } | undefined)?.eventHash ?? 'genesis';
 
-      // Compute hash for this event
       const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
 
-      // Insert the event
       await tx.insert(securityAuditLog).values({
         eventType: event.eventType,
         userId: event.userId,
@@ -196,7 +202,6 @@ export class SecurityAuditService {
         eventHash,
       });
 
-      // Update in-memory cache for reads (optimization for single-instance)
       this.lastHash = eventHash;
     });
   }
