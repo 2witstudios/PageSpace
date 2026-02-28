@@ -7,7 +7,7 @@
 
 import type { IntegrationProviderConfig } from '../types';
 
-const slackResponseValidation = {
+const SLACK_RESPONSE_VALIDATION = {
   success: { path: '$.ok', equals: true },
   errorPath: '$.error',
 } as const;
@@ -30,6 +30,7 @@ export const slackProvider: IntegrationProviderConfig = {
         'groups:history',
         'chat:write',
         'users:read',
+        'users:read.email',
         'search:read',
       ],
       pkceRequired: false,
@@ -95,7 +96,7 @@ export const slackProvider: IntegrationProviderConfig = {
           },
         },
       },
-      responseValidation: slackResponseValidation,
+      responseValidation: SLACK_RESPONSE_VALIDATION,
       outputTransform: {
         extract: '$.channels',
         mapping: {
@@ -144,7 +145,7 @@ export const slackProvider: IntegrationProviderConfig = {
           },
         },
       },
-      responseValidation: slackResponseValidation,
+      responseValidation: SLACK_RESPONSE_VALIDATION,
       outputTransform: {
         extract: '$.messages',
         mapping: {
@@ -182,7 +183,7 @@ export const slackProvider: IntegrationProviderConfig = {
           },
         },
       },
-      responseValidation: slackResponseValidation,
+      responseValidation: SLACK_RESPONSE_VALIDATION,
       outputTransform: {
         extract: '$.user',
         mapping: {
@@ -233,7 +234,7 @@ export const slackProvider: IntegrationProviderConfig = {
           },
         },
       },
-      responseValidation: slackResponseValidation,
+      responseValidation: SLACK_RESPONSE_VALIDATION,
       outputTransform: {
         extract: '$.messages.matches',
         mapping: {
@@ -284,7 +285,7 @@ export const slackProvider: IntegrationProviderConfig = {
           bodyEncoding: 'json',
         },
       },
-      responseValidation: slackResponseValidation,
+      responseValidation: SLACK_RESPONSE_VALIDATION,
       outputTransform: {
         mapping: {
           ts: 'ts',
