@@ -9,13 +9,16 @@
 import type { IntegrationProviderConfig } from '../types';
 import { genericWebhookProvider } from './generic-webhook';
 import { githubProvider } from './github';
+import { notionProvider } from './notion';
 
 export { genericWebhookProvider } from './generic-webhook';
 export { githubProvider } from './github';
+export { notionProvider } from './notion';
 
 export const builtinProviders: Record<string, IntegrationProviderConfig> = {
   [genericWebhookProvider.id]: genericWebhookProvider,
   [githubProvider.id]: githubProvider,
+  [notionProvider.id]: notionProvider,
 };
 
 export const builtinProviderList: IntegrationProviderConfig[] =
