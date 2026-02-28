@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Plug2, AlertCircle } from 'lucide-react';
+import { Plug2, AlertCircle, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAgentGrants, useUserConnections, useDriveConnections } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
@@ -72,6 +72,7 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
   const handleUpdateGrant = async (grant: SafeGrant, updates: {
     readOnly?: boolean;
     rateLimitOverride?: { requestsPerMinute?: number } | null;
+    allowedTools?: string[] | null;
   }) => {
     setUpdatingGrant(grant.id);
     try {
@@ -195,6 +196,34 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                             }
                           }}
                         />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Tool access</Label>
+                        {grant.allowedTools ? (
+                          <div className="flex flex-wrap gap-1">
+                            {grant.allowedTools.map((tool) => (
+                              <Badge key={tool} variant="secondary" className="text-xs gap-1 pr-1">
+                                {tool}
+                                <button
+                                  type="button"
+                                  aria-label={`Remove ${tool}`}
+                                  disabled={updatingGrant === grant.id}
+                                  className="ml-0.5 rounded-full hover:bg-muted-foreground/20 p-0.5"
+                                  onClick={() => {
+                                    const updated = grant.allowedTools!.filter((t) => t !== tool);
+                                    handleUpdateGrant(grant, {
+                                      allowedTools: updated.length > 0 ? updated : null,
+                                    });
+                                  }}
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">All tools</p>
+                        )}
                       </div>
                     </div>
                   )}
