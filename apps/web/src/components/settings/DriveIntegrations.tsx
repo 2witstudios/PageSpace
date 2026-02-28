@@ -11,9 +11,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { AlertCircle, Cable, Plug2, Plus } from 'lucide-react';
+import { AlertCircle, Cable, Plug2, Plus, Bot } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { useDriveConnections, useProviders } from '@/hooks/useIntegrations';
+import { useDriveConnections, useProviders, useConnectionGrantCount } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { DisconnectConfirmDialog } from '@/components/integrations/DisconnectConfirmDialog';
@@ -105,33 +106,11 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
           ) : (
             <div className="space-y-2">
               {connections.map((connection) => (
-                <div
+                <DriveConnectionRow
                   key={connection.id}
-                  className="flex items-center justify-between p-3 border rounded-lg"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="p-2 rounded-full bg-muted flex-shrink-0">
-                      <Plug2 className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium truncate">{connection.name}</span>
-                        <IntegrationStatusBadge status={connection.status} />
-                      </div>
-                      {connection.provider && (
-                        <p className="text-xs text-muted-foreground">{connection.provider.name}</p>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => setDisconnectConnection(connection)}
-                  >
-                    Disconnect
-                  </Button>
-                </div>
+                  connection={connection}
+                  onDisconnect={() => setDisconnectConnection(connection)}
+                />
               ))}
             </div>
           )}
@@ -160,13 +139,77 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
         driveId={driveId}
       />
 
-      <DisconnectConfirmDialog
-        open={!!disconnectConnection}
+      <DriveDisconnectWithAgentCount
+        connection={disconnectConnection}
         onOpenChange={(open) => { if (!open) setDisconnectConnection(null); }}
-        connectionName={disconnectConnection?.name ?? ''}
         onConfirm={handleDisconnect}
       />
     </>
+  );
+}
+
+function DriveConnectionRow({
+  connection,
+  onDisconnect,
+}: {
+  connection: SafeConnection;
+  onDisconnect: () => void;
+}) {
+  const { count: agentCount } = useConnectionGrantCount(connection.id);
+
+  return (
+    <div className="flex items-center justify-between p-3 border rounded-lg">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="p-2 rounded-full bg-muted flex-shrink-0">
+          <Plug2 className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium truncate">{connection.name}</span>
+            <IntegrationStatusBadge status={connection.status} />
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {connection.provider && <span>{connection.provider.name}</span>}
+            {agentCount > 0 && (
+              <Badge variant="secondary" className="text-xs px-1.5 py-0 h-5 gap-1">
+                <Bot className="h-3 w-3" />
+                {agentCount} {agentCount === 1 ? 'agent' : 'agents'}
+              </Badge>
+            )}
+          </div>
+        </div>
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="text-destructive hover:text-destructive"
+        onClick={onDisconnect}
+      >
+        Disconnect
+      </Button>
+    </div>
+  );
+}
+
+function DriveDisconnectWithAgentCount({
+  connection,
+  onOpenChange,
+  onConfirm,
+}: {
+  connection: SafeConnection | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const { count } = useConnectionGrantCount(connection?.id ?? null);
+
+  return (
+    <DisconnectConfirmDialog
+      open={!!connection}
+      onOpenChange={onOpenChange}
+      connectionName={connection?.name ?? ''}
+      onConfirm={onConfirm}
+      affectedAgentCount={count}
+    />
   );
 }
 
