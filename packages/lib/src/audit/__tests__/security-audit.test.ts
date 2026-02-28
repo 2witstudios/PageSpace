@@ -56,7 +56,8 @@ vi.mock('@pagespace/db', () => {
           }),
         }),
       }),
-      transaction: vi.fn().mockImplementation(async (callback: (tx: ReturnType<typeof createMockTxFn>) => Promise<void>) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      transaction: vi.fn().mockImplementation(async (callback: any) => {
         const tx = createMockTxFn();
         return callback(tx);
       }),
@@ -88,7 +89,8 @@ describe('Security Audit Service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Restore transaction implementation after clearAllMocks removes it
-    vi.mocked(db.transaction).mockImplementation(async (callback: (tx: ReturnType<typeof createMockTxFn>) => Promise<void>) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(db.transaction).mockImplementation(async (callback: any) => {
       const tx = createMockTxFn();
       return callback(tx);
     });
