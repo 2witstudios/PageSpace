@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, boolean, pgEnum, index, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { drives } from './core';
 import { createId } from '@paralleldrive/cuid2';
 
 // Organization member roles
@@ -62,6 +63,7 @@ export const organizationsRelations = relations(organizations, ({ one, many }) =
   }),
   members: many(orgMembers),
   invitations: many(orgInvitations),
+  drives: many(drives),
 }));
 
 export const orgMembersRelations = relations(orgMembers, ({ one }) => ({

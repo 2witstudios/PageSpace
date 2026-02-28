@@ -11,10 +11,12 @@ import {
   driveMembers,
   pages,
   pagePermissions,
+  orgMembers,
   eq,
   and,
   not,
   inArray,
+  isNotNull,
 } from '@pagespace/db';
 import { slugify } from '../utils/utils';
 
@@ -96,10 +98,35 @@ export async function listAccessibleDrives(
         .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
         .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
 
+  // 3b. Get drives belonging to orgs the user is a member of
+  const userOrgMemberships = await db
+    .selectDistinct({ orgId: orgMembers.orgId })
+    .from(orgMembers)
+    .where(eq(orgMembers.userId, userId));
+
+  const orgDriveIds = userOrgMemberships.length
+    ? await db
+        .selectDistinct({ id: drives.id })
+        .from(drives)
+        .where(and(
+          inArray(drives.orgId, userOrgMemberships.map(m => m.orgId)),
+          not(eq(drives.ownerId, userId)),
+          ...(includeTrash ? [] : [eq(drives.isTrashed, false)]),
+        ))
+    : [];
+
   // 4. Build role map and lastAccessedAt map (membership role takes precedence)
   const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
   const driveLastAccessed = new Map<string, Date | null>();
   const allSharedDriveIds = new Set<string>();
+
+  // Add org drives as MEMBER access
+  for (const d of orgDriveIds) {
+    allSharedDriveIds.add(d.id);
+    if (!driveRoles.has(d.id)) {
+      driveRoles.set(d.id, 'MEMBER');
+    }
+  }
 
   for (const d of memberDrives) {
     if (d.driveId) {

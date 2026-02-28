@@ -2,6 +2,7 @@ import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, ind
 import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { organizations } from './organizations';
 import { createId } from '@paralleldrive/cuid2';
 export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE']);
 export type PageTypeEnum = (typeof pageType.enumValues)[number];
@@ -16,10 +17,12 @@ export const drives = pgTable('drives', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   drivePrompt: text('drivePrompt'), // Custom AI instructions for this drive
+  orgId: text('orgId').references(() => organizations.id, { onDelete: 'set null' }),
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
         ownerSlugKey: index('drives_owner_id_slug_key').on(table.ownerId, table.slug),
+        orgIdx: index('drives_org_id_idx').on(table.orgId),
     }
 });
 
@@ -178,6 +181,10 @@ export const drivesRelations = relations(drives, ({ one, many }) => ({
     owner: one(users, {
         fields: [drives.ownerId],
         references: [users.id],
+    }),
+    organization: one(organizations, {
+        fields: [drives.orgId],
+        references: [organizations.id],
     }),
     pages: many(pages),
 }));
