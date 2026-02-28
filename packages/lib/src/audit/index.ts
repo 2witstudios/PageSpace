@@ -17,6 +17,17 @@ export {
   auditSecurityEvent,
 } from './security-audit-adapter';
 
+export {
+  verifyAndAlert,
+  setChainAlertHandler,
+  getChainAlertHandler,
+  startPeriodicVerification,
+  stopPeriodicVerification,
+  isPeriodicVerificationRunning,
+  type ChainVerificationAlert,
+  type ChainAlertHandler,
+} from './security-audit-alerting';
+
 /** Mask email to prevent PII in audit logs (e.g., john@example.com -> jo***@example.com) */
 export function maskEmail(email: string): string {
   const [local, domain] = email.split('@');
