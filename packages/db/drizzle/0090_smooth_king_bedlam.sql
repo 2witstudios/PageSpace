@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "excludeFromSearch" boolean DEFAULT false NOT NULL;

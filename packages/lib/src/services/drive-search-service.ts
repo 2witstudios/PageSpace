@@ -164,8 +164,8 @@ export async function globSearchPages(
   // Build where conditions
   const whereConditions =
     includeTypes && includeTypes.length > 0
-      ? and(eq(pages.driveId, driveId), eq(pages.isTrashed, false), inArray(pages.type, includeTypes))
-      : and(eq(pages.driveId, driveId), eq(pages.isTrashed, false));
+      ? and(eq(pages.driveId, driveId), eq(pages.isTrashed, false), eq(pages.excludeFromSearch, false), inArray(pages.type, includeTypes))
+      : and(eq(pages.driveId, driveId), eq(pages.isTrashed, false), eq(pages.excludeFromSearch, false));
 
   // Get all pages in drive
   const allPages = await db
@@ -370,18 +370,21 @@ export async function regexSearchPages(
     whereConditions = and(
       eq(pages.driveId, driveId),
       eq(pages.isTrashed, false),
+      eq(pages.excludeFromSearch, false),
       sql`${pages.content} ~ ${pgPattern}`
     );
   } else if (searchIn === 'title') {
     whereConditions = and(
       eq(pages.driveId, driveId),
       eq(pages.isTrashed, false),
+      eq(pages.excludeFromSearch, false),
       sql`${pages.title} ~ ${pgPattern}`
     );
   } else {
     whereConditions = and(
       eq(pages.driveId, driveId),
       eq(pages.isTrashed, false),
+      eq(pages.excludeFromSearch, false),
       sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`
     );
   }

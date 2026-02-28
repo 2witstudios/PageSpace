@@ -54,6 +54,7 @@ export const pages = pgTable('pages', {
   extractionMethod: text('extractionMethod'),
   extractionMetadata: jsonb('extractionMetadata'),
   contentHash: text('contentHash'),
+  excludeFromSearch: boolean('excludeFromSearch').default(false).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),

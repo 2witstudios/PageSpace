@@ -305,6 +305,7 @@ export async function GET(request: Request) {
         and(
           inArray(pages.driveId, allDriveIds),
           eq(pages.isTrashed, false),
+          eq(pages.excludeFromSearch, false),
           or(
             titleCondition,
             // Search content for documents
