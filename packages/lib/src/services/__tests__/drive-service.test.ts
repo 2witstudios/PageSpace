@@ -21,8 +21,9 @@ vi.mock('@pagespace/db', () => ({
     insert: vi.fn(),
     update: vi.fn(),
   },
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId', isTrashed: 'drives.isTrashed' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', isTrashed: 'drives.isTrashed', orgId: 'drives.orgId' },
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
+  orgMembers: { orgId: 'orgMembers.orgId', userId: 'orgMembers.userId' },
   pages: { driveId: 'pages.driveId', id: 'pages.id' },
   pagePermissions: { pageId: 'pagePermissions.pageId', userId: 'pagePermissions.userId', canView: 'pagePermissions.canView' },
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
@@ -58,6 +59,7 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   isTrashed: overrides.isTrashed ?? false,
   trashedAt: null,
   drivePrompt: null,
+  orgId: null,
 });
 
 // ============================================================================
@@ -81,15 +83,41 @@ describe('listAccessibleDrives', () => {
       .mockResolvedValueOnce(ownedDrives)
       .mockResolvedValueOnce(sharedDrivesData);
 
-    // Mock member drives selectDistinct - returns member list first, then permission list
-    vi.mocked(db.selectDistinct).mockImplementation(() => ({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(memberDrives),
-        leftJoin: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(permissionDrives),
+    // selectDistinct is called 4 times:
+    // 1. driveMembers (member drives)
+    // 2. pagePermissions (permission drives via leftJoin)
+    // 3. orgMembers (org memberships) - returns empty for these tests
+    // 4. drives by orgId (org drives) - only called if org memberships exist
+    let selectDistinctCallCount = 0;
+    vi.mocked(db.selectDistinct).mockImplementation(() => {
+      selectDistinctCallCount++;
+      const callNum = selectDistinctCallCount;
+
+      if (callNum === 1) {
+        // driveMembers query
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(memberDrives),
+          }),
+        } as unknown as ReturnType<typeof db.selectDistinct>;
+      }
+      if (callNum === 2) {
+        // pagePermissions query (with leftJoin)
+        return {
+          from: vi.fn().mockReturnValue({
+            leftJoin: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue(permissionDrives),
+            }),
+          }),
+        } as unknown as ReturnType<typeof db.selectDistinct>;
+      }
+      // orgMembers query - return empty (no org memberships in existing tests)
+      return {
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
         }),
-      }),
-    } as unknown as ReturnType<typeof db.selectDistinct>));
+      } as unknown as ReturnType<typeof db.selectDistinct>;
+    });
   };
 
   it('should return empty array when user has no drives', async () => {
