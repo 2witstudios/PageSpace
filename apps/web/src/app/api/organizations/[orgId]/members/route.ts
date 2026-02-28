@@ -39,7 +39,7 @@ export async function GET(
       members,
       currentUserRole: access.role,
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to fetch members' }, { status: 500 });
   }
 }

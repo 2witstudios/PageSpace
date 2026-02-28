@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   try {
     const orgs = await listUserOrganizations(auth.userId);
     return NextResponse.json(orgs);
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to fetch organizations' }, { status: 500 });
   }
 }
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 
     const org = await createOrganization(auth.userId, { name, slug, description });
     return NextResponse.json(org, { status: 201 });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to create organization' }, { status: 500 });
   }
 }

@@ -32,7 +32,7 @@ export async function DELETE(
 
     await removeOrgMember(orgId, targetUserId);
     return NextResponse.json({ success: true });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to remove member' }, { status: 500 });
   }
 }

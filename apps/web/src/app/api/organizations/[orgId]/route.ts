@@ -43,7 +43,7 @@ export async function GET(
       ...access.org,
       currentUserRole: access.role,
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to fetch organization' }, { status: 500 });
   }
 }
@@ -79,7 +79,7 @@ export async function PUT(
 
     const updated = await updateOrganization(orgId, parsed.data);
     return NextResponse.json(updated);
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to update organization' }, { status: 500 });
   }
 }
@@ -104,7 +104,7 @@ export async function DELETE(
 
     await deleteOrganization(orgId);
     return NextResponse.json({ success: true });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Failed to delete organization' }, { status: 500 });
   }
 }
