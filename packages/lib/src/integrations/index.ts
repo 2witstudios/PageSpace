@@ -176,4 +176,5 @@ export {
   isBuiltinProvider,
   genericWebhookProvider,
   githubProvider,
+  notionProvider,
 } from './providers';
