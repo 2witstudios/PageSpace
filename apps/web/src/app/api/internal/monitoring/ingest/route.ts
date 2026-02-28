@@ -4,6 +4,7 @@ import { db, systemLogs } from '@pagespace/db';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logger-database';
 import { loggers } from '@pagespace/lib/server';
 import { secureCompare } from '@pagespace/lib';
+import { sanitizeIngestPayload } from '@/lib/monitoring/ingest-sanitizer';
 
 interface ApiRequestPayload {
   type: 'api-request';
@@ -45,9 +46,10 @@ export async function POST(request: Request) {
 
   const ingestKey = process.env.MONITORING_INGEST_KEY;
   if (!ingestKey) {
-    loggers.system.error(
-      'MONITORING_INGEST_KEY is not configured and MONITORING_INGEST_DISABLED is not set. ' +
-      'Monitoring ingest cannot process requests. Set the key or set MONITORING_INGEST_DISABLED=true to opt out.'
+    loggers.system.warn(
+      'MONITORING_INGEST_KEY is not configured. ' +
+      'Monitoring ingest cannot authenticate requests. ' +
+      'Set MONITORING_INGEST_KEY to enable or MONITORING_INGEST_DISABLED=true to opt out.'
     );
     return NextResponse.json({ error: 'Monitoring ingest not configured' }, { status: 503 });
   }
@@ -58,16 +60,18 @@ export async function POST(request: Request) {
     return unauthorized('Unauthorized');
   }
 
-  let payload: IngestPayload;
+  let rawPayload: IngestPayload;
   try {
-    payload = await request.json();
+    rawPayload = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
   }
 
-  if (payload.type !== 'api-request') {
+  if (rawPayload.type !== 'api-request') {
     return NextResponse.json({ error: 'Unsupported payload type' }, { status: 400 });
   }
+
+  const payload = sanitizeIngestPayload(rawPayload);
 
   const timestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
   type HttpMethod = NonNullable<(typeof systemLogs.$inferInsert)['method']>;
@@ -118,7 +122,6 @@ export async function POST(request: Request) {
         statusCode,
         requestSize: payload.requestSize,
         responseSize: payload.responseSize,
-        query: payload.query,
       },
     });
 
