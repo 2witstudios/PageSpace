@@ -31,6 +31,7 @@ export interface DriveWithAccess {
   isTrashed: boolean;
   trashedAt: Date | null;
   drivePrompt: string | null;
+  orgId: string | null;
   createdAt: Date;
   updatedAt: Date;
   isOwned: boolean;

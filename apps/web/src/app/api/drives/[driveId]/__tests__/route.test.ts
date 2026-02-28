@@ -90,6 +90,7 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  orgId: null,
 });
 
 // Drive with access info fixture
@@ -105,6 +106,7 @@ const createDriveWithAccessFixture = (
   isTrashed: overrides.isTrashed ?? false,
   trashedAt: overrides.trashedAt ?? null,
   drivePrompt: overrides.drivePrompt ?? null,
+  orgId: overrides.orgId ?? null,
   isOwned: overrides.isOwned ?? true,
   role: overrides.role ?? 'OWNER',
   lastAccessedAt: overrides.lastAccessedAt ?? null,
