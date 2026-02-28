@@ -36,6 +36,9 @@ export * from './services/drive-role-service';
 // Drive search service
 export * from './services/drive-search-service';
 
+// Organization service
+export * from './organizations';
+
 // OAuth utilities (server-only)
 export * from './auth/oauth-utils';
 export * from './auth/oauth-types';
