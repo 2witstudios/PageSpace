@@ -29,7 +29,6 @@ describe('slackProvider', () => {
       expect(authMethod.config.scopes).toContain('chat:write');
       expect(authMethod.config.scopes).toContain('users:read');
       expect(authMethod.config.scopes).toContain('users:read.email');
-      expect(authMethod.config.scopes).toContain('search:read');
     });
 
     it('given the provider config, should not require PKCE', () => {
@@ -73,14 +72,14 @@ describe('slackProvider', () => {
       });
     });
 
-    it('given the provider config, should have 5 tools', () => {
-      expect(slackProvider.tools).toHaveLength(5);
+    it('given the provider config, should have 4 tools', () => {
+      expect(slackProvider.tools).toHaveLength(4);
     });
   });
 
   describe('tool categories', () => {
     it('given read tools, should all be category read', () => {
-      const readToolIds = ['list_channels', 'list_messages', 'get_user_info', 'search_messages'];
+      const readToolIds = ['list_channels', 'list_messages', 'get_user_info'];
       for (const id of readToolIds) {
         const tool = slackProvider.tools.find((t) => t.id === id)!;
         expect(tool.category).toBe('read');
@@ -104,7 +103,7 @@ describe('slackProvider', () => {
     });
 
     it('given read tools, should not have tool-level rate limits', () => {
-      const readToolIds = ['list_channels', 'list_messages', 'get_user_info', 'search_messages'];
+      const readToolIds = ['list_channels', 'list_messages', 'get_user_info'];
       for (const id of readToolIds) {
         const tool = slackProvider.tools.find((t) => t.id === id)!;
         expect(tool.rateLimit).toBeUndefined();
@@ -250,33 +249,6 @@ describe('slackProvider', () => {
     it('given the tool, should have output transform extracting user object', () => {
       expect(tool.outputTransform).toBeDefined();
       expect(tool.outputTransform!.extract).toBe('$.user');
-    });
-  });
-
-  describe('search_messages tool', () => {
-    const tool = slackProvider.tools.find((t) => t.id === 'search_messages')!;
-
-    it('given the tool, should require query', () => {
-      const required = (tool.inputSchema as { required: string[] }).required;
-      expect(required).toContain('query');
-    });
-
-    it('given query and optional params, should build correct GET request', () => {
-      const config = (tool.execution as { config: HttpExecutionConfig }).config;
-      const input = { query: 'deployment issue', sort: 'timestamp', count: 10 };
-
-      const result = buildHttpRequest(config, input, 'https://slack.com/api');
-
-      expect(result.method).toBe('GET');
-      expect(result.url).toContain('/search.messages');
-      expect(result.url).toContain('query=deployment+issue');
-      expect(result.url).toContain('sort=timestamp');
-      expect(result.url).toContain('count=10');
-    });
-
-    it('given the tool, should have output transform extracting messages', () => {
-      expect(tool.outputTransform).toBeDefined();
-      expect(tool.outputTransform!.extract).toBe('$.messages.matches');
     });
   });
 

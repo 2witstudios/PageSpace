@@ -31,7 +31,6 @@ export const slackProvider: IntegrationProviderConfig = {
         'chat:write',
         'users:read',
         'users:read.email',
-        'search:read',
       ],
       pkceRequired: false,
     },
@@ -198,56 +197,6 @@ export const slackProvider: IntegrationProviderConfig = {
         maxLength: 500,
       },
     },
-    {
-      id: 'search_messages',
-      name: 'Search Messages',
-      description: 'Search for messages across the workspace',
-      category: 'read',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Search query string',
-          },
-          sort: {
-            type: 'string',
-            enum: ['score', 'timestamp'],
-            description: 'Sort order for results',
-          },
-          count: {
-            type: 'integer',
-            description: 'Number of results to return (max 100)',
-          },
-        },
-        required: ['query'],
-      },
-      execution: {
-        type: 'http',
-        config: {
-          method: 'GET',
-          pathTemplate: '/search.messages',
-          queryParams: {
-            query: { $param: 'query' },
-            sort: { $param: 'sort' },
-            count: { $param: 'count', transform: 'string' },
-          },
-        },
-      },
-      responseValidation: SLACK_RESPONSE_VALIDATION,
-      outputTransform: {
-        extract: '$.messages.matches',
-        mapping: {
-          text: 'text',
-          ts: 'ts',
-          user: 'username',
-          channel: 'channel.name',
-          permalink: 'permalink',
-        },
-        maxLength: 500,
-      },
-    },
-
     // ─── Write Tools ─────────────────────────────────────────────────────
     {
       id: 'send_message',
