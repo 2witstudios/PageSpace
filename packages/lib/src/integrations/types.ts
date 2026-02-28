@@ -95,6 +95,16 @@ export interface OutputTransform {
   maxLength?: number;
 }
 
+export interface ResponseValidationRule {
+  path: string;
+  equals: string | number | boolean | null;
+}
+
+export interface ResponseValidationConfig {
+  success: ResponseValidationRule;
+  errorPath?: string;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TOOL DEFINITION
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -120,6 +130,7 @@ export interface ToolDefinition {
   inputSchema: Record<string, unknown>;
   execution: ToolExecution;
   outputTransform?: OutputTransform;
+  responseValidation?: ResponseValidationConfig;
   rateLimit?: RateLimitConfig;
   retry?: RetryConfig;
 }
