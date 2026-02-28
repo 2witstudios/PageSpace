@@ -1,7 +1,7 @@
 import { db, eq, organizations, orgSubscriptions } from '@pagespace/db';
 import { withOrgAdminAuth, withOrgOwnerAuth, type OrgRouteContext } from '@/lib/orgs/org-auth';
 import { getOrgBillingOverview } from '@/lib/orgs/seat-manager';
-import { stripe } from '@/lib/stripe';
+import { stripe, type Stripe } from '@/lib/stripe';
 import { getOrgMemberCount } from '@/lib/orgs/guardrails';
 
 // GET /api/orgs/[orgId]/billing - Get billing overview
@@ -83,16 +83,15 @@ export const POST = withOrgOwnerAuth<OrgRouteContext>(async (user, request, _con
     currentPeriodEnd,
   });
 
-  const latestInvoice = subscription.latest_invoice;
-  const confirmationSecret = typeof latestInvoice === 'object' && latestInvoice
-    ? (latestInvoice as Record<string, unknown>).confirmation_secret
-    : null;
+  const invoice = subscription.latest_invoice as Stripe.Invoice & {
+    confirmation_secret?: { client_secret: string; type: string };
+  };
+
+  const clientSecret = invoice?.confirmation_secret?.client_secret ?? null;
 
   return Response.json({
     subscriptionId: subscription.id,
-    clientSecret: typeof confirmationSecret === 'object' && confirmationSecret
-      ? (confirmationSecret as Record<string, unknown>).client_secret
-      : null,
+    clientSecret,
     status: subscription.status,
   }, { status: 201 });
 });
