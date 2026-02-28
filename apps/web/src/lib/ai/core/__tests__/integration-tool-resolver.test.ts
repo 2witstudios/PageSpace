@@ -30,6 +30,7 @@ import {
   resolveGlobalAssistantIntegrations,
   convertIntegrationToolsToAISDK,
   createToolExecutor,
+  type GrantWithConnectionAndProvider,
 } from '@pagespace/lib/integrations';
 import { resolvePageAgentIntegrationTools, resolveGlobalAssistantIntegrationTools } from '../integration-tool-resolver';
 
@@ -77,7 +78,7 @@ describe('resolvePageAgentIntegrationTools', () => {
           config: { id: 'github', name: 'GitHub', tools: [], baseUrl: 'https://api.github.com', authMethod: { type: 'oauth2', config: {} } },
         },
       },
-    }];
+    }] as unknown as GrantWithConnectionAndProvider[];
 
     mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
     const mockExecutor = vi.fn();
