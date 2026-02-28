@@ -2,6 +2,8 @@ import {
   db,
   eq,
   and,
+  inArray,
+  count,
   organizations,
   orgMembers,
   users,
@@ -70,20 +72,23 @@ export interface OrgMemberWithDetails {
 export async function createOrganization(ownerId: string, input: CreateOrgInput) {
   const orgId = createId();
 
-  const [org] = await db.insert(organizations).values({
-    id: orgId,
-    name: input.name,
-    slug: input.slug,
-    ownerId,
-    description: input.description,
-    updatedAt: new Date(),
-  }).returning();
+  const org = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(organizations).values({
+      id: orgId,
+      name: input.name,
+      slug: input.slug,
+      ownerId,
+      description: input.description,
+      updatedAt: new Date(),
+    }).returning();
 
-  // Add owner as OWNER member
-  await db.insert(orgMembers).values({
-    orgId: org.id,
-    userId: ownerId,
-    role: 'OWNER',
+    await tx.insert(orgMembers).values({
+      orgId: created.id,
+      userId: ownerId,
+      role: 'OWNER',
+    });
+
+    return created;
   });
 
   return org;
@@ -191,19 +196,16 @@ export async function listUserOrganizations(userId: string): Promise<OrgWithRole
     },
   });
 
-  // Get member counts for each org
+  // Get member counts in a single grouped query
   const orgIds = memberships.map(m => m.orgId);
-  const countResults = orgIds.length > 0
-    ? await Promise.all(orgIds.map(async (orgId) => {
-        const members = await db.query.orgMembers.findMany({
-          where: eq(orgMembers.orgId, orgId),
-          columns: { id: true },
-        });
-        return { orgId, count: members.length };
-      }))
+  const countRows = orgIds.length > 0
+    ? await db.select({ orgId: orgMembers.orgId, memberCount: count() })
+        .from(orgMembers)
+        .where(inArray(orgMembers.orgId, orgIds))
+        .groupBy(orgMembers.orgId)
     : [];
 
-  const countMap = new Map(countResults.map(r => [r.orgId, r.count]));
+  const countMap = new Map(countRows.map(r => [r.orgId, Number(r.memberCount)]));
 
   return memberships.map(m => ({
     id: m.organization.id,

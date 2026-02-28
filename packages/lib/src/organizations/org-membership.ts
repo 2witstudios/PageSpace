@@ -51,7 +51,8 @@ export async function createInvitation(
     }
   }
 
-  // Check for existing pending invitation
+  // Check for existing invitation
+  const now = new Date();
   const existingInvitation = await db.query.orgInvitations.findFirst({
     where: and(
       eq(orgInvitations.orgId, orgId),
@@ -59,15 +60,39 @@ export async function createInvitation(
     ),
   });
 
-  if (existingInvitation && !existingInvitation.acceptedAt) {
+  // Block only active pending invitations (not expired, not accepted)
+  if (existingInvitation && !existingInvitation.acceptedAt && existingInvitation.expiresAt > now) {
     throw new Error('An invitation has already been sent to this email');
   }
 
   // 7-day expiry
-  const expiresAt = new Date();
+  const expiresAt = new Date(now);
   expiresAt.setDate(expiresAt.getDate() + 7);
 
   const token = createId();
+
+  // Update existing row (expired or accepted) instead of inserting a duplicate
+  if (existingInvitation) {
+    const [invitation] = await db.update(orgInvitations)
+      .set({
+        role: input.role ?? 'MEMBER',
+        token,
+        invitedBy,
+        expiresAt,
+        acceptedAt: null,
+      })
+      .where(eq(orgInvitations.id, existingInvitation.id))
+      .returning();
+
+    return {
+      id: invitation.id,
+      orgId: invitation.orgId,
+      email: invitation.email,
+      role: invitation.role,
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
+    };
+  }
 
   const [invitation] = await db.insert(orgInvitations).values({
     orgId,
@@ -125,18 +150,19 @@ export async function acceptInvitation(token: string, userId: string) {
     throw new Error('You are already a member of this organization');
   }
 
-  // Add as member
-  await db.insert(orgMembers).values({
-    orgId: invitation.orgId,
-    userId,
-    role: invitation.role === 'OWNER' ? 'MEMBER' : invitation.role,
-    invitedBy: invitation.invitedBy,
-  });
+  // Add member and mark invitation accepted atomically
+  await db.transaction(async (tx) => {
+    await tx.insert(orgMembers).values({
+      orgId: invitation.orgId,
+      userId,
+      role: invitation.role === 'OWNER' ? 'MEMBER' : invitation.role,
+      invitedBy: invitation.invitedBy,
+    });
 
-  // Mark invitation as accepted
-  await db.update(orgInvitations)
-    .set({ acceptedAt: new Date() })
-    .where(eq(orgInvitations.id, invitation.id));
+    await tx.update(orgInvitations)
+      .set({ acceptedAt: new Date() })
+      .where(eq(orgInvitations.id, invitation.id));
+  });
 
   return { orgId: invitation.orgId };
 }

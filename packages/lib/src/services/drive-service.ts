@@ -242,7 +242,7 @@ export async function getDriveAccess(
     return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' };
   }
 
-  // Check membership
+  // Check drive membership
   const membership = await db
     .select({ role: driveMembers.role })
     .from(driveMembers)
@@ -257,6 +257,19 @@ export async function getDriveAccess(
       isMember: true,
       role,
     };
+  }
+
+  // Check org membership (drive belongs to an org the user is a member of)
+  if (drive.orgId) {
+    const orgMembership = await db
+      .select({ id: orgMembers.id })
+      .from(orgMembers)
+      .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, userId)))
+      .limit(1);
+
+    if (orgMembership.length > 0) {
+      return { isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' };
+    }
   }
 
   return { isOwner: false, isAdmin: false, isMember: false, role: null };
@@ -308,6 +321,22 @@ export async function getDriveAccessWithDrive(
         role,
       },
     };
+  }
+
+  // Check org membership
+  if (drive.orgId) {
+    const orgMembership = await db
+      .select({ id: orgMembers.id })
+      .from(orgMembers)
+      .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, userId)))
+      .limit(1);
+
+    if (orgMembership.length > 0) {
+      return {
+        drive,
+        access: { isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' },
+      };
+    }
   }
 
   return {
