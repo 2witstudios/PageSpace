@@ -494,8 +494,8 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       metadata: {
         ...data.metadata,
         streamingDuration: data.streamingDuration,
-        prompt: data.prompt?.substring(0, 1000),
-        completion: data.completion?.substring(0, 1000)
+        prompt: undefined,
+        completion: undefined,
       },
     }).catch((error) => {
       loggers.ai.debug('AI usage tracking failed', {

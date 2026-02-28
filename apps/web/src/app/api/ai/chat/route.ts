@@ -1091,8 +1091,8 @@ export async function POST(request: Request) {
                 inputTokens,
                 outputTokens,
                 totalTokens,
-                prompt: userPromptContent?.substring(0, 1000),
-                completion: messageContent?.substring(0, 1000),
+                prompt: undefined,
+                completion: undefined,
                 duration,
                 conversationId, // Use actual conversation ID instead of pageId
                 messageId,
