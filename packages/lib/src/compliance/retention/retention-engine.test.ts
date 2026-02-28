@@ -346,7 +346,7 @@ describe('runRetentionCleanup', () => {
     const results = await runRetentionCleanup(db);
 
     expect(Array.isArray(results)).toBe(true);
-    expect(results.length).toBe(9);
+    expect(results.length).toBe(12);
 
     for (const result of results) {
       expect(result).toHaveProperty('table');
@@ -362,13 +362,16 @@ describe('runRetentionCleanup', () => {
 
     expect(tableNames).toEqual([
       'ai_usage_logs',
+      'api_metrics',
       'drive_backups',
       'email_unsubscribe_tokens',
       'page_permissions',
       'page_versions',
       'pulse_summaries',
+      'security_audit_log',
       'sessions',
       'socket_tokens',
+      'system_logs',
       'verification_tokens',
     ]);
   });
