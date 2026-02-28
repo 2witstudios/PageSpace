@@ -263,6 +263,11 @@
       "import": "./dist/compliance/retention/retention-engine.js",
       "require": "./dist/compliance/retention/retention-engine.js"
     },
+    "./compliance/retention/monitoring-retention": {
+      "types": "./dist/compliance/retention/monitoring-retention.d.ts",
+      "import": "./dist/compliance/retention/monitoring-retention.js",
+      "require": "./dist/compliance/retention/monitoring-retention.js"
+    },
     "./compliance/file-cleanup/orphan-detector": {
       "types": "./dist/compliance/file-cleanup/orphan-detector.d.ts",
       "import": "./dist/compliance/file-cleanup/orphan-detector.js",
@@ -422,6 +427,9 @@
       ],
       "compliance/retention/retention-engine": [
         "./dist/compliance/retention/retention-engine.d.ts"
+      ],
+      "compliance/retention/monitoring-retention": [
+        "./dist/compliance/retention/monitoring-retention.d.ts"
       ],
       "compliance/file-cleanup/orphan-detector": [
         "./dist/compliance/file-cleanup/orphan-detector.d.ts"

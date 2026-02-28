@@ -11,6 +11,7 @@ import {
   pagePermissions,
   pulseSummaries,
 } from '@pagespace/db';
+import { runMonitoringRetentionCleanup } from './monitoring-retention';
 
 export interface CleanupResult {
   table: string;
@@ -121,16 +122,19 @@ export async function cleanupExpiredAiUsageLogs(database: DB): Promise<CleanupRe
 }
 
 export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]> {
-  const results = await Promise.all([
-    cleanupExpiredSessions(database),
-    cleanupExpiredVerificationTokens(database),
-    cleanupExpiredSocketTokens(database),
-    cleanupExpiredEmailUnsubscribeTokens(database),
-    cleanupExpiredPulseSummaries(database),
-    cleanupExpiredPageVersions(database),
-    cleanupExpiredDriveBackups(database),
-    cleanupExpiredPagePermissions(database),
-    cleanupExpiredAiUsageLogs(database),
+  const [expiryResults, monitoringResults] = await Promise.all([
+    Promise.all([
+      cleanupExpiredSessions(database),
+      cleanupExpiredVerificationTokens(database),
+      cleanupExpiredSocketTokens(database),
+      cleanupExpiredEmailUnsubscribeTokens(database),
+      cleanupExpiredPulseSummaries(database),
+      cleanupExpiredPageVersions(database),
+      cleanupExpiredDriveBackups(database),
+      cleanupExpiredPagePermissions(database),
+      cleanupExpiredAiUsageLogs(database),
+    ]),
+    runMonitoringRetentionCleanup(),
   ]);
-  return results;
+  return [...expiryResults, ...monitoringResults];
 }
