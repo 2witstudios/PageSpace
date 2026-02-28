@@ -15,6 +15,7 @@ import { isToolAllowed } from '../validation/is-tool-allowed';
 import { applyAuth } from '../auth/apply-auth';
 import { buildHttpRequest } from '../execution/build-request';
 import { transformOutput } from '../execution/transform-output';
+import { validateResponse } from '../execution/validate-response';
 import { executeHttpRequest, type ExecuteResult } from '../execution/http-executor';
 import { decryptCredentials } from '../credentials/encrypt-credentials';
 import { checkIntegrationRateLimit } from '../rate-limit/integration-rate-limiter';
@@ -210,6 +211,11 @@ export const executeToolSaga = async (
       baseUrl
     );
 
+    httpRequest.headers = {
+      ...(providerConfig.defaultHeaders ?? {}),
+      ...httpRequest.headers,
+    };
+
     // 7. Apply authentication (pure function)
     const auth = applyAuth(credentials, providerConfig.authMethod);
     httpRequest.headers = { ...httpRequest.headers, ...auth.headers };
@@ -245,12 +251,37 @@ export const executeToolSaga = async (
       };
     }
 
-    // 9. Transform output (pure function)
+    // 9. Validate successful response body (pure function)
+    const validation = validateResponse(
+      response.response?.body,
+      tool.responseValidation
+    );
+
+    if (!validation.valid) {
+      await deps.logAudit({
+        connectionId: request.connectionId,
+        toolName: request.toolName,
+        driveId: request.driveId,
+        success: false,
+        errorType: 'PROVIDER_RESPONSE_ERROR',
+        errorMessage: validation.error,
+        responseCode: response.response?.status,
+        durationMs: Date.now() - startTime,
+      });
+
+      return {
+        success: false,
+        error: validation.error,
+        errorType: 'http',
+      };
+    }
+
+    // 10. Transform output (pure function)
     const result = tool.outputTransform
       ? transformOutput(response.response?.body, tool.outputTransform)
       : response.response?.body;
 
-    // 10. Log success
+    // 11. Log success
     await deps.logAudit({
       connectionId: request.connectionId,
       toolName: request.toolName,

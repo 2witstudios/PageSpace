@@ -177,4 +177,5 @@ export {
   genericWebhookProvider,
   githubProvider,
   notionProvider,
+  slackProvider,
 } from './providers';

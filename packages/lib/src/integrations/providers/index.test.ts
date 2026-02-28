@@ -14,9 +14,10 @@ import {
   genericWebhookProvider,
   githubProvider,
   notionProvider,
+  slackProvider,
 } from './index';
 
-const expectedProviderIds = ['generic-webhook', 'github', 'notion'] as const;
+const expectedProviderIds = ['generic-webhook', 'github', 'notion', 'slack'] as const;
 
 describe('builtinProviders registry', () => {
   it('given the registry, should contain all providers', () => {
@@ -30,6 +31,7 @@ describe('builtinProviders registry', () => {
     expect(builtinProviders['generic-webhook']).toBe(genericWebhookProvider);
     expect(builtinProviders['github']).toBe(githubProvider);
     expect(builtinProviders['notion']).toBe(notionProvider);
+    expect(builtinProviders['slack']).toBe(slackProvider);
   });
 
   it('given all provider IDs, should be unique', () => {
@@ -44,6 +46,7 @@ describe('builtinProviderList', () => {
     expect(builtinProviderList).toContain(genericWebhookProvider);
     expect(builtinProviderList).toContain(githubProvider);
     expect(builtinProviderList).toContain(notionProvider);
+    expect(builtinProviderList).toContain(slackProvider);
   });
 });
 
@@ -52,6 +55,7 @@ describe('getBuiltinProvider', () => {
     expect(getBuiltinProvider('github')).toBe(githubProvider);
     expect(getBuiltinProvider('generic-webhook')).toBe(genericWebhookProvider);
     expect(getBuiltinProvider('notion')).toBe(notionProvider);
+    expect(getBuiltinProvider('slack')).toBe(slackProvider);
   });
 
   it('given an unknown provider ID, should return null', () => {
@@ -65,10 +69,11 @@ describe('isBuiltinProvider', () => {
     expect(isBuiltinProvider('github')).toBe(true);
     expect(isBuiltinProvider('generic-webhook')).toBe(true);
     expect(isBuiltinProvider('notion')).toBe(true);
+    expect(isBuiltinProvider('slack')).toBe(true);
   });
 
   it('given an unknown provider ID, should return false', () => {
-    expect(isBuiltinProvider('slack')).toBe(false);
+    expect(isBuiltinProvider('unknown-provider')).toBe(false);
     expect(isBuiltinProvider('')).toBe(false);
   });
 });
