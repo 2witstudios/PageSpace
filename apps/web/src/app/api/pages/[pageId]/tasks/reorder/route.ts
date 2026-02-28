@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db, taskItems, taskLists, pages, eq } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * PATCH /api/pages/[pageId]/tasks/reorder
@@ -20,6 +20,10 @@ export async function PATCH(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   // Check edit permission
   const canEdit = await canUserEditPage(userId, pageId);

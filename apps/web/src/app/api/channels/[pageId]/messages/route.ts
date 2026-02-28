@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { channelMessages, channelReadStatus, db, eq, and, desc, or, isNull, gt, lt, inArray, files, pages, driveMembers, pagePermissions } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
@@ -14,8 +14,8 @@ interface AttachmentMeta {
   contentHash: string;
 }
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -23,6 +23,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   // Check if user has view permission for this channel
   const canView = await canUserViewPage(userId, pageId);
@@ -111,6 +115,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const writeScopeError = await checkMCPPageScope(auth, pageId);
+  if (writeScopeError) return writeScopeError;
 
   // Check if user has edit permission to post messages in this channel
   const canEdit = await canUserEditPage(userId, pageId, { bypassCache: true });
