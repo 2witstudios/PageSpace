@@ -28,6 +28,7 @@ describe('slackProvider', () => {
       expect(authMethod.config.scopes).toContain('groups:history');
       expect(authMethod.config.scopes).toContain('chat:write');
       expect(authMethod.config.scopes).toContain('users:read');
+      expect(authMethod.config.scopes).toContain('users:read.email');
       expect(authMethod.config.scopes).toContain('search:read');
     });
 
