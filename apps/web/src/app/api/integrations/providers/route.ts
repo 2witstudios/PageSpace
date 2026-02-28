@@ -41,7 +41,9 @@ export async function GET(request: Request) {
           providers = await listEnabledProviders(db);
         }
       } catch (seedError) {
-        loggers.api.warn('Failed to auto-seed builtin providers (non-fatal)', seedError as Error);
+        loggers.api.warn('Failed to auto-seed builtin providers (non-fatal)', {
+          error: seedError instanceof Error ? seedError.message : String(seedError),
+        });
       }
     }
 
