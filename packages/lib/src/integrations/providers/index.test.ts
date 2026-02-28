@@ -16,12 +16,14 @@ import {
   notionProvider,
 } from './index';
 
+const expectedProviderIds = ['generic-webhook', 'github', 'notion'] as const;
+
 describe('builtinProviders registry', () => {
   it('given the registry, should contain all providers', () => {
-    expect(Object.keys(builtinProviders)).toHaveLength(3);
-    expect(builtinProviders).toHaveProperty('generic-webhook');
-    expect(builtinProviders).toHaveProperty('github');
-    expect(builtinProviders).toHaveProperty('notion');
+    expect(Object.keys(builtinProviders)).toHaveLength(expectedProviderIds.length);
+    for (const id of expectedProviderIds) {
+      expect(builtinProviders).toHaveProperty(id);
+    }
   });
 
   it('given the registry, should map to the correct provider objects', () => {
@@ -38,7 +40,7 @@ describe('builtinProviders registry', () => {
 
 describe('builtinProviderList', () => {
   it('given the list, should contain all registered providers', () => {
-    expect(builtinProviderList).toHaveLength(3);
+    expect(builtinProviderList).toHaveLength(expectedProviderIds.length);
     expect(builtinProviderList).toContain(genericWebhookProvider);
     expect(builtinProviderList).toContain(githubProvider);
     expect(builtinProviderList).toContain(notionProvider);

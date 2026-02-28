@@ -12,6 +12,12 @@ import { convertToolSchemaToZod } from '../converter/ai-sdk';
 import type { HttpExecutionConfig } from '../types';
 
 describe('notionProvider', () => {
+  const getTool = (id: string) => {
+    const tool = notionProvider.tools.find((t) => t.id === id);
+    expect(tool, `expected tool "${id}" to exist`).toBeDefined();
+    return tool!;
+  };
+
   describe('provider structure', () => {
     it('given the provider config, should have correct identity', () => {
       expect(notionProvider.id).toBe('notion');
@@ -74,7 +80,7 @@ describe('notionProvider', () => {
     it('given read tools, should all be category read', () => {
       const readToolIds = ['search', 'get_page', 'get_database', 'query_database'];
       for (const id of readToolIds) {
-        const tool = notionProvider.tools.find((t) => t.id === id)!;
+        const tool = getTool(id);
         expect(tool.category, `tool ${id} should be read`).toBe('read');
       }
     });
@@ -82,7 +88,7 @@ describe('notionProvider', () => {
     it('given write tools, should all be category write', () => {
       const writeToolIds = ['update_page', 'create_page'];
       for (const id of writeToolIds) {
-        const tool = notionProvider.tools.find((t) => t.id === id)!;
+        const tool = getTool(id);
         expect(tool.category, `tool ${id} should be write`).toBe('write');
       }
     });
@@ -90,7 +96,7 @@ describe('notionProvider', () => {
     it('given write tools, should have tighter rate limits', () => {
       const writeToolIds = ['update_page', 'create_page'];
       for (const id of writeToolIds) {
-        const tool = notionProvider.tools.find((t) => t.id === id)!;
+        const tool = getTool(id);
         expect(tool.rateLimit).toEqual({ requests: 10, windowMs: 60_000 });
       }
     });
@@ -98,14 +104,14 @@ describe('notionProvider', () => {
     it('given read tools, should not have tool-level rate limits', () => {
       const readToolIds = ['search', 'get_page', 'get_database', 'query_database'];
       for (const id of readToolIds) {
-        const tool = notionProvider.tools.find((t) => t.id === id)!;
+        const tool = getTool(id);
         expect(tool.rateLimit).toBeUndefined();
       }
     });
   });
 
   describe('search tool', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'search')!;
+    const tool = getTool('search');
 
     it('given the tool, should have no required params', () => {
       expect((tool.inputSchema as { required: string[] }).required).toEqual([]);
@@ -153,7 +159,7 @@ describe('notionProvider', () => {
   });
 
   describe('get_page tool', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'get_page')!;
+    const tool = getTool('get_page');
 
     it('given the tool, should require page_id', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -180,7 +186,7 @@ describe('notionProvider', () => {
   });
 
   describe('update_page tool', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'update_page')!;
+    const tool = getTool('update_page');
 
     it('given the tool, should require page_id', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -206,7 +212,7 @@ describe('notionProvider', () => {
   });
 
   describe('get_database tool', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'get_database')!;
+    const tool = getTool('get_database');
 
     it('given the tool, should require database_id', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -233,7 +239,7 @@ describe('notionProvider', () => {
   });
 
   describe('query_database tool', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'query_database')!;
+    const tool = getTool('query_database');
 
     it('given the tool, should require database_id', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -274,7 +280,7 @@ describe('notionProvider', () => {
   });
 
   describe('create_page tool', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'create_page')!;
+    const tool = getTool('create_page');
 
     it('given the tool, should require parent and properties', () => {
       const required = (tool.inputSchema as { required: string[] }).required;
@@ -351,7 +357,7 @@ describe('notionProvider', () => {
   });
 
   describe('update_page archive', () => {
-    const tool = notionProvider.tools.find((t) => t.id === 'update_page')!;
+    const tool = getTool('update_page');
 
     it('given archived flag, should include it in the PATCH body without requiring properties', () => {
       const config = (tool.execution as { config: HttpExecutionConfig }).config;
