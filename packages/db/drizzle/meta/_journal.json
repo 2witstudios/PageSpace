@@ -631,6 +631,13 @@
       "when": 1771971945331,
       "tag": "0089_safe_excalibur",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1772254458017,
+      "tag": "0090_early_black_cat",
+      "breakpoints": true
     }
   ]
 }
