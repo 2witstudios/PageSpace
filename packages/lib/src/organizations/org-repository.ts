@@ -23,7 +23,7 @@ export interface UpdateOrgInput {
   name?: string;
   slug?: string;
   description?: string;
-  avatarUrl?: string;
+  avatarUrl?: string | null;
 }
 
 export interface OrgWithRole {
