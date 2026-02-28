@@ -29,6 +29,14 @@ let mockEntries: Array<{
   eventHash: string;
 }> = [];
 
+vi.mock('drizzle-orm', () => ({
+  asc: vi.fn(),
+  count: vi.fn(() => 'count'),
+  and: vi.fn((...args: unknown[]) => args),
+  gte: vi.fn(),
+  lte: vi.fn(),
+}));
+
 vi.mock('@pagespace/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
@@ -50,15 +58,12 @@ vi.mock('@pagespace/db', () => ({
         findMany: vi.fn().mockImplementation(async (opts) => {
           let entries = [...mockEntries];
 
-          // Apply orderBy (always ASC by timestamp for verification)
           entries.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-          // Apply offset
           if (opts?.offset) {
             entries = entries.slice(opts.offset);
           }
 
-          // Apply limit
           if (opts?.limit) {
             entries = entries.slice(0, opts.limit);
           }
@@ -86,11 +91,6 @@ vi.mock('@pagespace/db', () => ({
     previousHash: 'previousHash',
     eventHash: 'eventHash',
   },
-  asc: vi.fn(),
-  count: vi.fn(() => 'count'),
-  and: vi.fn((...args) => args),
-  gte: vi.fn(),
-  lte: vi.fn(),
 }));
 
 import {
@@ -188,16 +188,35 @@ describe('security-audit-chain-verifier', () => {
       expect(result.breakPoint?.position).toBe(2);
     });
 
-    it('should detect tampered entry data', async () => {
+    it('should detect tampered entry data (non-PII field)', async () => {
       mockEntries = createValidSecurityChain(3);
-      // Modify the userId which changes the computed hash
-      mockEntries[1]!.userId = 'tampered-user';
+      // Modify eventType (non-PII) — this changes the computed hash
+      mockEntries[1]!.eventType = 'auth.login.failure';
 
       const result = await verifySecurityAuditChain();
 
       expect(result.isValid).toBe(false);
       expect(result.breakPoint).not.toBeNull();
       expect(result.breakPoint?.entryId).toBe('audit-2');
+    });
+
+    it('should remain valid after PII anonymization (#541)', async () => {
+      mockEntries = createValidSecurityChain(5);
+      // Simulate GDPR anonymization: null out all PII fields
+      for (const entry of mockEntries) {
+        entry.userId = null;
+        entry.sessionId = null;
+        entry.ipAddress = null;
+        entry.userAgent = null;
+        entry.geoLocation = null;
+      }
+
+      const result = await verifySecurityAuditChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.entriesVerified).toBe(5);
+      expect(result.validEntries).toBe(5);
+      expect(result.invalidEntries).toBe(0);
     });
 
     it('should detect broken chain link (previousHash mismatch)', async () => {

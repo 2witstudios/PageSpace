@@ -60,8 +60,19 @@ export interface QueryEventsOptions {
 }
 
 /**
+ * PII fields excluded from hash computation for GDPR compliance (#541).
+ * These fields may be anonymized/deleted under right-to-erasure requests,
+ * so they must not be part of the hash chain to keep it verifiable.
+ *
+ * Excluded: userId, sessionId, ipAddress, userAgent, geoLocation
+ * Included: eventType, serviceId, resourceType, resourceId, details,
+ *           riskScore, anomalyFlags, timestamp, previousHash
+ */
+
+/**
  * Compute SHA-256 hash for a security event.
  * Includes previous hash to create the chain link.
+ * Excludes PII fields so the chain remains verifiable after GDPR anonymization.
  *
  * @param event - The event data
  * @param previousHash - Hash of the previous event (or 'genesis' for first event)
@@ -75,14 +86,9 @@ export function computeSecurityEventHash(
 ): string {
   const data = JSON.stringify({
     eventType: event.eventType,
-    userId: event.userId,
-    sessionId: event.sessionId,
     serviceId: event.serviceId,
     resourceType: event.resourceType,
     resourceId: event.resourceId,
-    ipAddress: event.ipAddress,
-    userAgent: event.userAgent,
-    geoLocation: event.geoLocation,
     details: event.details,
     riskScore: event.riskScore,
     anomalyFlags: event.anomalyFlags,

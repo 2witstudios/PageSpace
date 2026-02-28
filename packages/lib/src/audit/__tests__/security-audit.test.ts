@@ -449,7 +449,6 @@ describe('Security Audit Service', () => {
 
 describe('Hash Chain Integrity', () => {
   it('manual verification: hash chain links events correctly', () => {
-    // This test manually verifies the hash chain concept
     const event1 = {
       eventType: 'auth.login.success',
       userId: 'user1',
@@ -462,28 +461,25 @@ describe('Hash Chain Integrity', () => {
       timestamp: new Date('2026-01-25T11:00:00Z'),
     };
 
-    // Compute hash for first event (uses genesis)
     const hash1 = computeSecurityEventHash(
       event1 as AuditEvent,
       'genesis',
       event1.timestamp
     );
 
-    // Compute hash for second event (uses first event's hash)
     const hash2 = computeSecurityEventHash(
       event2 as AuditEvent,
       hash1,
       event2.timestamp
     );
 
-    // Verify both hashes are valid SHA-256
     expect(hash1).toMatch(/^[a-f0-9]{64}$/);
     expect(hash2).toMatch(/^[a-f0-9]{64}$/);
 
-    // Verify changing event1 would break verification of event2
+    // Changing event type (non-PII) breaks the chain
     const modifiedEvent1 = {
       ...event1,
-      userId: 'hacker', // Modified!
+      eventType: 'auth.login.failure',
     };
 
     const badHash1 = computeSecurityEventHash(
@@ -492,8 +488,108 @@ describe('Hash Chain Integrity', () => {
       event1.timestamp
     );
 
-    // If someone tried to verify event2 with the modified event1's hash,
-    // the chain would break (hashes wouldn't match)
     expect(badHash1).not.toBe(hash1);
+  });
+});
+
+describe('GDPR-Safe Hash Chain (#541)', () => {
+  it('hash is stable after userId is anonymized (nulled)', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const event: AuditEvent = {
+      eventType: 'auth.login.success',
+      userId: 'user123',
+      ipAddress: '192.168.1.1',
+      userAgent: 'Mozilla/5.0',
+      sessionId: 'sess-abc',
+      geoLocation: 'US-CA',
+    };
+
+    const hashBefore = computeSecurityEventHash(event, 'genesis', timestamp);
+
+    const anonymizedEvent: AuditEvent = {
+      ...event,
+      userId: undefined,
+      ipAddress: undefined,
+      userAgent: undefined,
+      sessionId: undefined,
+      geoLocation: undefined,
+    };
+
+    const hashAfter = computeSecurityEventHash(anonymizedEvent, 'genesis', timestamp);
+
+    expect(hashBefore).toBe(hashAfter);
+  });
+
+  it('hash changes when non-PII fields change', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const event1: AuditEvent = {
+      eventType: 'auth.login.success',
+      userId: 'user123',
+      resourceType: 'page',
+      resourceId: 'page-1',
+    };
+
+    const event2: AuditEvent = {
+      ...event1,
+      resourceId: 'page-2',
+    };
+
+    const hash1 = computeSecurityEventHash(event1, 'genesis', timestamp);
+    const hash2 = computeSecurityEventHash(event2, 'genesis', timestamp);
+
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it('PII fields are excluded: changing them does not change hash', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+    const base: AuditEvent = {
+      eventType: 'data.read',
+      resourceType: 'page',
+      resourceId: 'page-1',
+      riskScore: 0.5,
+      details: { action: 'export' },
+    };
+
+    const withPII: AuditEvent = {
+      ...base,
+      userId: 'user-xyz',
+      ipAddress: '10.0.0.1',
+      userAgent: 'Chrome/120',
+      sessionId: 'sess-999',
+      geoLocation: 'DE-BE',
+    };
+
+    const withoutPII: AuditEvent = {
+      ...base,
+    };
+
+    const hash1 = computeSecurityEventHash(withPII, 'prev-hash', timestamp);
+    const hash2 = computeSecurityEventHash(withoutPII, 'prev-hash', timestamp);
+
+    expect(hash1).toBe(hash2);
+  });
+
+  it('non-PII fields that remain in hash: eventType, resourceType, resourceId, details, riskScore, anomalyFlags, serviceId', () => {
+    const timestamp = new Date('2026-01-25T10:00:00Z');
+
+    const event1: AuditEvent = {
+      eventType: 'auth.login.success',
+      serviceId: 'web',
+      resourceType: 'drive',
+      resourceId: 'drv-1',
+      details: { browser: 'Chrome' },
+      riskScore: 0.3,
+      anomalyFlags: ['new_device'],
+    };
+
+    const event2: AuditEvent = {
+      ...event1,
+      serviceId: 'api',
+    };
+
+    const hash1 = computeSecurityEventHash(event1, 'genesis', timestamp);
+    const hash2 = computeSecurityEventHash(event2, 'genesis', timestamp);
+
+    expect(hash1).not.toBe(hash2);
   });
 });

@@ -160,17 +160,12 @@ export async function verifySecurityAuditChain(
         }
         lastEntryId = entry.id;
 
-        // Reconstruct AuditEvent from stored fields
+        // Reconstruct AuditEvent from stored fields (PII excluded from hash per #541)
         const event: AuditEvent = {
           eventType: entry.eventType as AuditEvent['eventType'],
-          userId: entry.userId ?? undefined,
-          sessionId: entry.sessionId ?? undefined,
           serviceId: entry.serviceId ?? undefined,
           resourceType: entry.resourceType ?? undefined,
           resourceId: entry.resourceId ?? undefined,
-          ipAddress: entry.ipAddress ?? undefined,
-          userAgent: entry.userAgent ?? undefined,
-          geoLocation: entry.geoLocation ?? undefined,
           details: entry.details ?? undefined,
           riskScore: entry.riskScore ?? undefined,
           anomalyFlags: entry.anomalyFlags ?? undefined,
