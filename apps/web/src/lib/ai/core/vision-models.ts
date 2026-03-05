@@ -53,7 +53,9 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
 
   // Anthropic Claude 3+ (all have vision)
   'claude-opus-4-6-20260204': true,
+  'claude-sonnet-4-6-20260217': true,
   'anthropic/claude-opus-4.6': true,
+  'anthropic/claude-sonnet-4.6': true,
   'claude-opus-4-1-20250805': true,
   'claude-sonnet-4-1-20250805': true,
   'claude-3-7-sonnet-20250219': true,

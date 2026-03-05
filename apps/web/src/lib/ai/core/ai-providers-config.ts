@@ -60,6 +60,7 @@ export const AI_PROVIDERS = {
     models: {
       // Anthropic Models (2026)
       'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+      'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
 
       // Anthropic Models (2025)
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
@@ -274,6 +275,7 @@ export const AI_PROVIDERS = {
     models: {
       // Claude 4.6 Models (2026)
       'claude-opus-4-6-20260204': 'Claude Opus 4.6',
+      'claude-sonnet-4-6-20260217': 'Claude Sonnet 4.6',
 
       // Claude 4.5 Models (2025)
       'claude-opus-4-5-20251124': 'Claude Opus 4.5',
