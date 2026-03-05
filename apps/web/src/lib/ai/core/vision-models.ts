@@ -97,6 +97,8 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'x-ai/grok-4': true,
 
   // Qwen3.5 Vision-Language Models
+  'qwen/qwen3.5-397b-a17b': true,
+  'qwen/qwen3.5-plus-2026-02-15': true,
   'qwen/qwen3.5-flash': true,
   'qwen/qwen3.5-122b-a10b': true,
   'qwen/qwen3.5-35b-a3b': true,

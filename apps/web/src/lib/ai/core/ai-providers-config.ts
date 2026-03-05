@@ -108,6 +108,8 @@ export const AI_PROVIDERS = {
       'z-ai/glm-4.5': 'GLM 4.5',
       'z-ai/glm-4.5-air': 'GLM 4.5 Air',
       'z-ai/glm-4-32b': 'GLM 4 32B',
+      'qwen/qwen3.5-397b-a17b': 'Qwen3.5 397B-A17B',
+      'qwen/qwen3.5-plus-2026-02-15': 'Qwen3.5 Plus',
       'qwen/qwen3.5-flash': 'Qwen3.5 Flash',
       'qwen/qwen3.5-122b-a10b': 'Qwen3.5 122B-A10B',
       'qwen/qwen3.5-35b-a3b': 'Qwen3.5 35B-A3B',
