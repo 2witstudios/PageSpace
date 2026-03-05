@@ -9,6 +9,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-5.3-chat-latest': true,
   'gpt-5.3-codex': true,
   'openai/gpt-5.3-chat-latest': true,
+  'openai/gpt-5.3-codex': true,
 
   // OpenAI GPT-5.2 Models (all have vision)
   'gpt-5.2': true,

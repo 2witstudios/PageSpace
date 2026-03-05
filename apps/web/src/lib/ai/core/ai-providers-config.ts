@@ -70,6 +70,7 @@ export const AI_PROVIDERS = {
 
       // OpenAI Models (2026)
       'openai/gpt-5.3-chat-latest': 'GPT-5.3 Chat',
+      'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
 
       // OpenAI Models (2025)
       'openai/gpt-5.2': 'GPT-5.2',
