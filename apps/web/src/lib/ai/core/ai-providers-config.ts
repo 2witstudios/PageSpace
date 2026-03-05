@@ -114,6 +114,7 @@ export const AI_PROVIDERS = {
       'qwen/qwen3.5-122b-a10b': 'Qwen3.5 122B-A10B',
       'qwen/qwen3.5-35b-a3b': 'Qwen3.5 35B-A3B',
       'qwen/qwen3.5-27b': 'Qwen3.5 27B',
+      'qwen/qwen3-max-thinking': 'Qwen3 Max Thinking',
       'qwen/qwen3-max': 'Qwen3 Max',
       'qwen/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
