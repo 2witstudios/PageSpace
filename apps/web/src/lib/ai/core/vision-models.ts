@@ -68,6 +68,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'anthropic/claude-opus-4.1': true,
 
   // Google Gemini (all versions support vision)
+  'gemini-3.1-pro-preview': true,
   'gemini-3.1-pro-preview-customtools': true,
   'gemini-3.1-flash-lite-preview': true,
   'gemini-3-flash-preview': true,
@@ -77,6 +78,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gemini-2.0-flash-exp': true,
   'gemini-1.5-pro': true,
   'gemini-1.5-flash': true,
+  'google/gemini-3.1-pro-preview': true,
   'google/gemini-3.1-pro-preview-customtools': true,
   'google/gemini-3.1-flash-lite-preview': true,
   'google/gemini-3-flash-preview': true,
