@@ -68,6 +68,9 @@ export const AI_PROVIDERS = {
       'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
 
+      // OpenAI Models (2026)
+      'openai/gpt-5.3-chat-latest': 'GPT-5.3 Chat',
+
       // OpenAI Models (2025)
       'openai/gpt-5.2': 'GPT-5.2',
       'openai/gpt-5.2-codex': 'GPT-5.2 Codex',
@@ -215,6 +218,7 @@ export const AI_PROVIDERS = {
     name: 'OpenAI',
     models: {
       // GPT-5.3 Models (2026)
+      'gpt-5.3-chat-latest': 'GPT-5.3 Chat',
       'gpt-5.3-codex': 'GPT-5.3 Codex',
 
       // GPT-5.2 Models (2025)
