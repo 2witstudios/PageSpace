@@ -119,6 +119,7 @@ export const AI_PROVIDERS = {
 
       // Google Models (via OpenRouter)
       'google/gemini-3-pro-preview': 'Gemini 3 Pro',
+      'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
       'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
       'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
@@ -199,6 +200,7 @@ export const AI_PROVIDERS = {
     models: {
       // Gemini 3 Series (2025)
       'gemini-3-pro': 'Gemini 3 Pro',
+      'gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
       'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
       'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
       // Gemini 2.5 Series (2025)
