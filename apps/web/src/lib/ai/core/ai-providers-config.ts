@@ -70,6 +70,8 @@ export const AI_PROVIDERS = {
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
 
       // OpenAI Models (2026)
+      'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
+      'openai/gpt-5.4': 'GPT-5.4',
       'openai/gpt-5.3-chat-latest': 'GPT-5.3 Chat',
       'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
 
@@ -147,6 +149,7 @@ export const AI_PROVIDERS = {
       'x-ai/grok-4': 'Grok 4',
 
       // Other Models
+      'inception/mercury-2': 'Mercury 2',
       'inception/mercury': 'Mercury',
       'writer/palmyra-x5': 'Palmyra X5',
     },

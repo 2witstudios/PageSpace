@@ -5,6 +5,12 @@
  */
 
 const VISION_CAPABLE_MODELS: Record<string, boolean> = {
+  // OpenAI GPT-5.4 Models (all have vision)
+  'gpt-5.4-pro': true,
+  'gpt-5.4': true,
+  'openai/gpt-5.4-pro': true,
+  'openai/gpt-5.4': true,
+
   // OpenAI GPT-5.3 Models (all have vision)
   'gpt-5.3-chat-latest': true,
   'gpt-5.3-codex': true,
