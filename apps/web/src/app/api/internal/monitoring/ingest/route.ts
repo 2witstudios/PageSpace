@@ -4,35 +4,7 @@ import { db, systemLogs } from '@pagespace/db';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logger-database';
 import { loggers } from '@pagespace/lib/server';
 import { secureCompare } from '@pagespace/lib';
-import { sanitizeIngestPayload } from '@/lib/monitoring/ingest-sanitizer';
-
-interface ApiRequestPayload {
-  type: 'api-request';
-  requestId?: string;
-  timestamp?: string;
-  method: string;
-  endpoint: string;
-  statusCode: number;
-  duration: number;
-  requestSize?: number;
-  responseSize?: number;
-  userId?: string;
-  sessionId?: string;
-  ip?: string;
-  userAgent?: string;
-  error?: string;
-  errorName?: string;
-  errorStack?: string;
-  cacheHit?: boolean;
-  cacheKey?: string;
-  driveId?: string;
-  pageId?: string;
-  message?: string;
-  metadata?: Record<string, unknown>;
-  query?: Record<string, unknown>;
-}
-
-type IngestPayload = ApiRequestPayload;
+import { sanitizeIngestPayload, type IngestPayload } from '@/lib/monitoring/ingest-sanitizer';
 
 function unauthorized(message: string, status: number = 401) {
   return NextResponse.json({ error: message }, { status });

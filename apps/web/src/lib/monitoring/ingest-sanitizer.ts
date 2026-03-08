@@ -4,7 +4,7 @@ const MAX_STACK_LENGTH = 4096;
 const MAX_USER_AGENT_LENGTH = 512;
 const MAX_DURATION_MS = 300000; // 5 minutes
 
-interface IngestPayload {
+export interface IngestPayload {
   type: 'api-request';
   requestId?: string;
   timestamp?: string;

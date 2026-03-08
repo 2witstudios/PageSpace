@@ -345,9 +345,11 @@ export async function monitoringMiddleware(
   // Extract context
   const context = extractRequestContext(request);
   const userId = await extractUserId(request);
-  
+  const cleanEndpoint = sanitizeEndpoint(pathname);
+  const requestSize = getRequestSize(request);
+
   // Create request-scoped logger
-  const requestLogger = logger.child({ 
+  const requestLogger = logger.child({
     requestId,
     userId,
     ...context
@@ -359,14 +361,11 @@ export async function monitoringMiddleware(
   try {
     // Execute the request
     const response = await next();
-    
+
     // Calculate metrics
     const duration = Date.now() - startTime;
-    const requestSize = getRequestSize(request);
     const responseSize = getResponseSize(response);
     const statusCode = response.status;
-
-    const cleanEndpoint = sanitizeEndpoint(pathname);
 
     // Track metrics
     await metricsCollector.track({
@@ -432,11 +431,9 @@ export async function monitoringMiddleware(
     const errorName = error instanceof Error ? error.name : 'Error';
     const errorStack = error instanceof Error ? error.stack : undefined;
 
-    const cleanEndpointErr = sanitizeEndpoint(pathname);
-
     // Track error metrics
     await metricsCollector.track({
-      endpoint: cleanEndpointErr,
+      endpoint: cleanEndpoint,
       method: request.method,
       statusCode: 500,
       duration,
@@ -455,10 +452,10 @@ export async function monitoringMiddleware(
         requestId,
         timestamp: startedAt.toISOString(),
         method: request.method.toUpperCase(),
-        endpoint: cleanEndpointErr,
+        endpoint: cleanEndpoint,
         statusCode: 500,
         duration,
-        requestSize: getRequestSize(request),
+        requestSize,
         responseSize: 0,
         userId,
         sessionId: context.sessionId,
