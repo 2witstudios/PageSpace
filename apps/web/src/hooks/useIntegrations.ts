@@ -50,11 +50,15 @@ export function useAgentGrants(agentId: string | null) {
   return { grants: data?.grants ?? [], error, isLoading, mutate };
 }
 
-interface AuditLogsParams {
+export interface AuditLogsParams {
   limit?: number;
   offset?: number;
   connectionId?: string;
   success?: boolean;
+  agentId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  toolName?: string;
 }
 
 interface AvailableBuiltin {
@@ -79,6 +83,10 @@ export function useIntegrationAuditLogs(driveId: string | null, params: AuditLog
   if (params.offset != null) searchParams.set('offset', String(params.offset));
   if (params.connectionId) searchParams.set('connectionId', params.connectionId);
   if (params.success !== undefined) searchParams.set('success', String(params.success));
+  if (params.agentId) searchParams.set('agentId', params.agentId);
+  if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+  if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+  if (params.toolName) searchParams.set('toolName', params.toolName);
 
   const qs = searchParams.toString();
   const url = driveId ? `/api/drives/${driveId}/integrations/audit${qs ? `?${qs}` : ''}` : null;

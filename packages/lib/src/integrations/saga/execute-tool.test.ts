@@ -25,9 +25,15 @@ vi.mock('../execution/build-request', () => ({
   buildHttpRequest: vi.fn(),
 }));
 
-vi.mock('../execution/transform-output', () => ({
-  transformOutput: vi.fn(),
-}));
+vi.mock('../execution/transform-output', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../execution/transform-output')>();
+
+  return {
+    ...actual,
+    transformOutput: vi.fn(),
+  };
+});
 
 vi.mock('../execution/http-executor', () => ({
   executeHttpRequest: vi.fn(),
@@ -167,6 +173,52 @@ describe('executeToolSaga', () => {
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 
+  it('given provider default headers, should merge them into the executed request', async () => {
+    const providerWithDefaults = createTestProvider({
+      defaultHeaders: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+    });
+
+    mockLoadConnection.mockResolvedValue(
+      createTestConnection({
+        provider: {
+          id: 'github',
+          slug: 'github',
+          name: 'GitHub',
+          config: providerWithDefaults,
+        },
+      })
+    );
+
+    vi.mocked(buildHttpRequest).mockReturnValue({
+      url: 'https://api.github.com/user/repos',
+      method: 'GET',
+      headers: { 'X-Request-Id': 'req-1' },
+    });
+
+    const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
+      connectionId: 'conn-123',
+      agentId: 'agent-1',
+      toolName: 'list_repos',
+      input: {},
+    };
+
+    await executeToolSaga(request, mockDeps);
+
+    expect(executeHttpRequest).toHaveBeenCalledWith(expect.objectContaining({
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Request-Id': 'req-1',
+        Authorization: 'Bearer decrypted-token',
+      },
+    }));
+  });
+
   it('given invalid tool, should return error without executing', async () => {
     mockLoadConnection.mockResolvedValue(createTestConnection());
     vi.mocked(isToolAllowed).mockReturnValue({ allowed: false, reason: 'Tool not in allowed list' });
@@ -245,6 +297,63 @@ describe('executeToolSaga', () => {
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
       responseCode: 401,
+    }));
+  });
+
+  it('given response validation failure, should return provider error and log failure', async () => {
+    const validatedTool = createTestTool({
+      responseValidation: {
+        success: { path: '$.ok', equals: true },
+        errorPath: '$.error',
+      },
+    });
+    const validatedProvider = createTestProvider({ tools: [validatedTool] });
+
+    mockLoadConnection.mockResolvedValue(
+      createTestConnection({
+        provider: {
+          id: 'github',
+          slug: 'github',
+          name: 'GitHub',
+          config: validatedProvider,
+        },
+      })
+    );
+
+    vi.mocked(executeHttpRequest).mockResolvedValue({
+      success: true,
+      response: {
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        body: { ok: false, error: 'missing_scope' },
+        durationMs: 40,
+      },
+      retries: 0,
+    });
+
+    const request: ToolCallRequest = {
+      userId: 'user-1',
+      driveId: 'drive-1',
+      connectionId: 'conn-123',
+      agentId: 'agent-1',
+      toolName: 'list_repos',
+      input: {},
+    };
+
+    const result = await executeToolSaga(request, mockDeps);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'missing_scope',
+      errorType: 'http',
+    });
+    expect(transformOutput).not.toHaveBeenCalled();
+    expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      errorType: 'PROVIDER_RESPONSE_ERROR',
+      errorMessage: 'missing_scope',
+      responseCode: 200,
     }));
   });
 
