@@ -55,6 +55,24 @@ interface FiltersState {
 
 const PAGE_SIZE = 50;
 
+const INITIAL_FILTERS: FiltersState = {
+  connectionId: '',
+  success: 'all',
+  dateFrom: undefined,
+  dateTo: undefined,
+  agentId: '',
+};
+
+function filtersToSearchParams(filters: FiltersState): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filters.connectionId) params.set('connectionId', filters.connectionId);
+  if (filters.success !== 'all') params.set('success', filters.success);
+  if (filters.dateFrom) params.set('dateFrom', filters.dateFrom.toISOString());
+  if (filters.dateTo) params.set('dateTo', filters.dateTo.toISOString());
+  if (filters.agentId) params.set('agentId', filters.agentId);
+  return params;
+}
+
 function formatDateTime(dateString: string | null) {
   if (!dateString) return 'N/A';
   return format(new Date(dateString), 'MMM d, yyyy HH:mm:ss');
@@ -68,13 +86,7 @@ function formatDateShort(dateString: string | null) {
 export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [exporting, setExporting] = useState(false);
-  const [filters, setFilters] = useState<FiltersState>({
-    connectionId: '',
-    success: 'all',
-    dateFrom: undefined,
-    dateTo: undefined,
-    agentId: '',
-  });
+  const [filters, setFilters] = useState<FiltersState>(INITIAL_FILTERS);
 
   const { connections } = useDriveConnections(driveId);
 
@@ -113,28 +125,16 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
     filters.agentId;
 
   const clearFilters = () => {
-    setFilters({
-      connectionId: '',
-      success: 'all',
-      dateFrom: undefined,
-      dateTo: undefined,
-      agentId: '',
-    });
+    setFilters(INITIAL_FILTERS);
     setCurrentPage(1);
   };
 
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      const params = new URLSearchParams();
-      if (filters.connectionId) params.set('connectionId', filters.connectionId);
-      if (filters.success !== 'all') params.set('success', filters.success);
-      if (filters.dateFrom) params.set('dateFrom', filters.dateFrom.toISOString());
-      if (filters.dateTo) params.set('dateTo', filters.dateTo.toISOString());
-      if (filters.agentId) params.set('agentId', filters.agentId);
-
+      const qs = filtersToSearchParams(filters).toString();
       const response = await fetchWithAuth(
-        `/api/drives/${driveId}/integrations/audit/export?${params.toString()}`
+        `/api/drives/${driveId}/integrations/audit/export${qs ? `?${qs}` : ''}`
       );
 
       if (!response.ok) throw new Error('Failed to export audit logs');
@@ -411,12 +411,10 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
                       <TableCell className="font-mono text-xs">
                         {log.durationMs != null ? `${log.durationMs}ms` : '-'}
                       </TableCell>
-                      <TableCell>
-                        <div className="max-w-md truncate text-xs">
-                          {log.success
-                            ? log.inputSummary || `HTTP ${log.responseCode}`
-                            : log.errorMessage || log.errorType || 'Unknown error'}
-                        </div>
+                      <TableCell className="max-w-md truncate text-xs">
+                        {log.success
+                          ? log.inputSummary || `HTTP ${log.responseCode}`
+                          : log.errorMessage || log.errorType || 'Unknown error'}
                       </TableCell>
                     </TableRow>
                   ))

@@ -201,25 +201,28 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                         <Label className="text-xs">Tool access</Label>
                         {grant.allowedTools ? (
                           <div className="flex flex-wrap gap-1">
-                            {grant.allowedTools.map((tool) => (
-                              <Badge key={tool} variant="secondary" className="text-xs gap-1 pr-1">
-                                {tool}
-                                <button
-                                  type="button"
-                                  aria-label={`Remove ${tool}`}
-                                  disabled={updatingGrant === grant.id}
-                                  className="ml-0.5 rounded-full hover:bg-muted-foreground/20 p-0.5"
-                                  onClick={() => {
-                                    const updated = grant.allowedTools!.filter((t) => t !== tool);
-                                    handleUpdateGrant(grant, {
-                                      allowedTools: updated.length > 0 ? updated : null,
-                                    });
-                                  }}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </Badge>
-                            ))}
+                            {grant.allowedTools.map((tool) => {
+                              const { allowedTools } = grant;
+                              return (
+                                <Badge key={tool} variant="secondary" className="text-xs gap-1 pr-1">
+                                  {tool}
+                                  <button
+                                    type="button"
+                                    aria-label={`Remove ${tool}`}
+                                    disabled={updatingGrant === grant.id}
+                                    className="ml-0.5 rounded-full hover:bg-muted-foreground/20 p-0.5"
+                                    onClick={() => {
+                                      const updated = allowedTools.filter((t) => t !== tool);
+                                      handleUpdateGrant(grant, {
+                                        allowedTools: updated.length > 0 ? updated : null,
+                                      });
+                                    }}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </Badge>
+                              );
+                            })}
                           </div>
                         ) : (
                           <p className="text-xs text-muted-foreground">All tools</p>
