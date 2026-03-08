@@ -51,12 +51,19 @@ export function sanitizeFilename(filename: string): string {
  * @param value - The value to escape
  * @returns Escaped CSV field
  */
-function escapeCSVField(value: string): string {
-  // If the value contains comma, quote, or newline, wrap in quotes and escape internal quotes
-  if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
-    return `"${value.replace(/"/g, '""')}"`;
+export function escapeCSVField(value: string): string {
+  let sanitized = value;
+
+  // Prevent spreadsheet formula injection when opening CSV in Excel/Sheets.
+  if (/^[\t\r ]*[=+\-@]/.test(sanitized)) {
+    sanitized = `'${sanitized}`;
   }
-  return value;
+
+  // If the value contains comma, quote, or newline, wrap in quotes and escape internal quotes
+  if (sanitized.includes(',') || sanitized.includes('"') || sanitized.includes('\n') || sanitized.includes('\r')) {
+    return `"${sanitized.replace(/"/g, '""')}"`;
+  }
+  return sanitized;
 }
 
 /**

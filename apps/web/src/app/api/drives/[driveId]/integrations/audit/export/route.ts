@@ -3,11 +3,12 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, desc, integrationAuditLog } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { generateCSV } from '@pagespace/lib/content';
 import { format } from 'date-fns';
 import { buildAuditLogWhereClause, parseAuditFilterParams } from '../audit-filters';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
-const CSV_HEADER = [
+const CSV_HEADERS = [
   'Timestamp',
   'Tool Name',
   'Agent ID',
@@ -17,26 +18,7 @@ const CSV_HEADER = [
   'Duration (ms)',
   'Error Type',
   'Error Message',
-].join(',');
-
-function escapeCsvValue(value: string | number | null): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  let stringValue = String(value);
-
-  // Prevent spreadsheet formula injection when opening CSV in Excel/Sheets.
-  if (/^[\t\r ]*[=+\-@]/.test(stringValue)) {
-    stringValue = `'${stringValue}`;
-  }
-
-  if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
-    return `"${stringValue.replace(/"/g, '""')}"`;
-  }
-
-  return stringValue;
-}
+];
 
 /**
  * GET /api/drives/[driveId]/integrations/audit/export
@@ -71,22 +53,22 @@ export async function GET(
       limit: 10000,
     });
 
-    const csvRows = logs.map((log) => {
-      const timestamp = log.createdAt ? format(new Date(log.createdAt), 'yyyy-MM-dd HH:mm:ss') : '';
-      return [
-        escapeCsvValue(timestamp),
-        escapeCsvValue(log.toolName),
-        escapeCsvValue(log.agentId),
-        escapeCsvValue(log.connectionId),
-        escapeCsvValue(log.success ? 'Success' : 'Failure'),
-        escapeCsvValue(log.responseCode),
-        escapeCsvValue(log.durationMs),
-        escapeCsvValue(log.errorType),
-        escapeCsvValue(log.errorMessage),
-      ].join(',');
-    });
+    const csvData: string[][] = [
+      CSV_HEADERS,
+      ...logs.map((log) => [
+        log.createdAt ? format(new Date(log.createdAt), 'yyyy-MM-dd HH:mm:ss') : '',
+        log.toolName ?? '',
+        log.agentId ?? '',
+        log.connectionId ?? '',
+        log.success ? 'Success' : 'Failure',
+        log.responseCode != null ? String(log.responseCode) : '',
+        log.durationMs != null ? String(log.durationMs) : '',
+        log.errorType ?? '',
+        log.errorMessage ?? '',
+      ]),
+    ];
 
-    const csv = `${CSV_HEADER}\n${csvRows.join('\n')}`;
+    const csv = generateCSV(csvData);
 
     return new Response(csv, {
       headers: {

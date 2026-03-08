@@ -10,36 +10,15 @@ import {
   sql,
 } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
+import { escapeCSVField } from '@pagespace/lib/content';
 import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 
-/**
- * Escapes a value for CSV format
- * - Wraps in quotes if contains comma, quote, or newline
- * - Escapes quotes by doubling them
- */
-function escapeCSVValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  let stringValue: string;
-
-  if (value instanceof Date) {
-    stringValue = format(value, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
-  } else if (typeof value === 'object') {
-    stringValue = JSON.stringify(value);
-  } else {
-    stringValue = String(value);
-  }
-
-  // Check if escaping is needed
-  if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
-    // Escape quotes by doubling them and wrap in quotes
-    return `"${stringValue.replace(/"/g, '""')}"`;
-  }
-
-  return stringValue;
+function formatCSVValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return format(value, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
 
 /**
@@ -77,7 +56,7 @@ const CSV_HEADERS = [
  * Converts a log entry to a CSV row
  */
 function logToCSVRow(log: Record<string, unknown>): string {
-  return CSV_HEADERS.map(header => escapeCSVValue(log[header])).join(',');
+  return CSV_HEADERS.map(header => escapeCSVField(formatCSVValue(log[header]))).join(',');
 }
 
 /**
@@ -176,7 +155,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       async start(controller) {
         try {
           // Write CSV header
-          controller.enqueue(encoder.encode(CSV_HEADERS.join(',') + '\n'));
+          controller.enqueue(encoder.encode(CSV_HEADERS.map(escapeCSVField).join(',') + '\n'));
 
           let offset = 0;
           let hasMoreRecords = true;

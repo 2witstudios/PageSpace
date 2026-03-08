@@ -45,9 +45,11 @@ interface IntegrationAuditLogPageProps {
   driveId: string;
 }
 
+type SuccessFilter = 'all' | 'true' | 'false';
+
 interface FiltersState {
   connectionId: string;
-  success: string; // 'all' | 'true' | 'false'
+  success: SuccessFilter;
   dateFrom: Date | undefined;
   dateTo: Date | undefined;
   agentId: string;
@@ -55,14 +57,19 @@ interface FiltersState {
 
 const PAGE_SIZE = 50;
 
+function filtersToSearchParams(filters: FiltersState): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filters.connectionId) params.set('connectionId', filters.connectionId);
+  if (filters.success !== 'all') params.set('success', filters.success);
+  if (filters.dateFrom) params.set('dateFrom', filters.dateFrom.toISOString());
+  if (filters.dateTo) params.set('dateTo', filters.dateTo.toISOString());
+  if (filters.agentId) params.set('agentId', filters.agentId);
+  return params;
+}
+
 function formatDateTime(dateString: string | null) {
   if (!dateString) return 'N/A';
   return format(new Date(dateString), 'MMM d, yyyy HH:mm:ss');
-}
-
-function formatDateShort(dateString: string | null) {
-  if (!dateString) return 'N/A';
-  return format(new Date(dateString), 'MMM d, yyyy');
 }
 
 export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProps) {
@@ -126,12 +133,7 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      const params = new URLSearchParams();
-      if (filters.connectionId) params.set('connectionId', filters.connectionId);
-      if (filters.success !== 'all') params.set('success', filters.success);
-      if (filters.dateFrom) params.set('dateFrom', filters.dateFrom.toISOString());
-      if (filters.dateTo) params.set('dateTo', filters.dateTo.toISOString());
-      if (filters.agentId) params.set('agentId', filters.agentId);
+      const params = filtersToSearchParams(filters);
 
       const response = await fetchWithAuth(
         `/api/drives/${driveId}/integrations/audit/export?${params.toString()}`
@@ -276,7 +278,7 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
             <Select
               value={filters.success}
               onValueChange={(value) => {
-                setFilters((prev) => ({ ...prev, success: value }));
+                setFilters((prev) => ({ ...prev, success: value as SuccessFilter }));
                 setCurrentPage(1);
               }}
             >
@@ -301,7 +303,7 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
                   )}
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
-                  {filters.dateFrom ? formatDateShort(filters.dateFrom.toISOString()) : 'From Date'}
+                  {filters.dateFrom ? format(filters.dateFrom, 'MMM d, yyyy') : 'From Date'}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
@@ -328,7 +330,7 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
                   )}
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
-                  {filters.dateTo ? formatDateShort(filters.dateTo.toISOString()) : 'To Date'}
+                  {filters.dateTo ? format(filters.dateTo, 'MMM d, yyyy') : 'To Date'}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
