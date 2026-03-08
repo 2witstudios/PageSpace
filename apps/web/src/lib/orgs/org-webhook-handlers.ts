@@ -12,12 +12,13 @@ export async function handleOrgSubscriptionChange(subscription: Stripe.Subscript
   const subscriptionItem = subscription.items.data[0];
   if (!subscriptionItem) return;
 
-  const currentPeriodStart = subscriptionItem.current_period_start
-    ? new Date(subscriptionItem.current_period_start * 1000)
-    : new Date();
-  const currentPeriodEnd = subscriptionItem.current_period_end
-    ? new Date(subscriptionItem.current_period_end * 1000)
-    : new Date();
+  const periodStart = subscriptionItem.current_period_start;
+  const periodEnd = subscriptionItem.current_period_end;
+  if (!periodStart || !periodEnd) {
+    throw new Error(`Missing period dates for org subscription ${subscription.id}`);
+  }
+  const currentPeriodStart = new Date(periodStart * 1000);
+  const currentPeriodEnd = new Date(periodEnd * 1000);
 
   // Atomic upsert — handles race conditions from concurrent webhook deliveries
   await db.insert(orgSubscriptions).values({

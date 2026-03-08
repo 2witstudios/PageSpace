@@ -35,22 +35,28 @@ export const PUT = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _con
   const updates: Record<string, unknown> = {};
 
   if ('allowedAIProviders' in body) {
-    if (body.allowedAIProviders !== null && !Array.isArray(body.allowedAIProviders)) {
-      return Response.json({ error: 'allowedAIProviders must be an array or null' }, { status: 400 });
+    if (body.allowedAIProviders !== null) {
+      if (!Array.isArray(body.allowedAIProviders) || !body.allowedAIProviders.every((v: unknown) => typeof v === 'string')) {
+        return Response.json({ error: 'allowedAIProviders must be a string array or null' }, { status: 400 });
+      }
     }
     updates.allowedAIProviders = body.allowedAIProviders;
   }
 
   if ('maxStorageBytes' in body) {
-    if (body.maxStorageBytes !== null && (typeof body.maxStorageBytes !== 'number' || body.maxStorageBytes < 0)) {
-      return Response.json({ error: 'maxStorageBytes must be a non-negative number or null' }, { status: 400 });
+    if (body.maxStorageBytes !== null) {
+      if (typeof body.maxStorageBytes !== 'number' || !Number.isInteger(body.maxStorageBytes) || body.maxStorageBytes < 0) {
+        return Response.json({ error: 'maxStorageBytes must be a non-negative integer or null' }, { status: 400 });
+      }
     }
     updates.maxStorageBytes = body.maxStorageBytes;
   }
 
   if ('maxAITokensPerDay' in body) {
-    if (body.maxAITokensPerDay !== null && (typeof body.maxAITokensPerDay !== 'number' || body.maxAITokensPerDay < 0)) {
-      return Response.json({ error: 'maxAITokensPerDay must be a non-negative number or null' }, { status: 400 });
+    if (body.maxAITokensPerDay !== null) {
+      if (typeof body.maxAITokensPerDay !== 'number' || !Number.isInteger(body.maxAITokensPerDay) || body.maxAITokensPerDay < 0) {
+        return Response.json({ error: 'maxAITokensPerDay must be a non-negative integer or null' }, { status: 400 });
+      }
     }
     updates.maxAITokensPerDay = body.maxAITokensPerDay;
   }
@@ -70,8 +76,10 @@ export const PUT = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _con
   }
 
   if ('allowedDomains' in body) {
-    if (body.allowedDomains !== null && !Array.isArray(body.allowedDomains)) {
-      return Response.json({ error: 'allowedDomains must be an array or null' }, { status: 400 });
+    if (body.allowedDomains !== null) {
+      if (!Array.isArray(body.allowedDomains) || !body.allowedDomains.every((v: unknown) => typeof v === 'string')) {
+        return Response.json({ error: 'allowedDomains must be a string array or null' }, { status: 400 });
+      }
     }
     updates.allowedDomains = body.allowedDomains;
   }
