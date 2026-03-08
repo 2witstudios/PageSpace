@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server';
 import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc } from '@pagespace/db';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getDefaultContent, PageType } from '@pagespace/lib';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 /**
  * Get or create task list for a page, ensuring default status configs exist
@@ -76,6 +76,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const scopeError = await checkMCPPageScope(auth, pageId);
+  if (scopeError) return scopeError;
 
   // Check view permission
   const canView = await canUserViewPage(userId, pageId);
@@ -221,6 +225,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+
+  // Check MCP page scope
+  const writeScopeError = await checkMCPPageScope(auth, pageId);
+  if (writeScopeError) return writeScopeError;
 
   // Check edit permission
   const canEdit = await canUserEditPage(userId, pageId);

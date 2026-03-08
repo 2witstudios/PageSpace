@@ -857,6 +857,9 @@ importers:
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.2.2
+      dotenv:
+        specifier: ^17.2.0
+        version: 17.2.2
       drizzle-orm:
         specifier: ^0.32.2
         version: 0.32.2(@opentelemetry/api@1.9.0)(@types/pg@8.15.5)(@types/react@19.1.13)(pg@8.16.3)(react@19.2.1)
@@ -873,9 +876,6 @@ importers:
       bcryptjs:
         specifier: ^3.0.2
         version: 3.0.2
-      dotenv:
-        specifier: ^17.2.0
-        version: 17.2.2
       drizzle-kit:
         specifier: ^0.23.2
         version: 0.23.2
@@ -927,6 +927,12 @@ importers:
       pdf-parse-debugging-disabled:
         specifier: ^1.1.1
         version: 1.1.1
+      react:
+        specifier: ^19.1.2
+        version: 19.2.1
+      react-dom:
+        specifier: ^19.1.2
+        version: 19.2.1(react@19.2.1)
       react-email:
         specifier: ^5.1.1
         version: 5.1.1
@@ -964,9 +970,6 @@ importers:
       '@types/xlsx':
         specifier: ^0.0.36
         version: 0.0.36
-      react:
-        specifier: ^19.1.2
-        version: 19.2.1
 
 packages:
 

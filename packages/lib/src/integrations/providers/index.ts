@@ -9,13 +9,19 @@
 import type { IntegrationProviderConfig } from '../types';
 import { genericWebhookProvider } from './generic-webhook';
 import { githubProvider } from './github';
+import { notionProvider } from './notion';
+import { slackProvider } from './slack';
 
 export { genericWebhookProvider } from './generic-webhook';
 export { githubProvider } from './github';
+export { notionProvider } from './notion';
+export { slackProvider } from './slack';
 
 export const builtinProviders: Record<string, IntegrationProviderConfig> = {
   [genericWebhookProvider.id]: genericWebhookProvider,
   [githubProvider.id]: githubProvider,
+  [notionProvider.id]: notionProvider,
+  [slackProvider.id]: slackProvider,
 };
 
 export const builtinProviderList: IntegrationProviderConfig[] =

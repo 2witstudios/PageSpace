@@ -10,7 +10,7 @@ import appleSignIn from 'apple-signin-auth';
 import { users, drives } from '@pagespace/db';
 import { db, eq, or, count } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-import { slugify } from '@pagespace/lib/server';
+import { slugify } from '../utils/utils';
 import { loggers } from '../logging/logger-config';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 
