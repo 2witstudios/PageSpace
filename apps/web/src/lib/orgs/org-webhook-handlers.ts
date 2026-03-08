@@ -19,37 +19,28 @@ export async function handleOrgSubscriptionChange(subscription: Stripe.Subscript
     ? new Date(subscriptionItem.current_period_end * 1000)
     : new Date();
 
-  // Upsert org subscription
-  const [existing] = await db
-    .select({ id: orgSubscriptions.id })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.stripeSubscriptionId, subscription.id))
-    .limit(1);
-
-  if (existing) {
-    await db
-      .update(orgSubscriptions)
-      .set({
-        status: subscription.status,
-        stripePriceId: subscriptionItem.price.id,
-        quantity: subscriptionItem.quantity ?? 1,
-        currentPeriodStart,
-        currentPeriodEnd,
-        cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      })
-      .where(eq(orgSubscriptions.id, existing.id));
-  } else {
-    await db.insert(orgSubscriptions).values({
-      orgId,
-      stripeSubscriptionId: subscription.id,
-      stripePriceId: subscriptionItem.price.id,
+  // Atomic upsert — handles race conditions from concurrent webhook deliveries
+  await db.insert(orgSubscriptions).values({
+    orgId,
+    stripeSubscriptionId: subscription.id,
+    stripePriceId: subscriptionItem.price.id,
+    status: subscription.status,
+    quantity: subscriptionItem.quantity ?? 1,
+    currentPeriodStart,
+    currentPeriodEnd,
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+  }).onConflictDoUpdate({
+    target: orgSubscriptions.stripeSubscriptionId,
+    set: {
       status: subscription.status,
+      stripePriceId: subscriptionItem.price.id,
       quantity: subscriptionItem.quantity ?? 1,
       currentPeriodStart,
       currentPeriodEnd,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    });
-  }
+      updatedAt: new Date(),
+    },
+  });
 
   // Update org billing tier based on price
   const tier = getOrgTierFromPrice(subscriptionItem.price.id);

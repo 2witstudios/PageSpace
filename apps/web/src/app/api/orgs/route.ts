@@ -85,22 +85,30 @@ export async function POST(request: Request) {
 
   const orgId = createId();
 
-  await db.transaction(async (tx) => {
-    await tx.insert(organizations).values({
-      id: orgId,
-      name,
-      slug,
-      ownerId: user.id,
-    });
+  try {
+    await db.transaction(async (tx) => {
+      await tx.insert(organizations).values({
+        id: orgId,
+        name,
+        slug,
+        ownerId: user.id,
+      });
 
-    // Add owner as OWNER member
-    await tx.insert(orgMembers).values({
-      orgId,
-      userId: user.id,
-      role: 'OWNER',
-      acceptedAt: new Date(),
+      // Add owner as OWNER member
+      await tx.insert(orgMembers).values({
+        orgId,
+        userId: user.id,
+        role: 'OWNER',
+        acceptedAt: new Date(),
+      });
     });
-  });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '';
+    if (message.includes('unique') || message.includes('duplicate')) {
+      return NextResponse.json({ error: 'Organization slug already taken' }, { status: 409 });
+    }
+    throw err;
+  }
 
   const [org] = await db
     .select({

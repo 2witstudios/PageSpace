@@ -50,14 +50,21 @@ describe('updateSeatCount', () => {
     const result = await updateSeatCount('org-1', 0);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('at least 1');
+    expect(result.error).toContain('positive integer');
   });
 
   it('should reject negative seat count', async () => {
     const result = await updateSeatCount('org-1', -5);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('at least 1');
+    expect(result.error).toContain('positive integer');
+  });
+
+  it('should reject non-integer seat count', async () => {
+    const result = await updateSeatCount('org-1', 2.5);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('positive integer');
   });
 });
 
@@ -67,7 +74,7 @@ describe('updateSeatCount validation', () => {
 
     expect(result).toEqual({
       success: false,
-      error: 'Seat count must be at least 1',
+      error: 'Seat count must be a positive integer',
     });
     // Should not have tried to fetch subscription
     expect(mockGetOrgMemberCount).not.toHaveBeenCalled();

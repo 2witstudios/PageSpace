@@ -32,6 +32,14 @@ export async function adjustSeatsForMemberAdd(orgId: string): Promise<SeatUpdate
 
   const memberCount = await getOrgMemberCount(orgId);
 
+  // Cancel any pending grace period since a member was added
+  if (subscription.gracePeriodEnd) {
+    await db
+      .update(orgSubscriptions)
+      .set({ gracePeriodEnd: null })
+      .where(eq(orgSubscriptions.id, subscription.id));
+  }
+
   // Only increase if member count exceeds current seats
   if (memberCount <= subscription.quantity) {
     return { success: true, newQuantity: subscription.quantity };
@@ -90,7 +98,10 @@ export async function adjustSeatsForMemberRemove(orgId: string): Promise<SeatUpd
   }
 }
 
-/** Called by scheduled job after grace period expires to finalize seat decrease. */
+/**
+ * Called by a scheduled job (cron) after the grace period expires to finalize seat decrease.
+ * Wire this into a daily cron that queries orgSubscriptions where gracePeriodEnd < now().
+ */
 export async function finalizeGracePeriodSeatDecrease(orgId: string): Promise<SeatUpdateResult> {
   const subscription = await getActiveOrgSubscription(orgId);
   if (!subscription?.gracePeriodEnd) {
@@ -136,8 +147,8 @@ export async function updateSeatCount(
   orgId: string,
   newQuantity: number
 ): Promise<SeatUpdateResult> {
-  if (newQuantity < 1) {
-    return { success: false, error: 'Seat count must be at least 1' };
+  if (!Number.isSafeInteger(newQuantity) || newQuantity < 1) {
+    return { success: false, error: 'Seat count must be a positive integer' };
   }
 
   const subscription = await getActiveOrgSubscription(orgId);

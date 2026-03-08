@@ -6,8 +6,9 @@ import { stripe } from '@/lib/stripe';
 export const GET = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _context, orgId) => {
   const { searchParams } = new URL(request.url);
   const parsedLimit = parseInt(searchParams.get('limit') ?? '10');
-  const limit = Math.min(Number.isNaN(parsedLimit) ? 10 : parsedLimit, 100);
-  const startingAfter = searchParams.get('starting_after') ?? undefined;
+  const limit = Math.min(Math.max(Number.isNaN(parsedLimit) ? 10 : parsedLimit, 1), 100);
+  const rawStartingAfter = searchParams.get('starting_after');
+  const startingAfter = rawStartingAfter?.trim() || undefined;
 
   const [org] = await db
     .select({ stripeCustomerId: organizations.stripeCustomerId })

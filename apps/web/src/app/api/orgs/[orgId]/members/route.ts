@@ -3,6 +3,7 @@ import { withOrgAuth, withOrgAdminAuth, type OrgRouteContext } from '@/lib/orgs/
 import { getOrgGuardrails, getOrgMemberCount, checkDomainAllowed } from '@/lib/orgs/guardrails';
 import { canAddMember, type OrgBillingTier } from '@/lib/orgs/billing-plans';
 import { adjustSeatsForMemberAdd } from '@/lib/orgs/seat-manager';
+import { logger } from '@pagespace/lib';
 
 // GET /api/orgs/[orgId]/members - List org members
 export const GET = withOrgAuth<OrgRouteContext>(async (_user, _request, _context, orgId) => {
@@ -94,19 +95,34 @@ export const POST = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _co
     return Response.json({ error: 'User is already a member' }, { status: 409 });
   }
 
-  const [member] = await db
-    .insert(orgMembers)
-    .values({
-      orgId,
-      userId: targetUser.id,
-      role: role as 'ADMIN' | 'MEMBER',
-      invitedBy: _user.id,
-      acceptedAt: new Date(),
-    })
-    .returning();
+  // Insert member — the unique constraint on (orgId, userId) prevents duplicates
+  // even if two requests race past the check above
+  let member;
+  try {
+    const [inserted] = await db
+      .insert(orgMembers)
+      .values({
+        orgId,
+        userId: targetUser.id,
+        role: role as 'ADMIN' | 'MEMBER',
+        invitedBy: _user.id,
+        acceptedAt: new Date(),
+      })
+      .returning();
+    member = inserted;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '';
+    if (message.includes('unique') || message.includes('duplicate')) {
+      return Response.json({ error: 'User is already a member' }, { status: 409 });
+    }
+    throw err;
+  }
 
-  // Adjust seat count in billing
-  await adjustSeatsForMemberAdd(orgId);
+  // Adjust seat count in billing (non-blocking: member add succeeds even if billing fails)
+  const seatResult = await adjustSeatsForMemberAdd(orgId);
+  if (!seatResult.success) {
+    logger.child({ orgId }).warn('Seat adjustment failed after member add', { error: seatResult.error });
+  }
 
   return Response.json(member, { status: 201 });
 });

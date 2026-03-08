@@ -1,8 +1,14 @@
 import { db, eq, organizations, orgSubscriptions } from '@pagespace/db';
 import { withOrgAdminAuth, withOrgOwnerAuth, type OrgRouteContext } from '@/lib/orgs/org-auth';
-import { getOrgBillingOverview } from '@/lib/orgs/seat-manager';
+import { getOrgBillingOverview, getActiveOrgSubscription } from '@/lib/orgs/seat-manager';
 import { stripe, type Stripe } from '@/lib/stripe';
+import { stripeConfig } from '@/lib/stripe-config';
 import { getOrgMemberCount } from '@/lib/orgs/guardrails';
+
+const ALLOWED_ORG_PRICE_IDS = new Set([
+  stripeConfig.priceIds.pro,
+  stripeConfig.priceIds.business,
+]);
 
 // GET /api/orgs/[orgId]/billing - Get billing overview
 export const GET = withOrgAdminAuth<OrgRouteContext>(async (_user, _request, _context, orgId) => {
@@ -25,8 +31,21 @@ export const POST = withOrgOwnerAuth<OrgRouteContext>(async (user, request, _con
 
   const { priceId } = body as { priceId?: string };
 
-  if (!priceId) {
+  if (!priceId || typeof priceId !== 'string') {
     return Response.json({ error: 'priceId is required' }, { status: 400 });
+  }
+
+  if (!ALLOWED_ORG_PRICE_IDS.has(priceId)) {
+    return Response.json({ error: 'Invalid price ID for organization plans' }, { status: 400 });
+  }
+
+  // Prevent duplicate subscription creation
+  const existingSub = await getActiveOrgSubscription(orgId);
+  if (existingSub) {
+    return Response.json(
+      { error: 'Organization already has an active subscription. Use the update endpoint instead.' },
+      { status: 409 }
+    );
   }
 
   const [org] = await db

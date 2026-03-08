@@ -43,14 +43,14 @@ export const PUT = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _con
 
   if ('maxStorageBytes' in body) {
     if (body.maxStorageBytes !== null && (typeof body.maxStorageBytes !== 'number' || body.maxStorageBytes < 0)) {
-      return Response.json({ error: 'maxStorageBytes must be a positive number or null' }, { status: 400 });
+      return Response.json({ error: 'maxStorageBytes must be a non-negative number or null' }, { status: 400 });
     }
     updates.maxStorageBytes = body.maxStorageBytes;
   }
 
   if ('maxAITokensPerDay' in body) {
     if (body.maxAITokensPerDay !== null && (typeof body.maxAITokensPerDay !== 'number' || body.maxAITokensPerDay < 0)) {
-      return Response.json({ error: 'maxAITokensPerDay must be a positive number or null' }, { status: 400 });
+      return Response.json({ error: 'maxAITokensPerDay must be a non-negative number or null' }, { status: 400 });
     }
     updates.maxAITokensPerDay = body.maxAITokensPerDay;
   }

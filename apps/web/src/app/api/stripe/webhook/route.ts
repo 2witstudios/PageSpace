@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, subscriptions, stripeEvents, users } from '@pagespace/db';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { handleOrgSubscriptionChange, handleOrgSubscriptionDeleted } from '@/lib/orgs/org-webhook-handlers';
 
 export async function POST(request: NextRequest) {
   try {
@@ -48,13 +49,25 @@ export async function POST(request: NextRequest) {
     try {
       switch (event.type) {
         case 'customer.subscription.created':
-        case 'customer.subscription.updated':
-          await handleSubscriptionChange(event.data.object as Stripe.Subscription);
+        case 'customer.subscription.updated': {
+          const sub = event.data.object as Stripe.Subscription;
+          if (sub.metadata?.type === 'organization') {
+            await handleOrgSubscriptionChange(sub);
+          } else {
+            await handleSubscriptionChange(sub);
+          }
           break;
+        }
 
-        case 'customer.subscription.deleted':
-          await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        case 'customer.subscription.deleted': {
+          const sub = event.data.object as Stripe.Subscription;
+          if (sub.metadata?.type === 'organization') {
+            await handleOrgSubscriptionDeleted(sub);
+          } else {
+            await handleSubscriptionDeleted(sub);
+          }
           break;
+        }
 
         case 'checkout.session.completed':
           await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);

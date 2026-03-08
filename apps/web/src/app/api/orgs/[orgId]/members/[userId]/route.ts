@@ -59,7 +59,8 @@ export const DELETE = withOrgAdminAuth<OrgMemberRouteContext>(async (_user, _req
   }
 
   // Adjust seat count (grace period before billing decrease)
-  await adjustSeatsForMemberRemove(orgId);
+  // Non-blocking: member removal succeeds even if billing update fails
+  const seatResult = await adjustSeatsForMemberRemove(orgId);
 
-  return Response.json({ success: true });
+  return Response.json({ success: true, ...(seatResult.success ? {} : { billingWarning: 'Seat adjustment pending' }) });
 });
