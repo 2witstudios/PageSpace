@@ -211,6 +211,7 @@ describe('GET /api/drives', () => {
       expect(body[0]).toHaveProperty('ownerId');
       expect(body[0]).toHaveProperty('isTrashed');
       expect(body[0]).toHaveProperty('drivePrompt');
+      expect(body[0]).toHaveProperty('orgId');
       expect(body[0]).toHaveProperty('isOwned');
       expect(body[0]).toHaveProperty('role');
     });
