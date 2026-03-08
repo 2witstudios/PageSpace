@@ -25,17 +25,20 @@ export async function GET(
       return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
     }
 
-    // User-scoped: only the connection owner can view grants
-    if (connection.userId && connection.userId !== auth.userId) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-    }
-
-    // Drive-scoped: only drive members can view grants
-    if (connection.driveId) {
+    if (connection.userId) {
+      // User-scoped: only the connection owner can view grants
+      if (connection.userId !== auth.userId) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
+    } else if (connection.driveId) {
+      // Drive-scoped: only drive members can view grants
       const access = await getDriveAccess(connection.driveId, auth.userId);
       if (!access.isMember) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
+    } else {
+      // Reject connections with no scope
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
     const grants = await listGrantsByConnection(db, connectionId);

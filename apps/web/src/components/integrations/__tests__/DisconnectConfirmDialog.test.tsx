@@ -127,4 +127,36 @@ describe('DisconnectConfirmDialog', () => {
     expect(cancelButton).toBeInTheDocument();
     await user.click(cancelButton);
   });
+
+  it('should show loading state and disable disconnect while count loads', () => {
+    render(
+      <DisconnectConfirmDialog
+        open={true}
+        onOpenChange={mockOnOpenChange}
+        connectionName="GitHub"
+        onConfirm={mockOnConfirm}
+        isLoadingCount={true}
+      />
+    );
+
+    expect(screen.getByText('Checking agent usage...')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Disconnect/i })).toBeDisabled();
+  });
+
+  it('should not show loading or warning when count loaded with zero', () => {
+    render(
+      <DisconnectConfirmDialog
+        open={true}
+        onOpenChange={mockOnOpenChange}
+        connectionName="GitHub"
+        onConfirm={mockOnConfirm}
+        affectedAgentCount={0}
+        isLoadingCount={false}
+      />
+    );
+
+    expect(screen.queryByText('Checking agent usage...')).not.toBeInTheDocument();
+    expect(screen.queryByText(/AI agent/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Disconnect/i })).not.toBeDisabled();
+  });
 });

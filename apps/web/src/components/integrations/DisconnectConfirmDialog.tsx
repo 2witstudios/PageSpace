@@ -21,6 +21,7 @@ interface DisconnectConfirmDialogProps {
   connectionName: string;
   onConfirm: () => void;
   affectedAgentCount?: number;
+  isLoadingCount?: boolean;
 }
 
 export function DisconnectConfirmDialog({
@@ -29,6 +30,7 @@ export function DisconnectConfirmDialog({
   connectionName,
   onConfirm,
   affectedAgentCount,
+  isLoadingCount,
 }: DisconnectConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -39,7 +41,10 @@ export function DisconnectConfirmDialog({
             This will remove the connection and revoke access. This action cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {affectedAgentCount !== undefined && affectedAgentCount > 0 && (
+        {isLoadingCount && (
+          <p className="text-sm text-muted-foreground">Checking agent usage...</p>
+        )}
+        {!isLoadingCount && affectedAgentCount !== undefined && affectedAgentCount > 0 && (
           <Alert variant="destructive">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
@@ -53,6 +58,7 @@ export function DisconnectConfirmDialog({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
+            disabled={isLoadingCount}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             Disconnect
@@ -72,7 +78,7 @@ export function DisconnectWithAgentCount({
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }) {
-  const { count } = useConnectionGrantCount(connection?.id ?? null);
+  const { count, isLoading } = useConnectionGrantCount(connection?.id ?? null);
 
   return (
     <DisconnectConfirmDialog
@@ -81,6 +87,7 @@ export function DisconnectWithAgentCount({
       connectionName={connection?.name ?? ''}
       onConfirm={onConfirm}
       affectedAgentCount={count}
+      isLoadingCount={isLoading}
     />
   );
 }

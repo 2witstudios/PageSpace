@@ -404,6 +404,7 @@ function ConnectionRow({
           <Button
             variant="ghost"
             size="sm"
+            aria-label={`${connection.name} details`}
             onClick={() => onDetail(detailHref)}
           >
             <ExternalLink className="h-3.5 w-3.5" />
