@@ -3,6 +3,19 @@
  */
 
 /**
+ * Check if error is a request payload size error (distinct from context-window limits)
+ */
+export function isPayloadSizeError(errorMessage: string | undefined): boolean {
+  if (!errorMessage) return false;
+  const msg = errorMessage.toLowerCase();
+  return (
+    msg.includes('request body too large') ||
+    msg.includes('payload too large') ||
+    msg.includes('entity too large')
+  );
+}
+
+/**
  * Get user-friendly error message based on error content
  */
 export function getAIErrorMessage(errorMessage: string | undefined): string {
@@ -10,23 +23,16 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
 
   const msg = errorMessage.toLowerCase();
 
-  // Authentication errors
-  if (errorMessage.includes('Unauthorized') || errorMessage.includes('401')) {
+  if (isAuthenticationError(errorMessage)) {
     return 'Authentication failed. Please refresh the page and try again.';
   }
 
-  // Request size errors (distinct from context-window limits)
-  if (
-    msg.includes('request body too large') ||
-    msg.includes('payload too large') ||
-    msg.includes('entity too large')
-  ) {
+  if (isPayloadSizeError(errorMessage)) {
     return 'Your request is too large. Try sending a shorter message or fewer/lower-size attachments.';
   }
 
-  // Context length errors
   if (isContextLengthError(errorMessage)) {
-    // Preserve server-provided guidance when present (e.g. "even after trimming", "latest message too large")
+    // Preserve server-provided guidance when present
     if (
       msg.includes('latest message is too large') ||
       msg.includes('even after trimming') ||
@@ -37,15 +43,7 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
     return 'The conversation is too long for this model\'s context window. Please start a new conversation or use a model with a larger context window.';
   }
 
-  // Rate limit errors
-  if (
-    errorMessage.toLowerCase().includes('rate') ||
-    errorMessage.toLowerCase().includes('limit') ||
-    errorMessage.includes('429') ||
-    errorMessage.includes('402') ||
-    errorMessage.includes('Failed after') ||
-    errorMessage.includes('Provider returned error')
-  ) {
+  if (isRateLimitError(errorMessage)) {
     return 'Free tier rate limit hit. Please try again in a few seconds or subscribe for premium models and access.';
   }
 
@@ -65,27 +63,17 @@ export function isAuthenticationError(errorMessage: string | undefined): boolean
  */
 export function isContextLengthError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
+  if (isPayloadSizeError(errorMessage)) return false;
+
   const msg = errorMessage.toLowerCase();
-
-  // Explicitly exclude non-context 413 payload errors
-  if (
-    msg.includes('request body too large') ||
-    msg.includes('payload too large') ||
-    msg.includes('entity too large')
-  ) {
-    return false;
-  }
-
   return (
-    msg.includes('context_length') ||     // API error key: context_length_exceeded
-    msg.includes('context length') ||     // Human-readable variant
+    msg.includes('context_length') ||
+    msg.includes('context length') ||
     msg.includes('context window') ||
     msg.includes('maximum context') ||
-    msg.includes('token limit') ||
+    msg.includes('token limit exceeded') ||
     msg.includes('tokens exceeds') ||
     msg.includes('too many tokens') ||
-    errorMessage.includes('413') ||
-    // OpenRouter / provider-specific phrasing
     (msg.includes('maximum') && msg.includes('tokens'))
   );
 }
@@ -95,11 +83,11 @@ export function isContextLengthError(errorMessage: string | undefined): boolean 
  */
 export function isRateLimitError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
-  // Exclude context-length errors that also contain "limit"
   if (isContextLengthError(errorMessage)) return false;
+  const msg = errorMessage.toLowerCase();
   return (
-    errorMessage.toLowerCase().includes('rate') ||
-    errorMessage.toLowerCase().includes('limit') ||
+    msg.includes('rate') ||
+    msg.includes('limit') ||
     errorMessage.includes('429') ||
     errorMessage.includes('402') ||
     errorMessage.includes('Failed after') ||

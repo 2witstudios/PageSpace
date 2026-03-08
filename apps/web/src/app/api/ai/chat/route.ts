@@ -830,10 +830,10 @@ export async function POST(request: Request) {
     const fullSystemPrompt = systemPrompt + timestampSystemPrompt + pageTreePrompt;
     const contextWindow = getContextWindowSize(currentModel, currentProvider);
     const systemPromptTokens = estimateSystemPromptTokens(fullSystemPrompt);
-    // Cast needed because filteredTools is a ToolSet (Vercel AI SDK type) but calculator expects plain object
     const toolTokens = estimateToolDefinitionTokens(filteredTools as Record<string, unknown>);
-    // Reserve 25% headroom for output tokens and tokenizer inaccuracies
-    const inputBudget = Math.floor(contextWindow * 0.75);
+    // Reserve 25% of context window for output tokens and tokenizer inaccuracies
+    const INPUT_BUDGET_RATIO = 0.75;
+    const inputBudget = Math.floor(contextWindow * INPUT_BUDGET_RATIO);
     const truncationResult = determineMessagesToInclude(
       sanitizedMessages,
       inputBudget,
@@ -843,30 +843,26 @@ export async function POST(request: Request) {
     const { includedMessages } = truncationResult;
     wasTruncated = truncationResult.wasTruncated;
 
+    const truncationMeta = {
+      model: currentModel,
+      provider: currentProvider,
+      contextWindow,
+      inputBudget,
+      systemPromptTokens,
+      toolTokens,
+      originalMessageCount: sanitizedMessages.length,
+    };
+
     if (wasTruncated) {
       loggers.ai.warn('AI Chat API: Conversation truncated to fit context window', {
-        originalMessageCount: sanitizedMessages.length,
+        ...truncationMeta,
         includedMessageCount: includedMessages.length,
-        model: currentModel,
-        provider: currentProvider,
-        contextWindow,
-        inputBudget,
-        systemPromptTokens,
-        toolTokens,
       });
     }
 
     // Guard: if truncation left zero messages, the latest message alone exceeds the budget
     if (includedMessages.length === 0) {
-      loggers.ai.error('AI Chat API: No messages fit within context budget', {
-        model: currentModel,
-        provider: currentProvider,
-        contextWindow,
-        inputBudget,
-        systemPromptTokens,
-        toolTokens,
-        originalMessageCount: sanitizedMessages.length,
-      });
+      loggers.ai.error('AI Chat API: No messages fit within context budget', truncationMeta);
       return NextResponse.json(
         {
           error: 'context_length_exceeded',
@@ -919,7 +915,7 @@ export async function POST(request: Request) {
           // Start the AI response
           const aiResult = streamText({
             model,
-            system: systemPrompt + timestampSystemPrompt + pageTreePrompt,
+            system: fullSystemPrompt,
             messages: modelMessages,
             tools: filteredTools,  // Use original tools directly
             stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn

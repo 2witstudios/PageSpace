@@ -47,6 +47,10 @@ export interface ContextCalculation {
   truncationStrategy: 'none' | 'oldest_first' | 'smart';
 }
 
+const CHARS_PER_TOKEN_LATIN = 4;
+const CHARS_PER_TOKEN_CJK = 2;
+const CJK_HEAVY_THRESHOLD = 0.2;
+
 /**
  * Estimate tokens in a text string.
  * Uses ~4 chars/token for Latin text, ~2 chars/token when significant
@@ -55,13 +59,14 @@ export interface ContextCalculation {
 export function estimateTokens(text: string): number {
   if (!text) return 0;
 
-  // Detect non-ASCII heavy content (CJK, emoji, etc.)
-  // CJK Unified Ideographs, Hiragana, Katakana, Hangul, etc.
-  const nonAsciiCount = (text.match(/[^\x00-\x7F]/g) || []).length;
-  const nonAsciiRatio = nonAsciiCount / text.length;
+  let nonAsciiCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) nonAsciiCount++;
+  }
 
-  // Use 2 chars/token when >20% non-ASCII (CJK-heavy), else 4 chars/token
-  const charsPerToken = nonAsciiRatio > 0.2 ? 2 : 4;
+  const charsPerToken = (nonAsciiCount / text.length) > CJK_HEAVY_THRESHOLD
+    ? CHARS_PER_TOKEN_CJK
+    : CHARS_PER_TOKEN_LATIN;
   return Math.ceil(text.length / charsPerToken);
 }
 
@@ -335,10 +340,10 @@ export function determineMessagesToInclude(
     const messageTokens = estimateMessageTokens(message);
 
     if (currentTokens + messageTokens <= maxTokens) {
-      included.unshift(message); // Add to front to maintain order
+      included.push(message);
       currentTokens += messageTokens;
     } else {
-      // Would exceed budget, stop here
+      included.reverse();
       return {
         includedMessages: included,
         totalTokens: currentTokens,
@@ -348,6 +353,7 @@ export function determineMessagesToInclude(
   }
 
   // All messages fit
+  included.reverse();
   return {
     includedMessages: included,
     totalTokens: currentTokens,
