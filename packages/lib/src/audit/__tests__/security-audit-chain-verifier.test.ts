@@ -2,32 +2,17 @@
  * Security Audit Chain Verifier Tests
  *
  * Tests for verifying the integrity of the security audit log hash chain.
- * Uses actual computeSecurityEventHash to build valid chains, then
- * tampers with entries to verify detection.
+ * Builds valid chains via shared helpers, then tampers with entries to verify detection.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { computeSecurityEventHash, type AuditEvent } from '../security-audit';
+import { createValidSecurityChain, type MockSecurityAuditEntry } from './audit-test-helpers';
 
-// Mock data storage
-let mockEntries: Array<{
-  id: string;
-  eventType: string;
-  userId: string | null;
-  sessionId: string | null;
-  serviceId: string | null;
-  resourceType: string | null;
-  resourceId: string | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  geoLocation: string | null;
-  details: Record<string, unknown> | null;
-  riskScore: number | null;
-  anomalyFlags: string[] | null;
-  timestamp: Date;
-  previousHash: string;
-  eventHash: string;
-}> = [];
+let mockEntries: MockSecurityAuditEntry[] = [];
+
+vi.mock('../../logging/logger-config', () => ({
+  loggers: { security: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+}));
 
 vi.mock('drizzle-orm', () => ({
   asc: vi.fn(),
@@ -97,53 +82,6 @@ import {
   verifySecurityAuditChain,
   type SecurityChainVerificationResult,
 } from '../security-audit-chain-verifier';
-
-/**
- * Helper to create a valid security audit chain of entries
- * using actual computeSecurityEventHash for real hashes.
- */
-function createValidSecurityChain(count: number): typeof mockEntries {
-  const entries: typeof mockEntries = [];
-  let previousHash = 'genesis';
-
-  for (let i = 0; i < count; i++) {
-    const timestamp = new Date(Date.now() + i * 1000);
-    const id = `audit-${i + 1}`;
-
-    const event: AuditEvent = {
-      eventType: 'auth.login.success',
-      userId: 'user-123',
-      sessionId: `session-${i}`,
-      ipAddress: '127.0.0.1',
-      userAgent: 'test-agent',
-    };
-
-    const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
-
-    entries.push({
-      id,
-      eventType: event.eventType,
-      userId: event.userId ?? null,
-      sessionId: event.sessionId ?? null,
-      serviceId: null,
-      resourceType: null,
-      resourceId: null,
-      ipAddress: event.ipAddress ?? null,
-      userAgent: event.userAgent ?? null,
-      geoLocation: null,
-      details: null,
-      riskScore: null,
-      anomalyFlags: null,
-      timestamp,
-      previousHash,
-      eventHash,
-    });
-
-    previousHash = eventHash;
-  }
-
-  return entries;
-}
 
 describe('security-audit-chain-verifier', () => {
   beforeEach(() => {

@@ -3,27 +3,19 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { computeSecurityEventHash, type AuditEvent } from '../security-audit';
+import { createValidSecurityChain, type MockSecurityAuditEntry } from './audit-test-helpers';
 
-// Mock entry storage
-let mockEntries: Array<{
-  id: string;
-  eventType: string;
-  userId: string | null;
-  sessionId: string | null;
-  serviceId: string | null;
-  resourceType: string | null;
-  resourceId: string | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  geoLocation: string | null;
-  details: Record<string, unknown> | null;
-  riskScore: number | null;
-  anomalyFlags: string[] | null;
-  timestamp: Date;
-  previousHash: string;
-  eventHash: string;
-}> = [];
+let mockEntries: MockSecurityAuditEntry[] = [];
+
+const { mockLoggers } = vi.hoisted(() => ({
+  mockLoggers: {
+    security: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  },
+}));
+
+vi.mock('../../logging/logger-config', () => ({
+  loggers: mockLoggers,
+}));
 
 vi.mock('drizzle-orm', () => ({
   asc: vi.fn(),
@@ -84,46 +76,6 @@ import {
   type ChainVerificationAlert,
 } from '../security-audit-alerting';
 
-function createValidChain(count: number) {
-  const entries: typeof mockEntries = [];
-  let previousHash = 'genesis';
-
-  for (let i = 0; i < count; i++) {
-    const timestamp = new Date(Date.now() + i * 1000);
-    const event: AuditEvent = {
-      eventType: 'auth.login.success',
-      sessionId: `session-${i}`,
-      ipAddress: '127.0.0.1',
-      userAgent: 'test-agent',
-    };
-
-    const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
-
-    entries.push({
-      id: `audit-${i + 1}`,
-      eventType: event.eventType,
-      userId: null,
-      sessionId: event.sessionId ?? null,
-      serviceId: null,
-      resourceType: null,
-      resourceId: null,
-      ipAddress: event.ipAddress ?? null,
-      userAgent: event.userAgent ?? null,
-      geoLocation: null,
-      details: null,
-      riskScore: null,
-      anomalyFlags: null,
-      timestamp,
-      previousHash,
-      eventHash,
-    });
-
-    previousHash = eventHash;
-  }
-
-  return entries;
-}
-
 describe('security-audit-alerting (#544)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -156,7 +108,7 @@ describe('security-audit-alerting (#544)', () => {
 
   describe('verifyAndAlert', () => {
     it('does not alert when chain is valid', async () => {
-      mockEntries = createValidChain(3);
+      mockEntries = createValidSecurityChain(3);
       const handler = vi.fn();
       setChainAlertHandler(handler);
 
@@ -167,7 +119,7 @@ describe('security-audit-alerting (#544)', () => {
     });
 
     it('fires alert when chain is broken', async () => {
-      mockEntries = createValidChain(3);
+      mockEntries = createValidSecurityChain(3);
       mockEntries[1]!.eventHash = 'tampered';
 
       const handler = vi.fn();
@@ -186,7 +138,7 @@ describe('security-audit-alerting (#544)', () => {
     });
 
     it('passes source correctly for periodic verification', async () => {
-      mockEntries = createValidChain(3);
+      mockEntries = createValidSecurityChain(3);
       mockEntries[1]!.eventHash = 'tampered';
 
       const handler = vi.fn();
@@ -199,18 +151,17 @@ describe('security-audit-alerting (#544)', () => {
     });
 
     it('does not throw when no handler is set and chain is broken', async () => {
-      mockEntries = createValidChain(3);
+      mockEntries = createValidSecurityChain(3);
       mockEntries[1]!.eventHash = 'tampered';
 
       const result = await verifyAndAlert('manual');
       expect(result.isValid).toBe(false);
     });
 
-    it('catches and logs alert handler errors', async () => {
-      mockEntries = createValidChain(3);
+    it('catches alert handler errors without throwing', async () => {
+      mockEntries = createValidSecurityChain(3);
       mockEntries[1]!.eventHash = 'tampered';
 
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const handler = vi.fn().mockRejectedValue(new Error('alert delivery failed'));
       setChainAlertHandler(handler);
 
@@ -218,11 +169,10 @@ describe('security-audit-alerting (#544)', () => {
 
       expect(result.isValid).toBe(false);
       expect(handler).toHaveBeenCalledTimes(1);
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[SecurityAuditAlerting] Alert handler failed:',
-        expect.any(Error)
+      expect(mockLoggers.security.error).toHaveBeenCalledWith(
+        expect.stringContaining('[SecurityAuditAlerting] Alert handler failed:'),
+        expect.objectContaining({ error: expect.any(Error) })
       );
-      errorSpy.mockRestore();
     });
 
     it('returns verification result on empty chain without alert', async () => {
@@ -264,7 +214,7 @@ describe('security-audit-alerting (#544)', () => {
     it('fires verification on interval', async () => {
       vi.useFakeTimers();
 
-      mockEntries = createValidChain(2);
+      mockEntries = createValidSecurityChain(2);
       mockEntries[1]!.eventHash = 'tampered';
 
       const handler = vi.fn();

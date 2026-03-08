@@ -13,6 +13,7 @@
 
 import { db, securityAuditLog } from '@pagespace/db';
 import { asc, count, and, gte, lte, type SQL } from 'drizzle-orm';
+import { loggers } from '../logging/logger-config';
 import { computeSecurityEventHash, type AuditEvent } from './security-audit';
 
 export interface SecurityChainBreakPoint {
@@ -108,7 +109,7 @@ export async function verifySecurityAuditChain(
       conditions.push(lte(securityAuditLog.timestamp, options.toTimestamp));
     }
 
-    // Get total count
+    // Get total count (needed for reporting when limit is used)
     const countResult = await db
       .select({ count: count() })
       .from(securityAuditLog)
@@ -233,7 +234,7 @@ export async function verifySecurityAuditChain(
       }
     }
   } catch (error) {
-    console.error('[SecurityAuditChainVerifier] Verification failed:', error);
+    loggers.security.error('[SecurityAuditChainVerifier] Verification failed:', { error });
     throw error;
   }
 

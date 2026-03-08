@@ -7,6 +7,7 @@
  * - Configurable alert handler for integration with external systems
  */
 
+import { loggers } from '../logging/logger-config';
 import {
   verifySecurityAuditChain,
   type SecurityChainVerificationResult,
@@ -67,7 +68,7 @@ export async function verifyAndAlert(
     try {
       await alertHandler(alert);
     } catch (error) {
-      console.error('[SecurityAuditAlerting] Alert handler failed:', error);
+      loggers.security.error('[SecurityAuditAlerting] Alert handler failed:', { error });
     }
   }
 
@@ -75,10 +76,12 @@ export async function verifyAndAlert(
 }
 
 let periodicTimer: ReturnType<typeof setInterval> | null = null;
+let verificationInProgress = false;
 
 /**
  * Start periodic chain verification on an interval.
  * Replaces any previously running scheduler.
+ * Skips a tick if the previous verification is still running to prevent overlap.
  *
  * @param intervalMs - Interval between verifications in milliseconds
  * @param options - Verification options for each run
@@ -90,15 +93,18 @@ export function startPeriodicVerification(
   stopPeriodicVerification();
 
   periodicTimer = setInterval(() => {
-    verifyAndAlert('periodic', options).catch((error) => {
-      console.error('[SecurityAuditAlerting] Periodic verification failed:', error);
-    });
+    if (verificationInProgress) return;
+    verificationInProgress = true;
+    verifyAndAlert('periodic', options)
+      .catch((error) => {
+        loggers.security.error('[SecurityAuditAlerting] Periodic verification failed:', { error });
+      })
+      .finally(() => {
+        verificationInProgress = false;
+      });
   }, intervalMs);
 
-  // Don't keep the process alive just for verification
-  if (periodicTimer && typeof periodicTimer === 'object' && 'unref' in periodicTimer) {
-    periodicTimer.unref();
-  }
+  periodicTimer.unref();
 }
 
 /**

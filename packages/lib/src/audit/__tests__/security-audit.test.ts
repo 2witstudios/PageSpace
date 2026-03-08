@@ -9,10 +9,6 @@ const { testState, createMockTxFn } = vi.hoisted(() => {
   };
 
   const createMockTx = () => {
-    const insertValuesMock = {
-      fn: null as ReturnType<typeof import('vitest')['vi']['fn']> | null,
-    };
-
     return {
       execute: (sqlObj: { strings: TemplateStringsArray; values: unknown[] }) => {
         state.executedSql.push(sqlObj);
