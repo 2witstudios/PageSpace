@@ -5,7 +5,8 @@ import { stripe } from '@/lib/stripe';
 // GET /api/orgs/[orgId]/billing/invoices - List org invoices
 export const GET = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _context, orgId) => {
   const { searchParams } = new URL(request.url);
-  const limit = Math.min(parseInt(searchParams.get('limit') ?? '10'), 100);
+  const parsedLimit = parseInt(searchParams.get('limit') ?? '10');
+  const limit = Math.min(Number.isNaN(parsedLimit) ? 10 : parsedLimit, 100);
   const startingAfter = searchParams.get('starting_after') ?? undefined;
 
   const [org] = await db

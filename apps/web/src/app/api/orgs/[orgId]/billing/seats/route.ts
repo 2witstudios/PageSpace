@@ -17,8 +17,14 @@ export const GET = withOrgAdminAuth<OrgRouteContext>(async (_user, _request, _co
 
 // PUT /api/orgs/[orgId]/billing/seats - Manually update seat count
 export const PUT = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _context, orgId) => {
-  const body = await request.json();
-  const { quantity } = body;
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const { quantity } = body as { quantity?: number };
 
   if (typeof quantity !== 'number' || quantity < 1) {
     return Response.json({ error: 'quantity must be a positive number' }, { status: 400 });

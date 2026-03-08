@@ -1,0 +1,1 @@
+ALTER TABLE "organizations" ALTER COLUMN "maxStorageBytes" SET DATA TYPE bigint;

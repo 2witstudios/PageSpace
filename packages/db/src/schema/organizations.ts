@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, jsonb, index, real, integer, pgEnum, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, jsonb, index, bigint, integer, pgEnum, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { drives } from './core';
@@ -14,7 +14,7 @@ export const organizations = pgTable('organizations', {
 
   // Guardrail settings
   allowedAIProviders: jsonb('allowedAIProviders').$type<string[]>(),
-  maxStorageBytes: real('maxStorageBytes'),
+  maxStorageBytes: bigint('maxStorageBytes', { mode: 'number' }),
   maxAITokensPerDay: integer('maxAITokensPerDay'),
   requireMFA: boolean('requireMFA').default(false).notNull(),
   allowExternalSharing: boolean('allowExternalSharing').default(true).notNull(),

@@ -25,7 +25,12 @@ export const GET = withOrgAdminAuth<OrgRouteContext>(async (_user, _request, _co
 
 // PUT /api/orgs/[orgId]/settings - Update org guardrail settings
 export const PUT = withOrgAdminAuth<OrgRouteContext>(async (_user, request, _context, orgId) => {
-  const body = await request.json();
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
 
   const updates: Record<string, unknown> = {};
 

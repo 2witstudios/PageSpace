@@ -72,7 +72,9 @@ export async function adjustSeatsForMemberRemove(orgId: string): Promise<SeatUpd
   }
 
   try {
-    // Set grace period - seat count decreases at end of grace period
+    // Record grace period — Stripe seat decrease happens when grace period
+    // expires (handled by a scheduled job or webhook). This prevents
+    // immediate billing reduction when a member is removed temporarily.
     const gracePeriodEnd = new Date();
     gracePeriodEnd.setDate(gracePeriodEnd.getDate() + GRACE_PERIOD_DAYS);
 
@@ -81,8 +83,35 @@ export async function adjustSeatsForMemberRemove(orgId: string): Promise<SeatUpd
       .set({ gracePeriodEnd })
       .where(eq(orgSubscriptions.id, subscription.id));
 
-    // Schedule the actual seat decrease after grace period
-    // The seat count in Stripe updates immediately for billing purposes
+    return { success: true, newQuantity: subscription.quantity };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to adjust seats';
+    return { success: false, error: message };
+  }
+}
+
+/** Called by scheduled job after grace period expires to finalize seat decrease. */
+export async function finalizeGracePeriodSeatDecrease(orgId: string): Promise<SeatUpdateResult> {
+  const subscription = await getActiveOrgSubscription(orgId);
+  if (!subscription?.gracePeriodEnd) {
+    return { success: true };
+  }
+
+  if (subscription.gracePeriodEnd > new Date()) {
+    return { success: true, newQuantity: subscription.quantity };
+  }
+
+  const memberCount = await getOrgMemberCount(orgId);
+  if (memberCount >= subscription.quantity) {
+    // Members were re-added during grace period, clear it
+    await db
+      .update(orgSubscriptions)
+      .set({ gracePeriodEnd: null })
+      .where(eq(orgSubscriptions.id, subscription.id));
+    return { success: true, newQuantity: subscription.quantity };
+  }
+
+  try {
     await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
       items: [{
         id: await getSubscriptionItemId(subscription.stripeSubscriptionId),
@@ -93,12 +122,12 @@ export async function adjustSeatsForMemberRemove(orgId: string): Promise<SeatUpd
 
     await db
       .update(orgSubscriptions)
-      .set({ quantity: memberCount })
+      .set({ quantity: memberCount, gracePeriodEnd: null })
       .where(eq(orgSubscriptions.id, subscription.id));
 
     return { success: true, newQuantity: memberCount, prorated: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to adjust seats';
+    const message = error instanceof Error ? error.message : 'Failed to finalize seat decrease';
     return { success: false, error: message };
   }
 }

@@ -1,5 +1,7 @@
 import { db, eq, organizations, orgSubscriptions } from '@pagespace/db';
 import type Stripe from 'stripe';
+import { stripeConfig } from '../stripe-config';
+import type { OrgBillingTier } from './billing-plans';
 
 export async function handleOrgSubscriptionChange(subscription: Stripe.Subscription) {
   const orgId = subscription.metadata?.orgId;
@@ -76,10 +78,13 @@ export async function handleOrgSubscriptionDeleted(subscription: Stripe.Subscrip
     .where(eq(organizations.id, orgId));
 }
 
-// Map org-specific price IDs to tiers
-// These would be configured per environment similar to existing stripe-config.ts
-const ORG_PRICE_TO_TIER: Record<string, string> = {};
+// Map org-specific Stripe price IDs to billing tiers.
+// Uses the same stripeConfig pattern as the individual subscription system.
+const ORG_PRICE_TO_TIER: Record<string, OrgBillingTier> = {
+  [stripeConfig.priceIds.pro]: 'pro',
+  [stripeConfig.priceIds.business]: 'business',
+};
 
-function getOrgTierFromPrice(priceId: string): string | null {
+function getOrgTierFromPrice(priceId: string): OrgBillingTier | null {
   return ORG_PRICE_TO_TIER[priceId] ?? null;
 }

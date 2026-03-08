@@ -1,5 +1,6 @@
 import { db, eq, organizations, orgMembers } from '@pagespace/db';
 import { verifyAuth } from '@/lib/auth/auth';
+import { validateCSRF } from '@/lib/auth/csrf-validation';
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -36,11 +37,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
   }
 
-  const body = await request.json();
-  const { name, slug } = body;
+  // CSRF protection for state-changing operation
+  if (user.authTransport === 'cookie') {
+    const csrfError = await validateCSRF(request);
+    if (csrfError) return csrfError;
+  }
 
-  if (!name || !slug) {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const { name, slug } = body as { name?: string; slug?: string };
+
+  if (!name || !slug || typeof name !== 'string' || typeof slug !== 'string') {
     return NextResponse.json({ error: 'Name and slug are required' }, { status: 400 });
+  }
+
+  if (name.length > 100) {
+    return NextResponse.json({ error: 'Name must be 100 characters or fewer' }, { status: 400 });
+  }
+
+  if (slug.length > 63) {
+    return NextResponse.json({ error: 'Slug must be 63 characters or fewer' }, { status: 400 });
   }
 
   const slugRegex = /^[a-z0-9-]+$/;
@@ -82,7 +103,13 @@ export async function POST(request: Request) {
   });
 
   const [org] = await db
-    .select()
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      slug: organizations.slug,
+      billingTier: organizations.billingTier,
+      createdAt: organizations.createdAt,
+    })
     .from(organizations)
     .where(eq(organizations.id, orgId))
     .limit(1);

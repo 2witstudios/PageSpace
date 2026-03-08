@@ -1,4 +1,4 @@
-import { db, eq, and, organizations, orgMembers, orgDrives } from '@pagespace/db';
+import { db, eq, and, count, organizations, orgMembers, orgDrives } from '@pagespace/db';
 
 // Re-export pure check functions
 export {
@@ -68,6 +68,16 @@ export async function getOrgGuardrails(orgId: string): Promise<OrgGuardrails | n
   return org ?? null;
 }
 
+export async function isOrgMember(userId: string, orgId: string): Promise<boolean> {
+  const [member] = await db
+    .select({ id: orgMembers.id })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
+    .limit(1);
+
+  return !!member;
+}
+
 export async function isOrgAdmin(userId: string, orgId: string): Promise<boolean> {
   const [member] = await db
     .select({ role: orgMembers.role })
@@ -89,10 +99,10 @@ export async function isOrgOwner(userId: string, orgId: string): Promise<boolean
 }
 
 export async function getOrgMemberCount(orgId: string): Promise<number> {
-  const members = await db
-    .select({ id: orgMembers.id })
+  const [result] = await db
+    .select({ value: count() })
     .from(orgMembers)
     .where(eq(orgMembers.orgId, orgId));
 
-  return members.length;
+  return result?.value ?? 0;
 }

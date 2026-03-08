@@ -1,14 +1,22 @@
 import { db, eq, and, orgMembers } from '@pagespace/db';
 import { withOrgAdminAuth, type OrgMemberRouteContext } from '@/lib/orgs/org-auth';
 import { isOrgOwner } from '@/lib/orgs/guardrails';
+import { adjustSeatsForMemberRemove } from '@/lib/orgs/seat-manager';
 
 // PATCH /api/orgs/[orgId]/members/[userId] - Update member role
-export const PATCH = withOrgAdminAuth<OrgMemberRouteContext>(async (adminUser, request, context, orgId) => {
+export const PATCH = withOrgAdminAuth<OrgMemberRouteContext>(async (_user, request, context, orgId) => {
   const { userId } = await context.params;
-  const body = await request.json();
-  const { role } = body;
 
-  if (!['ADMIN', 'MEMBER'].includes(role)) {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const { role } = body as { role?: string };
+
+  if (!role || !['ADMIN', 'MEMBER'].includes(role)) {
     return Response.json({ error: 'Role must be ADMIN or MEMBER' }, { status: 400 });
   }
 
@@ -32,7 +40,7 @@ export const PATCH = withOrgAdminAuth<OrgMemberRouteContext>(async (adminUser, r
 });
 
 // DELETE /api/orgs/[orgId]/members/[userId] - Remove member
-export const DELETE = withOrgAdminAuth<OrgMemberRouteContext>(async (adminUser, request, context, orgId) => {
+export const DELETE = withOrgAdminAuth<OrgMemberRouteContext>(async (_user, _request, context, orgId) => {
   const { userId } = await context.params;
 
   // Cannot remove the owner
@@ -49,6 +57,9 @@ export const DELETE = withOrgAdminAuth<OrgMemberRouteContext>(async (adminUser, 
   if (!deleted) {
     return Response.json({ error: 'Member not found' }, { status: 404 });
   }
+
+  // Adjust seat count (grace period before billing decrease)
+  await adjustSeatsForMemberRemove(orgId);
 
   return Response.json({ success: true });
 });

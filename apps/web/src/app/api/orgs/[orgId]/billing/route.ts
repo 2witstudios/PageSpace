@@ -16,8 +16,14 @@ export const GET = withOrgAdminAuth<OrgRouteContext>(async (_user, _request, _co
 
 // POST /api/orgs/[orgId]/billing - Create or update subscription
 export const POST = withOrgOwnerAuth<OrgRouteContext>(async (user, request, _context, orgId) => {
-  const body = await request.json();
-  const { priceId } = body;
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const { priceId } = body as { priceId?: string };
 
   if (!priceId) {
     return Response.json({ error: 'priceId is required' }, { status: 400 });
