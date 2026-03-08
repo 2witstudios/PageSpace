@@ -11,10 +11,6 @@ import {
 } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 
-// ============================================================================
-// Types
-// ============================================================================
-
 export interface CreateOrgInput {
   name: string;
   slug: string;
@@ -65,9 +61,6 @@ export interface OrgMemberWithDetails {
   } | null;
 }
 
-// ============================================================================
-// Organization CRUD
-// ============================================================================
 
 export async function createOrganization(ownerId: string, input: CreateOrgInput) {
   const orgId = createId();
@@ -118,9 +111,6 @@ export async function deleteOrganization(orgId: string) {
   await db.delete(organizations).where(eq(organizations.id, orgId));
 }
 
-// ============================================================================
-// Organization Access
-// ============================================================================
 
 export async function checkOrgAccess(orgId: string, userId: string): Promise<OrgAccessResult> {
   const org = await db.query.organizations.findFirst({
@@ -153,9 +143,6 @@ export async function checkOrgAccess(orgId: string, userId: string): Promise<Org
   };
 }
 
-// ============================================================================
-// Organization Members
-// ============================================================================
 
 export async function listOrgMembers(orgId: string): Promise<OrgMemberWithDetails[]> {
   const members = await db.query.orgMembers.findMany({

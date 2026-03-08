@@ -8,12 +8,12 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ orgId: string; token: string }> }
 ) {
-  const { token } = await context.params;
+  const { orgId, token } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const result = await acceptInvitation(token, auth.userId);
+    const result = await acceptInvitation(token, auth.userId, orgId);
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to accept invitation';

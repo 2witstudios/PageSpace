@@ -2,15 +2,13 @@ import {
   db,
   eq,
   and,
+  isNull,
+  gt,
   orgMembers,
   orgInvitations,
   users,
 } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export interface InviteInput {
   email: string;
@@ -26,16 +24,20 @@ export interface InvitationResult {
   expiresAt: Date;
 }
 
-// ============================================================================
-// Invitation Flow
-// ============================================================================
+const toInvitationResult = (inv: typeof orgInvitations.$inferSelect): InvitationResult => ({
+  id: inv.id,
+  orgId: inv.orgId,
+  email: inv.email,
+  role: inv.role,
+  token: inv.token,
+  expiresAt: inv.expiresAt,
+});
 
 export async function createInvitation(
   orgId: string,
   invitedBy: string,
   input: InviteInput
 ): Promise<InvitationResult> {
-  // Check if user is already a member
   const existingUser = await db.query.users.findFirst({
     where: eq(users.email, input.email),
     columns: { id: true },
@@ -51,7 +53,6 @@ export async function createInvitation(
     }
   }
 
-  // Check for existing invitation
   const now = new Date();
   const existingInvitation = await db.query.orgInvitations.findFirst({
     where: and(
@@ -60,18 +61,15 @@ export async function createInvitation(
     ),
   });
 
-  // Block only active pending invitations (not expired, not accepted)
   if (existingInvitation && !existingInvitation.acceptedAt && existingInvitation.expiresAt > now) {
     throw new Error('An invitation has already been sent to this email');
   }
 
-  // 7-day expiry
   const expiresAt = new Date(now);
   expiresAt.setDate(expiresAt.getDate() + 7);
 
   const token = createId();
 
-  // Update existing row (expired or accepted) instead of inserting a duplicate
   if (existingInvitation) {
     const [invitation] = await db.update(orgInvitations)
       .set({
@@ -84,14 +82,7 @@ export async function createInvitation(
       .where(eq(orgInvitations.id, existingInvitation.id))
       .returning();
 
-    return {
-      id: invitation.id,
-      orgId: invitation.orgId,
-      email: invitation.email,
-      role: invitation.role,
-      token: invitation.token,
-      expiresAt: invitation.expiresAt,
-    };
+    return toInvitationResult(invitation);
   }
 
   const [invitation] = await db.insert(orgInvitations).values({
@@ -103,22 +94,19 @@ export async function createInvitation(
     expiresAt,
   }).returning();
 
-  return {
-    id: invitation.id,
-    orgId: invitation.orgId,
-    email: invitation.email,
-    role: invitation.role,
-    token: invitation.token,
-    expiresAt: invitation.expiresAt,
-  };
+  return toInvitationResult(invitation);
 }
 
-export async function acceptInvitation(token: string, userId: string) {
+export async function acceptInvitation(token: string, userId: string, expectedOrgId?: string) {
   const invitation = await db.query.orgInvitations.findFirst({
     where: eq(orgInvitations.token, token),
   });
 
   if (!invitation) {
+    throw new Error('Invitation not found');
+  }
+
+  if (expectedOrgId && invitation.orgId !== expectedOrgId) {
     throw new Error('Invitation not found');
   }
 
@@ -130,7 +118,6 @@ export async function acceptInvitation(token: string, userId: string) {
     throw new Error('Invitation has expired');
   }
 
-  // Verify user email matches invitation
   const user = await db.query.users.findFirst({
     where: eq(users.id, userId),
     columns: { email: true },
@@ -140,7 +127,6 @@ export async function acceptInvitation(token: string, userId: string) {
     throw new Error('This invitation was sent to a different email address');
   }
 
-  // Check not already a member
   const existingMember = await db.query.orgMembers.findFirst({
     where: and(eq(orgMembers.orgId, invitation.orgId), eq(orgMembers.userId, userId)),
     columns: { id: true },
@@ -150,7 +136,6 @@ export async function acceptInvitation(token: string, userId: string) {
     throw new Error('You are already a member of this organization');
   }
 
-  // Add member and mark invitation accepted atomically
   await db.transaction(async (tx) => {
     await tx.insert(orgMembers).values({
       orgId: invitation.orgId,
@@ -168,13 +153,13 @@ export async function acceptInvitation(token: string, userId: string) {
 }
 
 export async function listPendingInvitations(orgId: string) {
-  const invitations = await db.query.orgInvitations.findMany({
+  return db.query.orgInvitations.findMany({
     where: and(
       eq(orgInvitations.orgId, orgId),
+      isNull(orgInvitations.acceptedAt),
+      gt(orgInvitations.expiresAt, new Date()),
     ),
   });
-
-  return invitations.filter(inv => !inv.acceptedAt && inv.expiresAt > new Date());
 }
 
 export async function revokeInvitation(invitationId: string) {
