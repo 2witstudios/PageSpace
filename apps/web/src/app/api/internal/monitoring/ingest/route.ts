@@ -54,51 +54,52 @@ export async function POST(request: Request) {
   const level = (statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info') as SystemLogLevel;
 
   try {
-    await writeApiMetrics({
-      endpoint: payload.endpoint,
-      method,
-      statusCode,
-      duration: payload.duration,
-      requestSize: payload.requestSize,
-      responseSize: payload.responseSize,
-      userId: payload.userId,
-      sessionId: payload.sessionId,
-      ip: payload.ip,
-      userAgent: payload.userAgent,
-      error: payload.error,
-      requestId: payload.requestId,
-      cacheHit: payload.cacheHit,
-      cacheKey: payload.cacheKey,
-      timestamp,
-    });
-
-    await db.insert(systemLogs).values({
-      id: createId(),
-      timestamp,
-      level,
-      message:
-        payload.message || `${method} ${payload.endpoint} ${statusCode} ${payload.duration}ms`,
-      category: 'api',
-      userId: payload.userId,
-      sessionId: payload.sessionId,
-      requestId: payload.requestId,
-      driveId: payload.driveId,
-      pageId: payload.pageId,
-      endpoint: payload.endpoint,
-      method,
-      ip: payload.ip,
-      userAgent: payload.userAgent,
-      duration: payload.duration,
-      metadata: {
-        ...payload.metadata,
+    const operations: Promise<unknown>[] = [
+      writeApiMetrics({
+        endpoint: payload.endpoint,
+        method,
         statusCode,
+        duration: payload.duration,
         requestSize: payload.requestSize,
         responseSize: payload.responseSize,
-      },
-    });
+        userId: payload.userId,
+        sessionId: payload.sessionId,
+        ip: payload.ip,
+        userAgent: payload.userAgent,
+        error: payload.error,
+        requestId: payload.requestId,
+        cacheHit: payload.cacheHit,
+        cacheKey: payload.cacheKey,
+        timestamp,
+      }),
+      db.insert(systemLogs).values({
+        id: createId(),
+        timestamp,
+        level,
+        message:
+          payload.message || `${method} ${payload.endpoint} ${statusCode} ${payload.duration}ms`,
+        category: 'api',
+        userId: payload.userId,
+        sessionId: payload.sessionId,
+        requestId: payload.requestId,
+        driveId: payload.driveId,
+        pageId: payload.pageId,
+        endpoint: payload.endpoint,
+        method,
+        ip: payload.ip,
+        userAgent: payload.userAgent,
+        duration: payload.duration,
+        metadata: {
+          ...payload.metadata,
+          statusCode,
+          requestSize: payload.requestSize,
+          responseSize: payload.responseSize,
+        },
+      }),
+    ];
 
     if (payload.error) {
-      await writeError({
+      operations.push(writeError({
         name: payload.errorName || 'RequestError',
         message: payload.error,
         stack: payload.errorStack,
@@ -114,8 +115,10 @@ export async function POST(request: Request) {
           statusCode,
           duration: payload.duration,
         },
-      });
+      }));
     }
+
+    await Promise.all(operations);
 
     return NextResponse.json({ success: true });
   } catch (error) {
