@@ -55,4 +55,4 @@ USER node
 
 EXPOSE 3001
 
-CMD ["node", "apps/realtime/dist/index.js"]
+CMD ["node", "apps/realtime/dist/apps/realtime/src/index.js"]
