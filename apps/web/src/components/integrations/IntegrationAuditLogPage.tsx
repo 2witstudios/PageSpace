@@ -281,8 +281,8 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
             {/* Success/Failure Filter */}
             <Select
               value={filters.success}
-              onValueChange={(value) => {
-                setFilters((prev) => ({ ...prev, success: value }));
+              onValueChange={(value: string) => {
+                setFilters((prev) => ({ ...prev, success: value as FiltersState['success'] }));
                 setCurrentPage(1);
               }}
             >

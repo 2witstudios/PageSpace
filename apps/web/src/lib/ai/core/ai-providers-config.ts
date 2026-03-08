@@ -235,6 +235,10 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
+      // GPT-5.4 Models (2026)
+      'gpt-5.4-pro': 'GPT-5.4 Pro',
+      'gpt-5.4': 'GPT-5.4',
+
       // GPT-5.3 Models (2026)
       'gpt-5.3-chat-latest': 'GPT-5.3 Chat',
       'gpt-5.3-codex': 'GPT-5.3 Codex',

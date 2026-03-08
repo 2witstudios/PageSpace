@@ -72,6 +72,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
 
   // xAI Grok Vision models
   'grok-4': true,
+  'grok-4-fast': true,
   'grok-2-vision': true,
   'grok-2-vision-latest': true,
   'grok-2-vision-1212': true,
@@ -84,6 +85,7 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'qwen3.5-122b-a10b': true,
   'qwen3.5-35b-a3b': true,
   'qwen3.5-27b': true,
+  'qwen3-max-thinking': true,
 
   // Chinese/Asian Vision Models
   'glm-4.5v': true,
