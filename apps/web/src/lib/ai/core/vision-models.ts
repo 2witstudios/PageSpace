@@ -8,31 +8,20 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   // OpenAI GPT-5.4 Models (all have vision)
   'gpt-5.4-pro': true,
   'gpt-5.4': true,
-  'openai/gpt-5.4-pro': true,
-  'openai/gpt-5.4': true,
 
   // OpenAI GPT-5.3 Models (all have vision)
   'gpt-5.3-chat-latest': true,
   'gpt-5.3-codex': true,
-  'openai/gpt-5.3-chat-latest': true,
-  'openai/gpt-5.3-codex': true,
 
   // OpenAI GPT-5.2 Models (all have vision)
   'gpt-5.2': true,
   'gpt-5.2-codex': true,
   'gpt-5.2-mini': true,
   'gpt-5.2-nano': true,
-  'openai/gpt-5.2': true,
-  'openai/gpt-5.2-codex': true,
-  'openai/gpt-5.2-mini': true,
-  'openai/gpt-5.2-nano': true,
 
   // OpenAI GPT-5.1 Models (all have vision)
   'gpt-5.1': true,
   'gpt-5.1-codex': true,
-  'openai/gpt-5.1': true,
-  'openai/gpt-5.1-codex': true,
-  'openai/gpt-5.1-codex-mini': true,
 
   // OpenAI GPT-5 Models (all have vision)
   'gpt-5': true,
@@ -40,9 +29,6 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-5-nano': true,
   'gpt-5-2025-08-07': true,
   'gpt-5-chat-latest': true,
-  'openai/gpt-5': true,
-  'openai/gpt-5-mini': true,
-  'openai/gpt-5-nano': true,
 
   // OpenAI GPT-4o Models with Vision
   'gpt-4o': true,
@@ -52,16 +38,12 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gpt-4-turbo-preview': true,
   'gpt-4-vision-preview': true,
   'gpt-4': true,
-  'openai/gpt-4o': true,
-  'openai/gpt-4o-mini': true,
-  'openai/gpt-4-turbo': true,
-  'openai/gpt-4': true,
 
   // Anthropic Claude 3+ (all have vision)
   'claude-opus-4-6-20260204': true,
   'claude-sonnet-4-6-20260217': true,
-  'anthropic/claude-opus-4.6': true,
-  'anthropic/claude-sonnet-4.6': true,
+  'claude-opus-4.6': true,
+  'claude-sonnet-4.6': true,
   'claude-opus-4-1-20250805': true,
   'claude-sonnet-4-1-20250805': true,
   'claude-3-7-sonnet-20250219': true,
@@ -71,9 +53,9 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'claude-3-opus-20240229': true,
   'claude-3-sonnet-20240229': true,
   'claude-3-haiku-20240307': true,
-  'anthropic/claude-3.5-sonnet': true,
-  'anthropic/claude-3-haiku': true,
-  'anthropic/claude-opus-4.1': true,
+  'claude-3.5-sonnet': true,
+  'claude-3-haiku': true,
+  'claude-opus-4.1': true,
 
   // Google Gemini (all versions support vision)
   'gemini-3.1-pro-preview': true,
@@ -83,39 +65,32 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'gemini-2.5-pro': true,
   'gemini-2.5-flash': true,
   'gemini-2.5-flash-lite': true,
+  'gemini-2.5-flash-lite-preview-06-17': true,
   'gemini-2.0-flash-exp': true,
   'gemini-1.5-pro': true,
   'gemini-1.5-flash': true,
-  'google/gemini-3.1-pro-preview': true,
-  'google/gemini-3.1-pro-preview-customtools': true,
-  'google/gemini-3.1-flash-lite-preview': true,
-  'google/gemini-3-flash-preview': true,
-  'google/gemini-2.5-pro': true,
-  'google/gemini-2.5-flash': true,
-  'google/gemini-2.5-flash-lite': true,
-  'google/gemini-2.5-flash-lite-preview-06-17': true,
 
   // xAI Grok Vision models
+  'grok-4': true,
   'grok-2-vision': true,
   'grok-2-vision-latest': true,
   'grok-2-vision-1212': true,
   'grok-vision-beta': true,
-  'x-ai/grok-4': true,
 
   // Qwen3.5 Vision-Language Models
-  'qwen/qwen3.5-397b-a17b': true,
-  'qwen/qwen3.5-plus-2026-02-15': true,
-  'qwen/qwen3.5-flash': true,
-  'qwen/qwen3.5-122b-a10b': true,
-  'qwen/qwen3.5-35b-a3b': true,
-  'qwen/qwen3.5-27b': true,
+  'qwen3.5-397b-a17b': true,
+  'qwen3.5-plus-2026-02-15': true,
+  'qwen3.5-flash': true,
+  'qwen3.5-122b-a10b': true,
+  'qwen3.5-35b-a3b': true,
+  'qwen3.5-27b': true,
 
   // Chinese/Asian Vision Models
-  'z-ai/glm-4.5v': true,
+  'glm-4.5v': true,
 
   // MiniMax Vision Models
   'MiniMax-M2.5': true,
-  'minimax/minimax-m2.5': true,
+  'minimax-m2.5': true,
 
   // Special handling for o1 models - they DON'T support vision
   'o1': false,
@@ -126,15 +101,27 @@ const VISION_CAPABLE_MODELS: Record<string, boolean> = {
   'o4-mini': false,
 };
 
+/** Strip provider prefix (e.g. "openai/gpt-5" -> "gpt-5") for map lookup */
+const stripPrefix = (model: string): string => {
+  const slashIdx = model.indexOf('/');
+  return slashIdx >= 0 ? model.slice(slashIdx + 1) : model;
+};
+
 /**
  * Check if a model has vision/multimodal capabilities
  */
 export function hasVisionCapability(model: string): boolean {
+  // Try exact match first, then strip provider prefix
   if (model in VISION_CAPABLE_MODELS) {
     return VISION_CAPABLE_MODELS[model];
   }
 
-  const lowerModel = model.toLowerCase();
+  const bare = stripPrefix(model);
+  if (bare !== model && bare in VISION_CAPABLE_MODELS) {
+    return VISION_CAPABLE_MODELS[bare];
+  }
+
+  const lowerModel = bare.toLowerCase();
 
   if (lowerModel.includes('vision') || lowerModel.includes('-v-')) {
     return true;

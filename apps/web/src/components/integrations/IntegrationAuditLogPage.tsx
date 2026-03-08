@@ -47,7 +47,7 @@ interface IntegrationAuditLogPageProps {
 
 interface FiltersState {
   connectionId: string;
-  success: string; // 'all' | 'true' | 'false'
+  success: 'all' | 'true' | 'false';
   dateFrom: Date | undefined;
   dateTo: Date | undefined;
   agentId: string;
@@ -98,12 +98,19 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
   const hasNextPage = currentPage < totalPages;
   const hasPreviousPage = currentPage > 1;
 
-  // Compute stats from current page
-  const successCount = logs.filter((l) => l.success).length;
-  const successRate = logs.length > 0 ? Math.round((successCount / logs.length) * 100) : 0;
-  const avgDuration = logs.length > 0
-    ? Math.round(logs.reduce((sum, l) => sum + (l.durationMs ?? 0), 0) / logs.length)
-    : 0;
+  // Compute stats from current page in a single pass
+  const { successRate, avgDuration } = useMemo(() => {
+    if (logs.length === 0) return { successRate: 0, avgDuration: 0 };
+    let sc = 0, td = 0;
+    for (const l of logs) {
+      if (l.success) sc++;
+      td += l.durationMs ?? 0;
+    }
+    return {
+      successRate: Math.round((sc / logs.length) * 100),
+      avgDuration: Math.round(td / logs.length),
+    };
+  }, [logs]);
 
   const hasActiveFilters =
     filters.connectionId ||
@@ -127,14 +134,15 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
     setExporting(true);
     try {
       const params = new URLSearchParams();
-      if (filters.connectionId) params.set('connectionId', filters.connectionId);
-      if (filters.success !== 'all') params.set('success', filters.success);
-      if (filters.dateFrom) params.set('dateFrom', filters.dateFrom.toISOString());
-      if (filters.dateTo) params.set('dateTo', filters.dateTo.toISOString());
-      if (filters.agentId) params.set('agentId', filters.agentId);
+      if (hookParams.connectionId) params.set('connectionId', hookParams.connectionId);
+      if (hookParams.success !== undefined) params.set('success', String(hookParams.success));
+      if (hookParams.dateFrom) params.set('dateFrom', hookParams.dateFrom);
+      if (hookParams.dateTo) params.set('dateTo', hookParams.dateTo);
+      if (hookParams.agentId) params.set('agentId', hookParams.agentId);
+      const qs = params.toString();
 
       const response = await fetchWithAuth(
-        `/api/drives/${driveId}/integrations/audit/export?${params.toString()}`
+        `/api/drives/${driveId}/integrations/audit/export${qs ? `?${qs}` : ''}`
       );
 
       if (!response.ok) throw new Error('Failed to export audit logs');
@@ -144,16 +152,14 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
       const a = document.createElement('a');
       a.href = url;
       a.download = `integration-audit-logs-${format(new Date(), 'yyyy-MM-dd-HHmmss')}.csv`;
-      document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
     } catch {
       toast.error('Failed to export audit logs');
     } finally {
       setExporting(false);
     }
-  }, [driveId, filters]);
+  }, [driveId, hookParams]);
 
   // Loading skeleton
   if (isLoading && logs.length === 0) {
@@ -220,11 +226,11 @@ export function IntegrationAuditLogPage({ driveId }: IntegrationAuditLogPageProp
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-green-600">{successRate}%</div>
-              <div className="text-muted-foreground">Success Rate</div>
+              <div className="text-muted-foreground">Success Rate (this page)</div>
             </div>
             <div className="text-center">
               <div className="text-2xl font-bold text-blue-600">{avgDuration}ms</div>
-              <div className="text-muted-foreground">Avg Duration</div>
+              <div className="text-muted-foreground">Avg Duration (this page)</div>
             </div>
           </div>
         </CardContent>

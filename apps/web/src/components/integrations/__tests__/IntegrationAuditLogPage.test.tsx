@@ -185,7 +185,7 @@ describe('IntegrationAuditLogPage', () => {
     setupMocks();
     render(<IntegrationAuditLogPage driveId="drive-1" />);
     expect(screen.getByText('Total Calls')).toBeInTheDocument();
-    expect(screen.getByText('Success Rate')).toBeInTheDocument();
+    expect(screen.getByText('Success Rate (this page)')).toBeInTheDocument();
   });
 
   // --- Export button ---
