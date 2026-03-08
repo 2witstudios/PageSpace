@@ -348,6 +348,7 @@ describe('checkOrgAccess', () => {
       orgId: 'org-1',
       userId: 'user-1',
       role: 'ADMIN',
+      invitedBy: null,
       joinedAt: new Date(),
     });
 
@@ -370,6 +371,7 @@ describe('checkOrgAccess', () => {
       orgId: 'org-1',
       userId: 'user-1',
       role: 'MEMBER',
+      invitedBy: null,
       joinedAt: new Date(),
     });
 

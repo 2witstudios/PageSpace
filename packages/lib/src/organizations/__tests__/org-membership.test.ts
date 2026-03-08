@@ -116,7 +116,7 @@ describe('org-membership', () => {
     });
 
     it('creates a new invitation for known user who is not a member', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'existing-user' });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'existing-user' } as any);
       vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(undefined);
 
@@ -140,8 +140,8 @@ describe('org-membership', () => {
     });
 
     it('throws when user is already a member of the organization', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'existing-user' });
-      vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue({ id: 'member-1' });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ id: 'existing-user' } as any);
+      vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue({ id: 'member-1' } as any);
 
       await expect(createInvitation(orgId, invitedBy, input)).rejects.toThrow(
         'User is already a member of this organization'
@@ -358,7 +358,7 @@ describe('org-membership', () => {
 
     it('accepts a valid invitation and returns the orgId', async () => {
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
       vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
       setupTransactionMock();
 
@@ -411,7 +411,7 @@ describe('org-membership', () => {
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         email: 'different@example.com',
-      });
+      } as any);
 
       await expect(acceptInvitation(token, userId)).rejects.toThrow(
         'This invitation was sent to a different email address'
@@ -420,8 +420,8 @@ describe('org-membership', () => {
 
     it('throws when user is already a member of the organization', async () => {
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
-      vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue({ id: 'member-existing' });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
+      vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue({ id: 'member-existing' } as any);
 
       await expect(acceptInvitation(token, userId)).rejects.toThrow(
         'You are already a member of this organization'
@@ -430,7 +430,7 @@ describe('org-membership', () => {
 
     it('inserts orgMember and updates invitation acceptedAt inside a transaction', async () => {
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
       vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
 
       let capturedTx: any;
@@ -456,7 +456,7 @@ describe('org-membership', () => {
         role: 'OWNER' as const,
       };
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(ownerInvitation);
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
       vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
 
       let capturedValues: any;
@@ -483,7 +483,7 @@ describe('org-membership', () => {
         role: 'ADMIN' as const,
       };
       vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(adminInvitation);
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
       vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
 
       let capturedValues: any;
@@ -510,7 +510,7 @@ describe('org-membership', () => {
     describe('expectedOrgId validation', () => {
       it('succeeds when expectedOrgId matches invitation orgId', async () => {
         vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
-        vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+        vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
         vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
         setupTransactionMock();
 
@@ -529,7 +529,7 @@ describe('org-membership', () => {
 
       it('succeeds when expectedOrgId is undefined (backwards compatibility)', async () => {
         vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
-        vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+        vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
         vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
         setupTransactionMock();
 
@@ -540,7 +540,7 @@ describe('org-membership', () => {
 
       it('succeeds when expectedOrgId is empty string (falsy, skips check)', async () => {
         vi.mocked(db.query.orgInvitations.findFirst).mockResolvedValue(validInvitation);
-        vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail });
+        vi.mocked(db.query.users.findFirst).mockResolvedValue({ email: inviteeEmail } as any);
         vi.mocked(db.query.orgMembers.findFirst).mockResolvedValue(undefined);
         setupTransactionMock();
 
@@ -561,7 +561,7 @@ describe('org-membership', () => {
           id: 'inv-1',
           orgId,
           email: 'a@example.com',
-          role: 'MEMBER',
+          role: 'MEMBER' as const,
           token: 'tok-1',
           expiresAt: new Date(Date.now() + 86400000),
           acceptedAt: null,
@@ -572,7 +572,7 @@ describe('org-membership', () => {
           id: 'inv-2',
           orgId,
           email: 'b@example.com',
-          role: 'ADMIN',
+          role: 'ADMIN' as const,
           token: 'tok-2',
           expiresAt: new Date(Date.now() + 86400000),
           acceptedAt: null,
