@@ -28,7 +28,7 @@ export const PATCH = withOrgAdminAuth<OrgMemberRouteContext>(async (_user, reque
 
   const [updated] = await db
     .update(orgMembers)
-    .set({ role })
+    .set({ role: role as 'ADMIN' | 'MEMBER' })
     .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
     .returning();
 
