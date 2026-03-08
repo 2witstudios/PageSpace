@@ -445,7 +445,6 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
   try {
     // Calculate tokens if not provided
     let { inputTokens, outputTokens, totalTokens } = data;
-
     // Calculate total if not provided
     if (!totalTokens && (inputTokens || outputTokens)) {
       totalTokens = (inputTokens || 0) + (outputTokens || 0);

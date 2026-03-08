@@ -10,13 +10,17 @@ This document describes the tradeoff, the controls in place, and the per-page op
 
 ## Why Plaintext
 
-PageSpace supports three content operations that require server-side access to raw text:
+PageSpace supports five content operations that require server-side access to raw text:
 
 1. **Full-text search** — Multi-drive search uses PostgreSQL `ILIKE` and regex operators directly on the `pages.content` column. Encrypted content would require decryption of every page to search, which is infeasible at scale.
 
 2. **AI context** — When users chat with AI about a page, the page content is included in the AI prompt. The server assembles the prompt, so it must be able to read the content.
 
 3. **Real-time collaboration** — The Socket.IO service broadcasts content updates to all connected editors. The server relays these updates and must parse them to resolve conflicts.
+
+4. **File processing** — When files are uploaded, the processor service extracts text content and stores it in the `pages.content` column for downstream search and AI operations.
+
+5. **Activity digest generation** — The pulse/digest service retrieves content snapshots from activity logs to generate change summaries and activity diffs.
 
 ---
 
@@ -36,7 +40,7 @@ Pages can opt out of search indexing by setting `excludeFromSearch = true`. When
 
 - The page will **not** appear in multi-drive search results.
 - The page will **not** appear in drive-level regex or glob search results.
-- The page content is **still stored in plaintext** (exclusion affects search queries, not storage).
+- The page content **remains stored in plaintext** — the flag only affects query-time filtering, not storage or retention.
 - The page content is **still accessible** via direct page load, AI chat, and API endpoints.
 
 This is useful for pages containing sensitive data (credentials, personal notes) that should not surface in search results.
@@ -54,7 +58,7 @@ This is useful for pages containing sensitive data (credentials, personal notes)
 
 - **Encryption at rest at the application layer** — Content is plaintext in the database. Encryption at rest must be handled by the storage layer (e.g., LUKS, AWS EBS encryption, PostgreSQL TDE).
 - **Zero-knowledge architecture** — The server can read all content. This is inherent to server-side search and AI.
-- **Content redaction in logs** — Activity logs may contain content snapshots for audit trail purposes (limited to 1MB per entry).
+- **Content in activity logs** — Activity logs preserve raw content snapshots for audit and rollback purposes (limited to 1MB per entry). Content snapshots are not redacted and may contain sensitive data.
 
 ---
 

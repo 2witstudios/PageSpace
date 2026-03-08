@@ -35,6 +35,7 @@ vi.mock('@pagespace/lib/server', () => ({
     getDriveMemberCount: vi.fn().mockResolvedValue(0),
     deleteDrive: vi.fn(),
     deleteUser: vi.fn(),
+    checkAndDeleteSoloDrives: vi.fn().mockResolvedValue({ multiMemberDriveNames: [] }),
   },
   activityLogRepository: {
     anonymizeForUser: vi.fn().mockResolvedValue({ success: true, count: 0 }),
@@ -177,10 +178,9 @@ describe('/api/admin/users/[userId]/data', () => {
       email: 'target@example.com',
       image: null,
     });
-    vi.mocked(accountRepository.getOwnedDrives).mockResolvedValue([
-      { id: 'drive-1', name: 'Shared Drive' },
-    ]);
-    vi.mocked(accountRepository.getDriveMemberCount).mockResolvedValue(3);
+    vi.mocked(accountRepository.checkAndDeleteSoloDrives).mockResolvedValue({
+      multiMemberDriveNames: ['Shared Drive'],
+    });
 
     const request = new Request('http://localhost/api/admin/users/user-1/data', {
       method: 'DELETE',

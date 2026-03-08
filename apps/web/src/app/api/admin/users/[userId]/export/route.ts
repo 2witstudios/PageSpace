@@ -27,11 +27,16 @@ export const GET = withAdminAuth<ExportRouteContext>(
 
       loggers.api.info(`Admin DSAR export: admin=${adminUser.id} target=${userId}`);
 
-      return Response.json({
-        ...data,
-        exportedAt: new Date().toISOString(),
-        exportedBy: adminUser.id,
-      });
+      return Response.json(
+        {
+          ...data,
+          exportedAt: new Date().toISOString(),
+          exportedBy: adminUser.id,
+        },
+        {
+          headers: { 'Cache-Control': 'no-store' },
+        }
+      );
     } catch (error) {
       loggers.api.error('Admin DSAR export error:', error as Error);
       return Response.json({ error: 'Failed to export user data' }, { status: 500 });

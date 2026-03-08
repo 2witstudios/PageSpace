@@ -6,6 +6,12 @@ import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activit
 
 type DataRouteContext = { params: Promise<{ userId: string }> };
 
+function maskEmail(email: string): string {
+  const [localPart, domain] = email.split('@');
+  if (!domain) return '***';
+  return `${localPart.slice(0, 3)}***@${domain}`;
+}
+
 /**
  * DELETE /api/admin/users/[userId]/data
  *
@@ -33,43 +39,23 @@ export const DELETE = withAdminAuth<DataRouteContext>(
         return Response.json({ error: 'User not found' }, { status: 404 });
       }
 
-      // Check for multi-member drives
-      const ownedDrives = await accountRepository.getOwnedDrives(userId);
-      if (ownedDrives.length > 0) {
-        const driveIds = ownedDrives.map(d => d.id);
-        const memberCounts = await Promise.all(
-          driveIds.map(async (driveId) => ({
-            driveId,
-            memberCount: await accountRepository.getDriveMemberCount(driveId),
-          }))
+      // Atomically check for multi-member drives and delete solo ones
+      const { multiMemberDriveNames } = await accountRepository.checkAndDeleteSoloDrives(userId);
+      if (multiMemberDriveNames.length > 0) {
+        return Response.json(
+          {
+            error: 'User owns drives with other members. Transfer ownership first.',
+            multiMemberDrives: multiMemberDriveNames,
+          },
+          { status: 400 }
         );
-
-        const countByDrive = new Map(memberCounts.map(m => [m.driveId, m.memberCount]));
-        const multiMemberDrives = ownedDrives.filter(d => (countByDrive.get(d.id) || 0) > 1);
-
-        if (multiMemberDrives.length > 0) {
-          return Response.json(
-            {
-              error: 'User owns drives with other members. Transfer ownership first.',
-              multiMemberDrives: multiMemberDrives.map(d => d.name),
-            },
-            { status: 400 }
-          );
-        }
-
-        // Auto-delete solo drives in parallel
-        const soloDriveIds = ownedDrives
-          .filter(d => (countByDrive.get(d.id) || 0) <= 1)
-          .map(d => d.id);
-
-        await Promise.all(soloDriveIds.map(id => accountRepository.deleteDrive(id)));
       }
 
       // Log BEFORE anonymization (GDPR compliance)
       const actorInfo = await getActorInfo(adminUser.id);
       logUserActivity(adminUser.id, 'account_delete', {
         targetUserId: userId,
-        targetUserEmail: user.email,
+        targetUserEmail: maskEmail(user.email),
       }, actorInfo);
 
       // Anonymize activity logs
@@ -78,12 +64,8 @@ export const DELETE = withAdminAuth<DataRouteContext>(
         createAnonymizedActorEmail(userId)
       );
 
-      // Clean up AI usage logs
-      try {
-        await deleteAiUsageLogsForUser(userId);
-      } catch (error) {
-        loggers.auth.error('Could not delete AI usage logs during admin DSAR deletion:', error as Error);
-      }
+      // Clean up AI usage logs (fail-closed: error surfaces to caller)
+      await deleteAiUsageLogsForUser(userId);
 
       // Delete user record
       await accountRepository.deleteUser(userId);

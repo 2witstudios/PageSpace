@@ -102,6 +102,7 @@ const createPageFixture = (overrides: Partial<{
   id: string;
   driveId: string;
   title: string;
+  excludeFromSearch: boolean;
 }> = {}) => ({
   id: overrides.id ?? 'page_1',
   driveId: overrides.driveId ?? 'drive_1',
@@ -139,7 +140,7 @@ const createPageFixture = (overrides: Partial<{
   stateHash: null,
   parentId: null,
   originalParentId: null,
-  excludeFromSearch: false,
+  excludeFromSearch: overrides.excludeFromSearch ?? false,
 });
 
 const createTaskListFixture = (overrides: Partial<{

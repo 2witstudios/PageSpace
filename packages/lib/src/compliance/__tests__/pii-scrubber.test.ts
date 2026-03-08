@@ -49,4 +49,22 @@ describe('scrubPII', () => {
     expect(result).toContain('[EMAIL_REDACTED]');
     expect(result).toContain('[SSN_REDACTED]');
   });
+
+  it('redactsPhoneNumbers', () => {
+    expect(scrubPII('Call 555-123-4567')).toContain('[PHONE_REDACTED]');
+    expect(scrubPII('Call (555) 123-4567')).toContain('[PHONE_REDACTED]');
+    expect(scrubPII('Call +1-555-123-4567')).toContain('[PHONE_REDACTED]');
+  });
+
+  it('redactsAmExCards', () => {
+    // AmEx test number (15 digits, passes Luhn)
+    const result = scrubPII('Card: 378282246310005');
+    expect(result).toBe('Card: [CC_REDACTED]');
+  });
+
+  it('doesNotRedactNonLuhnNumbers', () => {
+    // 16 digits but fails Luhn check
+    const result = scrubPII('ID: 1234567890123456');
+    expect(result).not.toContain('[CC_REDACTED]');
+  });
 });

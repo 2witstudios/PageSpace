@@ -78,6 +78,48 @@ export const accountRepository = {
   deleteUser: async (userId: string): Promise<void> => {
     await db.delete(users).where(eq(users.id, userId));
   },
+
+  /**
+   * Atomically check owned drives and delete solo ones inside a transaction.
+   * Returns multi-member drive names if any exist (caller should abort).
+   */
+  checkAndDeleteSoloDrives: async (userId: string): Promise<{ multiMemberDriveNames: string[] }> => {
+    return db.transaction(async (tx) => {
+      const ownedDrives = await tx.query.drives.findMany({
+        where: eq(drives.ownerId, userId),
+        columns: { id: true, name: true },
+      });
+
+      if (ownedDrives.length === 0) return { multiMemberDriveNames: [] };
+
+      const multiMemberNames: string[] = [];
+      const soloDriveIds: string[] = [];
+
+      for (const drive of ownedDrives) {
+        const [{ count }] = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(driveMembers)
+          .where(eq(driveMembers.driveId, drive.id));
+
+        if (Number(count) > 1) {
+          multiMemberNames.push(drive.name);
+        } else {
+          soloDriveIds.push(drive.id);
+        }
+      }
+
+      if (multiMemberNames.length > 0) {
+        return { multiMemberDriveNames: multiMemberNames };
+      }
+
+      // Safe to delete — no multi-member drives
+      for (const driveId of soloDriveIds) {
+        await tx.delete(drives).where(eq(drives.id, driveId));
+      }
+
+      return { multiMemberDriveNames: [] };
+    });
+  },
 };
 
 export type AccountRepository = typeof accountRepository;
