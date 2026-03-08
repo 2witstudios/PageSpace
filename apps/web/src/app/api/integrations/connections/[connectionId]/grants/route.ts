@@ -3,12 +3,13 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db';
 import { loggers } from '@pagespace/lib/server';
 import { getConnectionById, listGrantsByConnection } from '@pagespace/lib/integrations';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
 /**
  * GET /api/integrations/connections/[connectionId]/grants
- * List grants for a connection. Only the connection owner can access.
+ * List grants for a connection. Only the connection owner or drive member can access.
  */
 export async function GET(
   request: Request,
@@ -24,9 +25,17 @@ export async function GET(
       return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
     }
 
-    // Only the connection owner (user-scoped) or a drive member can view grants
+    // User-scoped: only the connection owner can view grants
     if (connection.userId && connection.userId !== auth.userId) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    }
+
+    // Drive-scoped: only drive members can view grants
+    if (connection.driveId) {
+      const access = await getDriveAccess(connection.driveId, auth.userId);
+      if (!access.isMember) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      }
     }
 
     const grants = await listGrantsByConnection(db, connectionId);

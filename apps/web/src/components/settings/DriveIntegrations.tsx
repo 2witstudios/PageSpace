@@ -17,7 +17,7 @@ import { toast } from 'sonner';
 import { useDriveConnections, useProviders, useConnectionGrantCount } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
-import { DisconnectConfirmDialog } from '@/components/integrations/DisconnectConfirmDialog';
+import { DisconnectWithAgentCount } from '@/components/integrations/DisconnectConfirmDialog';
 import { del } from '@/lib/auth/auth-fetch';
 import type { SafeProvider, SafeConnection } from '@/components/integrations/types';
 
@@ -139,7 +139,7 @@ export function DriveIntegrations({ driveId }: DriveIntegrationsProps) {
         driveId={driveId}
       />
 
-      <DriveDisconnectWithAgentCount
+      <DisconnectWithAgentCount
         connection={disconnectConnection}
         onOpenChange={(open) => { if (!open) setDisconnectConnection(null); }}
         onConfirm={handleDisconnect}
@@ -188,28 +188,6 @@ function DriveConnectionRow({
         Disconnect
       </Button>
     </div>
-  );
-}
-
-function DriveDisconnectWithAgentCount({
-  connection,
-  onOpenChange,
-  onConfirm,
-}: {
-  connection: SafeConnection | null;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-}) {
-  const { count } = useConnectionGrantCount(connection?.id ?? null);
-
-  return (
-    <DisconnectConfirmDialog
-      open={!!connection}
-      onOpenChange={onOpenChange}
-      connectionName={connection?.name ?? ''}
-      onConfirm={onConfirm}
-      affectedAgentCount={count}
-    />
   );
 }
 

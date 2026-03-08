@@ -74,12 +74,12 @@ export function useAvailableBuiltins() {
 }
 
 export function useConnectionGrantCount(connectionId: string | null) {
-  const { data, error, isLoading } = useSWR<{ grants: unknown[]; total: number }>(
+  const { data, error, isLoading } = useSWR<{ grants: SafeGrant[]; total: number }>(
     connectionId ? `/api/integrations/connections/${connectionId}/grants` : null,
     fetcher,
     { revalidateOnFocus: false }
   );
-  return { count: data?.total ?? data?.grants?.length ?? 0, error, isLoading };
+  return { count: data?.total ?? 0, error, isLoading };
 }
 
 export function useIntegrationAuditLogs(driveId: string | null, params: AuditLogsParams = {}) {

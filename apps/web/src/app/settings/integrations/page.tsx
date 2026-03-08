@@ -14,10 +14,10 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, Cable, Plug2, Loader2, ExternalLink, AlertCircle, Package, Clock } from 'lucide-react';
 import { toast } from 'sonner';
-import { useProviders, useUserConnections, useAvailableBuiltins, useConnectionGrantCount } from '@/hooks/useIntegrations';
+import { useProviders, useUserConnections, useAvailableBuiltins } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
-import { DisconnectConfirmDialog } from '@/components/integrations/DisconnectConfirmDialog';
+import { DisconnectWithAgentCount } from '@/components/integrations/DisconnectConfirmDialog';
 import { del, patch, post } from '@/lib/auth/auth-fetch';
 import type { SafeProvider, SafeConnection } from '@/components/integrations/types';
 
@@ -422,24 +422,3 @@ function ConnectionRow({
   );
 }
 
-function DisconnectWithAgentCount({
-  connection,
-  onOpenChange,
-  onConfirm,
-}: {
-  connection: SafeConnection | null;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-}) {
-  const { count } = useConnectionGrantCount(connection?.id ?? null);
-
-  return (
-    <DisconnectConfirmDialog
-      open={!!connection}
-      onOpenChange={onOpenChange}
-      connectionName={connection?.name ?? ''}
-      onConfirm={onConfirm}
-      affectedAgentCount={count}
-    />
-  );
-}
