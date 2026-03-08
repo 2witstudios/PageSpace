@@ -9,6 +9,7 @@ import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { formatBytes } from '@/lib/utils';
 
 // File attachment info returned from upload
 export interface FileAttachment {
@@ -174,12 +175,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
       return FileIcon;
     };
 
-    // Format file size
-    const formatFileSize = (bytes: number) => {
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    };
+    const formatFileSize = formatBytes;
 
     // Handle formatting shortcuts
     const handleFormatClick = (format: 'bold' | 'italic' | 'code' | 'list') => {

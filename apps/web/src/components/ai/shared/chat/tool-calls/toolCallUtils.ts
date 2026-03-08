@@ -20,12 +20,27 @@ export interface ToolPart {
 
 // ── JSON Parsing ──
 
-export const safeJsonParse = (value: unknown, fallback: 'raw' | 'null' = 'null'): Record<string, unknown> | null => {
+export const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   if (typeof value === 'string') {
     try {
       return JSON.parse(value);
     } catch {
-      return fallback === 'raw' ? { raw: value } : null;
+      return null;
+    }
+  }
+  if (typeof value === 'object' && value !== null) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+};
+
+/** Like safeJsonParse, but wraps unparseable strings as { raw: value } instead of returning null */
+export const safeJsonParseRaw = (value: unknown): Record<string, unknown> | null => {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return { raw: value };
     }
   }
   if (typeof value === 'object' && value !== null) {

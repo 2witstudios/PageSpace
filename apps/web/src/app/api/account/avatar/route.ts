@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db, users, eq } from '@pagespace/db';
-
 import { PROCESSOR_URL } from '@/lib/processor-config';
 import { createAvatarServiceToken } from '@/lib/auth/avatar-service';
 

@@ -354,31 +354,7 @@ function getWarningLevel(percent: number): 'none' | 'warning' | 'critical' {
   return 'none';
 }
 
-export { formatBytes } from '../utils/format';
-
-/**
- * Parse human-readable size to bytes
- */
-export function parseBytes(size: string): number {
-  // Defensive check for undefined/null input
-  if (!size || typeof size !== 'string') {
-    throw new Error(`Invalid size parameter: expected string, got ${typeof size}`);
-  }
-
-  const units: Record<string, number> = {
-    B: 1,
-    KB: 1024,
-    MB: 1024 * 1024,
-    GB: 1024 * 1024 * 1024,
-    TB: 1024 * 1024 * 1024 * 1024
-  };
-
-  const match = size.match(/^(\d+(?:\.\d+)?)\s*([KMGT]?B)$/i);
-  if (!match) throw new Error(`Invalid size format: "${size}"`);
-
-  const [, value, unit] = match;
-  return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
-}
+export { formatBytes, parseBytes } from '../utils/format';
 
 /**
  * @deprecated - Removed: Use subscription tier changes instead

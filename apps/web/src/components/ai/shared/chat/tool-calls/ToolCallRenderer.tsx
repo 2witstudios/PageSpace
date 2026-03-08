@@ -18,7 +18,7 @@ import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
 import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
 import {
   type ToolPart,
-  safeJsonParse as safeJsonParseBase,
+  safeJsonParseRaw as safeJsonParse,
   formatToolName,
   flattenActivityGroups,
 } from './toolCallUtils';
@@ -26,9 +26,6 @@ import {
 interface ToolCallRendererProps {
   part: ToolPart;
 }
-
-// This renderer uses 'raw' fallback for unparseable strings
-const safeJsonParse = (value: unknown) => safeJsonParseBase(value, 'raw');
 
 // Helper to parse list_pages paths format into tree structure
 // Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
@@ -108,8 +105,6 @@ const parsePathsToTree = (paths: string[], _driveId?: string): TreeItem[] => {
   // Start building from depth 1 (skip drive slug at depth 0)
   return buildTreeFromParsed(parsedPages, 1, []);
 };
-
-// TOOL_NAME_MAP and formatToolName imported from ./toolCallUtils
 
 // Internal renderer component with hooks
 const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function ToolCallRendererInternal({ part, toolName }) {
