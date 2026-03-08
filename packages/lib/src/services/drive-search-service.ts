@@ -365,29 +365,18 @@ export async function regexSearchPages(
   const pgPattern = pattern.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
 
   // Build where conditions based on searchIn parameter
-  let whereConditions;
-  if (searchIn === 'content') {
-    whereConditions = and(
-      eq(pages.driveId, driveId),
-      eq(pages.isTrashed, false),
-      eq(pages.excludeFromSearch, false),
-      sql`${pages.content} ~ ${pgPattern}`
-    );
-  } else if (searchIn === 'title') {
-    whereConditions = and(
-      eq(pages.driveId, driveId),
-      eq(pages.isTrashed, false),
-      eq(pages.excludeFromSearch, false),
-      sql`${pages.title} ~ ${pgPattern}`
-    );
-  } else {
-    whereConditions = and(
-      eq(pages.driveId, driveId),
-      eq(pages.isTrashed, false),
-      eq(pages.excludeFromSearch, false),
-      sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`
-    );
-  }
+  const regexCondition = searchIn === 'content'
+    ? sql`${pages.content} ~ ${pgPattern}`
+    : searchIn === 'title'
+      ? sql`${pages.title} ~ ${pgPattern}`
+      : sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`;
+
+  const whereConditions = and(
+    eq(pages.driveId, driveId),
+    eq(pages.isTrashed, false),
+    eq(pages.excludeFromSearch, false),
+    regexCondition,
+  );
 
   let matchingPages: Array<{
     id: string;

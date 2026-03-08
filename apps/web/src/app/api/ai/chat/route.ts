@@ -1089,8 +1089,6 @@ export async function POST(request: Request) {
                 inputTokens,
                 outputTokens,
                 totalTokens,
-                prompt: undefined,
-                completion: undefined,
                 duration,
                 conversationId, // Use actual conversation ID instead of pageId
                 messageId,

@@ -1,15 +1,10 @@
-import { createHash } from 'crypto';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { loggers, accountRepository, activityLogRepository } from '@pagespace/lib/server';
 import { deleteAiUsageLogsForUser } from '@pagespace/lib';
+import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 type DataRouteContext = { params: Promise<{ userId: string }> };
-
-function createAnonymizedActorEmail(userId: string): string {
-  const hash = createHash('sha256').update(userId).digest('hex').slice(0, 12);
-  return `deleted_user_${hash}`;
-}
 
 /**
  * DELETE /api/admin/users/[userId]/data
@@ -30,8 +25,8 @@ export const DELETE = withAdminAuth<DataRouteContext>(
     }
 
     try {
-      const body = await request.json().catch(() => ({}));
-      const reason = (body as { reason?: string }).reason || 'Admin DSAR deletion';
+      const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+      const reason = (typeof body.reason === 'string' ? body.reason : 'Admin DSAR deletion').substring(0, 200);
 
       const user = await accountRepository.findById(userId);
       if (!user) {
@@ -49,10 +44,8 @@ export const DELETE = withAdminAuth<DataRouteContext>(
           }))
         );
 
-        const multiMemberDrives = ownedDrives.filter(drive => {
-          const mc = memberCounts.find(m => m.driveId === drive.id);
-          return (mc?.memberCount || 0) > 1;
-        });
+        const countByDrive = new Map(memberCounts.map(m => [m.driveId, m.memberCount]));
+        const multiMemberDrives = ownedDrives.filter(d => (countByDrive.get(d.id) || 0) > 1);
 
         if (multiMemberDrives.length > 0) {
           return Response.json(
@@ -64,17 +57,12 @@ export const DELETE = withAdminAuth<DataRouteContext>(
           );
         }
 
-        // Auto-delete solo drives
+        // Auto-delete solo drives in parallel
         const soloDriveIds = ownedDrives
-          .filter(drive => {
-            const mc = memberCounts.find(m => m.driveId === drive.id);
-            return (mc?.memberCount || 0) <= 1;
-          })
+          .filter(d => (countByDrive.get(d.id) || 0) <= 1)
           .map(d => d.id);
 
-        for (const driveId of soloDriveIds) {
-          await accountRepository.deleteDrive(driveId);
-        }
+        await Promise.all(soloDriveIds.map(id => accountRepository.deleteDrive(id)));
       }
 
       // Log BEFORE anonymization (GDPR compliance)
