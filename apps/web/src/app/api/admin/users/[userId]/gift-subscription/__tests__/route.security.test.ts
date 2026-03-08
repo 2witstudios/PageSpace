@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, DELETE } from '../route';
 import { NextRequest } from 'next/server';
-import { db, users, subscriptions, eq } from '@pagespace/db';
+import { db, users, subscriptions, sessions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
@@ -129,13 +129,26 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
     }).returning();
     regularUserId = regularUser.id;
 
-    // Create a session token for the admin user
-    adminSessionToken = await sessionService.createSession({
-      userId: adminUserId,
-      type: 'user',
-      scopes: ['*'],
-      expiresInMs: 3600000,
-    });
+    // Create a session token for the admin user.
+    // Retry to handle TOCTOU race between user insert and session insert
+    // when parallel test files share the same connection pool (see admin-role-version.test.ts).
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        adminSessionToken = await sessionService.createSession({
+          userId: adminUserId,
+          type: 'user',
+          scopes: ['*'],
+          expiresInMs: 3600000,
+        });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
+      }
+    }
+    if (lastError) throw lastError;
 
     // Generate CSRF token bound to the session
     const sessionClaims = await sessionService.validateSession(adminSessionToken);
@@ -146,9 +159,11 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   });
 
   afterEach(async () => {
-    // Clean up test data - wrapped to prevent cascading failures
+    // Clean up test data in FK-safe order to prevent cascading failures
     try {
       await db.delete(subscriptions).where(eq(subscriptions.userId, regularUserId));
+      await db.delete(sessions).where(eq(sessions.userId, adminUserId));
+      await db.delete(sessions).where(eq(sessions.userId, regularUserId));
       await db.delete(users).where(eq(users.id, adminUserId));
       await db.delete(users).where(eq(users.id, regularUserId));
     } catch {
