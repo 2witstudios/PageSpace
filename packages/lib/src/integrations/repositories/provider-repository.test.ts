@@ -384,6 +384,127 @@ describe('deleteProvider', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SEED BUILTIN PROVIDERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface BuiltinConfig {
+  id: string;
+  name: string;
+  description?: string;
+  iconUrl?: string;
+  documentationUrl?: string;
+}
+
+const seedBuiltinProviders = async (
+  db: MockDb,
+  builtins: BuiltinConfig[],
+): Promise<MockProvider[]> => {
+  const existing: MockProvider[] = await db.query.integrationProviders.findMany({
+    columns: { slug: true },
+  }) ?? [];
+
+  const installedSlugs = new Set(existing.map((p) => p.slug));
+  const toSeed = builtins.filter((b) => !installedSlugs.has(b.id));
+
+  if (toSeed.length === 0) return [];
+
+  const seeded: MockProvider[] = [];
+  for (const builtin of toSeed) {
+    const result = await db.insert().values({
+      slug: builtin.id,
+      name: builtin.name,
+      description: builtin.description ?? null,
+      iconUrl: builtin.iconUrl ?? null,
+      documentationUrl: builtin.documentationUrl ?? null,
+      providerType: 'builtin',
+      config: builtin,
+      isSystem: true,
+      enabled: true,
+    }).returning();
+    seeded.push(result[0]);
+  }
+
+  return seeded;
+};
+
+describe('seedBuiltinProviders', () => {
+  let mockDb: MockDb;
+
+  beforeEach(() => {
+    mockDb = createMockDb();
+  });
+
+  it('given no providers installed, should seed all builtins', async () => {
+    mockDb.query.integrationProviders.findMany.mockResolvedValue([]);
+
+    const github: MockProvider = {
+      id: 'prov-github', slug: 'github', name: 'GitHub', config: {}, enabled: true, isSystem: true,
+    };
+    const webhook: MockProvider = {
+      id: 'prov-webhook', slug: 'generic-webhook', name: 'Generic Webhook', config: {}, enabled: true, isSystem: true,
+    };
+
+    let callCount = 0;
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockImplementation(() => {
+          callCount++;
+          return Promise.resolve([callCount === 1 ? github : webhook]);
+        }),
+      }),
+    });
+
+    const result = await seedBuiltinProviders(mockDb, [
+      { id: 'github', name: 'GitHub', description: 'GitHub integration' },
+      { id: 'generic-webhook', name: 'Generic Webhook', description: 'Webhook' },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(mockDb.insert).toHaveBeenCalledTimes(2);
+  });
+
+  it('given some providers already installed, should only seed missing ones', async () => {
+    mockDb.query.integrationProviders.findMany.mockResolvedValue([
+      { id: 'p1', slug: 'github', name: 'GitHub', config: {}, enabled: true, isSystem: true },
+    ]);
+
+    const webhook: MockProvider = {
+      id: 'prov-webhook', slug: 'generic-webhook', name: 'Generic Webhook', config: {}, enabled: true, isSystem: true,
+    };
+
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([webhook]),
+      }),
+    });
+
+    const result = await seedBuiltinProviders(mockDb, [
+      { id: 'github', name: 'GitHub' },
+      { id: 'generic-webhook', name: 'Generic Webhook' },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].slug).toBe('generic-webhook');
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
+  });
+
+  it('given all providers already installed, should seed nothing', async () => {
+    mockDb.query.integrationProviders.findMany.mockResolvedValue([
+      { id: 'p1', slug: 'github', name: 'GitHub', config: {}, enabled: true, isSystem: true },
+      { id: 'p2', slug: 'generic-webhook', name: 'Webhook', config: {}, enabled: true, isSystem: true },
+    ]);
+
+    const result = await seedBuiltinProviders(mockDb, [
+      { id: 'github', name: 'GitHub' },
+      { id: 'generic-webhook', name: 'Generic Webhook' },
+    ]);
+
+    expect(result).toHaveLength(0);
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+});
+
 describe('countProviderConnections', () => {
   let mockDb: MockDb;
 

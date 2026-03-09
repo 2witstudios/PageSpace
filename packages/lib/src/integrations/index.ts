@@ -120,6 +120,7 @@ export {
   updateProvider,
   deleteProvider,
   countProviderConnections,
+  seedBuiltinProviders,
 } from './repositories/provider-repository';
 
 // Config Repository
