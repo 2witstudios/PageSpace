@@ -5,6 +5,13 @@
  * Supports two modes:
  * 1. messages_only - Just soft-delete messages from a point forward
  * 2. messages_and_changes - Soft-delete messages AND rollback all tool call changes
+ *
+ * This service wraps the core rollback-service.ts for AI-specific undo operations.
+ * It finds AI-generated activities and uses executeRollback for each one.
+ *
+ * Related Services:
+ * - rollback-service.ts: Core rollback engine used internally
+ * - rollback-to-point-service.ts: Similar pattern for non-AI rollbacks
  */
 
 import { db, chatMessages, messages, activityLogs, eq, and, gte, lt, desc } from '@pagespace/db';

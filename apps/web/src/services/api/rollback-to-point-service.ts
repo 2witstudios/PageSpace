@@ -3,6 +3,13 @@
  *
  * Handles rolling back all changes from a specific activity forward.
  * Similar to AI undo but for any activities, not just AI-generated ones.
+ *
+ * This service wraps the core rollback-service.ts for point-in-time rollbacks.
+ * It finds activities from a timestamp forward and uses executeRollback for each.
+ *
+ * Related Services:
+ * - rollback-service.ts: Core rollback engine used internally
+ * - ai-undo-service.ts: Similar pattern for AI-specific undos
  */
 
 import { db, activityLogs, eq, and, gte, desc } from '@pagespace/db';

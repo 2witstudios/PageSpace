@@ -1,8 +1,21 @@
 /**
  * Rollback Service
  *
- * Handles version history rollback operations for PageSpace.
+ * Core rollback engine for PageSpace version history.
  * Allows users to restore resources to previous states based on activity logs.
+ *
+ * Related Services:
+ * - ai-undo-service.ts: Wraps this service for AI conversation undos
+ * - rollback-to-point-service.ts: Wraps this service for point-in-time rollbacks
+ *
+ * Structure:
+ * - Constants & Types (lines 40-500)
+ * - Core Fetch Functions (lines 500-570)
+ * - Preview Logic (lines 570-1560)
+ * - Execute Logic (lines 1560-2500)
+ * - Domain Handlers: Page (2500-2700), Drive (2700-2900), Member (2900-3000)
+ * - Domain Handlers: Permission (3000-3100), Role (3100-3200), Message (3200-3276)
+ * - Version History (3276+)
  */
 
 import { db, activityLogs, pages, drives, driveMembers, driveRoles, pagePermissions, users, chatMessages, messages, channelMessages, eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db';
