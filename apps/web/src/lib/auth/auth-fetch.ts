@@ -2,54 +2,34 @@
 
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { getPlatformStorage, type PlatformStorage } from './platform-storage';
-import { isCapacitorApp, getPlatform } from '@/lib/capacitor-bridge';
+import { type FetchOptions, type SessionRefreshResult, REFRESH_COOLDOWN_MS } from './types';
+import { createCSRFTokenManager, requiresCSRFToken } from './token-csrf';
+import { createSessionTokenManager } from './token-session';
+import { createSessionRefreshManager } from './session-refresh';
+import { createLifecycleManager } from './lifecycle-events';
+import { validateRequestUrl, createRequestQueue } from './request-utils';
 
-interface FetchOptions extends RequestInit {
-  skipAuth?: boolean;
-  maxRetries?: number;
-}
-
-interface QueuedRequest {
-  resolve: (value: Response) => void;
-  reject: (error: Error) => void;
-  url: string;
-  options?: FetchOptions;
-}
-
-export interface SessionRefreshResult {
-  success: boolean;
-  shouldLogout: boolean;
-}
+export type { FetchOptions, SessionRefreshResult } from './types';
 
 class AuthFetch {
   private isRefreshing = false;
-  private refreshQueue: QueuedRequest[] = [];
   private refreshPromise: Promise<SessionRefreshResult> | null = null;
   private logger = createClientLogger({ namespace: 'auth', component: 'auth-fetch' });
-  private csrfToken: string | null = null;
-  private csrfTokenPromise: Promise<string | null> | null = null;
-  private sessionCache: { token: string } | null = null;
-  private sessionFetchPromise: Promise<string | null> | null = null;
-  private readonly SESSION_RETRY_DELAY_MS = 100; // 100ms retry delay for async storage
-  private authClearedCleanup: (() => void) | null = null;
-  private initialized = false;
-
-  // Power state tracking for desktop (prevents refresh during sleep)
-  private isSuspended = false;
-  private suspendTime: number | null = null;
-  private powerEventCleanups: (() => void)[] = [];
-
-  // Refresh cooldown tracking - prevents rapid re-refresh after successful refresh
-  // This handles the case where delayed callbacks (e.g., socket's 2-second timeout)
-  // try to refresh after the main refresh already completed and rotated the device token
-  private lastSuccessfulRefresh: number | null = null;
-  private readonly REFRESH_COOLDOWN_MS = 5000; // 5 seconds cooldown after successful refresh
-
-  // Timeout for bearer token retrieval (IPC/Keychain) to prevent hung requests on cold start
-  private readonly TOKEN_RETRIEVAL_TIMEOUT_MS = 3000;
-
-  // Platform storage abstraction for cross-platform auth
   private storage: PlatformStorage | null = null;
+
+  private lastSuccessfulRefresh: number | null = null;
+
+  private csrfManager = createCSRFTokenManager();
+  private sessionManager = createSessionTokenManager();
+  private requestQueue = createRequestQueue();
+
+  private lifecycleManager = createLifecycleManager();
+
+  private refreshManager = createSessionRefreshManager(
+    () => this.sessionManager.clearCache(),
+    (token: string) => this.csrfManager.setToken(token),
+    () => this.csrfManager.clearToken()
+  );
 
   constructor() {
     this.initializeListeners();
@@ -63,209 +43,39 @@ class AuthFetch {
   }
 
   private initializeListeners(): void {
-    // Prevent duplicate initialization (HMR, multiple imports)
-    if (this.initialized) return;
-    this.initialized = true;
-
-    // Listen for desktop logout event to clear cache
-    if (typeof window !== 'undefined' && window.electron) {
-      // Clean up any existing listener first
-      if (this.authClearedCleanup) {
-        this.authClearedCleanup();
-        this.authClearedCleanup = null;
-      }
-
-      const cleanup = window.electron.on?.('auth:cleared', () => {
-        this.logger.info('Desktop auth cleared event received, clearing session cache');
-        this.clearSessionCache();
-        this.csrfToken = null;
-      });
-
-      if (cleanup) {
-        this.authClearedCleanup = cleanup;
-      }
-
-      // Initialize power state listeners for desktop
-      this.initializePowerListeners();
-    }
-
-    // Initialize iOS lifecycle handling
-    if (isCapacitorApp() && getPlatform() === 'ios') {
-      this.initializeIOSLifecycle();
-    }
+    this.lifecycleManager.initialize(
+      () => {
+        this.sessionManager.clearCache();
+        this.csrfManager.clearToken();
+      },
+      () => this.csrfManager.clearToken(),
+      () => this.refreshAuthSession()
+    );
   }
 
-  /**
-   * Initialize power state listeners for desktop app
-   * This prevents auth refresh attempts during sleep and forces refresh on wake
-   */
-  private initializePowerListeners(): void {
-    if (typeof window === 'undefined' || !window.electron?.power) return;
-
-    // Clean up any existing listeners
-    this.powerEventCleanups.forEach(cleanup => cleanup());
-    this.powerEventCleanups = [];
-
-    // Handle system suspend (sleep/hibernate)
-    const suspendCleanup = window.electron.power.onSuspend(({ suspendTime }) => {
-      this.isSuspended = true;
-      this.suspendTime = suspendTime;
-      this.logger.info('[Power] System suspended - pausing auth operations', { suspendTime });
-
-      // Dispatch event for other components (like useTokenRefresh) to pause
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('power:suspend', { detail: { suspendTime } }));
-      }
-    });
-    this.powerEventCleanups.push(suspendCleanup);
-
-    // Handle system resume (wake from sleep)
-    const resumeCleanup = window.electron.power.onResume(({ resumeTime, sleepDuration, forceRefresh }) => {
-      this.isSuspended = false;
-      const suspendedAt = this.suspendTime;
-      this.suspendTime = null;
-
-      this.logger.info('[Power] System resumed - resuming auth operations', {
-        resumeTime,
-        sleepDuration,
-        sleepDurationMin: Math.round(sleepDuration / 60000),
-        forceRefresh,
-      });
-
-      // Clear session cache on wake to ensure fresh token retrieval
-      this.clearSessionCache();
-
-      // Dispatch event for other components (like useTokenRefresh) to resume
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('power:resume', {
-          detail: { resumeTime, sleepDuration, forceRefresh, suspendedAt }
-        }));
-      }
-    });
-    this.powerEventCleanups.push(resumeCleanup);
-
-    // Handle screen unlock (user returned)
-    const unlockCleanup = window.electron.power.onUnlockScreen(({ shouldRefresh }) => {
-      this.logger.debug('[Power] Screen unlocked', { shouldRefresh });
-
-      if (shouldRefresh) {
-        // Clear session cache to ensure fresh auth state
-        this.clearSessionCache();
-
-        // Dispatch event for soft refresh
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('power:unlock', { detail: { shouldRefresh } }));
-        }
-      }
-    });
-    this.powerEventCleanups.push(unlockCleanup);
-
-    this.logger.info('[Power] Power state listeners initialized');
-  }
-
-  /**
-   * Initialize iOS app lifecycle handling for session management.
-   * Handles background/foreground transitions and proactive session refresh.
-   */
-  private async initializeIOSLifecycle(): Promise<void> {
-    // Dynamic import to avoid bundling Capacitor in web builds
-    const capacitorApp = await import('@capacitor/app').catch(() => null);
-    if (!capacitorApp) {
-      this.logger.warn('[iOS] Failed to load @capacitor/app - skipping lifecycle setup');
-      return;
-    }
-    const { App } = capacitorApp;
-    let backgroundTime: number | null = null;
-
-    App.addListener('appStateChange', async ({ isActive }: { isActive: boolean }) => {
-      if (!isActive) {
-        backgroundTime = Date.now();
-        this.logger.debug('[iOS] App backgrounded', { time: backgroundTime });
-      } else {
-        const duration = backgroundTime ? Date.now() - backgroundTime : 0;
-        backgroundTime = null;
-        this.clearSessionCache();
-        this.logger.debug('[iOS] App foregrounded', { backgroundDurationMs: duration });
-
-        // If backgrounded for more than 5 minutes, proactively refresh session
-        if (duration > 5 * 60 * 1000) {
-          this.logger.info('[iOS] Long background period detected, refreshing session', {
-            durationMin: Math.round(duration / 60000),
-          });
-          const result = await this.refreshAuthSession();
-          if (!result.success && result.shouldLogout) {
-            window.dispatchEvent(new CustomEvent('auth:expired'));
-          }
-        }
-      }
-    });
-
-    this.logger.info('[iOS] Lifecycle listeners initialized');
-  }
-
-  /**
-   * Check if the system is currently suspended (desktop only)
-   */
   isSystemSuspended(): boolean {
-    return this.isSuspended;
+    return this.lifecycleManager.getPowerState().isSuspended;
   }
 
-  /**
-   * Get the time when system was suspended (desktop only)
-   */
   getSuspendTime(): number | null {
-    return this.suspendTime;
-  }
-
-  /**
-   * Validate that a URL is safe for authenticated requests.
-   * Only allows relative URLs and same-origin requests to prevent SSRF.
-   */
-  private validateRequestUrl(url: string): void {
-    // Allow relative URLs (most common case for API calls)
-    // Block protocol-relative URLs (//evil.com) which resolve to attacker-controlled hosts
-    if (url.startsWith('/') && !url.startsWith('//')) {
-      return;
-    }
-
-    // For absolute URLs, verify same-origin
-    try {
-      const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : undefined);
-      if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
-        throw new Error(`Cross-origin request blocked: ${parsed.origin}`);
-      }
-      // Block non-HTTP(S) schemes
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error(`Unsafe URL scheme: ${parsed.protocol}`);
-      }
-    } catch (error) {
-      if (error instanceof TypeError) {
-        throw new Error('Invalid URL');
-      }
-      throw error;
-    }
+    return this.lifecycleManager.getPowerState().suspendTime;
   }
 
   async fetch(url: string, options?: FetchOptions): Promise<Response> {
     const { skipAuth = false, maxRetries = 1, ...fetchOptions } = options || {};
 
-    // For non-auth requests, just pass through
     if (skipAuth) {
       return fetch(url, fetchOptions);
     }
 
-    // Validate URL to prevent SSRF - only allow same-origin requests
-    this.validateRequestUrl(url);
+    validateRequestUrl(url);
 
     const storage = this.getStorage();
-
-    // Prepare headers
     let headers = { ...fetchOptions.headers };
 
     if (storage.usesBearer()) {
-      // Bearer token authentication (Desktop, iOS, Android)
       try {
-        const sessionToken = await this.getSessionTokenWithTimeout(storage, url);
+        const sessionToken = await this.sessionManager.getTokenWithTimeout(storage, url);
         if (sessionToken) {
           headers = {
             ...headers,
@@ -282,8 +92,6 @@ class AuthFetch {
         });
       }
     } else {
-      // Web: Use cookie-based authentication with CSRF protection
-      // Include device token for device tracking and "Revoke All Others" functionality
       const session = await storage.getStoredSession();
       if (session?.deviceToken) {
         headers = {
@@ -293,8 +101,8 @@ class AuthFetch {
         this.logger.debug('Web: Using device token for authentication', { url });
       }
 
-      if (storage.supportsCSRF() && this.requiresCSRFToken(url, fetchOptions.method)) {
-        const token = await this.getCSRFToken();
+      if (storage.supportsCSRF() && requiresCSRFToken(url, fetchOptions.method)) {
+        const token = await this.csrfManager.getToken();
         if (token) {
           headers = {
             ...headers,
@@ -304,41 +112,35 @@ class AuthFetch {
       }
     }
 
-    // Make the initial request
-    // Note: Desktop uses 'include' to receive cookies on login, but sends them as Bearer token
     let response = await fetch(url, {
       ...fetchOptions,
       headers,
-      credentials: 'include', // Always include cookies (needed for login and fallback)
+      credentials: 'include',
     });
 
-    // If we get a 401 and haven't retried yet, try to refresh
     if (response.status === 401 && maxRetries > 0) {
       this.logger.warn('Received 401 response, attempting token refresh before retry', {
         url,
         retriesRemaining: maxRetries,
       });
 
-      // If we're already refreshing, queue this request
       if (this.isRefreshing) {
         this.logger.debug('Token refresh already in progress, queuing request', {
           url,
-          queuedRequests: this.refreshQueue.length + 1,
+          queuedRequests: this.requestQueue.length + 1,
         });
-        return this.queueRequest(url, { ...options, maxRetries: maxRetries - 1 });
+        return this.requestQueue.enqueue(url, { ...options, maxRetries: maxRetries - 1 });
       }
 
-      // Start the refresh process
       const refreshSuccess = await this.refreshToken();
 
       if (refreshSuccess) {
         this.logger.info('Token refresh successful, retrying original request', { url });
 
         if (storage.usesBearer()) {
-          // Bearer platforms: Get fresh token (cache was already cleared in refreshToken())
           try {
             const freshSession = storage.platform === 'desktop'
-              ? await this.getSessionFromElectron()
+              ? await this.sessionManager.getFromElectron()
               : await storage.getSessionToken();
             if (freshSession) {
               headers = {
@@ -356,7 +158,6 @@ class AuthFetch {
             });
           }
         } else {
-          // Web: Re-add device token and get fresh CSRF token if needed
           const session = await storage.getStoredSession();
           if (session?.deviceToken) {
             headers = {
@@ -365,8 +166,8 @@ class AuthFetch {
             };
           }
 
-          if (storage.supportsCSRF() && this.requiresCSRFToken(url, fetchOptions.method)) {
-            const token = await this.getCSRFToken(true);
+          if (storage.supportsCSRF() && requiresCSRFToken(url, fetchOptions.method)) {
+            const token = await this.csrfManager.getToken(true);
             if (token) {
               headers = {
                 ...headers,
@@ -376,7 +177,6 @@ class AuthFetch {
           }
         }
 
-        // Retry the original request with fresh credentials
         response = await fetch(url, {
           ...fetchOptions,
           headers,
@@ -387,23 +187,20 @@ class AuthFetch {
       }
     }
 
-    // Handle CSRF token errors (403) - refresh CSRF token and retry once (Web only)
-    const needsCSRF = storage.supportsCSRF() && this.requiresCSRFToken(url, fetchOptions.method);
+    const needsCSRF = storage.supportsCSRF() && requiresCSRFToken(url, fetchOptions.method);
     if (response.status === 403 && needsCSRF && maxRetries > 0) {
       const errorBody = await response.clone().json().catch(() => ({}));
 
       if (errorBody.code === 'CSRF_TOKEN_INVALID' || errorBody.code === 'CSRF_TOKEN_MISSING') {
         this.logger.warn('CSRF token invalid, refreshing and retrying', { url });
 
-        // Refresh CSRF token
-        const newToken = await this.getCSRFToken(true);
+        const newToken = await this.csrfManager.getToken(true);
         if (newToken) {
           headers = {
             ...headers,
             'X-CSRF-Token': newToken,
           };
 
-          // Retry with new CSRF token
           response = await fetch(url, {
             ...fetchOptions,
             headers,
@@ -416,52 +213,30 @@ class AuthFetch {
     return response;
   }
 
-  private async queueRequest(url: string, options?: FetchOptions): Promise<Response> {
-    return new Promise((resolve, reject) => {
-      this.refreshQueue.push({ resolve, reject, url, options });
-    });
-  }
-
   private async refreshToken(): Promise<boolean> {
-    // Atomic check-and-set to prevent race condition where multiple threads
-    // check null simultaneously before either sets the promise
     if (this.refreshPromise) {
       this.logger.debug('Refresh already in progress, joining queue');
       const result = await this.refreshPromise;
       return result.success;
     }
 
-    // CRITICAL FIX: Clear session cache IMMEDIATELY before refresh starts
-    // This prevents the race condition where:
-    // 1. doRefresh() completes and stores new session
-    // 2. Original request retries with getSessionFromElectron()
-    // 3. Cache still contains OLD session token
-    // 4. Retry uses stale token → 401 → infinite loop
-    // By clearing cache here, retry will read fresh session from storage
-    this.clearSessionCache();
+    this.sessionManager.clearCache();
     this.logger.debug('Session cache cleared BEFORE token refresh to prevent stale retry');
 
-    // Set flags and promise IMMEDIATELY (atomic operation)
     this.isRefreshing = true;
     this.refreshPromise = this.doRefresh();
 
     try {
       const { success, shouldLogout } = await this.refreshPromise;
 
-      // Process queued requests
-      const queue = [...this.refreshQueue];
-      this.refreshQueue = [];
+      const queue = this.requestQueue.dequeueAll();
 
       if (success) {
-        // Track successful refresh for cooldown (prevents delayed callbacks from re-refreshing)
         this.lastSuccessfulRefresh = Date.now();
 
-        // Defensive: Clear session cache again for queued requests
-        // (Already cleared before doRefresh, but clear again in case queue accumulated during refresh)
-        this.clearSessionCache();
+        this.sessionManager.clearCache();
         this.logger.debug('Session cache cleared after successful token refresh (for queued requests)');
 
-        // Retry all queued requests using this.fetch to preserve auth logic
         this.logger.info('Token refresh successful, retrying queued requests', {
           queuedRequests: queue.length,
         });
@@ -469,10 +244,6 @@ class AuthFetch {
         queue.forEach(async ({ resolve, reject, url, options }) => {
           try {
             this.logger.debug('Retrying queued request after token refresh', { url });
-            // Use this.fetch instead of plain fetch to preserve:
-            // - CSRF token injection
-            // - Proper headers
-            // - Retry logic
             const response = await this.fetch(url, options);
             this.logger.debug('Queued request retry successful', {
               url,
@@ -488,7 +259,6 @@ class AuthFetch {
           }
         });
       } else {
-        // Reject all queued requests
         this.logger.warn('Token refresh failed, rejecting queued requests', {
           queuedRequests: queue.length,
         });
@@ -498,7 +268,6 @@ class AuthFetch {
       }
 
       if (shouldLogout && typeof window !== 'undefined') {
-        // Only dispatch auth:expired if user WAS authenticated (prevents loop for new users)
         const { useAuthStore } = await import('@/stores/useAuthStore');
         if (useAuthStore.getState().isAuthenticated) {
           window.dispatchEvent(new CustomEvent('auth:expired'));
@@ -516,308 +285,44 @@ class AuthFetch {
     const storage = this.getStorage();
 
     if (storage.usesBearer()) {
-      // Desktop uses its own specialized refresh logic with power state handling
       if (storage.platform === 'desktop') {
-        return this.refreshDesktopSession();
+        return this.refreshManager.refreshDesktopSession(this.lifecycleManager.getPowerState());
       }
-      // iOS/Android use unified bearer refresh
-      return this.refreshBearerSession();
+      return this.refreshManager.refreshBearerSession(storage);
     }
 
-    // Web: Session-based auth with sliding window expiry
-    return this.refreshWebSession();
-  }
-
-  /**
-   * Refresh session for Bearer token platforms (iOS, Android)
-   */
-  private async refreshBearerSession(): Promise<SessionRefreshResult> {
-    const storage = this.getStorage();
-
-    try {
-      const session = await storage.getStoredSession();
-      const info = await storage.getDeviceInfo();
-
-      if (!session?.deviceToken || !info.deviceId) {
-        this.logger.warn(`${storage.platform}: No device token - must re-authenticate`);
-        return { success: false, shouldLogout: true };
-      }
-
-      const endpoint = storage.platform === 'ios'
-        ? '/api/auth/mobile/refresh'
-        : '/api/auth/device/refresh';
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deviceToken: session.deviceToken,
-          deviceId: info.deviceId,
-          platform: storage.platform,
-          userAgent: info.userAgent,
-          appVersion: info.appVersion,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        await storage.storeSession({
-          sessionToken: data.sessionToken,
-          csrfToken: data.csrfToken || null,
-          deviceId: info.deviceId,
-          deviceToken: data.deviceToken || session.deviceToken,
-        });
-        this.clearSessionCache();
-        storage.dispatchAuthEvent?.('auth:refreshed');
-        this.logger.info(`${storage.platform}: Session refreshed successfully`);
-        return { success: true, shouldLogout: false };
-      }
-
-      if (response.status === 401) {
-        await storage.clearSession();
-        this.logger.warn(`${storage.platform}: Device token invalid - logging out`);
-        return { success: false, shouldLogout: true };
-      }
-
-      if (response.status === 429 || response.status >= 500) {
-        this.logger.warn(`${storage.platform}: Refresh returned retryable status`, { status: response.status });
-        return { success: false, shouldLogout: false };
-      }
-
-      this.logger.error(`${storage.platform}: Refresh failed`, { status: response.status });
-      return { success: false, shouldLogout: false };
-    } catch (error) {
-      this.logger.error(`${storage.platform}: Refresh error`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return { success: false, shouldLogout: false };
-    }
-  }
-
-  /**
-   * Refresh session for web (cookie-based auth with device token recovery)
-   */
-  private async refreshWebSession(): Promise<SessionRefreshResult> {
-    try {
-      const deviceToken = typeof localStorage !== 'undefined'
-        ? localStorage.getItem('deviceToken')
-        : null;
-
-      if (!deviceToken) {
-        this.logger.warn('Web: No device token - session expired, must re-authenticate');
-        return { success: false, shouldLogout: true };
-      }
-
-      this.logger.debug('Web: Attempting session recovery via device token');
-      const { getOrCreateDeviceId } = await import('@/lib/analytics/device-fingerprint');
-      const deviceId = getOrCreateDeviceId();
-
-      const response = await fetch('/api/auth/device/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deviceToken,
-          deviceId,
-          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
-        }),
-      });
-
-      if (response.ok) {
-        let refreshData: { deviceToken?: string; csrfToken?: string } | null = null;
-        try {
-          refreshData = await response.json();
-        } catch {
-          refreshData = null;
-        }
-
-        if (refreshData?.deviceToken && typeof localStorage !== 'undefined') {
-          try {
-            localStorage.setItem('deviceToken', refreshData.deviceToken);
-          } catch (storageError) {
-            this.logger.warn('Failed to persist refreshed device token', {
-              error: storageError instanceof Error ? storageError.message : String(storageError),
-            });
-          }
-        }
-
-        if (refreshData?.csrfToken) {
-          this.csrfToken = refreshData.csrfToken;
-        } else {
-          this.clearCSRFToken();
-        }
-
-        this.logger.info('Web: Session recovered via device token');
-        if (typeof window !== 'undefined' && window.dispatchEvent) {
-          window.dispatchEvent(new CustomEvent('auth:refreshed'));
-        }
-        return { success: true, shouldLogout: false };
-      }
-
-      if (response.status === 401) {
-        this.logger.warn('Web: Device token invalid - logging out');
-        return { success: false, shouldLogout: true };
-      }
-
-      if (response.status === 429 || response.status >= 500) {
-        this.logger.warn('Web: Device refresh returned retryable status', { status: response.status });
-        return { success: false, shouldLogout: false };
-      }
-
-      // Other client errors
-      this.logger.error('Web: Device refresh failed', { status: response.status });
-      return { success: false, shouldLogout: false };
-    } catch (error) {
-      this.logger.error('Web: Session refresh error', { error });
-      return { success: false, shouldLogout: false };
-    }
-  }
-
-  private async refreshDesktopSession(): Promise<SessionRefreshResult> {
-    if (!window.electron) {
-      return { success: false, shouldLogout: false };
-    }
-
-    // Don't attempt refresh if system is suspended - it will likely fail
-    // and could incorrectly trigger logout
-    if (this.isSuspended) {
-      this.logger.warn('Desktop: Skipping refresh while system is suspended');
-      return { success: false, shouldLogout: false };
-    }
-
-    try {
-      const session = await window.electron.auth.getSession();
-      const deviceInfo = await window.electron.auth.getDeviceInfo();
-
-      const deviceToken = session?.deviceToken;
-
-      // Desktop REQUIRES a device token for long-lived sessions
-      // If no device token exists, user needs to re-authenticate
-      if (!deviceToken) {
-        this.logger.warn('Desktop: No device token found - user must re-authenticate');
-        return { success: false, shouldLogout: true };
-      }
-
-      let response: Response;
-
-      // Device token refresh (90-day validity)
-      // This is the PRIMARY auth mechanism for desktop - designed for long-lived sessions
-      try {
-        response = await fetch('/api/auth/device/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            deviceToken,
-            deviceId: deviceInfo.deviceId,
-            userAgent: deviceInfo.userAgent,
-            appVersion: deviceInfo.appVersion,
-          }),
-        });
-
-        if (response.ok) {
-          this.logger.debug('Desktop: Device token refresh succeeded');
-        }
-      } catch (networkError) {
-        // Network error - don't logout, let retry logic handle it
-        this.logger.warn('Desktop: Device token refresh network error', {
-          error: networkError instanceof Error ? networkError.message : String(networkError),
-        });
-        return { success: false, shouldLogout: false };
-      }
-
-      if (response.status === 401) {
-        // 401 = device token is genuinely invalid (expired or revoked)
-        // User must re-authenticate
-        this.logger.warn('Desktop: Device token rejected - user must re-authenticate');
-        return { success: false, shouldLogout: true };
-      }
-
-      if (response.status === 429) {
-        // Rate limited - don't logout, let retry logic handle it
-        this.logger.warn('Desktop: Token refresh rate limited');
-        return { success: false, shouldLogout: false };
-      }
-
-      if (response.status >= 500) {
-        // Server error - don't logout, let retry logic handle it
-        this.logger.warn('Desktop: Token refresh server error', { status: response.status });
-        return { success: false, shouldLogout: false };
-      }
-
-      if (!response.ok) {
-        this.logger.error('Desktop: Token refresh failed with unexpected status', {
-          status: response.status,
-        });
-        return { success: false, shouldLogout: false };
-      }
-
-      const data = await response.json();
-
-      await window.electron.auth.storeSession({
-        sessionToken: data.sessionToken,
-        csrfToken: data.csrfToken,
-        deviceToken: data.deviceToken,
-      });
-
-      this.clearSessionCache();
-      this.logger.info('Desktop: Session refreshed successfully via secure storage');
-      if (typeof window !== 'undefined' && window.dispatchEvent) {
-        window.dispatchEvent(new CustomEvent('auth:refreshed'));
-      }
-      return { success: true, shouldLogout: false };
-    } catch (error) {
-      this.logger.error('Desktop: Token refresh request threw an error', {
-        error: error instanceof Error ? error : String(error),
-      });
-      // Don't logout on unexpected errors - let retry logic handle it
-      return { success: false, shouldLogout: false };
-    }
+    return this.refreshManager.refreshWebSession();
   }
 
   async refreshAuthSession(): Promise<SessionRefreshResult> {
-    // CRITICAL FIX: Use the same deduplication as refreshToken() to prevent race conditions
-    // Previously this called doRefresh() directly, allowing concurrent refreshes when:
-    // 1. auth-fetch's internal refreshToken() is triggered by 401
-    // 2. useTokenRefresh's scheduled refresh calls refreshAuthSession()
-    // Both would call doRefresh() independently, and if device token was rotated by the first,
-    // the second would fail with 401 → shouldLogout: true → user logged out!
     if (this.refreshPromise) {
       this.logger.debug('Refresh already in progress via refreshAuthSession, joining existing promise');
       return this.refreshPromise;
     }
 
-    // COOLDOWN CHECK: If we just successfully refreshed, skip this attempt
-    // This prevents delayed callbacks (e.g., socket's 2-second timeout) from triggering
-    // a redundant refresh after the main refresh already completed and rotated the device token
-    if (this.lastSuccessfulRefresh && (Date.now() - this.lastSuccessfulRefresh) < this.REFRESH_COOLDOWN_MS) {
+    if (this.lastSuccessfulRefresh && (Date.now() - this.lastSuccessfulRefresh) < REFRESH_COOLDOWN_MS) {
       this.logger.debug('Skipping refresh - within cooldown period after recent successful refresh', {
         timeSinceLastRefresh: Date.now() - this.lastSuccessfulRefresh,
-        cooldownMs: this.REFRESH_COOLDOWN_MS,
+        cooldownMs: REFRESH_COOLDOWN_MS,
       });
       return { success: true, shouldLogout: false };
     }
 
-    // Clear session cache before refresh to prevent stale token usage
-    this.clearSessionCache();
+    this.sessionManager.clearCache();
 
-    // Set the shared promise
     this.isRefreshing = true;
     this.refreshPromise = this.doRefresh();
 
     try {
       const result = await this.refreshPromise;
 
-      // Process queued requests (mirroring refreshToken() behavior)
-      const queue = [...this.refreshQueue];
-      this.refreshQueue = [];
+      const queue = this.requestQueue.dequeueAll();
 
       if (result.success) {
-        // Track successful refresh for cooldown
         this.lastSuccessfulRefresh = Date.now();
 
-        // Clear session cache for queued requests to get fresh token
-        this.clearSessionCache();
+        this.sessionManager.clearCache();
 
-        // Retry all queued requests
         this.logger.info('refreshAuthSession: Retrying queued requests', {
           queuedRequests: queue.length,
         });
@@ -840,7 +345,6 @@ class AuthFetch {
           }
         });
       } else {
-        // Reject all queued requests
         this.logger.warn('refreshAuthSession: Rejecting queued requests', {
           queuedRequests: queue.length,
         });
@@ -850,7 +354,6 @@ class AuthFetch {
       }
 
       if (result.shouldLogout && typeof window !== 'undefined') {
-        // Only dispatch auth:expired if user WAS authenticated (prevents loop for new users)
         const { useAuthStore } = await import('@/stores/useAuthStore');
         if (useAuthStore.getState().isAuthenticated) {
           window.dispatchEvent(new CustomEvent('auth:expired'));
@@ -864,202 +367,18 @@ class AuthFetch {
     }
   }
 
-  /**
-   * Gets CSRF token, fetching it from the server if not cached
-   * @param refresh - Force refresh the token even if cached
-   */
-  private async getCSRFToken(refresh = false): Promise<string | null> {
-    // Return cached token if available and not forcing refresh
-    if (this.csrfToken && !refresh) {
-      return this.csrfToken;
-    }
-
-    // If a fetch is already in progress, wait for it
-    if (this.csrfTokenPromise) {
-      return this.csrfTokenPromise;
-    }
-
-    // Fetch CSRF token from server
-    this.csrfTokenPromise = this.fetchCSRFToken();
-
-    try {
-      const token = await this.csrfTokenPromise;
-      this.csrfToken = token;
-      return token;
-    } finally {
-      this.csrfTokenPromise = null;
-    }
-  }
-
-  /**
-   * Fetches a new CSRF token from the server
-   */
-  private async fetchCSRFToken(): Promise<string | null> {
-    try {
-      const response = await fetch('/api/auth/csrf', {
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        this.logger.error('Failed to fetch CSRF token', {
-          status: response.status,
-        });
-        return null;
-      }
-
-      const data = await response.json();
-      this.logger.debug('CSRF token fetched successfully');
-      return data.csrfToken;
-    } catch (error) {
-      this.logger.error('Error fetching CSRF token', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
-  }
-
-  /**
-   * Gets session token with a timeout to prevent hung requests on cold start.
-   * On Desktop, IPC calls to Electron can hang if the main process is busy.
-   * On iOS, Keychain access can hang during app launch.
-   * If timeout fires, returns null so the request proceeds without auth → 401 → SWR retry handles recovery.
-   */
-  private async getSessionTokenWithTimeout(storage: PlatformStorage, url: string): Promise<string | null> {
-    // Fast path: return cached token for ANY bearer platform (desktop, iOS, Android)
-    // Desktop already gets this via getSessionFromElectron(), but iOS/Android skip
-    // that method and go straight to storage.getSessionToken() which has no cache.
-    if (this.sessionCache) {
-      return this.sessionCache.token;
-    }
-
-    const tokenPromise = storage.platform === 'desktop'
-      ? this.getSessionFromElectron()
-      : storage.getSessionToken();
-
-    let timeoutId: ReturnType<typeof setTimeout>;
-    const timeoutPromise = new Promise<null>((resolve) => {
-      timeoutId = setTimeout(() => {
-        this.logger.warn(`${storage.platform}: Session token retrieval timed out after ${this.TOKEN_RETRIEVAL_TIMEOUT_MS}ms`, { url });
-        resolve(null);
-      }, this.TOKEN_RETRIEVAL_TIMEOUT_MS);
-    });
-
-    try {
-      const token = await Promise.race([tokenPromise, timeoutPromise]);
-      // Cache the token after slow-path resolution so subsequent calls are instant
-      if (token) {
-        this.sessionCache = { token };
-      }
-      return token;
-    } finally {
-      clearTimeout(timeoutId!);
-    }
-  }
-
-  /**
-   * Gets session token from Electron with permanent caching.
-   * Cache is invalidated explicitly via clearSessionCache() (called on logout,
-   * token refresh, suspend/resume, auth:cleared IPC). No TTL - identical to
-   * how cookies work on web (present until explicitly removed).
-   * Concurrent IPC calls are deduplicated via sessionFetchPromise.
-   * @returns Session token string or null if not authenticated
-   */
-  private async getSessionFromElectron(): Promise<string | null> {
-    // Return cached token if available (no TTL - invalidated explicitly)
-    if (this.sessionCache) {
-      return this.sessionCache.token;
-    }
-
-    const electron = window.electron;
-    if (!electron) return null;
-
-    // Deduplicate concurrent IPC calls (e.g., multiple SWR hooks firing at once)
-    if (this.sessionFetchPromise) {
-      return this.sessionFetchPromise;
-    }
-
-    this.sessionFetchPromise = (async () => {
-      try {
-        let token = await electron.auth.getSessionToken();
-
-        // DEFENSIVE FIX: If null, retry once after brief delay
-        // This handles async timing issues where storage hasn't completed yet
-        if (!token) {
-          await new Promise(resolve => setTimeout(resolve, this.SESSION_RETRY_DELAY_MS));
-          token = await electron.auth.getSessionToken();
-
-          if (token) {
-            this.logger.info(`Session retrieval succeeded on retry after ${this.SESSION_RETRY_DELAY_MS}ms delay`);
-          }
-        }
-
-        if (token) {
-          this.sessionCache = { token };
-        } else {
-          this.logger.debug('Session token is null after IPC — not caching to allow future re-checks');
-        }
-        return token;
-      } finally {
-        this.sessionFetchPromise = null;
-      }
-    })();
-
-    return this.sessionFetchPromise;
-  }
-
-  /**
-   * Clears the cached session token.
-   * Should be called when user logs out or when token needs to be refreshed.
-   */
   clearSessionCache(): void {
-    this.sessionCache = null;
+    this.sessionManager.clearCache();
   }
 
-  /**
-   * Pre-populates the session cache with a known-good token.
-   * Call this after loadSession() successfully retrieves a desktop token via IPC
-   * to avoid a redundant IPC roundtrip when fetchWithAuth runs shortly after.
-   */
   warmSessionCache(token: string): void {
-    this.sessionCache = { token };
+    this.sessionManager.warmCache(token);
   }
 
-  /**
-   * Checks if a request requires CSRF token
-   * CSRF is required for:
-   * - Mutation methods (POST, PUT, PATCH, DELETE)
-   * - API routes (not auth endpoints like login/signup)
-   */
-  private requiresCSRFToken(url: string, method: string = 'GET'): boolean {
-    const mutationMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
-    if (!mutationMethods.includes(method.toUpperCase())) {
-      return false;
-    }
-
-    // Exempt certain auth endpoints that establish sessions
-    const csrfExemptPaths = [
-      '/api/auth/login',
-      '/api/auth/signup',
-      // REMOVED: '/api/auth/refresh' - route doesn't exist (dropped in device token migration)
-      '/api/auth/google',
-      '/api/auth/resend-verification',
-      '/api/stripe/webhook',
-      '/api/internal/',
-    ];
-
-    return !csrfExemptPaths.some((path) => url.includes(path));
-  }
-
-  /**
-   * Clears the cached CSRF token
-   * Useful when logging out or when token needs to be refreshed
-   */
   clearCSRFToken(): void {
-    this.csrfToken = null;
-    this.csrfTokenPromise = null;
+    this.csrfManager.clearToken();
   }
 
-  // Helper method for JSON requests
   async fetchJSON<T = unknown>(url: string, options?: FetchOptions): Promise<T> {
     const response = await this.fetch(url, {
       ...options,
@@ -1071,16 +390,13 @@ class AuthFetch {
 
     if (!response.ok) {
       const text = await response.text().catch(() => 'Request failed');
-      // Try to parse JSON error response and extract error message
       try {
         const json = JSON.parse(text);
         throw new Error(json.error || json.message || text);
       } catch (parseError) {
-        // If parsing fails, it's not JSON - use the raw text
         if (parseError instanceof SyntaxError) {
           throw new Error(text);
         }
-        // Re-throw if it's our Error from above
         throw parseError;
       }
     }
@@ -1088,7 +404,6 @@ class AuthFetch {
     return response.json();
   }
 
-  // Helper method for POST requests
   async post<T = unknown>(url: string, body?: unknown, options?: FetchOptions): Promise<T> {
     return this.fetchJSON<T>(url, {
       ...options,
@@ -1097,7 +412,6 @@ class AuthFetch {
     });
   }
 
-  // Helper method for PUT requests
   async put<T = unknown>(url: string, body?: unknown, options?: FetchOptions): Promise<T> {
     return this.fetchJSON<T>(url, {
       ...options,
@@ -1106,7 +420,6 @@ class AuthFetch {
     });
   }
 
-  // Helper method for DELETE requests
   async delete<T = unknown>(url: string, body?: unknown, options?: FetchOptions): Promise<T> {
     return this.fetchJSON<T>(url, {
       ...options,
@@ -1115,7 +428,6 @@ class AuthFetch {
     });
   }
 
-  // Helper method for PATCH requests
   async patch<T = unknown>(url: string, body?: unknown, options?: FetchOptions): Promise<T> {
     return this.fetchJSON<T>(url, {
       ...options,
@@ -1125,8 +437,6 @@ class AuthFetch {
   }
 }
 
-// Create a true global singleton using Symbol.for to ensure single instance
-// across different import paths and bundler contexts (critical for mobile apps)
 const AUTHFETCH_KEY = Symbol.for('pagespace.authfetch.singleton');
 
 function getAuthFetch(): AuthFetch {
@@ -1138,11 +448,8 @@ function getAuthFetch(): AuthFetch {
   return globalObj[AUTHFETCH_KEY];
 }
 
-// Export the class for extensibility if needed
 export { AuthFetch };
 
-// Export convenience functions using guaranteed singleton
-// This ensures all imports reference the same AuthFetch instance
 export const fetchWithAuth = (...args: Parameters<AuthFetch['fetch']>) =>
   getAuthFetch().fetch(...args);
 
