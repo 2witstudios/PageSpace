@@ -16,11 +16,6 @@ interface ProfileSectionProps {
   onUserUpdate: () => void;
 }
 
-interface ProfileSectionProps {
-  user: { id: string; name?: string | null; email?: string | null; image?: string | null };
-  onUserUpdate: () => void;
-}
-
 export function ProfileSection({ user, onUserUpdate }: ProfileSectionProps) {
   const [name, setName] = useState(user.name || "");
   const [email, setEmail] = useState(user.email || "");
