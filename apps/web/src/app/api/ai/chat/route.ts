@@ -13,12 +13,9 @@ import {
 import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { requiresProSubscription, createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
+import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
 import { broadcastUsageEvent } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { canUserViewPage, canUserEditPage, getActorInfo } from '@pagespace/lib/server';
 import {
   createAIProvider,
@@ -26,9 +23,9 @@ import {
   createProviderErrorResponse,
   isProviderError,
   type ProviderRequest,
+  getDefaultPageSpaceSettings,
   getUserOpenRouterSettings,
   getUserGoogleSettings,
-  getDefaultPageSpaceSettings,
   getUserOpenAISettings,
   getUserAnthropicSettings,
   getUserXAISettings,
@@ -72,16 +69,423 @@ import {
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 
-
-// Allow streaming responses up to 5 minutes for complex AI agent interactions
 export const maxDuration = 300;
 
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
-/**
- * Next.js 15 compatible API route for AI chat
- * Implements reliable persistence by saving user messages immediately
- * Supports multi-provider architecture: OpenRouter and Google AI
- */
+const VALID_PROVIDERS = [
+  'pagespace',
+  'openrouter',
+  'openrouter_free',
+  'google',
+  'openai',
+  'anthropic',
+  'xai',
+  'ollama',
+  'lmstudio',
+  'glm',
+];
+
+interface ChatRequest {
+  messages: UIMessage[];
+  chatId?: string;
+  conversationId?: string;
+  selectedProvider?: string;
+  selectedModel?: string;
+  openRouterApiKey?: string;
+  googleApiKey?: string;
+  openAIApiKey?: string;
+  anthropicApiKey?: string;
+  xaiApiKey?: string;
+  ollamaBaseUrl?: string;
+  glmApiKey?: string;
+  mcpTools?: MCPTool[];
+  isReadOnly?: boolean;
+  webSearchEnabled?: boolean;
+  pageContext?: {
+    pageId: string;
+    pageTitle: string;
+    pageType: string;
+    pagePath: string;
+    parentPath: string;
+    breadcrumbs: string[];
+    driveId?: string;
+    driveName: string;
+    driveSlug: string;
+  };
+}
+
+async function buildToolSet(params: {
+  userId: string;
+  chatId: string;
+  page: typeof pages.$inferSelect;
+  readOnlyMode: boolean;
+  webSearchMode: boolean;
+  mcpTools?: MCPTool[];
+}): Promise<ToolSet> {
+  const { userId, chatId, page, readOnlyMode, webSearchMode, mcpTools } = params;
+  const enabledTools = page.enabledTools as string[] | null;
+
+  let filteredTools: ToolSet;
+
+  if (enabledTools === null || enabledTools.length === 0) {
+    filteredTools = {};
+  } else {
+    const filtered: Record<string, (typeof pageSpaceTools)[keyof typeof pageSpaceTools]> = {};
+    for (const toolName of enabledTools) {
+      if (toolName in pageSpaceTools) {
+        filtered[toolName] = pageSpaceTools[toolName as keyof typeof pageSpaceTools];
+      }
+    }
+    const postReadOnlyFiltered = filterToolsForReadOnly(filtered, readOnlyMode);
+    filteredTools = filterToolsForWebSearch(postReadOnlyFiltered, webSearchMode);
+  }
+
+  try {
+    const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
+    const integrationTools = await resolvePageAgentIntegrationTools({
+      agentId: chatId,
+      userId,
+      driveId: page.driveId,
+    });
+    if (Object.keys(integrationTools).length > 0) {
+      filteredTools = mergeToolSets(filteredTools, integrationTools);
+    }
+  } catch (error) {
+    loggers.ai.error('Failed to resolve integration tools', error as Error);
+  }
+
+  if (mcpTools && mcpTools.length > 0) {
+    filteredTools = await mergeMCPTools(filteredTools, mcpTools, userId, chatId);
+  }
+
+  return filteredTools;
+}
+
+async function mergeMCPTools(
+  filteredTools: ToolSet,
+  mcpTools: MCPTool[],
+  userId: string,
+  chatId: string
+): Promise<ToolSet> {
+  try {
+    const mcpToolSchemas = convertMCPToolsToAISDKSchemas(mcpTools);
+    const mcpToolsWithExecute: Record<string, unknown> = {};
+
+    for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
+      mcpToolsWithExecute[toolName] = {
+        ...toolSchema,
+        execute: async (args: Record<string, unknown>) => {
+          const parsed = parseMCPToolName(toolName);
+          if (!parsed) {
+            throw new Error(`Invalid MCP tool name format: ${toolName}`);
+          }
+
+          const { serverName, toolName: actualToolName } = parsed;
+
+          try {
+            const mcpBridge = getMCPBridge();
+            if (!mcpBridge.isUserConnected(userId)) {
+              throw new Error('Desktop app not connected. Please ensure PageSpace Desktop is running.');
+            }
+            return await mcpBridge.executeTool(userId, serverName, actualToolName, args);
+          } catch (error) {
+            loggers.ai.error('MCP tool execution failed', error as Error, {
+              toolName: actualToolName,
+              serverName,
+              userId: maskIdentifier(userId),
+            });
+            throw error;
+          }
+        },
+      };
+    }
+
+    return sanitizeToolNamesForProvider({ ...filteredTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
+  } catch (error) {
+    loggers.ai.error('Failed to integrate MCP tools', error as Error, {
+      userId: maskIdentifier(userId),
+      chatId: maskIdentifier(chatId),
+    });
+    return filteredTools;
+  }
+}
+
+async function loadConversationHistory(pageId: string, conversationId: string): Promise<UIMessage[]> {
+  const cachedConversation = await conversationCache.getConversation(pageId, conversationId);
+
+  if (cachedConversation) {
+    return cachedConversation.messages.map((msg: CachedMessage) =>
+      convertDbMessageToUIMessage({
+        id: msg.id,
+        pageId,
+        userId: null,
+        role: msg.role,
+        content: msg.content,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        createdAt: new Date(msg.createdAt),
+        isActive: true,
+        editedAt: msg.editedAt ? new Date(msg.editedAt) : null,
+      })
+    );
+  }
+
+  const dbMessages = await db
+    .select()
+    .from(chatMessages)
+    .where(and(
+      eq(chatMessages.pageId, pageId),
+      eq(chatMessages.conversationId, conversationId),
+      eq(chatMessages.isActive, true)
+    ))
+    .orderBy(chatMessages.createdAt);
+
+  const conversationHistory = dbMessages.map(msg =>
+    convertDbMessageToUIMessage({
+      id: msg.id,
+      pageId: msg.pageId,
+      userId: msg.userId,
+      role: msg.role,
+      content: msg.content,
+      toolCalls: msg.toolCalls,
+      toolResults: msg.toolResults,
+      createdAt: msg.createdAt,
+      isActive: msg.isActive,
+      editedAt: msg.editedAt,
+    })
+  );
+
+  const messagesToCache: CachedMessage[] = dbMessages.map(msg => ({
+    id: msg.id,
+    role: msg.role as 'user' | 'assistant' | 'system',
+    content: msg.content ?? '',
+    toolCalls: (msg.toolCalls as string | null) ?? null,
+    toolResults: (msg.toolResults as string | null) ?? null,
+    createdAt: msg.createdAt.getTime(),
+    editedAt: msg.editedAt?.getTime() ?? null,
+    messageType: (msg.messageType as 'standard' | 'todo_list') ?? 'standard',
+  }));
+
+  conversationCache.setConversation(pageId, conversationId, messagesToCache).catch(err => {
+    loggers.ai.warn('Failed to populate conversation cache', { error: err });
+  });
+
+  return conversationHistory;
+}
+
+async function buildCompleteSystemPrompt(params: {
+  page: typeof pages.$inferSelect;
+  pageContext?: ChatRequest['pageContext'];
+  readOnlyMode: boolean;
+  userTimezone?: string;
+  userId: string;
+  chatId: string;
+}): Promise<string> {
+  const { page, pageContext, readOnlyMode, userTimezone, userId, chatId } = params;
+
+  let drivePromptPrefix = '';
+  if (page.includeDrivePrompt) {
+    try {
+      const [drive] = await db
+        .select({ drivePrompt: drives.drivePrompt })
+        .from(drives)
+        .where(eq(drives.id, page.driveId))
+        .limit(1);
+
+      if (drive?.drivePrompt?.trim()) {
+        drivePromptPrefix = `## DRIVE INSTRUCTIONS\n\n${drive.drivePrompt}\n\n---\n\n`;
+      }
+    } catch (error) {
+      loggers.ai.error('Failed to fetch drive prompt', error as Error);
+    }
+  }
+
+  const personalization = await getUserPersonalization(userId);
+  const customSystemPrompt = page.systemPrompt;
+
+  let systemPrompt: string;
+  if (customSystemPrompt) {
+    systemPrompt = drivePromptPrefix + customSystemPrompt;
+    if (pageContext) {
+      systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
+    }
+    const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
+    if (personalizationPrompt) {
+      systemPrompt += `\n\n${personalizationPrompt}`;
+    }
+    if (readOnlyMode) {
+      systemPrompt += `\n\nREAD-ONLY MODE:\n• You cannot modify, create, or delete any content\n• Focus on exploring, analyzing, and planning\n• Create actionable plans for the user to execute later`;
+    }
+  } else {
+    systemPrompt = buildSystemPrompt(
+      'page',
+      pageContext ? {
+        driveName: pageContext.driveName,
+        driveSlug: pageContext.driveSlug,
+        driveId: pageContext.driveId,
+        pagePath: pageContext.pagePath,
+        pageType: pageContext.pageType,
+        breadcrumbs: pageContext.breadcrumbs,
+      } : undefined,
+      readOnlyMode,
+      personalization ?? undefined
+    );
+  }
+
+  const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
+
+  let pageTreePrompt = '';
+  if (page.includePageTree && page.driveId) {
+    const pageTreeContext = await getPageTreeContext(userId, {
+      scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
+      pageId: chatId,
+      driveId: page.driveId,
+    });
+    if (pageTreeContext) {
+      pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;
+    }
+  }
+
+  return systemPrompt + timestampSystemPrompt + pageTreePrompt;
+}
+
+async function trackUsage(params: {
+  userId: string;
+  currentProvider: string;
+  currentModel: string;
+  chatId: string;
+  messageId: string;
+  messageContent: string;
+  userPromptContent?: string;
+  toolCallsCount: number;
+  toolResultsCount: number;
+  startTime: number;
+  usagePromise?: Promise<LanguageModelUsage | undefined>;
+  pageContext?: ChatRequest['pageContext'];
+  page: typeof pages.$inferSelect;
+  conversationId: string;
+}): Promise<void> {
+  const {
+    userId,
+    currentProvider,
+    currentModel,
+    chatId,
+    messageId,
+    messageContent,
+    userPromptContent,
+    toolCallsCount,
+    startTime,
+    usagePromise,
+    pageContext,
+    page,
+    conversationId,
+  } = params;
+
+  const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
+  const isPageSpaceProvider = currentProvider === 'pagespace';
+  const maskedUserId = maskIdentifier(userId);
+  const maskedMessageId = maskIdentifier(messageId);
+
+  if (isPageSpaceProvider) {
+    try {
+      const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
+      const usageResult = await incrementUsage(userId, providerType);
+
+      usageLogger.info('Page AI usage incremented', {
+        userId: maskedUserId,
+        provider: currentProvider,
+        providerType,
+        messageId: maskedMessageId,
+        currentCount: usageResult.currentCount,
+        limit: usageResult.limit,
+        remaining: usageResult.remainingCalls,
+      });
+
+      try {
+        const currentUsageSummary = await getUserUsageSummary(userId);
+        await broadcastUsageEvent({
+          userId,
+          operation: 'updated',
+          subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
+          standard: currentUsageSummary.standard,
+          pro: currentUsageSummary.pro,
+        });
+      } catch (broadcastError) {
+        usageLogger.error('Page AI usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined);
+      }
+    } catch (usageError) {
+      usageLogger.error('Page AI usage tracking failed', usageError as Error);
+    }
+  }
+
+  const duration = Date.now() - startTime;
+  const usage = usagePromise ? await usagePromise : undefined;
+
+  await AIMonitoring.trackUsage({
+    userId,
+    provider: currentProvider,
+    model: currentModel,
+    inputTokens: usage?.inputTokens ?? undefined,
+    outputTokens: usage?.outputTokens ?? undefined,
+    totalTokens: usage?.totalTokens ?? ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
+    prompt: userPromptContent?.substring(0, 1000),
+    completion: messageContent?.substring(0, 1000),
+    duration,
+    conversationId,
+    messageId,
+    pageId: chatId,
+    driveId: pageContext?.driveId,
+    success: true,
+    metadata: {
+      pageName: page.title,
+      toolCallsCount,
+      toolResultsCount: params.toolResultsCount,
+      hasTools: toolCallsCount > 0 || params.toolResultsCount > 0,
+      reasoningTokens: usage?.reasoningTokens,
+      cachedInputTokens: usage?.cachedInputTokens,
+    },
+  });
+
+  if (toolCallsCount > 0) {
+    trackFeature(userId, 'ai_tools_used', {
+      toolCount: toolCallsCount,
+      provider: currentProvider,
+      model: currentModel,
+    });
+  }
+}
+
+async function validateProviderModel(
+  provider: string,
+  model: string,
+  userId: string
+): Promise<{ valid: boolean; reason?: string }> {
+  if (!VALID_PROVIDERS.includes(provider)) {
+    return {
+      valid: false,
+      reason: `Invalid provider: ${provider}. Supported providers: ${VALID_PROVIDERS.join(', ')}`,
+    };
+  }
+
+  if (!model || typeof model !== 'string' || model.length > 100) {
+    return { valid: false, reason: 'Invalid model format' };
+  }
+
+  try {
+    const [user] = await db.select().from(users).where(eq(users.id, userId));
+    const { requiresProSubscription } = await import('@/lib/subscription/rate-limit-middleware');
+    if (requiresProSubscription(provider, model, user?.subscriptionTier)) {
+      return { valid: false, reason: 'Pro or Business subscription required for this model' };
+    }
+  } catch {
+    return { valid: false, reason: 'Unable to validate subscription requirements' };
+  }
+
+  return { valid: true };
+}
+
 export async function POST(request: Request) {
   const startTime = Date.now();
   let userId: string | undefined;
@@ -90,43 +494,24 @@ export async function POST(request: Request) {
   let selectedProvider: string | undefined;
   let selectedModel: string | undefined;
   let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
-  const usageLogger = loggers.ai.child({ module: 'page-ai-usage' });
-  const permissionLogger = loggers.ai.child({ module: 'page-ai-permissions' });
 
   try {
-    loggers.ai.info('AI Chat API: Starting request processing');
-
-    // Authenticate the request
     const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(authResult)) {
-      loggers.ai.warn('AI Chat API: Authentication failed');
       return authResult.error;
     }
     userId = authResult.userId;
-    loggers.ai.debug('AI Chat API: Authentication successful', { userId });
 
-    // Body size guard — reject payloads over 25MB before parsing
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
     if (contentLength > 25 * 1024 * 1024) {
-      loggers.ai.warn('AI Chat API: Request body too large', { contentLength });
       return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
     }
 
-    // Parse request body for AI SDK v5 pattern
-    const requestBody = await request.json();
-    loggers.ai.debug('AI Chat API: Request body received', {
-      messageCount: requestBody.messages?.length || 0,
-      chatId: requestBody.chatId,
-      selectedProvider: requestBody.selectedProvider,
-      selectedModel: requestBody.selectedModel,
-      hasOpenRouterKey: !!requestBody.openRouterApiKey,
-      hasGoogleKey: !!requestBody.googleApiKey
-    });
-    
+    const requestBody: ChatRequest = await request.json();
     const {
-      messages, // Used ONLY to extract new user message, NOT for conversation history
-      chatId: requestChatId, // chat ID (page ID) - standard AI SDK pattern
-      conversationId: requestConversationId, // Conversation session ID (auto-generated if not provided)
+      messages,
+      chatId: requestChatId,
+      conversationId: requestConversationId,
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
       openRouterApiKey,
@@ -137,137 +522,57 @@ export async function POST(request: Request) {
       ollamaBaseUrl,
       glmApiKey,
       pageContext,
-      mcpTools, // MCP tool schemas from desktop client (optional)
-      isReadOnly, // Optional read-only mode toggle
-      webSearchEnabled, // Optional web search toggle (defaults to false)
-    }: {
-      messages: UIMessage[],
-      chatId?: string,
-      conversationId?: string, // Optional - will be auto-generated if not provided
-      selectedProvider?: string,
-      selectedModel?: string,
-      openRouterApiKey?: string,
-      googleApiKey?: string,
-      openAIApiKey?: string,
-      anthropicApiKey?: string,
-      xaiApiKey?: string,
-      ollamaBaseUrl?: string,
-      glmApiKey?: string,
-      mcpTools?: MCPTool[], // MCP tool schemas from desktop (client-side execution)
-      isReadOnly?: boolean, // Optional read-only mode toggle
-      webSearchEnabled?: boolean, // Optional web search toggle (defaults to false)
-      pageContext?: {
-        pageId: string,
-        pageTitle: string,
-        pageType: string,
-        pagePath: string,
-        parentPath: string,
-        breadcrumbs: string[],
-        driveId?: string,
-        driveName: string,
-        driveSlug: string,
-      }
+      mcpTools,
+      isReadOnly,
+      webSearchEnabled,
     } = requestBody;
 
-    // Assign to outer scope variables for error handling
     chatId = requestChatId;
     selectedProvider = requestSelectedProvider;
     selectedModel = requestSelectedModel;
 
-    // For Page AI, we'll use custom agent configuration instead of fixed roles
-    // Global assistant will continue to use the role system
-    loggers.ai.debug('AI Page Chat API: Page AI using custom agent configuration');
-
-    // Validate required parameters
     if (!messages || messages.length === 0) {
-      loggers.ai.warn('AI Chat API: No messages provided');
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
-    
+
     if (!chatId) {
-      loggers.ai.warn('AI Chat API: No chatId provided');
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 });
     }
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
     if (mcpScopeError) return mcpScopeError;
 
-    // Ensure userId and chatId are defined
     if (!userId) {
-      loggers.ai.warn('AI Chat API: No userId after authentication');
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
-    // Image security validation — validate file parts in the user message
     const userMessageForValidation = messages[messages.length - 1];
     const messageHasImages = userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation);
     if (messageHasImages) {
       const imageValidation = validateUserMessageFileParts(userMessageForValidation);
       if (!imageValidation.valid) {
-        loggers.ai.warn('AI Chat API: Image validation failed', { error: imageValidation.error });
         return NextResponse.json({ error: imageValidation.error }, { status: 400 });
       }
     }
 
-    // Check if user has permission to view and edit this AI chat page
-    const maskedUserId = maskIdentifier(userId);
-    const maskedChatId = maskIdentifier(chatId);
-    permissionLogger.debug('Evaluating Page AI permissions', {
-      userId: maskedUserId,
-      chatId: maskedChatId,
-    });
     const canView = await canUserViewPage(userId, chatId);
-    permissionLogger.debug('Page AI view permission evaluated', {
-      userId: maskedUserId,
-      chatId: maskedChatId,
-      allowed: canView,
-    });
     if (!canView) {
-      loggers.ai.warn('AI Chat API: User lacks view permission', { userId: maskedUserId, chatId: maskedChatId });
-      permissionLogger.warn('Page AI view permission denied', {
-        userId: maskedUserId,
-        chatId: maskedChatId,
-      });
       return NextResponse.json({ error: 'You do not have permission to view this AI chat' }, { status: 403 });
     }
 
     const canEdit = await canUserEditPage(userId, chatId);
-    permissionLogger.debug('Page AI edit permission evaluated', {
-      userId: maskedUserId,
-      chatId: maskedChatId,
-      allowed: canEdit,
-    });
     if (!canEdit) {
-      loggers.ai.warn('AI Chat API: User lacks edit permission', { userId: maskedUserId, chatId: maskedChatId });
-      permissionLogger.warn('Page AI edit permission denied', {
-        userId: maskedUserId,
-        chatId: maskedChatId,
-      });
       return NextResponse.json({ error: 'You do not have permission to send messages in this AI chat' }, { status: 403 });
     }
 
-    permissionLogger.info('Page AI permissions granted', {
-      userId: maskedUserId,
-      chatId: maskedChatId,
-    });
-    
-    loggers.ai.info('AI Chat API: Validation passed', { 
-      messageCount: messages.length, 
-      chatId 
-    });
-
-    // Get page configuration for custom agent settings (needed early for message saving)
     const [page] = await db.select().from(pages).where(eq(pages.id, chatId));
     if (!page) {
-      loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
 
-    // Vision capability gate — reject images sent to non-vision models
     if (messageHasImages) {
       const effectiveModel = selectedModel || page.aiModel;
       if (effectiveModel && !hasVisionCapability(effectiveModel)) {
-        loggers.ai.warn('AI Chat API: Images sent to non-vision model', { model: effectiveModel });
         return NextResponse.json(
           { error: `The selected model "${effectiveModel}" does not support image attachments. Please choose a vision-capable model.` },
           { status: 400 }
@@ -275,73 +580,21 @@ export async function POST(request: Request) {
       }
     }
 
-    // Extract custom agent configuration from page
-    const customSystemPrompt = page.systemPrompt;
-    const enabledTools = page.enabledTools as string[] | null;
-
-    // Fetch drive prompt if page has includeDrivePrompt enabled
-    let drivePromptPrefix = '';
-    if (page.includeDrivePrompt) {
-      try {
-        const [drive] = await db
-          .select({ drivePrompt: drives.drivePrompt })
-          .from(drives)
-          .where(eq(drives.id, page.driveId))
-          .limit(1);
-
-        if (drive?.drivePrompt?.trim()) {
-          drivePromptPrefix = `## DRIVE INSTRUCTIONS\n\n${drive.drivePrompt}\n\n---\n\n`;
-          loggers.ai.debug('AI Page Chat API: Including drive prompt', {
-            driveId: page.driveId,
-            promptLength: drive.drivePrompt.length
-          });
-        }
-      } catch (error) {
-        loggers.ai.error('AI Page Chat API: Failed to fetch drive prompt', error as Error);
-        // Continue without drive prompt on error
-      }
-    }
-
-    loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
-      hasCustomSystemPrompt: !!customSystemPrompt,
-      enabledToolsCount: enabledTools?.length || 0,
-      pageName: page.title,
-      includeDrivePrompt: page.includeDrivePrompt,
-      hasDrivePrompt: !!drivePromptPrefix
-    });
-
-    // Auto-generate conversationId if not provided (seamless UX)
     conversationId = requestConversationId || createId();
-    loggers.ai.debug('AI Chat API: Conversation session', {
-      conversationId,
-      isNewConversation: !requestConversationId
-    });
 
-    // Process @mentions in the user's message
+    const userMessage = messages[messages.length - 1];
+    let userPromptContent: string | undefined;
     let mentionedPageIds: string[] = [];
 
-    // Save user's message immediately to database (database-first approach)
-    const userMessage = messages[messages.length - 1]; // Last message is the new user message
-    let userPromptContent: string | undefined;
     if (userMessage && userMessage.role === 'user') {
-      try {
-        const messageId = userMessage.id || createId();
-        const messageContent = extractMessageContent(userMessage);
-        userPromptContent = messageContent;
-        
-        // Process @mentions in the user message
-        const processedMessage = processMentionsInMessage(messageContent);
-        mentionedPageIds = processedMessage.pageIds;
-        
-        if (processedMessage.mentions.length > 0) {
-          loggers.ai.info('AI Chat API: Found @mentions in user message', {
-            mentionCount: processedMessage.mentions.length,
-            pageIds: mentionedPageIds
-          });
-        }
-        
-        loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
+      const messageId = userMessage.id || createId();
+      const messageContent = extractMessageContent(userMessage);
+      userPromptContent = messageContent;
 
+      const processedMessage = processMentionsInMessage(messageContent);
+      mentionedPageIds = processedMessage.pageIds;
+
+      try {
         await saveMessageToDatabase({
           messageId,
           pageId: chatId,
@@ -353,45 +606,26 @@ export async function POST(request: Request) {
           toolResults: undefined,
           uiMessage: userMessage,
         });
-        
-        loggers.ai.debug('AI Chat API: User message saved to database');
       } catch (error) {
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',
           details: error instanceof Error ? error.message : 'Unknown database error',
-          userMessage: userMessage // Preserve user input for retry
+          userMessage,
         }, { status: 500 });
       }
     }
-    
-    // Get user's current AI provider settings
+
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
     const currentModel = selectedModel || user?.currentAiModel || 'glm-4.5-air';
 
-    // Pro subscription check for special providers
-    const { requiresProSubscription, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
+    const { requiresProSubscription: checkRequiresPro, createSubscriptionRequiredResponse } = await import('@/lib/subscription/rate-limit-middleware');
 
-    // Check if provider requires Pro subscription
-    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier)) {
-      loggers.ai.warn('AI Chat API: Pro subscription required', {
-        userId,
-        provider: currentProvider,
-        model: currentModel,
-        subscriptionTier: user?.subscriptionTier
-      });
+    if (checkRequiresPro(currentProvider, currentModel, user?.subscriptionTier)) {
       return createSubscriptionRequiredResponse();
     }
 
-    // Usage tracking will be handled in onFinish callback for PageSpace providers only
-    loggers.ai.debug('AI Chat API: Will track usage in onFinish for PageSpace providers', {
-      userId,
-      provider: currentProvider,
-      isPageSpaceProvider: currentProvider === 'pagespace'
-    });
-    
-    // Update page's AI provider/model if changed
     if (selectedProvider && selectedModel && chatId) {
       if (selectedProvider !== page.aiProvider || selectedModel !== page.aiModel) {
         try {
@@ -399,10 +633,7 @@ export async function POST(request: Request) {
           await applyPageMutation({
             pageId: chatId,
             operation: 'agent_config_update',
-            updates: {
-              aiProvider: selectedProvider,
-              aiModel: selectedModel,
-            },
+            updates: { aiProvider: selectedProvider, aiModel: selectedModel },
             updatedFields: ['aiProvider', 'aiModel'],
             expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
             context: {
@@ -415,11 +646,7 @@ export async function POST(request: Request) {
         } catch (error) {
           if (error instanceof PageRevisionMismatchError) {
             return NextResponse.json(
-              {
-                error: error.message,
-                currentRevision: error.currentRevision,
-                expectedRevision: error.expectedRevision,
-              },
+              { error: error.message, currentRevision: error.currentRevision, expectedRevision: error.expectedRevision },
               { status: error.expectedRevision === undefined ? 428 : 409 }
             );
           }
@@ -428,8 +655,6 @@ export async function POST(request: Request) {
       }
     }
 
-
-    // Create AI provider using factory service
     const providerRequest: ProviderRequest = {
       selectedProvider,
       selectedModel,
@@ -443,395 +668,52 @@ export async function POST(request: Request) {
     };
 
     const providerResult = await createAIProvider(userId, providerRequest);
-
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
 
     const { model } = providerResult;
-
-    // Update user's current provider/model if changed
     await updateUserProviderSettings(userId, selectedProvider, selectedModel);
 
-    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
-    // This prevents users from exceeding their daily AI call limits
     if (currentProvider === 'pagespace') {
       const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
-
-      loggers.ai.debug('AI Chat API: Checking rate limit before streaming', {
-        userId: maskIdentifier(userId),
-        provider: currentProvider,
-        model: currentModel,
-        providerType,
-        pageId: chatId
-      });
-
       const currentUsage = await getCurrentUsage(userId, providerType);
 
       if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.ai.warn('AI Chat API: Rate limit exceeded', {
-          userId: maskIdentifier(userId),
-          providerType,
-          currentCount: currentUsage.currentCount,
-          limit: currentUsage.limit,
-          remaining: currentUsage.remainingCalls,
-          pageId: chatId
-        });
-
         return createRateLimitResponse(providerType, currentUsage.limit);
       }
-
-      loggers.ai.debug('AI Chat API: Rate limit check passed', {
-        userId: maskIdentifier(userId),
-        providerType,
-        remaining: currentUsage.remainingCalls,
-        limit: currentUsage.limit,
-        pageId: chatId
-      });
     }
 
-    // Parse read-only mode (defaults to false for full access)
     const readOnlyMode = isReadOnly === true;
-    // Parse web search mode (defaults to false - disabled)
     const webSearchMode = webSearchEnabled === true;
-    loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Filter tools based on custom enabled tools configuration
-    // - null or [] = no tools enabled (default behavior)
-    // - ['tool1', 'tool2'] = specific tools → use only those
-    let filteredTools: ToolSet;
-    if (enabledTools === null || enabledTools.length === 0) {
-      // No tools configured - default to no tools
-      filteredTools = {};
-      loggers.ai.debug('AI Page Chat API: No tools enabled', {
-        totalTools: Object.keys(pageSpaceTools).length,
-        enabledTools: 0,
-        filteredTools: 0,
-        isReadOnly: readOnlyMode
-      });
-    } else {
-      // Filter tools based on the page's enabled tools configuration
-      // Simple object filtering approach to avoid complex TypeScript issues
-      const filtered: Record<string, (typeof pageSpaceTools)[keyof typeof pageSpaceTools]> = {};
-      for (const toolName of enabledTools) {
-        if (toolName in pageSpaceTools) {
-          filtered[toolName] = pageSpaceTools[toolName as keyof typeof pageSpaceTools];
-        }
-      }
-      // Apply read-only filtering on top of enabled tools
-      const postReadOnlyFiltered = filterToolsForReadOnly(filtered, readOnlyMode);
-      // Apply web search filtering (exclude web_search if disabled)
-      filteredTools = filterToolsForWebSearch(postReadOnlyFiltered, webSearchMode);
-
-      loggers.ai.debug('AI Page Chat API: Filtered tools based on page configuration', {
-        totalTools: Object.keys(pageSpaceTools).length,
-        enabledTools: enabledTools.length,
-        filteredTools: Object.keys(filteredTools).length,
-        isReadOnly: readOnlyMode,
-        webSearchEnabled: webSearchMode
-      });
-    }
-
-    // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
-    try {
-      const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-      const integrationTools = await resolvePageAgentIntegrationTools({
-        agentId: chatId,
-        userId,
-        driveId: page.driveId,
-      });
-      if (Object.keys(integrationTools).length > 0) {
-        filteredTools = mergeToolSets(filteredTools, integrationTools);
-        loggers.ai.info('AI Chat API: Merged integration tools', {
-          integrationToolCount: Object.keys(integrationTools).length,
-          totalTools: Object.keys(filteredTools).length,
-        });
-      }
-    } catch (error) {
-      loggers.ai.error('AI Chat API: Failed to resolve integration tools', error as Error);
-    }
-
-    // DESKTOP MCP INTEGRATION: Merge MCP tools from client if provided
-    if (mcpTools && mcpTools.length > 0) {
-      try {
-        loggers.ai.info('AI Chat API: Integrating MCP tools from desktop', {
-          mcpToolCount: mcpTools.length,
-          toolNames: mcpTools.map(t => `mcp:${t.serverName}:${t.name}`),
-          userId: maskIdentifier(userId),
-          chatId: maskIdentifier(chatId)
-        });
-
-        // Convert MCP tools to AI SDK format (schemas only, no execute functions)
-        const mcpToolSchemas = convertMCPToolsToAISDKSchemas(mcpTools);
-
-        // Create execute functions that signal client-side execution
-        // The AI SDK will call these, but we throw a special error that the client intercepts
-        const mcpToolsWithExecute: Record<string, unknown> = {};
-        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
-          mcpToolsWithExecute[toolName] = {
-            ...toolSchema,
-            execute: async (args: Record<string, unknown>) => {
-              // Ensure userId is defined (it should be from authentication)
-              if (!userId) {
-                throw new Error('User ID not available for MCP tool execution');
-              }
-
-              // Parse tool name using shared parser (supports both mcp:server:tool and legacy mcp__server__tool)
-              const parsed = parseMCPToolName(toolName);
-              if (!parsed) {
-                loggers.ai.error('AI Chat API: Invalid MCP tool name format', {
-                  toolName,
-                  userId: maskIdentifier(userId)
-                });
-                throw new Error(`Invalid MCP tool name format: ${toolName}`);
-              }
-
-              const { serverName, toolName: actualToolName } = parsed;
-
-              loggers.ai.debug('AI Chat API: Executing MCP tool via WebSocket bridge', {
-                toolName: actualToolName,
-                serverName,
-                userId: maskIdentifier(userId),
-                hasArgs: !!args
-              });
-
-              try {
-                const mcpBridge = getMCPBridge();
-
-                // Check if user is connected
-                if (!mcpBridge.isUserConnected(userId)) {
-                  const errorMsg = 'Desktop app not connected. Please ensure PageSpace Desktop is running.';
-                  loggers.ai.warn('AI Chat API: User not connected to desktop', {
-                    userId: maskIdentifier(userId),
-                    toolName: actualToolName,
-                    serverName
-                  });
-                  throw new Error(errorMsg);
-                }
-
-                // Execute tool via WebSocket bridge
-                const result = await mcpBridge.executeTool(
-                  userId,
-                  serverName,
-                  actualToolName,
-                  args
-                );
-
-                loggers.ai.info('AI Chat API: MCP tool execution succeeded', {
-                  toolName: actualToolName,
-                  serverName,
-                  userId: maskIdentifier(userId)
-                });
-
-                return result;
-              } catch (error) {
-                loggers.ai.error('AI Chat API: MCP tool execution failed', error as Error, {
-                  toolName: actualToolName,
-                  serverName,
-                  userId: maskIdentifier(userId)
-                });
-                throw error;
-              }
-            }
-          };
-        }
-
-        // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
-        // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
-        filteredTools = sanitizeToolNamesForProvider({ ...filteredTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
-
-        loggers.ai.info('AI Chat API: Successfully merged MCP tools', {
-          totalTools: Object.keys(filteredTools).length,
-          mcpTools: Object.keys(mcpToolSchemas).length,
-          pageSpaceTools: Object.keys(filteredTools).length - Object.keys(mcpToolSchemas).length
-        });
-      } catch (error) {
-        loggers.ai.error('AI Chat API: Failed to integrate MCP tools', error as Error, {
-          userId: maskIdentifier(userId),
-          chatId: maskIdentifier(chatId)
-        });
-        // Continue without MCP tools rather than failing the entire request
-      }
-    } else {
-      loggers.ai.debug('AI Chat API: No MCP tools provided in request', {
-        userId: maskIdentifier(userId),
-        chatId: maskIdentifier(chatId)
-      });
-    }
-
-    // DATABASE-FIRST ARCHITECTURE WITH CACHING:
-    // PageSpace uses database as the single source of truth for all messages.
-    // Cache provides fast reads while invalidation ensures consistency on edits/deletes.
-    loggers.ai.debug('AI Chat API: Loading conversation history', {
-      pageId: chatId
+    const filteredTools = await buildToolSet({
+      userId,
+      chatId,
+      page,
+      readOnlyMode,
+      webSearchMode,
+      mcpTools,
     });
 
-    // Try cache first (L1 memory -> L2 Redis -> DB fallback)
-    // Note: chatId is guaranteed to be defined here due to earlier validation
-    const pageId = chatId as string;
-    let conversationHistory: UIMessage[];
-    const cachedConversation = await conversationCache.getConversation(pageId, conversationId);
-
-    if (cachedConversation) {
-      // Cache hit - convert cached messages to UI format
-      conversationHistory = cachedConversation.messages.map(msg =>
-        convertDbMessageToUIMessage({
-          id: msg.id,
-          pageId,
-          userId: null,
-          role: msg.role,
-          content: msg.content,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          createdAt: new Date(msg.createdAt),
-          isActive: true,
-          editedAt: msg.editedAt ? new Date(msg.editedAt) : null,
-        })
-      );
-      loggers.ai.debug('AI Chat API: Loaded conversation from cache', {
-        messageCount: conversationHistory.length,
-        pageId
-      });
-    } else {
-      // Cache miss - read from database
-      const dbMessages = await db
-        .select()
-        .from(chatMessages)
-        .where(and(
-          eq(chatMessages.pageId, pageId),
-          eq(chatMessages.conversationId, conversationId),
-          eq(chatMessages.isActive, true)
-        ))
-        .orderBy(chatMessages.createdAt);
-
-      // Convert database messages to UI format
-      conversationHistory = dbMessages.map(msg =>
-        convertDbMessageToUIMessage({
-          id: msg.id,
-          pageId: msg.pageId,
-          userId: msg.userId,
-          role: msg.role,
-          content: msg.content,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          createdAt: msg.createdAt,
-          isActive: msg.isActive,
-          editedAt: msg.editedAt,
-        })
-      );
-
-      // Populate cache with DB results (fire-and-forget)
-      const messagesToCache: CachedMessage[] = dbMessages.map(msg => ({
-        id: msg.id,
-        role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content ?? '',
-        toolCalls: (msg.toolCalls as string | null) ?? null,
-        toolResults: (msg.toolResults as string | null) ?? null,
-        createdAt: msg.createdAt.getTime(),
-        editedAt: msg.editedAt?.getTime() ?? null,
-        messageType: (msg.messageType as 'standard' | 'todo_list') ?? 'standard',
-      }));
-      conversationCache.setConversation(pageId, conversationId, messagesToCache).catch(err => {
-        loggers.ai.warn('Failed to populate conversation cache', { error: err });
-      });
-
-      loggers.ai.debug('AI Chat API: Loaded conversation from database', {
-        messageCount: conversationHistory.length,
-        pageId
-      });
-    }
-
-    // Convert UIMessages to ModelMessages for the AI model
-    // First sanitize messages to remove tool parts without results (prevents "input-available" state errors)
-    // NOTE: We use database-loaded messages, NOT messages from client
+    const conversationHistory = await loadConversationHistory(chatId, conversationId);
     const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
-    const modelMessages = convertToModelMessages(sanitizedMessages, {
-      tools: filteredTools  // Use original tools - no wrapping needed
+    const modelMessages = convertToModelMessages(sanitizedMessages, { tools: filteredTools });
+
+    const userTimezone = user?.timezone ?? undefined;
+    const systemPrompt = await buildCompleteSystemPrompt({
+      page,
+      pageContext,
+      readOnlyMode,
+      userTimezone,
+      userId,
+      chatId,
     });
 
-    // Fetch user personalization for AI system prompt injection
-    const personalization = await getUserPersonalization(userId);
-    if (personalization) {
-      loggers.ai.debug('AI Chat API: User personalization loaded', {
-        hasPersonalization: true,
-        hasBio: !!personalization.bio,
-        hasWritingStyle: !!personalization.writingStyle,
-        hasRules: !!personalization.rules,
-      });
-    }
-
-    // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
-    let systemPrompt: string;
-    if (customSystemPrompt) {
-      // Use custom system prompt with page context injected
-      // Prepend drive prompt if enabled and available
-      systemPrompt = drivePromptPrefix + customSystemPrompt;
-      if (pageContext) {
-        systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
-      }
-      // Add user personalization if enabled
-      const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
-      if (personalizationPrompt) {
-        systemPrompt += `\n\n${personalizationPrompt}`;
-      }
-      // Add read-only constraint if applicable
-      if (readOnlyMode) {
-        systemPrompt += `\n\nREAD-ONLY MODE:\n• You cannot modify, create, or delete any content\n• Focus on exploring, analyzing, and planning\n• Create actionable plans for the user to execute later`;
-      }
-    } else {
-      // Fallback to default PageSpace system prompt with read-only mode and personalization
-      systemPrompt = buildSystemPrompt(
-        'page',
-        pageContext ? {
-          driveName: pageContext.driveName,
-          driveSlug: pageContext.driveSlug,
-          driveId: pageContext.driveId,
-          pagePath: pageContext.pagePath,
-          pageType: pageContext.pageType,
-          breadcrumbs: pageContext.breadcrumbs,
-        } : undefined,
-        readOnlyMode,
-        personalization ?? undefined
-      );
-    }
-    
-    // Build timestamp system prompt for temporal awareness
-    const userTimezone = user?.timezone ?? undefined;
-    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
-
-    // Build page tree context if enabled
-    let pageTreePrompt = '';
-    if (page.includePageTree && page.driveId) {
-      const pageTreeContext = await getPageTreeContext(userId, {
-        scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
-        pageId: chatId,
-        driveId: page.driveId,
-      });
-      if (pageTreeContext) {
-        pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the ${page.pageTreeScope === 'drive' ? 'complete workspace' : 'page subtree'} structure:\n\n${pageTreeContext}`;
-        loggers.ai.debug('AI Chat API: Page tree context included', {
-          pageId: chatId,
-          scope: page.pageTreeScope,
-          contextLength: pageTreeContext.length
-        });
-      }
-    }
-
-    loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });
-    loggers.ai.info('AI Chat API: Starting streamText for Page AI', { model: currentModel, pageName: page.title });
-    
-    // Create UI message stream with visual content injection support
-    // This handles the case where tools return visual content that needs to be injected into the stream
-    let result;
-
-    // Generate server-side message ID for the AI response
-    // This ensures client and server use the same ID, fixing the undo-after-streaming issue
-    // See: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence
     const serverAssistantMessageId = createId();
-
-    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
-    // This is separate from request.signal which fires on any client disconnect
     const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
+
+    let result;
 
     try {
       const stream = createUIMessageStream({
@@ -839,28 +721,20 @@ export async function POST(request: Request) {
         execute: async ({ writer }) => {
           let startChunkSent = false;
 
-          // Send the server-generated message ID to the client at stream start
-          // streamId is passed via X-Stream-Id header (see result.toUIMessageStreamResponse below)
-          // Wrapped in try/catch to handle early disconnect - continue processing anyway
           try {
-            writer.write({
-              type: 'start',
-              messageId: serverAssistantMessageId,
-            });
+            writer.write({ type: 'start', messageId: serverAssistantMessageId });
             startChunkSent = true;
           } catch {
-            // Client disconnected before first write - continue processing
-            // to ensure onFinish fires and the message is saved
+            // Client disconnected before first write
           }
 
-          // Start the AI response
           const aiResult = streamText({
             model,
-            system: systemPrompt + timestampSystemPrompt + pageTreePrompt,
+            system: systemPrompt,
             messages: modelMessages,
-            tools: filteredTools,  // Use original tools directly
-            stopWhen: stepCountIs(100), // Allow up to 100 tool calls per conversation turn
-            abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
+            tools: filteredTools,
+            stopWhen: stepCountIs(100),
+            abortSignal,
             experimental_context: {
               userId,
               timezone: userTimezone,
@@ -882,13 +756,9 @@ export async function POST(request: Request) {
                 breadcrumbs: pageContext.breadcrumbs,
               } : undefined,
               modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
-              chatSource: {
-                type: 'page' as const,
-                agentPageId: chatId,
-                agentTitle: page.title,
-              },
-            }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
-            maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
+              chatSource: { type: 'page' as const, agentPageId: chatId, agentTitle: page.title },
+            },
+            maxRetries: 20,
             onAbort: () => {
               loggers.ai.info('AI Chat API: Stream aborted by user', {
                 userId: maskIdentifier(userId!),
@@ -900,244 +770,63 @@ export async function POST(request: Request) {
             },
           });
 
-          usagePromise = aiResult.totalUsage
-            .then((usage) => usage)
-            .catch((error) => {
-              loggers.ai.debug('AI Chat API: Failed to retrieve token usage from stream', {
-                error: error instanceof Error ? error.message : 'Unknown error',
-              });
-              return undefined;
-            });
+          usagePromise = aiResult.totalUsage.then(u => u).catch(() => undefined);
 
-          // Stream the AI response directly to the client
-          // Wrap in try-catch to handle client disconnection gracefully - the AI stream
-          // will continue processing server-side even if writes fail
           for await (const chunk of aiResult.toUIMessageStream()) {
             try {
-              // We already emitted a start chunk with a server-controlled message ID.
-              // Skip any additional start chunks so client/server message IDs stay aligned.
               if (chunk.type === 'start') {
-                if (startChunkSent) {
-                  continue;
-                }
-
-                writer.write({
-                  type: 'start',
-                  messageId: serverAssistantMessageId,
-                });
+                if (startChunkSent) continue;
+                writer.write({ type: 'start', messageId: serverAssistantMessageId });
                 startChunkSent = true;
                 continue;
               }
-
               writer.write(chunk);
             } catch {
-              // Client disconnected - continue processing to ensure onFinish fires
-              // and the message is saved to the database
+              // Client disconnected
             }
           }
         },
         onFinish: async ({ responseMessage }) => {
-          // Clean up abort controller from registry
           removeStream({ streamId });
 
-          loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
-          
-          // Enhanced debugging: Log the complete message structure
-          loggers.ai.debug('AI Chat API: Response message structure', {
-            id: responseMessage?.id,
-            role: responseMessage?.role,
-            partsCount: responseMessage?.parts?.length || 0,
-            partTypes: responseMessage?.parts?.map(p => p.type) || [],
-          });
-          
-          // Log each part in detail
-          responseMessage?.parts?.forEach((part, index) => {
-            if (part.type === 'text') {
-              const text = (part as TextUIPart).text || '';
-              loggers.ai.trace(`AI Chat API: Part ${index}: TEXT`, { preview: text.substring(0, 100) });
-            } else if (part.type.startsWith('tool-')) {
-              const toolPart = part as { state?: string; output?: unknown };
-              loggers.ai.trace(`AI Chat API: Part ${index}: TOOL`, { type: part.type, state: toolPart.state, hasOutput: !!toolPart.output });
-            } else {
-              loggers.ai.trace(`AI Chat API: Part ${index}`, { type: part.type });
-            }
-          });
-          
-          // Save the AI's response message with tool calls and results (database-first approach)
           if (chatId && responseMessage) {
             try {
-              // Use the server-generated ID that was sent to the client at stream start
-              // This ensures the saved message ID matches what the client has
               const messageId = serverAssistantMessageId;
               const messageContent = extractMessageContent(responseMessage);
-              
-              // Extract tool calls and results from the response
               const extractedToolCalls = extractToolCalls(responseMessage);
               const extractedToolResults = extractToolResults(responseMessage);
-              
-              loggers.ai.debug('AI Chat API: Saving AI response message', { 
-                id: messageId, 
-                contentLength: messageContent.length,
-                contentPreview: messageContent.substring(0, 100),
-                toolCallsCount: extractedToolCalls.length,
-                toolResultsCount: extractedToolResults.length,
-                hasContent: messageContent.length > 0,
-                hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0
-              });
-              
-              loggers.ai.trace('AI Chat API: Tool tracking', { 
-                toolCalls: extractedToolCalls.length,
-                toolResults: extractedToolResults.length 
-              });
-              
-              // Use the new helper function to save the message with complete UIMessage for chronological ordering
+
               await saveMessageToDatabase({
                 messageId,
                 pageId: chatId,
-                conversationId: conversationId!, // Group messages into conversation sessions
-                userId: null, // AI message
+                conversationId: conversationId!,
+                userId: null,
                 role: 'assistant',
                 content: messageContent,
                 toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
                 toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-                uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
+                uiMessage: responseMessage,
               });
-              
-              loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
 
-              // Track usage for PageSpace providers only (rate limiting/quota tracking)
-              const isPageSpaceProvider = currentProvider === 'pagespace';
-
-              const maskedUserId = maskIdentifier(userId);
-              const maskedMessageId = maskIdentifier(messageId);
-
-              if (isPageSpaceProvider) {
-                try {
-                  const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
-
-                  usageLogger.debug('Incrementing usage for Page AI response', {
-                    userId: maskedUserId,
-                    provider: currentProvider,
-                    providerType,
-                    messageId: maskedMessageId,
-                  });
-
-                  const usageResult = await incrementUsage(userId!, providerType);
-
-                  usageLogger.info('Page AI usage incremented', {
-                    userId: maskedUserId,
-                    provider: currentProvider,
-                    providerType,
-                    messageId: maskedMessageId,
-                    currentCount: usageResult.currentCount,
-                    limit: usageResult.limit,
-                    remaining: usageResult.remainingCalls,
-                    success: usageResult.success,
-                  });
-
-                  // Broadcast usage event for real-time updates
-                  try {
-                    const currentUsageSummary = await getUserUsageSummary(userId!);
-
-                    await broadcastUsageEvent({
-                      userId: userId!,
-                      operation: 'updated',
-                      subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                      standard: currentUsageSummary.standard,
-                      pro: currentUsageSummary.pro
-                    });
-
-                    usageLogger.debug('Page AI usage broadcast sent', {
-                      userId: maskedUserId,
-                    });
-                  } catch (broadcastError) {
-                    usageLogger.error('Page AI usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                      userId: maskedUserId,
-                    });
-                  }
-
-                } catch (usageError) {
-                  usageLogger.error('Page AI usage tracking failed', usageError as Error, {
-                    userId: maskedUserId,
-                    provider: currentProvider,
-                    messageId: maskedMessageId,
-                  });
-
-                  // Don't fail the request - usage tracking errors shouldn't break the chat
-                }
-              } else {
-                usageLogger.debug('Skipping usage tracking for non-PageSpace provider', {
-                  provider: currentProvider,
-                  userId: maskedUserId,
-                  messageId: maskedMessageId,
-                });
-              }
-
-              // Track enhanced AI usage with token counting and cost calculation
-              const duration = Date.now() - startTime;
-
-              const usage = usagePromise ? await usagePromise : undefined;
-              const inputTokens = usage?.inputTokens ?? undefined;
-              const outputTokens = usage?.outputTokens ?? undefined;
-              const totalTokens =
-                usage?.totalTokens ??
-                ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined);
-
-              // Use enhanced AI monitoring with token usage from SDK
-              await AIMonitoring.trackUsage({
+              await trackUsage({
                 userId: userId!,
-                provider: currentProvider,
-                model: currentModel,
-                inputTokens,
-                outputTokens,
-                totalTokens,
-                prompt: userPromptContent?.substring(0, 1000),
-                completion: messageContent?.substring(0, 1000),
-                duration,
-                conversationId, // Use actual conversation ID instead of pageId
+                currentProvider,
+                currentModel,
+                chatId,
                 messageId,
-                pageId: chatId,
-                driveId: pageContext?.driveId,
-                success: true,
-                metadata: {
-                  pageName: page.title,
-                  toolCallsCount: extractedToolCalls.length,
-                  toolResultsCount: extractedToolResults.length,
-                  hasTools: extractedToolCalls.length > 0 || extractedToolResults.length > 0,
-                  reasoningTokens: usage?.reasoningTokens,
-                  cachedInputTokens: usage?.cachedInputTokens,
-                }
+                messageContent,
+                userPromptContent,
+                toolCallsCount: extractedToolCalls.length,
+                toolResultsCount: extractedToolResults.length,
+                startTime,
+                usagePromise,
+                pageContext,
+                page,
+                conversationId: conversationId!,
               });
-              
-              // Track tool usage separately for analytics
-              if (extractedToolCalls.length > 0) {
-                for (const toolCall of extractedToolCalls) {
-                  await AIMonitoring.trackToolUsage({
-                    userId: userId!,
-                    provider: currentProvider,
-                    model: currentModel,
-                    toolName: toolCall.toolName,
-                    toolId: toolCall.toolCallId,
-                    args: undefined,
-                    conversationId, // Use actual conversation ID instead of pageId
-                    pageId: chatId,
-                    success: true
-                  });
-                }
-                
-                // Also track feature usage
-                trackFeature(userId!, 'ai_tools_used', {
-                  toolCount: extractedToolCalls.length,
-                  provider: currentProvider,
-                  model: currentModel
-                });
-              }
             } catch (error) {
-              loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
-              // Don't fail the response - persistence errors shouldn't break the chat
+              loggers.ai.error('Failed to save AI response message', error as Error);
             }
-          } else {
-            loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
           }
         },
       });
@@ -1149,18 +838,10 @@ export async function POST(request: Request) {
         }),
       };
     } catch (streamError) {
-      // Clean up the registry entry since onFinish won't be called
       removeStream({ streamId });
-      loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
-        message: streamError instanceof Error ? streamError.message : 'Unknown error',
-        stack: streamError instanceof Error ? streamError.stack : undefined
-      });
-      throw streamError; // Re-throw to be handled by the outer catch
+      throw streamError;
     }
 
-    loggers.ai.debug('AI Chat API: Returning visual-content-aware stream response');
-    
-    // Return the enhanced UI message stream response with visual content injection
     return result.toUIMessageStreamResponse();
 
   } catch (error) {
@@ -1169,24 +850,20 @@ export async function POST(request: Request) {
       chatId,
       provider: selectedProvider,
       model: selectedModel,
-      responseTime: Date.now() - startTime
+      responseTime: Date.now() - startTime,
     });
 
     const usage = usagePromise ? await usagePromise : undefined;
 
-    // Track AI usage even for errors using enhanced monitoring
-    // Note: conversationId might not be available in error path, use chatId as fallback
     await AIMonitoring.trackUsage({
       userId: userId || 'unknown',
       provider: selectedProvider || 'unknown',
       model: selectedModel || 'unknown',
       inputTokens: usage?.inputTokens ?? undefined,
       outputTokens: usage?.outputTokens ?? undefined,
-      totalTokens:
-        usage?.totalTokens ??
-        ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
+      totalTokens: usage?.totalTokens ?? ((usage?.inputTokens || 0) + (usage?.outputTokens || 0) || undefined),
       duration: Date.now() - startTime,
-      conversationId: conversationId || chatId, // Use conversationId if available, fallback to chatId
+      conversationId: conversationId || chatId,
       pageId: chatId,
       driveId: undefined,
       success: false,
@@ -1195,189 +872,82 @@ export async function POST(request: Request) {
         errorType: error instanceof Error ? error.name : 'UnknownError',
         reasoningTokens: usage?.reasoningTokens,
         cachedInputTokens: usage?.cachedInputTokens,
-      }
+      },
     });
-    
-    // Return a proper error response
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
-    }, { status: 500 });
+
+    return NextResponse.json({ error: 'Failed to process chat request. Please try again.' }, { status: 500 });
   }
 }
 
-/**
- * GET handler to check multi-provider configuration status and current settings
- */
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const userId = auth.userId;
 
-    // Get pageId from query params
     const url = new URL(request.url);
     const pageId = url.searchParams.get('pageId');
-    
-    // Get user's current provider settings
+
     const [user] = await db.select().from(users).where(eq(users.id, userId));
-    
-    // Get page-specific settings if pageId provided
+
     let currentProvider = user?.currentAiProvider || 'pagespace';
     let currentModel = user?.currentAiModel || 'glm-4.5-air';
-    
+
     if (pageId) {
       const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
       if (page) {
-        // Use page-specific settings if they exist, otherwise fallback to user settings
         currentProvider = page.aiProvider || currentProvider;
         currentModel = page.aiModel || currentModel;
       }
     }
-    
-    // Check PageSpace default settings
-    const pageSpaceSettings = await getDefaultPageSpaceSettings();
 
-    // Check OpenRouter settings
-    const openRouterSettings = await getUserOpenRouterSettings(userId);
+    const [
+      pageSpaceSettings,
+      openRouterSettings,
+      googleSettings,
+      openAISettings,
+      anthropicSettings,
+      xaiSettings,
+      ollamaSettings,
+      lmstudioSettings,
+      glmSettings,
+    ] = await Promise.all([
+      getDefaultPageSpaceSettings(),
+      getUserOpenRouterSettings(userId),
+      getUserGoogleSettings(userId),
+      getUserOpenAISettings(userId),
+      getUserAnthropicSettings(userId),
+      getUserXAISettings(userId),
+      getUserOllamaSettings(userId),
+      getUserLMStudioSettings(userId),
+      getUserGLMSettings(userId),
+    ]);
 
-    // Check Google AI settings
-    const googleSettings = await getUserGoogleSettings(userId);
-
-    // Check OpenAI settings
-    const openAISettings = await getUserOpenAISettings(userId);
-
-    // Check Anthropic settings
-    const anthropicSettings = await getUserAnthropicSettings(userId);
-
-    // Check xAI settings
-    const xaiSettings = await getUserXAISettings(userId);
-
-    // Check Ollama settings
-    const ollamaSettings = await getUserOllamaSettings(userId);
-
-    // Check LM Studio settings
-    const lmstudioSettings = await getUserLMStudioSettings(userId);
-
-    // Check GLM settings
-    const glmSettings = await getUserGLMSettings(userId);
+    const providers = {
+      pagespace: { isConfigured: !!pageSpaceSettings?.isConfigured, hasApiKey: !!pageSpaceSettings?.apiKey },
+      openrouter: { isConfigured: !!openRouterSettings?.isConfigured, hasApiKey: !!openRouterSettings?.apiKey },
+      google: { isConfigured: !!googleSettings?.isConfigured, hasApiKey: !!googleSettings?.apiKey },
+      openai: { isConfigured: !!openAISettings?.isConfigured, hasApiKey: !!openAISettings?.apiKey },
+      anthropic: { isConfigured: !!anthropicSettings?.isConfigured, hasApiKey: !!anthropicSettings?.apiKey },
+      xai: { isConfigured: !!xaiSettings?.isConfigured, hasApiKey: !!xaiSettings?.apiKey },
+      ollama: { isConfigured: !!ollamaSettings?.isConfigured, hasBaseUrl: !!ollamaSettings?.baseUrl },
+      lmstudio: { isConfigured: !!lmstudioSettings?.isConfigured, hasBaseUrl: !!lmstudioSettings?.baseUrl },
+      glm: { isConfigured: !!glmSettings?.isConfigured, hasApiKey: !!glmSettings?.apiKey },
+    };
 
     return NextResponse.json({
       currentProvider,
       currentModel,
-      providers: {
-        pagespace: {
-          isConfigured: !!pageSpaceSettings?.isConfigured,
-          hasApiKey: !!pageSpaceSettings?.apiKey,
-        },
-        openrouter: {
-          isConfigured: !!openRouterSettings?.isConfigured,
-          hasApiKey: !!openRouterSettings?.apiKey,
-        },
-        google: {
-          isConfigured: !!googleSettings?.isConfigured,
-          hasApiKey: !!googleSettings?.apiKey,
-        },
-        openai: {
-          isConfigured: !!openAISettings?.isConfigured,
-          hasApiKey: !!openAISettings?.apiKey,
-        },
-        anthropic: {
-          isConfigured: !!anthropicSettings?.isConfigured,
-          hasApiKey: !!anthropicSettings?.apiKey,
-        },
-        xai: {
-          isConfigured: !!xaiSettings?.isConfigured,
-          hasApiKey: !!xaiSettings?.apiKey,
-        },
-        ollama: {
-          isConfigured: !!ollamaSettings?.isConfigured,
-          hasBaseUrl: !!ollamaSettings?.baseUrl,
-        },
-        lmstudio: {
-          isConfigured: !!lmstudioSettings?.isConfigured,
-          hasBaseUrl: !!lmstudioSettings?.baseUrl,
-        },
-        glm: {
-          isConfigured: !!glmSettings?.isConfigured,
-          hasApiKey: !!glmSettings?.apiKey,
-        },
-      },
-      isAnyProviderConfigured: !!pageSpaceSettings?.isConfigured || !!openRouterSettings?.isConfigured || !!googleSettings?.isConfigured || !!openAISettings?.isConfigured || !!anthropicSettings?.isConfigured || !!xaiSettings?.isConfigured || !!ollamaSettings?.isConfigured || !!lmstudioSettings?.isConfigured || !!glmSettings?.isConfigured,
+      providers,
+      isAnyProviderConfigured: Object.values(providers).some(p => p.isConfigured),
     });
 
   } catch (error) {
     loggers.ai.error('Error checking provider settings', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to check settings' 
-    }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to check settings' }, { status: 500 });
   }
 }
 
-/**
- * Validate provider and model combination
- * Ensures the provider/model pair is supported and user has access
- */
-async function validateProviderModel(
-  provider: string,
-  model: string,
-  userId: string
-): Promise<{ valid: boolean; reason?: string }> {
-  // Define valid providers
-  const validProviders = [
-    'pagespace',
-    'openrouter',
-    'openrouter_free',
-    'google',
-    'openai',
-    'anthropic',
-    'xai',
-    'ollama',
-    'lmstudio',
-    'glm'
-  ];
-
-  // Check if provider is valid
-  if (!validProviders.includes(provider)) {
-    return {
-      valid: false,
-      reason: `Invalid provider: ${provider}. Supported providers: ${validProviders.join(', ')}`
-    };
-  }
-
-  // Validate model string format (basic sanity check)
-  if (!model || typeof model !== 'string' || model.length > 100) {
-    return {
-      valid: false,
-      reason: 'Invalid model format'
-    };
-  }
-
-  // Check subscription requirements for pro models
-  try {
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
-    if (requiresProSubscription(provider, model, user?.subscriptionTier)) {
-      return {
-        valid: false,
-        reason: 'Pro or Business subscription required for this model'
-      };
-    }
-  } catch (error) {
-    loggers.ai.error('Error checking subscription requirements', error as Error);
-    return {
-      valid: false,
-      reason: 'Unable to validate subscription requirements'
-    };
-  }
-
-  // Additional provider-specific validation could go here
-  // For now, basic validation is sufficient
-
-  return { valid: true };
-}
-
-/**
- * PATCH handler to update page-specific AI settings
- */
 export async function PATCH(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -1385,93 +955,49 @@ export async function PATCH(request: Request) {
 
     const body = await request.json();
 
-    // Enhanced input validation with type checking
     if (!body || typeof body !== 'object') {
-      return NextResponse.json(
-        { error: 'Invalid request body' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     }
 
     const { pageId, provider, model, expectedRevision } = body;
 
-    // Validate pageId (should be a CUID)
     if (!pageId || typeof pageId !== 'string' || pageId.length < 10 || pageId.length > 30) {
-      return NextResponse.json(
-        { error: 'Invalid pageId format' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Invalid pageId format' }, { status: 400 });
     }
 
-    // Validate provider
     if (!provider || typeof provider !== 'string' || provider.length > 50) {
-      return NextResponse.json(
-        { error: 'Provider is required and must be a valid string' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Provider is required and must be a valid string' }, { status: 400 });
     }
 
-    // Validate model
     if (!model || typeof model !== 'string' || model.length > 100) {
-      return NextResponse.json(
-        { error: 'Model is required and must be a valid string' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Model is required and must be a valid string' }, { status: 400 });
     }
 
-    // Sanitize inputs (trim whitespace and basic cleanup)
     const sanitizedProvider = provider.trim();
     const sanitizedModel = model.trim();
     const sanitizedPageId = pageId.trim();
 
-    // Verify the user has access to this page
     const [page] = await db.select().from(pages).where(eq(pages.id, sanitizedPageId));
     if (!page) {
-      return NextResponse.json(
-        { error: 'Page not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
 
-    // Check if user has permission to edit this page (SECURITY: Critical permission enforcement)
     const canEdit = await canUserEditPage(auth.userId, sanitizedPageId);
     if (!canEdit) {
-      loggers.ai.warn('AI Settings PATCH: User lacks edit permission', {
-        userId: auth.userId,
-        pageId: sanitizedPageId
-      });
-      return NextResponse.json(
-        { error: 'You do not have permission to modify this page' },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: 'You do not have permission to modify this page' }, { status: 403 });
     }
 
-    // Validate provider and model combination (SECURITY: Validate permitted combinations)
     const validation = await validateProviderModel(sanitizedProvider, sanitizedModel, auth.userId);
     if (!validation.valid) {
-      loggers.ai.warn('AI Settings PATCH: Invalid provider/model combination', {
-        userId: auth.userId,
-        pageId: sanitizedPageId,
-        provider: sanitizedProvider,
-        model: sanitizedModel,
-        reason: validation.reason
-      });
-      return NextResponse.json(
-        { error: validation.reason || 'Invalid provider/model combination' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: validation.reason || 'Invalid provider/model combination' }, { status: 400 });
     }
 
-    // Update page settings
     try {
       const actorInfo = await getActorInfo(auth.userId);
       await applyPageMutation({
         pageId: sanitizedPageId,
         operation: 'agent_config_update',
-        updates: {
-          aiProvider: sanitizedProvider,
-          aiModel: sanitizedModel,
-        },
+        updates: { aiProvider: sanitizedProvider, aiModel: sanitizedModel },
         updatedFields: ['aiProvider', 'aiModel'],
         expectedRevision: typeof expectedRevision === 'number' ? expectedRevision : undefined,
         context: {
@@ -1484,23 +1010,12 @@ export async function PATCH(request: Request) {
     } catch (error) {
       if (error instanceof PageRevisionMismatchError) {
         return NextResponse.json(
-          {
-            error: error.message,
-            currentRevision: error.currentRevision,
-            expectedRevision: error.expectedRevision,
-          },
+          { error: error.message, currentRevision: error.currentRevision, expectedRevision: error.expectedRevision },
           { status: error.expectedRevision === undefined ? 428 : 409 }
         );
       }
       throw error;
     }
-
-    loggers.ai.info('AI Settings PATCH: Page settings updated successfully', {
-      userId: auth.userId,
-      pageId: sanitizedPageId,
-      provider: sanitizedProvider,
-      model: sanitizedModel
-    });
 
     return NextResponse.json({
       success: true,
@@ -1508,11 +1023,9 @@ export async function PATCH(request: Request) {
       provider: sanitizedProvider,
       model: sanitizedModel,
     });
+
   } catch (error) {
     loggers.ai.error('Failed to update page AI settings', error as Error);
-    return NextResponse.json(
-      { error: 'Failed to update settings' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to update settings' }, { status: 500 });
   }
 }
