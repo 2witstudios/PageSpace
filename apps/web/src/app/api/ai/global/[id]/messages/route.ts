@@ -1,236 +1,95 @@
 import { NextResponse } from 'next/server';
-import { streamText, convertToModelMessages, stepCountIs, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type LanguageModelUsage, type ToolSet } from 'ai';
-import { getPageSpaceModelTier } from '@/lib/ai/core/ai-providers-config';
-import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { incrementUsage, getCurrentUsage, getUserUsageSummary } from '@/lib/subscription/usage-service';
-import { createRateLimitResponse } from '@/lib/subscription/rate-limit-middleware';
-import { broadcastUsageEvent } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/server';
 import {
   createAIProvider,
   updateUserProviderSettings,
   createProviderErrorResponse,
   isProviderError,
-  type ProviderRequest,
-  pageSpaceTools,
-  extractMessageContent,
-  extractToolCalls,
-  extractToolResults,
-  sanitizeMessagesForModel,
-  convertGlobalAssistantMessageToUIMessage,
-  saveGlobalAssistantMessageToDatabase,
-  processMentionsInMessage,
-  buildMentionSystemPrompt,
-  buildTimestampSystemPrompt,
-  buildSystemPrompt,
-  buildAgentAwarenessPrompt,
-  filterToolsForReadOnly,
-  filterToolsForWebSearch,
-  getPageTreeContext,
-  getDriveListSummary,
-  getModelCapabilities,
-  convertMCPToolsToAISDKSchemas,
-  parseMCPToolName,
-  sanitizeToolNamesForProvider,
-  getUserPersonalization,
-  getUserTimezone,
+  type ProviderRequest
 } from '@/lib/ai/core';
-import { db, conversations, messages, drives, eq, and, desc, gt, lt } from '@pagespace/db';
-import { createId } from '@paralleldrive/cuid2';
-import { getMCPBridge } from '@/lib/mcp';
-import { loggers } from '@pagespace/lib/server';
-import { maskIdentifier } from '@/lib/logging/mask';
-import type { MCPTool } from '@/types/mcp';
-import { AIMonitoring } from '@pagespace/lib/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/ai-context-calculator';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
-  createStreamAbortController,
-  removeStream,
-  STREAM_ID_HEADER,
-} from '@/lib/ai/core/stream-abort-registry';
-import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+  validateReadAuth,
+  validateWriteAuth,
+  validateBodySize,
+  parsePostBody,
+  validatePostRequest,
+  parseGetPagination,
+  createNotFoundResponse
+} from './lib/validation';
+import {
+  getConversation,
+  getMessagesPaginated,
+  getConversationHistory,
+  processUserMessage
+} from './lib/message-queries';
+import { buildGlobalAssistantSystemPrompt } from './lib/system-prompt-builder';
+import { buildToolSet } from './lib/tools-builder';
+import { createStream } from './lib/streaming';
+import { checkRateLimit } from './lib/usage-tracking';
 
-// Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-
-/**
- * GET - Get all messages for a conversation
- */
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
-    if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
+    const authResult = await validateReadAuth(request);
+    if (authResult instanceof Response) return authResult;
+    const { userId } = authResult;
 
     const { id } = await context.params;
 
-    // Verify user owns the conversation
-    const [conversation] = await db
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.id, id),
-        eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
-      ));
-
+    const conversation = await getConversation(id, userId);
     if (!conversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
-      }, { status: 404 });
+      return createNotFoundResponse('Conversation');
     }
 
-    // Parse pagination parameters
-    const { searchParams } = new URL(request.url);
-    const limit = parseBoundedIntParam(searchParams.get('limit'), {
-      defaultValue: 50,
-      min: 1,
-      max: 200,
-    });
-    const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
-    const direction = searchParams.get('direction') || 'before'; // 'before' or 'after'
-
-    // Build query conditions
-    const conditions = [
-      eq(messages.conversationId, id),
-      eq(messages.isActive, true)
-    ];
-
-    // Add cursor condition if provided
-    if (cursor) {
-      // First, get the timestamp of the cursor message
-      const [cursorMessage] = await db
-        .select({ createdAt: messages.createdAt })
-        .from(messages)
-        .where(eq(messages.id, cursor))
-        .limit(1);
-
-      if (cursorMessage) {
-        if (direction === 'before') {
-          // Get messages created before the cursor (older messages)
-          conditions.push(lt(messages.createdAt, cursorMessage.createdAt));
-        } else {
-          // Get messages created after the cursor (newer messages)
-          conditions.push(gt(messages.createdAt, cursorMessage.createdAt));
-        }
-      }
-    }
-
-    // Get messages with pagination
-    // Order by createdAt DESC to get newest first, then reverse for chronological display
-    const conversationMessages = await db
-      .select()
-      .from(messages)
-      .where(and(...conditions))
-      .orderBy(desc(messages.createdAt))
-      .limit(limit + 1); // Get one extra to check if there are more
-
-    // Check if there are more messages
-    const hasMore = conversationMessages.length > limit;
-    const messagesToReturn = hasMore ? conversationMessages.slice(0, limit) : conversationMessages;
-
-    // Reverse messages to show in chronological order (oldest first)
-    const orderedMessages = messagesToReturn.reverse();
-
-    // Convert to UIMessage format with proper tool call reconstruction
-    const uiMessages = orderedMessages.map(msg =>
-      convertGlobalAssistantMessageToUIMessage({
-        id: msg.id,
-        conversationId: msg.conversationId,
-        userId: msg.userId,
-        role: msg.role,
-        content: msg.content,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        createdAt: msg.createdAt,
-        isActive: msg.isActive,
-        editedAt: msg.editedAt,
-      })
-    );
-
-    // Determine cursors for pagination
-    const nextCursor = hasMore && orderedMessages.length > 0
-      ? orderedMessages[0].id // First message (oldest) for loading even older messages
-      : null;
-
-    const prevCursor = orderedMessages.length > 0
-      ? orderedMessages[orderedMessages.length - 1].id // Last message (newest) for loading newer messages
-      : null;
+    const pagination = parseGetPagination(request);
+    const { messages, hasMore, nextCursor, prevCursor } = await getMessagesPaginated(id, pagination);
 
     return NextResponse.json({
-      messages: uiMessages,
+      messages,
       pagination: {
         hasMore,
         nextCursor,
         prevCursor,
-        limit,
-        direction
+        limit: pagination.limit,
+        direction: pagination.direction
       }
     });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to fetch messages' 
-    }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to fetch messages' }, { status: 500 });
   }
 }
 
-/**
- * POST - Send a message to the conversation (streaming chat)
- */
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   const startTime = Date.now();
+
   try {
-    const usageLogger = loggers.api.child({ module: 'global-assistant-usage' });
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
-    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
-    if (isAuthError(auth)) {
-      loggers.api.debug('Global Assistant Chat API: Authentication failed', {});
-      return auth.error;
-    }
-    const userId = auth.userId;
+    const authResult = await validateWriteAuth(request);
+    if (authResult instanceof Response) return authResult;
+    const { userId } = authResult;
 
     const { id: conversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
 
-    // Verify user owns the conversation
-    const [conversation] = await db
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.id, conversationId),
-        eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
-      ));
-
+    const conversation = await getConversation(conversationId, userId);
     if (!conversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
-      }, { status: 404 });
+      return createNotFoundResponse('Conversation');
     }
 
-    // Body size guard — reject payloads over 25MB before parsing
-    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
-    if (contentLength > 25 * 1024 * 1024) {
-      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
-      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
-    }
+    const bodySizeError = validateBodySize(request);
+    if (bodySizeError) return bodySizeError;
 
-    // Parse request body
-    const requestBody = await request.json();
+    const requestBody = await parsePostBody(request);
     loggers.api.debug('Global Assistant Chat API: Request body received', {
       messageCount: requestBody.messages?.length || 0,
       conversationId,
@@ -238,552 +97,78 @@ export async function POST(
       selectedModel: requestBody.selectedModel,
       hasLocationContext: !!requestBody.locationContext
     });
-    
-    const {
-      messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
-      selectedProvider,
-      selectedModel,
-      openRouterApiKey,
-      googleApiKey,
-      openAIApiKey,
-      anthropicApiKey,
-      xaiApiKey,
-      ollamaBaseUrl,
-      glmApiKey,
-      locationContext,
-      isReadOnly,
-      webSearchEnabled,
-      showPageTree,
-      mcpTools
-    } = requestBody;
 
-    // Validate required parameters
-    if (!requestMessages || requestMessages.length === 0) {
-      loggers.api.debug('Global Assistant Chat API: No messages provided', {});
-      return NextResponse.json({ error: 'messages are required' }, { status: 400 });
-    }
-    
-    loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+    const validation = validatePostRequest(requestBody, conversationId);
+    if (validation instanceof Response) return validation;
+    const { userMessage, readOnlyMode, webSearchMode } = validation;
 
-    // Image security validation — validate file parts in the user message
-    const userMessageForValidation = requestMessages[requestMessages.length - 1];
-    if (userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation)) {
-      const imageValidation = validateUserMessageFileParts(userMessageForValidation);
-      if (!imageValidation.valid) {
-        loggers.api.warn('Global Assistant Chat API: Image validation failed', { error: imageValidation.error });
-        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
-      }
+    const mentionResult = await processUserMessage(userMessage, conversationId, userId, conversation);
+    if (mentionResult instanceof Response) return mentionResult;
+    const { mentionSystemPrompt } = mentionResult;
 
-      // Vision capability gate — reject images sent to non-vision models
-      if (selectedModel && !hasVisionCapability(selectedModel)) {
-        loggers.api.warn('Global Assistant Chat API: Images sent to non-vision model', { model: selectedModel });
-        return NextResponse.json(
-          { error: `The selected model "${selectedModel}" does not support image attachments. Please choose a vision-capable model.` },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Parse read-only mode early (needed for message saving)
-    const readOnlyMode = isReadOnly === true;
-    // Parse web search mode (defaults to false - disabled)
-    const webSearchMode = webSearchEnabled === true;
-
-    // Process @mentions in the user's message
-    let mentionSystemPrompt = '';
-    let mentionedPageIds: string[] = [];
-    
-    // Save user's message immediately to database
-    const userMessage = requestMessages[requestMessages.length - 1];
-    if (userMessage && userMessage.role === 'user') {
-      try {
-        const messageId = userMessage.id || createId();
-        const messageContent = extractMessageContent(userMessage);
-        
-        // Process @mentions in the user message
-        const processedMessage = processMentionsInMessage(messageContent);
-        mentionedPageIds = processedMessage.pageIds;
-        
-        if (processedMessage.mentions.length > 0) {
-          mentionSystemPrompt = buildMentionSystemPrompt(processedMessage.mentions);
-          loggers.api.info('Global Assistant Chat API: Found @mentions in user message', {
-            mentionCount: processedMessage.mentions.length,
-            pageIds: mentionedPageIds
-          });
-        }
-        
-        loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
-        
-        await saveGlobalAssistantMessageToDatabase({
-          messageId,
-          conversationId,
-          userId,
-          role: 'user',
-          content: messageContent,
-          toolCalls: undefined,
-          toolResults: undefined,
-          uiMessage: userMessage, // Pass UIMessage to preserve part ordering
-        });
-
-        // Update conversation lastMessageAt and auto-generate title if needed
-        const updateData: {
-          lastMessageAt: Date;
-          updatedAt: Date;
-          title?: string;
-        } = {
-          lastMessageAt: new Date(),
-          updatedAt: new Date(),
-        };
-
-        if (!conversation.title) {
-          // Auto-generate title from first user message
-          const title = messageContent.slice(0, 50) + (messageContent.length > 50 ? '...' : '');
-          updateData.title = title;
-        }
-
-        await db
-          .update(conversations)
-          .set(updateData)
-          .where(eq(conversations.id, conversationId));
-        
-        loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
-      } catch (error) {
-        loggers.api.error('Global Assistant Chat API: Failed to save user message', error as Error);
-        return NextResponse.json({
-          error: 'Failed to save message to database',
-          details: error instanceof Error ? error.message : 'Unknown database error',
-          userMessage: userMessage // Preserve user input for retry
-        }, { status: 500 });
-      }
-    }
-    
-    // Create AI provider using factory service
     const providerRequest: ProviderRequest = {
-      selectedProvider,
-      selectedModel,
-      googleApiKey,
-      openRouterApiKey,
-      openAIApiKey,
-      anthropicApiKey,
-      xaiApiKey,
-      ollamaBaseUrl,
-      glmApiKey,
+      selectedProvider: requestBody.selectedProvider,
+      selectedModel: requestBody.selectedModel,
+      googleApiKey: requestBody.googleApiKey,
+      openRouterApiKey: requestBody.openRouterApiKey,
+      openAIApiKey: requestBody.openAIApiKey,
+      anthropicApiKey: requestBody.anthropicApiKey,
+      xaiApiKey: requestBody.xaiApiKey,
+      ollamaBaseUrl: requestBody.ollamaBaseUrl,
+      glmApiKey: requestBody.glmApiKey,
     };
 
     const providerResult = await createAIProvider(userId, providerRequest);
-
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
-
     const { model, provider: currentProvider, modelName: currentModel } = providerResult;
 
-    // Update user's current provider/model if changed
-    await updateUserProviderSettings(userId, selectedProvider, selectedModel);
+    await updateUserProviderSettings(userId, requestBody.selectedProvider, requestBody.selectedModel);
 
-    // RATE LIMIT CHECK: Verify user has remaining quota BEFORE streaming
-    // This prevents users from exceeding their daily AI call limits
-    if (currentProvider === 'pagespace') {
-      const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
-
-      loggers.api.debug('Global Assistant Chat API: Checking rate limit before streaming', {
-        userId: maskIdentifier(userId),
-        provider: currentProvider,
-        model: currentModel,
-        providerType,
-        conversationId
-      });
-
-      const currentUsage = await getCurrentUsage(userId, providerType);
-
-      if (!currentUsage.success || currentUsage.remainingCalls <= 0) {
-        loggers.api.warn('Global Assistant Chat API: Rate limit exceeded', {
-          userId: maskIdentifier(userId),
-          providerType,
-          currentCount: currentUsage.currentCount,
-          limit: currentUsage.limit,
-          remaining: currentUsage.remainingCalls,
-          conversationId
-        });
-
-        return createRateLimitResponse(providerType, currentUsage.limit);
-      }
-
-      loggers.api.debug('Global Assistant Chat API: Rate limit check passed', {
-        userId: maskIdentifier(userId),
-        providerType,
-        remaining: currentUsage.remainingCalls,
-        limit: currentUsage.limit,
-        conversationId
-      });
+    const rateLimitResult = await checkRateLimit(userId, currentProvider, currentModel, conversationId);
+    if (!rateLimitResult.allowed && rateLimitResult.response) {
+      return rateLimitResult.response;
     }
 
     loggers.api.debug('Global Assistant Chat API: Read-only mode', { isReadOnly: readOnlyMode });
 
-    // DATABASE-FIRST ARCHITECTURE:
-    // PageSpace uses database as the single source of truth for all messages.
-    // We MUST read conversation history from database, not from client's request.
-    // This ensures edited messages, multi-user changes, and any database updates
-    // are reflected in the AI's context immediately.
     loggers.api.debug('Global Assistant Chat API: Loading conversation history from database', {
       conversationId
     });
 
-    // Read ALL active messages from database (source of truth)
-    const dbMessages = await db
-      .select()
-      .from(messages)
-      .where(and(
-        eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true)
-      ))
-      .orderBy(messages.createdAt);
-
-    // Convert database messages to UI format
-    const conversationHistory = dbMessages.map(msg =>
-      convertGlobalAssistantMessageToUIMessage({
-        id: msg.id,
-        conversationId: msg.conversationId,
-        userId: msg.userId,
-        role: msg.role,
-        content: msg.content,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        createdAt: msg.createdAt,
-        isActive: msg.isActive,
-        editedAt: msg.editedAt,
-      })
-    );
+    const history = await getConversationHistory(conversationId);
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
-      messageCount: conversationHistory.length,
+      messageCount: history.uiMessages.length,
       conversationId
     });
 
-    // Convert UIMessages to ModelMessages for the AI model
-    // NOTE: We use database-loaded messages, NOT requestMessages from client
-    const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
-    
-    // Process messages to inject visual content from previous tool calls
-    // Limit history to prevent memory issues with large conversations
-    const MAX_MESSAGES_WITH_IMAGES = 10; // Limit messages with images to prevent memory issues
-    const recentMessages = sanitizedMessages.slice(-MAX_MESSAGES_WITH_IMAGES);
-    
-    const processedMessages = recentMessages.map((msg: UIMessage) => {
-      if (msg.role === 'assistant' && msg.parts) {
-        // Check if any tool results contain visual content to inject
-        const toolResults = msg.parts.filter((part) => {
-          if (part && typeof part === 'object' && 'type' in part && part.type === 'tool-result') {
-            const result = (part as { result?: unknown }).result;
-            if (result && typeof result === 'object' && 'type' in result && 'imageDataUrl' in result) {
-              return (result as { type: string }).type === 'visual_content';
-            }
-          }
-          return false;
-        });
-        
-        if (toolResults.length > 0) {
-          // Create new parts array with injected images
-          const newParts = [...msg.parts];
-          
-          // Add image parts for each visual result
-          toolResults.forEach((toolResult) => {
-            const result = (toolResult as { result?: { imageDataUrl?: string; title?: string } }).result;
-            if (result?.imageDataUrl) {
-              // Add a data part that contains the visual content
-              // This will be processed by the client to display the image
-              newParts.push({
-                type: 'data-visual-content' as const,
-                data: {
-                  imageDataUrl: result.imageDataUrl,
-                  title: result.title || 'Visual content'
-                }
-              });
-              
-              // Clear the original imageDataUrl from tool result to save memory
-              const mutableResult = result as { imageDataUrl?: string; title?: string };
-              delete mutableResult.imageDataUrl;
-            }
-          });
-          
-          return { ...msg, parts: newParts };
-        }
-      }
-      return msg;
-    });
-    
-    const modelMessages = convertToModelMessages(processedMessages);
-
-    // Fetch user personalization and timezone for AI system prompt injection
-    const [personalization, userTimezone] = await Promise.all([
-      getUserPersonalization(userId),
-      getUserTimezone(userId),
-    ]);
-    if (personalization) {
-      loggers.api.debug('Global Assistant: User personalization loaded', {
-        hasPersonalization: true,
-        hasBio: !!personalization.bio,
-        hasWritingStyle: !!personalization.writingStyle,
-        hasRules: !!personalization.rules,
-      });
-    }
-
-    // Build system prompt with context
-    const contextType = locationContext?.currentPage ? 'page' :
-                       locationContext?.currentDrive ? 'drive' :
-                       'dashboard';
-
-    const baseSystemPrompt = buildSystemPrompt(
-      contextType,
-      locationContext ? {
-        driveName: locationContext.currentDrive?.name,
-        driveSlug: locationContext.currentDrive?.slug,
-        driveId: locationContext.currentDrive?.id,
-        pagePath: locationContext.currentPage?.path,
-        pageType: locationContext.currentPage?.type,
-        breadcrumbs: locationContext.breadcrumbs,
-      } : undefined,
+    const { finalSystemPrompt, userTimezone } = await buildGlobalAssistantSystemPrompt({
+      userId,
+      conversation,
+      locationContext: requestBody.locationContext,
+      mentionSystemPrompt,
       readOnlyMode,
-      personalization ?? undefined
-    );
-
-    // Build timestamp system prompt for temporal awareness (using user's timezone)
-    const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
-
-    // Fetch drive prompt if user is within a drive
-    let drivePromptSection = '';
-    if (locationContext?.currentDrive?.id) {
-      try {
-        const [drive] = await db
-          .select({ drivePrompt: drives.drivePrompt })
-          .from(drives)
-          .where(eq(drives.id, locationContext.currentDrive.id))
-          .limit(1);
-
-        if (drive?.drivePrompt?.trim()) {
-          drivePromptSection = `\n\n## DRIVE INSTRUCTIONS\n\nThe following custom instructions have been set for this drive by the drive owner:\n\n${drive.drivePrompt}`;
-          loggers.api.debug('Global Assistant Chat API: Including drive prompt', {
-            driveId: locationContext.currentDrive.id,
-            promptLength: drive.drivePrompt.length
-          });
-        }
-      } catch (error) {
-        loggers.api.error('Global Assistant Chat API: Failed to fetch drive prompt', error as Error);
-        // Continue without drive prompt on error
-      }
-    }
-
-    // Add global assistant specific instructions
-    const systemPrompt = baseSystemPrompt + mentionSystemPrompt + timestampSystemPrompt + `
-
-You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
-
-TASK MANAGEMENT:
-• Use create_page with type TASK_LIST to create task lists for tracking work
-• Use update_task with pageId to add tasks - each task creates a linked DOCUMENT page
-• Use read_page on TASK_LIST pages to view tasks and progress
-• Update task status as you progress - users see real-time updates
-
-CRITICAL NESTING PRINCIPLE:
-• NO RESTRICTIONS on what can contain what - organize based on logical user needs
-• Documents can contain AI chats, channels, folders, and canvas pages
-• AI chats can contain documents, other AI chats, folders, and any page type
-• Channels can contain any page type for organized discussion threads  
-• Canvas pages can contain any page type for custom navigation structures
-• Think creatively about nesting - optimize for user workflow, not type conventions
-
-${locationContext ? `
-CONTEXT-AWARE BEHAVIOR:
-• You are currently in: ${locationContext.currentDrive?.name || 'dashboard'} ${locationContext.currentPage ? `> ${locationContext.currentPage.title}` : ''}
-• Default scope: Operations should focus on this location unless user indicates otherwise
-• When user says "here" or "this", they mean the current location
-• Only explore other drives/areas when explicitly mentioned or necessary for the task
-• Start from current context, not from list_drives
-` : `
-DASHBOARD CONTEXT:
-• You are in the dashboard view - focus on cross-workspace tasks and overview
-• Use list_drives when you need to work across multiple workspaces
-• Help with personal productivity and workspace organization
-• create_drive: Use when user explicitly requests new workspace OR when their project clearly doesn't fit existing drives
-• Always check existing drives first via list_drives before suggesting new drive creation
-• Ask for confirmation unless user is explicit about creating new workspace
-`}
-
-SMART EXPLORATION RULES:
-1. When in a drive context - ALWAYS explore it first:
-   - If locationContext includes a drive, ALWAYS use list_pages on that drive when:
-     • User asks about the drive, its contents, or what's available
-     • User wants to create, write, or modify ANYTHING
-     • User mentions something that MAY exist in the drive
-     • User asks general questions about content or organization
-     • You need to understand the workspace structure
-   - Start with list_pages(driveId: '${locationContext?.currentDrive?.id || 'current-drive-id'}') BEFORE other actions
-2. Context-first approach:
-   - Default scope: Current drive/location is your primary workspace
-   - Only explore OTHER drives when explicitly mentioned
-   - When user says "here" or "this", they mean current context
-3. Efficient exploration pattern:
-   - FIRST: list_pages with driveId on current drive (if in a drive)
-   - THEN: read specific pages as needed
-   - ONLY IF NEEDED: explore other drives/workspaces
-4. Proactive assistance:
-   - Don't ask "what's in your drive" - use list_pages to discover
-   - Suggest creating AI_CHAT and CHANNEL pages for organization
-   - Be autonomous within current context
-
-CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}
-
-MENTION PROCESSING:
-• When users @mention documents using @[Label](id:type) format, you MUST read those documents first
-• Use the read_page tool for each mentioned document before providing your main response
-• Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` + drivePromptSection;
-
-    // Build agent awareness prompt - lists visible AI agents for consultation
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
-
-    // Build page tree context if enabled
-    let pageTreePrompt = '';
-    if (showPageTree) {
-      if (locationContext?.currentDrive?.id) {
-        // In drive context: show full drive tree
-        const treeContext = await getPageTreeContext(userId, {
-          scope: 'drive',
-          driveId: locationContext.currentDrive.id,
-        });
-        if (treeContext) {
-          pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
-          loggers.api.debug('Global Assistant: Page tree context included', {
-            driveId: locationContext.currentDrive.id,
-            contextLength: treeContext.length
-          });
-        }
-      } else {
-        // Dashboard context: show drive list summary
-        const driveSummary = await getDriveListSummary(userId);
-        if (driveSummary) {
-          pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
-          loggers.api.debug('Global Assistant: Drive list summary included', {
-            summaryLength: driveSummary.length
-          });
-        }
-      }
-    }
-
-    const finalSystemPrompt = systemPrompt
-      + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
-      + pageTreePrompt;
-
-    // Filter tools based on read-only mode and web search toggle
-    const postReadOnlyTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
-    // Apply web search filtering (exclude web_search if disabled)
-    let finalTools: ToolSet = filterToolsForWebSearch(postReadOnlyTools, webSearchMode) as ToolSet;
-
-    loggers.api.debug('Global Assistant Chat API: Tool modes', {
-      isReadOnly: readOnlyMode,
-      webSearchEnabled: webSearchMode,
-      totalTools: Object.keys(finalTools).length
+      showPageTree: requestBody.showPageTree ?? false,
     });
 
-    // INTEGRATION TOOLS: Resolve and merge integration tools for global assistant
-    try {
-      const { resolveGlobalAssistantIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-      let currentDriveId = locationContext?.currentDrive?.id || null;
-      let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
-      if (currentDriveId) {
-        const access = await getDriveAccess(currentDriveId, userId);
-        if (!access.isMember) {
-          // User is not a member of this drive — do not resolve drive-scoped integrations
-          currentDriveId = null;
-        } else {
-          userDriveRole = access.role;
-        }
-      }
-      const integrationTools = await resolveGlobalAssistantIntegrationTools({
-        userId,
-        driveId: currentDriveId,
-        userDriveRole,
-      });
-      if (Object.keys(integrationTools).length > 0) {
-        finalTools = mergeToolSets(finalTools, integrationTools);
-        loggers.api.info('Global Assistant: Merged integration tools', {
-          integrationToolCount: Object.keys(integrationTools).length,
-          totalTools: Object.keys(finalTools).length,
-        });
-      }
-    } catch (error) {
-      loggers.api.error('Global Assistant: Failed to resolve integration tools', error as Error);
-    }
+    const finalTools = await buildToolSet({
+      userId,
+      readOnlyMode,
+      webSearchMode,
+      locationContext: requestBody.locationContext,
+      mcpTools: requestBody.mcpTools,
+    });
 
-    // Merge MCP tools if provided
-    if (mcpTools && mcpTools.length > 0) {
-      try {
-        loggers.api.info('Global Assistant Chat API: Integrating MCP tools from desktop', {
-          mcpToolCount: mcpTools.length,
-          toolNames: mcpTools.map((t: MCPTool) => `mcp:${t.serverName}:${t.name}`),
-          userId: maskIdentifier(userId),
-          conversationId
-        });
+    loggers.api.debug('Global Assistant Chat API: Starting streamText', {
+      model: currentModel,
+      isReadOnly: readOnlyMode
+    });
 
-        // Convert MCP tools to AI SDK format
-        const mcpToolSchemas = convertMCPToolsToAISDKSchemas(mcpTools);
-
-        // Create execute functions that proxy to WebSocket bridge
-        const mcpToolsWithExecute: Record<string, unknown> = {};
-        for (const [toolName, toolSchema] of Object.entries(mcpToolSchemas)) {
-          mcpToolsWithExecute[toolName] = {
-            ...toolSchema,
-            execute: async (args: Record<string, unknown>) => {
-              // Parse tool name using shared parser (supports both mcp:server:tool and legacy mcp__server__tool)
-              const parsed = parseMCPToolName(toolName);
-              if (!parsed) {
-                throw new Error(`Invalid MCP tool name format: ${toolName}`);
-              }
-              const { serverName, toolName: originalToolName } = parsed;
-
-              loggers.api.debug('MCP Tool Execute: Calling tool via bridge', {
-                toolName,
-                serverName,
-                originalToolName,
-                userId: maskIdentifier(userId)
-              });
-
-              // executeTool returns Promise<unknown> - resolves with result or rejects with error
-              const result = await getMCPBridge().executeTool(userId, serverName, originalToolName, args);
-              return result;
-            }
-          };
-        }
-
-        // Merge MCP tools with PageSpace tools, then sanitize for provider compatibility
-        // (many providers reject colons in tool names - sanitization converts mcp:server:tool to mcp__server__tool)
-        finalTools = sanitizeToolNamesForProvider({ ...finalTools, ...mcpToolsWithExecute } as Record<string, ToolSet[string]>) as ToolSet;
-
-        loggers.api.info('Global Assistant Chat API: Successfully merged MCP tools', {
-          totalTools: Object.keys(finalTools).length,
-          mcpTools: Object.keys(mcpToolSchemas).length,
-          pageSpaceTools: Object.keys(finalTools).length - Object.keys(mcpToolSchemas).length
-        });
-      } catch (error) {
-        loggers.api.error('Global Assistant Chat API: Failed to integrate MCP tools', error as Error, {
-          userId: maskIdentifier(userId),
-          conversationId
-        });
-        // Continue without MCP tools rather than failing the entire request
-      }
-    } else {
-      loggers.api.debug('Global Assistant Chat API: No MCP tools provided in request', {
-        userId: maskIdentifier(userId),
-        conversationId
-      });
-    }
-
-    loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
-
-    // Calculate context size BEFORE streaming (for real context window tracking)
     const contextCalculation = calculateTotalContextSize({
-      systemPrompt,
-      messages: processedMessages, // Use UIMessage array (not model messages)
+      systemPrompt: finalSystemPrompt,
+      messages: history.sanitizedMessages,
       tools: finalTools,
       model: currentModel,
       provider: currentProvider,
@@ -797,226 +182,39 @@ MENTION PROCESSING:
       wasTruncated: contextCalculation.wasTruncated,
     });
 
-    // Create abort controller for explicit user-initiated stop (via /api/ai/abort endpoint)
-    // This is separate from request.signal which fires on any client disconnect
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId });
-
-    // Generate server-side message ID for the AI response
-    // This ensures client and server use the same ID, fixing the undo-after-streaming issue
-    const serverAssistantMessageId = createId();
-
-    // Track usage promise for token counting
-    let usagePromise: Promise<LanguageModelUsage | undefined> | undefined;
-
-    // Use createUIMessageStream to wrap the streaming response
-    // This ensures server-side processing continues even if the client disconnects
-    const stream = createUIMessageStream({
-      originalMessages: processedMessages,
-      execute: async ({ writer }) => {
-        // Send the server-generated message ID to the client at stream start
-        try {
-          writer.write({
-            type: 'start',
-            messageId: serverAssistantMessageId,
-          });
-        } catch {
-          // Client disconnected before first write - continue processing
-        }
-
-        const aiResult = streamText({
-          model,
-          system: finalSystemPrompt,
-          messages: modelMessages,
-          tools: finalTools,
-          stopWhen: stepCountIs(100),
-          abortSignal, // From registry - only aborts on explicit user stop, not client disconnect
-          experimental_context: {
-            userId,
-            timezone: userTimezone,
-            aiProvider: currentProvider,
-            aiModel: currentModel,
-            conversationId,
-            locationContext,
-            modelCapabilities: await getModelCapabilities(currentModel, currentProvider),
-            chatSource: { type: 'global' as const },
-          },
-          maxRetries: 20,
-          onAbort: () => {
-            loggers.api.info('Global Assistant Chat API: Stream aborted by user', {
-              userId: maskIdentifier(userId),
-              conversationId,
-              streamId,
-              model: currentModel,
-              provider: currentProvider,
-            });
-          },
-        });
-
-        usagePromise = aiResult.totalUsage
-          .catch((error) => {
-            loggers.api.debug('Global Assistant: Failed to retrieve token usage from stream', {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            });
-            return undefined;
-          });
-
-        // Stream all chunks to client, continuing server-side even if client disconnects
-        for await (const chunk of aiResult.toUIMessageStream()) {
-          try {
-            writer.write(chunk);
-          } catch {
-            // Client disconnected - continue processing to ensure onFinish fires
-          }
-        }
-      },
-      onFinish: async ({ responseMessage }) => {
-        // Clean up abort controller from registry
-        removeStream({ streamId });
-
-        loggers.api.debug('Global Assistant Chat API: onFinish callback triggered for AI response', {});
-
-        if (responseMessage) {
-          try {
-            const messageId = serverAssistantMessageId;
-            const messageContent = extractMessageContent(responseMessage);
-            const extractedToolCalls = extractToolCalls(responseMessage);
-            const extractedToolResults = extractToolResults(responseMessage);
-
-            loggers.api.debug('Global Assistant Chat API: Saving AI response message', {
-              id: messageId,
-              contentLength: messageContent.length,
-              toolCallsCount: extractedToolCalls.length,
-              toolResultsCount: extractedToolResults.length,
-            });
-
-            await saveGlobalAssistantMessageToDatabase({
-              messageId,
-              conversationId,
-              userId,
-              role: 'assistant',
-              content: messageContent,
-              toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
-              toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-              uiMessage: responseMessage,
-            });
-
-            // Update conversation lastMessageAt
-            await db
-              .update(conversations)
-              .set({
-                lastMessageAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .where(eq(conversations.id, conversationId));
-
-            loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
-
-            // Track detailed AI usage (tokens, cost, etc.)
-            try {
-              const usage = usagePromise ? await usagePromise : undefined;
-
-              if (usage && usage.totalTokens && usage.totalTokens > 0) {
-                const duration = Date.now() - startTime;
-
-                await AIMonitoring.trackUsage({
-                  userId: userId!,
-                  provider: currentProvider,
-                  model: currentModel,
-                  inputTokens: usage.inputTokens,
-                  outputTokens: usage.outputTokens,
-                  totalTokens: usage.totalTokens,
-                  duration,
-                  conversationId,
-                  messageId,
-                  success: true,
-                  contextMessages: contextCalculation.messageIds,
-                  contextSize: contextCalculation.totalTokens,
-                  systemPromptTokens: contextCalculation.systemPromptTokens,
-                  toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
-                  conversationTokens: contextCalculation.conversationTokens,
-                  messageCount: contextCalculation.messageCount,
-                  wasTruncated: contextCalculation.wasTruncated,
-                  truncationStrategy: contextCalculation.truncationStrategy,
-                  metadata: {
-                    toolCallsCount: extractedToolCalls.length,
-                    toolResultsCount: extractedToolResults.length,
-                    isReadOnly: readOnlyMode,
-                  }
-                });
-              }
-            } catch (trackingError) {
-              loggers.api.debug('Global Assistant: Could not track AI usage (stream aborted or failed)', {
-                conversationId: maskIdentifier(conversationId),
-                messageId: maskIdentifier(messageId),
-                error: trackingError instanceof Error ? trackingError.message : 'Unknown error',
-              });
-            }
-
-            // Track usage for PageSpace providers only (rate limiting/quota tracking)
-            const isPageSpaceProvider = currentProvider === 'pagespace';
-
-            if (isPageSpaceProvider) {
-              try {
-                const providerType = getPageSpaceModelTier(currentModel) ?? 'standard';
-
-                const usageResult = await incrementUsage(userId, providerType);
-
-                usageLogger.info('Global Assistant usage incremented', {
-                  userId: maskIdentifier(userId),
-                  provider: currentProvider,
-                  providerType,
-                  messageId: maskIdentifier(messageId),
-                  conversationId: maskIdentifier(conversationId),
-                  currentCount: usageResult.currentCount,
-                  limit: usageResult.limit,
-                  remaining: usageResult.remainingCalls,
-                  success: usageResult.success,
-                });
-
-                // Broadcast usage event for real-time updates
-                try {
-                  const currentUsageSummary = await getUserUsageSummary(userId);
-                  await broadcastUsageEvent({
-                    userId,
-                    operation: 'updated',
-                    subscriptionTier: currentUsageSummary.subscriptionTier as 'free' | 'pro',
-                    standard: currentUsageSummary.standard,
-                    pro: currentUsageSummary.pro
-                  });
-                } catch (broadcastError) {
-                  usageLogger.error('Global Assistant usage broadcast failed', broadcastError instanceof Error ? broadcastError : undefined, {
-                    userId: maskIdentifier(userId),
-                    conversationId: maskIdentifier(conversationId),
-                  });
-                }
-              } catch (usageError) {
-                usageLogger.error('Global Assistant usage tracking failed', usageError as Error, {
-                  userId: maskIdentifier(userId),
-                  provider: currentProvider,
-                  messageId: maskIdentifier(messageId),
-                  conversationId: maskIdentifier(conversationId),
-                });
-              }
-            }
-          } catch (error) {
-            loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
-          }
-        }
+    const { response } = createStream({
+      model,
+      provider: currentProvider,
+      modelName: currentModel,
+      userId,
+      conversationId,
+      userTimezone,
+      locationContext: requestBody.locationContext,
+      systemPrompt: finalSystemPrompt,
+      messages: history.modelMessages,
+      tools: finalTools,
+      readOnlyMode,
+      startTime,
+      contextCalculation: {
+        totalTokens: contextCalculation.totalTokens,
+        messageCount: contextCalculation.messageCount,
+        messageIds: contextCalculation.messageIds,
+        wasTruncated: contextCalculation.wasTruncated,
+        truncationStrategy: contextCalculation.truncationStrategy,
+        systemPromptTokens: contextCalculation.systemPromptTokens,
+        toolDefinitionTokens: contextCalculation.toolDefinitionTokens,
+        conversationTokens: contextCalculation.conversationTokens,
       },
     });
 
     loggers.api.debug('Global Assistant Chat API: Returning stream response', {});
 
-    return createUIMessageStreamResponse({
-      stream,
-      headers: { [STREAM_ID_HEADER]: streamId },
-    });
+    return response;
 
   } catch (error) {
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
-    
-    return NextResponse.json({ 
-      error: 'Failed to process chat request. Please try again.' 
+    return NextResponse.json({
+      error: 'Failed to process chat request. Please try again.'
     }, { status: 500 });
   }
 }
