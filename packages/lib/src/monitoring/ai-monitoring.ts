@@ -6,6 +6,7 @@
 import { db, aiUsageLogs, sql, and, eq, gte, lte } from '@pagespace/db';
 import { writeAiUsage } from '../logging/logger-database';
 import { loggers } from '../logging/logger-config';
+import { getContextWindowSize } from './ai-context-calculator';
 
 /**
  * AI Provider Pricing (per 1M tokens)
@@ -376,9 +377,16 @@ export const MODEL_CONTEXT_WINDOWS = {
 
 /**
  * Get context window size for a model
+ * First checks the dictionary for exact match, then falls back to pattern-based detection
  */
-export function getContextWindow(model: string): number {
-  return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS] || MODEL_CONTEXT_WINDOWS.default;
+export function getContextWindow(model: string, provider?: string): number {
+  // Try exact match from dictionary first
+  const exactMatch = MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS];
+  if (exactMatch) {
+    return exactMatch;
+  }
+  // Fall back to pattern-based detection from ai-context-calculator
+  return getContextWindowSize(model, provider);
 }
 
 /**

@@ -10,7 +10,7 @@
 
 import { db, activityLogs } from '@pagespace/db';
 import { asc, isNotNull, count, and, gte, lte, SQL } from 'drizzle-orm';
-import { computeLogHash } from './activity-logger';
+import { computeLogHash } from './hash-chain';
 
 /**
  * Result of verifying a single log entry in the hash chain.
