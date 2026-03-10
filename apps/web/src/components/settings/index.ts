@@ -1,0 +1,9 @@
+export { ProfileSection } from './ProfileSection';
+export { EmailVerificationSection } from './EmailVerificationSection';
+export { SecuritySection } from './SecuritySection';
+export { DevicesSection } from './DevicesSection';
+export { AccountInfoSection } from './AccountInfoSection';
+export { DataPrivacySection } from './DataPrivacySection';
+export { DangerZoneSection } from './DangerZoneSection';
+export { SettingsPageLayout } from './SettingsPageLayout';
+export { SettingsSection } from './SettingsSection';

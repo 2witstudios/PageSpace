@@ -2,23 +2,17 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, Cable, Plug2, Loader2, ExternalLink, AlertCircle, Package } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Cable, Plug2, Loader2, ExternalLink, AlertCircle, Package } from 'lucide-react';
 import { toast } from 'sonner';
 import { useProviders, useUserConnections, useAvailableBuiltins } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { DisconnectConfirmDialog } from '@/components/integrations/DisconnectConfirmDialog';
-import { del, patch, post } from '@/lib/auth/auth-fetch';
+import { del, post } from '@/lib/auth/auth-fetch';
+import { SettingsPageLayout } from '@/components/settings/SettingsPageLayout';
+import { SettingsSection } from '@/components/settings/SettingsSection';
 import type { SafeProvider, SafeConnection } from '@/components/integrations/types';
 
 const visibilityLabels: Record<string, string> = {
@@ -32,20 +26,16 @@ export default function IntegrationsSettingsPage() {
   const searchParams = useSearchParams();
   const { providers, isLoading: loadingProviders, error: providersError, mutate: mutateProviders } = useProviders();
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
-
   const { builtins, isLoading: loadingBuiltins, error: builtinsError, mutate: mutateBuiltins } = useAvailableBuiltins();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
-  const [updatingVisibility, setUpdatingVisibility] = useState<string | null>(null);
   const [installingBuiltin, setInstallingBuiltin] = useState<string | null>(null);
 
-  // Handle OAuth callback redirect params
   useEffect(() => {
     if (searchParams.get('connected') === 'true') {
       toast.success('Integration connected successfully');
       mutateConnections();
-      // Clean URL
       router.replace('/settings/integrations');
     } else if (searchParams.get('error')) {
       toast.error('Connection failed. Please try again.');
@@ -75,18 +65,6 @@ export default function IntegrationsSettingsPage() {
     }
   };
 
-  const handleVisibilityChange = async (connectionId: string, visibility: string) => {
-    setUpdatingVisibility(connectionId);
-    try {
-      await patch(`/api/user/integrations/${connectionId}`, { visibility });
-      mutateConnections();
-    } catch {
-      toast.error('Failed to update visibility');
-    } finally {
-      setUpdatingVisibility(null);
-    }
-  };
-
   const handleInstallBuiltin = async (builtinId: string) => {
     setInstallingBuiltin(builtinId);
     try {
@@ -102,7 +80,6 @@ export default function IntegrationsSettingsPage() {
   };
 
   const isLoading = loadingProviders || loadingConnections;
-
   const getProviderDetailHref = (connection: SafeConnection) => {
     if (connection.provider?.slug === 'google-calendar') {
       return '/settings/integrations/google-calendar';
@@ -110,251 +87,139 @@ export default function IntegrationsSettingsPage() {
     return null;
   };
 
+  const renderConnectionItem = (connection: SafeConnection) => {
+    const detailHref = getProviderDetailHref(connection);
+    return (
+      <div
+        key={connection.id}
+        className="flex items-center justify-between p-3 border rounded-lg bg-card"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="p-2 rounded-full bg-muted flex-shrink-0">
+            <Plug2 className="h-4 w-4 text-muted-foreground" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium truncate">{connection.name}</span>
+              <IntegrationStatusBadge status={connection.status} />
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {connection.provider?.name}
+              {connection.visibility && (
+                <> &middot; {visibilityLabels[connection.visibility] ?? connection.visibility}</>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {detailHref && (
+            <Button variant="ghost" size="sm" onClick={() => router.push(detailHref)}>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setDisconnectConnection(connection)}
+          >
+            Disconnect
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderProviderItem = (provider: SafeProvider) => (
+    <div key={provider.id} className="flex items-center justify-between p-3 border rounded-lg bg-card">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="p-2 rounded-full bg-muted flex-shrink-0">
+          <Plug2 className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <span className="font-medium">{provider.name}</span>
+          {provider.description && (
+            <p className="text-xs text-muted-foreground truncate">{provider.description}</p>
+          )}
+        </div>
+      </div>
+      <Button size="sm" onClick={() => setConnectProvider(provider)}>Connect</Button>
+    </div>
+  );
+
+  const renderBuiltinItem = (builtin: { id: string; name: string; description?: string }) => (
+    <div key={builtin.id} className="flex items-center justify-between p-3 border rounded-lg bg-card">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="p-2 rounded-full bg-muted flex-shrink-0">
+          <Package className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <span className="font-medium">{builtin.name}</span>
+          {builtin.description && (
+            <p className="text-xs text-muted-foreground truncate">{builtin.description}</p>
+          )}
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={installingBuiltin === builtin.id}
+        onClick={() => handleInstallBuiltin(builtin.id)}
+      >
+        {installingBuiltin === builtin.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+        Install
+      </Button>
+    </div>
+  );
+
+  const renderLoading = (count = 2) => (
+    <div className="space-y-3">
+      {Array.from({ length: count }).map((_, i) => (
+        <Skeleton key={i} className="h-16 w-full" />
+      ))}
+    </div>
+  );
+
+  const renderError = (message: string) => (
+    <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+      <AlertCircle className="h-4 w-4" />
+      <span>{message}</span>
+    </div>
+  );
+
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
-      <div className="mb-8">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-        <p className="text-muted-foreground">
-          Connect external APIs and services to your AI assistants.
-        </p>
-      </div>
+    <SettingsPageLayout
+      title="Integrations"
+      description="Connect external APIs and services to your AI assistants"
+      icon={Cable}
+    >
+      <SettingsSection title="Connected" icon={Cable} description="Your active service connections.">
+        {isLoading ? renderLoading() : connectionsError ? renderError('Failed to load integrations') : connections.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-6">No integrations connected yet.</p>
+        ) : (
+          <div className="space-y-3">{connections.map(renderConnectionItem)}</div>
+        )}
+      </SettingsSection>
 
-      <div className="space-y-6">
-        {/* Connected Integrations */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Cable className="h-5 w-5" />
-              Connected
-            </CardTitle>
-            <CardDescription>
-              Your active service connections.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                <Skeleton className="h-16 w-full" />
-                <Skeleton className="h-16 w-full" />
-              </div>
-            ) : connectionsError ? (
-              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
-                <AlertCircle className="h-4 w-4" />
-                <span>Failed to load integrations</span>
-              </div>
-            ) : connections.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                No integrations connected yet.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {connections.map((connection) => {
-                  const detailHref = getProviderDetailHref(connection);
-                  return (
-                    <div
-                      key={connection.id}
-                      className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="p-2 rounded-full bg-muted flex-shrink-0">
-                          <Plug2 className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium truncate">{connection.name}</span>
-                            <IntegrationStatusBadge status={connection.status} />
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {connection.provider?.name}
-                            {connection.visibility && (
-                              <> &middot; {visibilityLabels[connection.visibility] ?? connection.visibility}</>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {connection.visibility && (
-                          <Select
-                            value={connection.visibility}
-                            onValueChange={(v) => handleVisibilityChange(connection.id, v)}
-                            disabled={updatingVisibility === connection.id}
-                          >
-                            <SelectTrigger className="w-[130px] h-8 text-xs">
-                              {updatingVisibility === connection.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <SelectValue />
-                              )}
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="private">Private</SelectItem>
-                              <SelectItem value="owned_drives">Your drives</SelectItem>
-                              <SelectItem value="all_drives">All drives</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                        {detailHref && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => router.push(detailHref)}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDisconnectConnection(connection)}
-                        >
-                          Disconnect
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <SettingsSection title="Available Providers" icon={Plug2} description="Connect new services to extend your AI assistants' capabilities.">
+        {isLoading ? renderLoading() : providersError ? renderError('Failed to load integrations') : availableProviders.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+            <AlertCircle className="h-4 w-4" />
+            {providers.length === 0 ? 'No integration providers configured.' : 'All available providers are already connected.'}
+          </div>
+        ) : (
+          <div className="space-y-3">{availableProviders.map(renderProviderItem)}</div>
+        )}
+      </SettingsSection>
 
-        {/* Available Providers */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Plug2 className="h-5 w-5" />
-              Available Providers
-            </CardTitle>
-            <CardDescription>
-              Connect new services to extend your AI assistants&apos; capabilities.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                <Skeleton className="h-16 w-full" />
-                <Skeleton className="h-16 w-full" />
-              </div>
-            ) : providersError ? (
-              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
-                <AlertCircle className="h-4 w-4" />
-                <span>Failed to load integrations</span>
-              </div>
-            ) : availableProviders.length === 0 ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-                <AlertCircle className="h-4 w-4" />
-                {providers.length === 0
-                  ? 'No integration providers configured.'
-                  : 'All available providers are already connected.'}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {availableProviders.map((provider) => (
-                  <div
-                    key={provider.id}
-                    className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="p-2 rounded-full bg-muted flex-shrink-0">
-                        <Plug2 className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="font-medium">{provider.name}</span>
-                        {provider.description && (
-                          <p className="text-xs text-muted-foreground truncate">
-                            {provider.description}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      onClick={() => setConnectProvider(provider)}
-                    >
-                      Connect
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <SettingsSection title="Built-in Integrations" icon={Package} description="Install built-in integrations to make them available for connection.">
+        {loadingBuiltins ? renderLoading(1) : builtinsError ? renderError('Failed to load available integrations') : builtins.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-6">All built-in integrations have been installed.</p>
+        ) : (
+          <div className="space-y-3">{builtins.map(renderBuiltinItem)}</div>
+        )}
+      </SettingsSection>
 
-        {/* Built-in Integrations */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Package className="h-5 w-5" />
-              Built-in Integrations
-            </CardTitle>
-            <CardDescription>
-              Install built-in integrations to make them available for connection.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loadingBuiltins ? (
-              <div className="space-y-3">
-                <Skeleton className="h-16 w-full" />
-              </div>
-            ) : builtinsError ? (
-              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
-                <AlertCircle className="h-4 w-4" />
-                <span>Failed to load available integrations</span>
-              </div>
-            ) : builtins.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                All built-in integrations have been installed.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {builtins.map((builtin) => (
-                  <div
-                    key={builtin.id}
-                    className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="p-2 rounded-full bg-muted flex-shrink-0">
-                        <Package className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="font-medium">{builtin.name}</span>
-                        {builtin.description && (
-                          <p className="text-xs text-muted-foreground truncate">
-                            {builtin.description}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={installingBuiltin === builtin.id}
-                      onClick={() => handleInstallBuiltin(builtin.id)}
-                    >
-                      {installingBuiltin === builtin.id ? (
-                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                      ) : null}
-                      Install
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Connect Dialog */}
       <ConnectIntegrationDialog
         provider={connectProvider}
         open={!!connectProvider}
@@ -362,13 +227,12 @@ export default function IntegrationsSettingsPage() {
         onConnected={() => mutateConnections()}
       />
 
-      {/* Disconnect Dialog */}
       <DisconnectConfirmDialog
         open={!!disconnectConnection}
         onOpenChange={(open) => { if (!open) setDisconnectConnection(null); }}
         connectionName={disconnectConnection?.name ?? ''}
         onConfirm={handleDisconnect}
       />
-    </div>
+    </SettingsPageLayout>
   );
 }
