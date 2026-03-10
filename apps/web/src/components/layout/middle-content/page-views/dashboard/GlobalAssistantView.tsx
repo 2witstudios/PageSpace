@@ -51,9 +51,9 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
+import type { VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
-import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
+import { useChatSession } from '@/lib/ai/shared/hooks';
 
 // Shared hooks and components
 import {
@@ -134,24 +134,10 @@ const GlobalAssistantView: React.FC = () => {
   // LOCAL STATE
   // ============================================
   const [input, setInput] = useState<string>('');
-  const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
-
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
-
-  // Display preferences
-  const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
   const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
@@ -250,22 +236,6 @@ const GlobalAssistantView: React.FC = () => {
     loadAgentConfig();
   }, [selectedAgent]);
 
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
-
   // ============================================
   // CHAT CONFIGURATION
   // ============================================
@@ -339,6 +309,30 @@ const GlobalAssistantView: React.FC = () => {
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
   const isLoading = !isInitialized;
+
+  // ============================================
+  // CONSOLIDATED CHAT SESSION HOOK
+  // ============================================
+  const chatSession = useChatSession({
+    owner: VOICE_OWNER,
+    conversationId: currentConversationId,
+    isStreaming,
+    messages,
+    error,
+  });
+
+  // Destructure for convenience
+  const {
+    isVoiceModeActive,
+    handleVoiceModeToggle,
+    lastAIResponse,
+    showVoiceSettings,
+    setShowVoiceSettings,
+    showError,
+    setShowError,
+    isOpenAIConfigured,
+    displayPreferences,
+  } = chatSession;
 
   // ============================================
   // MESSAGE ACTIONS (shared hook)
@@ -584,17 +578,6 @@ const GlobalAssistantView: React.FC = () => {
     { conversationId: currentConversationId || undefined, componentName: 'GlobalAssistantView' }
   );
 
-  // Reset error visibility when new error occurs
-  useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
-
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
   // ============================================
   // HANDLERS
   // ============================================
@@ -693,36 +676,6 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage,
     wrapSend,
   ]);
-
-  // Track last AI response for voice mode TTS
-  useEffect(() => {
-    if (!isVoiceModeActive || isStreaming) return;
-
-    // Get the last assistant message
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      // Extract text from message parts
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
-    }
-  }, [messages, isStreaming, isVoiceModeActive]);
-
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-      setShowVoiceSettings(false);
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // ============================================
   // RENDER

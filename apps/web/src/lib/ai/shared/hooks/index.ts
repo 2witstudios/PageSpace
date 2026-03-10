@@ -11,3 +11,5 @@ export { useStreamingRegistration } from './useStreamingRegistration';
 export { useChatStop } from './useChatStop';
 export { useSendHandoff } from './useSendHandoff';
 export { useStreamRecovery } from './useStreamRecovery';
+export { useChatSession } from './useChatSession';
+export { useTodoListState } from './useTodoListState';

@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
 import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
+import { type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { buildPagePath } from '@/lib/tree/tree-utils';
 import { useDriveStore } from '@/hooks/useDrive';
 import { useAuth } from '@/hooks/useAuth';
@@ -40,13 +40,13 @@ import {
   useStreamingRegistration,
   useChatStop,
   useSendHandoff,
+  useChatSession,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
 import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
-import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import {
   ChatLayout,
   type ChatLayoutRef,
@@ -76,22 +76,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [input, setInput] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('chat');
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
-  const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
-
-  // Display preferences
-  const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
   const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
@@ -189,6 +176,17 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const isLoading = !isInitialized;
 
   // ============================================
+  // CHAT SESSION (shared voice mode, error, display prefs)
+  // ============================================
+  const chatSession = useChatSession({
+    owner: VOICE_OWNER,
+    conversationId: currentConversationId,
+    isStreaming,
+    messages,
+    error,
+  });
+
+  // ============================================
   // MESSAGE ACTIONS (shared hook)
   // ============================================
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
@@ -273,51 +271,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     isStreaming,
     { pageId: page.id, componentName: 'AiChatView' }
   );
-
-  // Reset error visibility when new error occurs
-  useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
-
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
-
-  // Track last AI response for voice mode TTS
-  useEffect(() => {
-    if (!isVoiceModeActive || isStreaming) return;
-
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
-    }
-  }, [messages, isStreaming, isVoiceModeActive]);
 
   // ============================================
   // HANDLERS
@@ -450,16 +403,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     wrapSend,
   ]);
 
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-      setShowVoiceSettings(false);
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
-
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
     try {
@@ -563,7 +506,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             {/* Chat tab actions */}
             {activeTab === 'chat' && (
               <div className="flex items-center gap-3">
-                {displayPreferences.showTokenCounts && (
+                {chatSession.displayPreferences.showTokenCounts && (
                   <AiUsageMonitor pageId={page.id} compact />
                 )}
 
@@ -619,8 +562,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
             driveId={driveId}
             error={error}
-            showError={showError}
-            onClearError={() => setShowError(false)}
+            showError={chatSession.showError}
+            onClearError={() => chatSession.setShowError(false)}
             welcomeTitle={`Chat with ${page.title}`}
             welcomeSubtitle={agentConfig?.systemPrompt ? 'Ask me anything!' : 'Start a conversation with the AI assistant'}
             onEdit={!isReadOnly ? handleEdit : undefined}
@@ -640,15 +583,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onMcpServerToggle={setServerEnabled}
             showMcp={isDesktop}
             renderInput={(props) => (
-              isVoiceModeActive ? (
+              chatSession.isVoiceModeActive ? (
                 <VoiceModeDock
                   owner={VOICE_OWNER}
                   onSend={handleVoiceSend}
-                  aiResponse={lastAIResponse}
+                  aiResponse={chatSession.lastAIResponse}
                   isAIStreaming={isStreaming}
-                  showSettings={showVoiceSettings}
-                  onToggleSettings={() => setShowVoiceSettings((s) => !s)}
-                  onClose={() => setShowVoiceSettings(false)}
+                  showSettings={chatSession.showVoiceSettings}
+                  onToggleSettings={() => chatSession.setShowVoiceSettings((s) => !s)}
+                  onClose={() => chatSession.setShowVoiceSettings(false)}
                 />
               ) : (
                 <ChatInput
@@ -677,9 +620,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                     setSelectedProvider(provider);
                     setSelectedModel(model);
                   }}
-                  onVoiceModeClick={handleVoiceModeToggle}
-                  isVoiceModeActive={isVoiceModeActive}
-                  isVoiceModeAvailable={isOpenAIConfigured}
+                  onVoiceModeClick={chatSession.handleVoiceModeToggle}
+                  isVoiceModeActive={chatSession.isVoiceModeActive}
+                  isVoiceModeAvailable={chatSession.isOpenAIConfigured}
                   attachments={attachments}
                   onAddFiles={addFiles}
                   onRemoveFile={removeFile}

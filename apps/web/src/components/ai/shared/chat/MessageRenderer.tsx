@@ -1,18 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { ToolCallRenderer } from './tool-calls';
-
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
 import { DeleteMessageDialog } from './DeleteMessageDialog';
 import { TodoListMessage } from './TodoListMessage';
-import { useSocket } from '@/hooks/useSocket';
+import { CompactTodoListMessage } from './CompactTodoListMessage';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
-import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useTodoListState } from '@/lib/ai/shared/hooks/useTodoListState';
 import { useGroupedParts } from './useGroupedParts';
 import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
+import styles from './CompactMessageRenderer.module.css';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -26,13 +26,10 @@ interface TextBlockProps {
   isEditing?: boolean;
   onSaveEdit?: (newContent: string) => Promise<void>;
   onCancelEdit?: () => void;
-  /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  compact?: boolean;
 }
 
-/**
- * Renders a group of consecutive text parts as a single block
- */
 const TextBlock: React.FC<TextBlockProps> = React.memo(({
   parts,
   role,
@@ -45,47 +42,48 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  compact = false,
 }) => {
   const content = parts.map(part => part.text).join('');
-
   if (!content.trim() && !isEditing) return null;
 
+  const containerClass = compact
+    ? `group relative text-xs mb-1 min-w-0 max-w-full ${role === 'user' ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2' : ''}`
+    : `group relative mb-1 ${role === 'user' ? 'p-3 rounded-lg bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8' : 'mr-2 sm:mr-8'}`;
+
   return (
-    <div
-      className={`group relative mb-1 ${role === 'user'
-        ? 'p-3 rounded-lg bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
-        : 'mr-2 sm:mr-8'
-        }`}
-    >
+    <div className={containerClass}>
       {role === 'user' && (
-        <div className="flex items-center mb-1">
-          <div className="text-sm font-medium text-primary dark:text-primary">
+        <div className={`flex items-center ${compact ? 'mb-0.5' : 'mb-1'}`}>
+          <div className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-primary dark:text-primary`}>
             You
           </div>
         </div>
       )}
 
       {isEditing && onSaveEdit && onCancelEdit ? (
-        <MessageEditor
-          initialContent={content}
-          onSave={onSaveEdit}
-          onCancel={onCancelEdit}
-        />
+        <div className={compact ? 'text-xs' : undefined}>
+          <MessageEditor
+            initialContent={content}
+            onSave={onSaveEdit}
+            onCancel={onCancelEdit}
+            placeholder={compact ? "Edit message..." : undefined}
+          />
+        </div>
       ) : (
         <>
-          <div className="text-gray-900 dark:text-gray-100 prose prose-sm dark:prose-invert max-w-full prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800">
+          <div className={`text-gray-900 dark:text-gray-100 prose ${compact ? 'prose-xs' : 'prose-sm'} dark:prose-invert ${compact ? 'min-w-0 max-w-full break-words' : 'max-w-full'} prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800 ${compact ? styles.compactProseContent : ''}`}>
             <div className="[overflow-wrap:break-word] [hyphens:auto] [text-wrap:pretty]">
               <StreamingMarkdown content={content} isStreaming={isStreaming} />
             </div>
           </div>
-          {/* Always show footer with buttons; timestamp only when createdAt exists */}
-          <div className="flex items-center justify-between mt-2">
-            <div className="text-xs text-gray-500">
+          <div className={`flex items-center justify-between ${compact ? 'mt-1' : 'mt-2'}`}>
+            <div className={`${compact ? 'text-[10px]' : 'text-xs'} text-gray-500`}>
               {createdAt && (
                 <>
-                  {new Date(createdAt).toLocaleTimeString()}
-                  {editedAt && <span className="ml-2">(edited)</span>}
+                  {new Date(createdAt).toLocaleTimeString(compact ? undefined : [], compact ? { hour: '2-digit', minute: '2-digit' } : undefined)}
+                  {editedAt && <span className={compact ? 'ml-1' : 'ml-2'}>(edited)</span>}
                 </>
               )}
             </div>
@@ -95,6 +93,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
                 onDelete={onDelete}
                 onRetry={onRetry}
                 onUndoFromHere={onUndoFromHere}
+                compact={compact}
               />
             )}
           </div>
@@ -115,15 +114,10 @@ interface MessageRendererProps {
   onTaskUpdate?: (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => void;
   isLastAssistantMessage?: boolean;
   isLastUserMessage?: boolean;
-  /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  compact?: boolean;
 }
 
-/**
- * Renders a UIMessage with parts in chronological order.
- * Supports both standard messages and todo_list messages with real-time socket updates.
- * Groups consecutive text parts together while preserving tool call positions.
- */
 export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   message,
   onEdit,
@@ -133,117 +127,21 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   onTaskUpdate,
   isLastAssistantMessage = false,
   isLastUserMessage = false,
-  isStreaming = false
+  isStreaming = false,
+  compact = false,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const canRetry = Boolean(onRetry) && (isLastAssistantMessage || isLastUserMessage);
 
-  // ============================================
-  // Todo List State & Socket (only for todo_list messages)
-  // ============================================
-  const [tasks, setTasks] = useState<Array<{
-    id: string;
-    title: string;
-    status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-    priority: 'low' | 'medium' | 'high';
-    position: number;
-    updatedAt?: Date;
-  }>>([]);
-  const [taskList, setTaskList] = useState<{
-    id: string;
-    title: string;
-    description?: string;
-    status: string;
-    createdAt?: Date;
-    updatedAt?: Date;
-  } | null>(null);
-  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+  const { tasks, taskList, isLoadingTasks, handleTaskStatusUpdate } = useTodoListState({
+    messageId: message.id,
+    messageType: message.messageType,
+    onTaskUpdate,
+  });
 
-  // Socket connection (singleton pattern) - only used for todo_list messages
-  const socket = useSocket();
-
-  const loadTasksForMessage = async (messageId: string) => {
-    setIsLoadingTasks(true);
-    try {
-      const response = await fetchWithAuth(`/api/ai/tasks/by-message/${messageId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setTasks(data.tasks || []);
-        setTaskList(data.taskList);
-      } else {
-        console.error('Failed to load tasks for message:', messageId);
-      }
-    } catch (error) {
-      console.error('Error loading tasks:', error);
-    } finally {
-      setIsLoadingTasks(false);
-    }
-  };
-
-  // Load tasks for todo_list messages
-  useEffect(() => {
-    if (message.messageType === 'todo_list' && message.id) {
-      loadTasksForMessage(message.id);
-    }
-  }, [message.messageType, message.id]);
-
-  // Listen for real-time task updates
-  useEffect(() => {
-    if (!socket || message.messageType !== 'todo_list') return;
-
-    const handleTaskUpdate = (payload: {
-      taskId: string;
-      data: { newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked' };
-    }) => {
-      const taskInOurMessage = tasks.find(task => task.id === payload.taskId);
-      if (taskInOurMessage) {
-        setTasks(prevTasks =>
-          prevTasks.map(task =>
-            task.id === payload.taskId
-              ? { ...task, status: payload.data.newStatus, updatedAt: new Date() }
-              : task
-          )
-        );
-      }
-    };
-
-    const handleTaskListUpdate = (payload: { taskListId: string }) => {
-      if (taskList && payload.taskListId === taskList.id) {
-        loadTasksForMessage(message.id);
-      }
-    };
-
-    socket.on('task:task_updated', handleTaskUpdate);
-    socket.on('task:task_list_created', handleTaskListUpdate);
-
-    return () => {
-      socket.off('task:task_updated', handleTaskUpdate);
-      socket.off('task:task_list_created', handleTaskListUpdate);
-    };
-  }, [socket, message.messageType, message.id, tasks, taskList]);
-
-  const handleTaskStatusUpdate = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed' | 'blocked') => {
-    try {
-      await patch(`/api/ai/tasks/${taskId}/status`, { status: newStatus });
-      setTasks(prevTasks =>
-        prevTasks.map(task =>
-          task.id === taskId ? { ...task, status: newStatus, updatedAt: new Date() } : task
-        )
-      );
-      onTaskUpdate?.(taskId, newStatus);
-    } catch (error) {
-      console.error('Error updating task:', error);
-    }
-  };
-
-  // ============================================
-  // Standard Message Rendering
-  // ============================================
   const groupedParts = useGroupedParts(message.parts);
-
-  // Check if this message has tool calls (for showing undo button on assistant messages)
   const hasToolCalls = message.role === 'assistant' && groupedParts.some(isProcessedToolPart);
 
   const createdAt = message.createdAt;
@@ -276,21 +174,19 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
     }
   };
 
-  // ============================================
   // Render todo_list messages
-  // ============================================
   if (message.messageType === 'todo_list') {
     if (isLoadingTasks) {
       return (
-        <div className="mb-4 mr-8">
-          <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 dark:border-primary/30 rounded-lg p-4">
+        <div className={`${compact ? 'mb-3' : 'mb-4'} ${compact ? '' : 'mr-8'}`}>
+          <div className={`bg-primary/${compact ? '10' : '5'} dark:bg-primary/${compact ? '20' : '10'} border border-primary/20 dark:border-primary/30 ${compact ? 'rounded-md p-2' : 'rounded-lg p-4'}`}>
             <div className="animate-pulse">
-              <div className="h-4 bg-primary/20 dark:bg-primary/30 rounded w-1/3 mb-2"></div>
-              <div className="h-2 bg-primary/15 dark:bg-primary/25 rounded w-full mb-3"></div>
-              <div className="space-y-2">
-                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
-                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
-                <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>
+              <div className={`h-${compact ? '3' : '4'} bg-primary/${compact ? '30' : '20'} dark:bg-primary/${compact ? '50' : '30'} rounded ${compact ? 'w-2/3 mb-1' : 'w-1/3 mb-2'}`}></div>
+              <div className={`h-${compact ? '1.5' : '2'} bg-primary/${compact ? '20' : '15'} dark:bg-primary/${compact ? '40' : '25'} rounded ${compact ? 'w-full mb-2' : 'w-full mb-3'}`}></div>
+              <div className={`space-y-${compact ? '1' : '2'}`}>
+                <div className={`h-${compact ? '6' : '8'} bg-white dark:bg-gray-800 rounded`}></div>
+                <div className={`h-${compact ? '6' : '8'} bg-white dark:bg-gray-800 rounded`}></div>
+                {compact ? null : <div className="h-8 bg-white dark:bg-gray-800 rounded"></div>}
               </div>
             </div>
           </div>
@@ -300,9 +196,9 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
 
     if (!taskList || tasks.length === 0) {
       return (
-        <div className="mb-4 mr-8">
-          <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-            <div className="text-yellow-800 dark:text-yellow-200">
+        <div className={`${compact ? 'mb-3' : 'mb-4'} ${compact ? '' : 'mr-8'}`}>
+          <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-4">
+            <div className={`${compact ? 'text-xs' : ''} text-yellow-800 dark:text-yellow-200`}>
               No tasks found for this todo list.
             </div>
           </div>
@@ -310,19 +206,21 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
       );
     }
 
+    const TodoListComponent = compact ? CompactTodoListMessage : TodoListMessage;
+
     return (
       <ErrorBoundary
         fallback={
-          <div className="mb-4">
-            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-              <div className="text-yellow-800 dark:text-yellow-200">
+          <div className={`${compact ? 'mb-3' : 'mb-4'}`}>
+            <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-4">
+              <div className={`${compact ? 'text-xs' : ''} text-yellow-800 dark:text-yellow-200`}>
                 Failed to load TODO list. Please refresh the page.
               </div>
             </div>
           </div>
         }
       >
-        <TodoListMessage
+        <TodoListComponent
           tasks={tasks}
           taskList={taskList}
           createdAt={message.createdAt}
@@ -332,12 +230,10 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
     );
   }
 
-  // ============================================
   // Render standard messages
-  // ============================================
   return (
     <>
-      <div key={message.id} className="mb-2">
+      <div key={message.id} className={`${compact ? 'mb-1 min-w-0 max-w-full' : 'mb-2'}`}>
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
@@ -357,6 +253,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                compact={compact}
               />
             );
           } else if (isFileGroupPart(group)) {
@@ -364,11 +261,12 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
               <ImageMessageContent
                 key={`${message.id}-file-${index}`}
                 parts={group.parts}
+                compact={compact}
               />
             );
           } else if (isProcessedToolPart(group)) {
             return (
-              <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
+              <div key={`${message.id}-tool-${index}`} className={compact ? 'mt-1' : 'mr-2 sm:mr-8'}>
                 <ToolCallRenderer
                   part={{
                     type: group.type,
@@ -378,6 +276,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                     output: group.output,
                     state: group.state,
                   }}
+                  compact={compact}
                 />
               </div>
             );

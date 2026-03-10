@@ -18,18 +18,17 @@ import {
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
+import type { VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChatConversation, useGlobalChatConfig, useGlobalChatStream } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
-import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, useChatSession } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
-import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { InputCard } from '@/components/ui/floating-input';
 import { isEditingActive } from '@/stores/useEditingStore';
 
@@ -252,22 +251,32 @@ const SidebarChatTab: React.FC = () => {
   // Local Component State
   // ============================================
   const [input, setInput] = useState<string>('');
-  const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
 
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
+  // ============================================
+  // CONSOLIDATED CHAT SESSION HOOK
+  // ============================================
+  const chatSession = useChatSession({
+    owner: VOICE_OWNER,
+    conversationId: currentConversationId,
+    isStreaming: displayIsStreaming,
+    messages,
+    error,
+  });
 
-  // Display preferences
-  const { preferences: displayPreferences } = useDisplayPreferences();
+  // Destructure for convenience
+  const {
+    isVoiceModeActive,
+    handleVoiceModeToggle,
+    lastAIResponse,
+    showVoiceSettings,
+    setShowVoiceSettings,
+    showError,
+    setShowError,
+    isOpenAIConfigured,
+    displayPreferences,
+  } = chatSession;
 
   // Image attachments for vision support
   const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
@@ -412,50 +421,6 @@ const SidebarChatTab: React.FC = () => {
   // Note: Removed unconditional scroll on every message change
   // The sidebar will be updated with use-stick-to-bottom in a future iteration
   // For now, scroll is called explicitly after sending messages
-
-  useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
-
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
-
-  // Track last AI response for voice mode TTS
-  useEffect(() => {
-    if (!isVoiceModeActive || displayIsStreaming) return;
-
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
-    }
-  }, [messages, displayIsStreaming, isVoiceModeActive]);
 
   // App state recovery - refresh messages when returning from background
   // This catches completed AI responses that finished while the app was backgrounded
@@ -607,16 +572,6 @@ const SidebarChatTab: React.FC = () => {
     sendMessage,
     wrapSend,
   ]);
-
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-      setShowVoiceSettings(false);
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // Unified setMessages that syncs to global context when in global mode
   // Forward updater functions directly — useChat's setMessages handles them with latest state
