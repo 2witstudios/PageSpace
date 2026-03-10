@@ -30,6 +30,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { type ToolExecutionContext } from '../core';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
+import { getAuthenticatedUserId } from './tool-utils';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -393,10 +394,7 @@ export const pageWriteTools = {
       content: z.string().describe('New content to replace the lines with'),
     }),
     execute: async ({ title, pageId, startLine, endLine = startLine, content }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the page via repository seam
@@ -541,10 +539,7 @@ export const pageWriteTools = {
       contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
     }),
     execute: async ({ driveId, parentId, title, type, contentMode }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the drive via repository seam
@@ -699,10 +694,7 @@ export const pageWriteTools = {
       title: z.string().describe('New title for the page'),
     }),
     execute: async ({ currentTitle, pageId, title }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the page via repository seam
@@ -777,10 +769,7 @@ export const pageWriteTools = {
       confirmDriveName: z.string().optional().describe('For drives: the exact name of the drive (required for safety confirmation)'),
     }),
     execute: async ({ type, id, title, withChildren = false, confirmDriveName }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         if (type === 'page') {
@@ -844,10 +833,7 @@ export const pageWriteTools = {
       id: z.string().describe('The unique ID of the page or drive to restore'),
     }),
     execute: async ({ type, id }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         if (type === 'page') {
@@ -906,10 +892,7 @@ export const pageWriteTools = {
       position: z.number().describe('Position within the new parent (1-based, higher numbers appear later)'),
     }),
     execute: async ({ title, pageId, newParentTitle, newParentId, position }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the page to move via repository seam
@@ -1000,10 +983,7 @@ export const pageWriteTools = {
       })).min(1).describe('Array of cell updates to apply'),
     }),
     execute: async ({ pageId, cells }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the page via repository seam

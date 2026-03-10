@@ -25,7 +25,11 @@ import {
   type DiffRequest,
 } from '@pagespace/lib/content';
 import { readPageContent } from '@pagespace/lib/server';
-import { type ToolExecutionContext } from '../core';
+import {
+  getAuthenticatedUserId,
+  getTimeWindowStart,
+  createCompactDelta,
+} from './tool-utils';
 
 /**
  * Activity tools for AI agents
@@ -40,27 +44,6 @@ import { type ToolExecutionContext } from '../core';
 const CONTENT_OPERATIONS = ['create', 'update', 'delete', 'restore', 'move', 'trash', 'reorder'] as const;
 const PERMISSION_OPERATIONS = ['permission_grant', 'permission_update', 'permission_revoke'] as const;
 const MEMBERSHIP_OPERATIONS = ['member_add', 'member_remove', 'member_role_change', 'ownership_transfer'] as const;
-
-// Time window helpers
-function getTimeWindowStart(window: string, lastVisitTime?: Date): Date {
-  const now = new Date();
-
-  switch (window) {
-    case '1h':
-      return new Date(now.getTime() - 60 * 60 * 1000);
-    case '24h':
-      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    case '7d':
-      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    case '30d':
-      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    case 'last_visit':
-      // Fall back to 7 days if no last visit time
-      return lastVisitTime || new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    default:
-      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  }
-}
 
 // Get user's last active session time
 async function getLastVisitTime(userId: string): Promise<Date | undefined> {
@@ -146,45 +129,6 @@ interface CompactActor {
   name: string | null;
   isYou: boolean;  // is this the current user
   count: number;   // activity count
-}
-
-// Helper to create compact delta from previousValues/newValues
-function createCompactDelta(
-  updatedFields: string[] | null,
-  prev: Record<string, unknown> | null,
-  next: Record<string, unknown> | null
-): Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }> | undefined {
-  if (!updatedFields || updatedFields.length === 0) return undefined;
-
-  const delta: Record<string, { from?: unknown; to?: unknown; len?: { from: number; to: number } }> = {};
-
-  for (const field of updatedFields) {
-    const fromVal = prev?.[field];
-    const toVal = next?.[field];
-
-    // For content/text fields, just show length change to save tokens
-    if (field === 'content' || field === 'systemPrompt' || field === 'drivePrompt') {
-      const fromLen = typeof fromVal === 'string' ? fromVal.length : 0;
-      const toLen = typeof toVal === 'string' ? toVal.length : 0;
-      if (fromLen !== toLen) {
-        delta[field] = { len: { from: fromLen, to: toLen } };
-      }
-    } else if (field === 'title') {
-      // Title changes are small and meaningful - include full values
-      delta[field] = { from: fromVal, to: toVal };
-    } else if (typeof fromVal === 'boolean' || typeof toVal === 'boolean') {
-      // Booleans are small
-      delta[field] = { from: fromVal, to: toVal };
-    } else if (typeof fromVal === 'number' || typeof toVal === 'number') {
-      // Numbers are small
-      delta[field] = { from: fromVal, to: toVal };
-    } else {
-      // For other fields, just note they changed
-      delta[field] = {};
-    }
-  }
-
-  return Object.keys(delta).length > 0 ? delta : undefined;
 }
 
 export const activityTools = {
@@ -314,10 +258,7 @@ When summarizing multiple changes, group them thematically and describe the over
       },
       { experimental_context: context }
     ) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get last visit time if needed

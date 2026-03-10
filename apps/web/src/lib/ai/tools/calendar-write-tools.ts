@@ -1,6 +1,5 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as chrono from 'chrono-node';
 import {
   db,
   calendarEvents,
@@ -13,78 +12,15 @@ import { isUserDriveMember } from '@pagespace/lib';
 import { getDriveMemberUserIds, loggers } from '@pagespace/lib/server';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { type ToolExecutionContext } from '../core';
-import { getTimezoneOffsetMinutes, normalizeTimezone, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
+import { formatDateInTimezone, normalizeTimezone } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
+import {
+  getAuthenticatedUserId,
+  parseDateTime,
+  canEditCalendarEvent,
+} from './tool-utils';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
-
-/**
- * Parse a date string that can be either ISO 8601 or natural language.
- * Uses chrono-node for natural language parsing with timezone awareness.
- * @param input - Date string (ISO 8601 or natural language)
- * @param referenceDate - Reference date for relative parsing (e.g., "tomorrow")
- * @param timezone - IANA timezone string for interpreting times (e.g., "America/New_York")
- */
-function parseDateTime(input: string, referenceDate?: Date, timezone?: string): Date {
-  // Try ISO 8601 first
-  const isoDate = new Date(input);
-  if (!isNaN(isoDate.getTime())) {
-    // If the input is a naive ISO datetime (no Z or offset) and a timezone is provided,
-    // interpret the time in the specified timezone instead of treating as UTC/server-local.
-    // E.g., "2026-02-19T19:00:00" with timezone "America/Chicago" → 7pm Central, not 7pm UTC.
-    if (timezone && isNaiveISODatetime(input)) {
-      return parseNaiveDatetimeInTimezone(input, timezone);
-    }
-    return isoDate;
-  }
-
-  // Build timezone-aware reference for chrono-node so that
-  // natural language like "tomorrow at 3pm" is interpreted in the user's timezone
-  const ref: { instant: Date; timezone?: number } = {
-    instant: referenceDate ?? new Date(),
-  };
-  if (timezone) {
-    ref.timezone = getTimezoneOffsetMinutes(timezone, ref.instant);
-  }
-
-  // Try natural language parsing with chrono-node
-  const parsed = chrono.parseDate(input, ref, { forwardDate: true });
-  if (!parsed) {
-    throw new Error(`Could not parse date: "${input}". Use ISO 8601 format (e.g., "2024-01-15T10:00:00Z") or natural language (e.g., "tomorrow at 3pm", "next Monday 10am").`);
-  }
-
-  return parsed;
-}
-
-/**
- * Check if user can edit an event
- * Returns { canEdit: boolean, reason?: string }
- */
-async function canEditEvent(
-  userId: string,
-  event: typeof calendarEvents.$inferSelect
-): Promise<{ canEdit: boolean; reason?: string }> {
-  // Check if user is the creator
-  if (event.createdById !== userId) {
-    return {
-      canEdit: false,
-      reason: 'Only the event creator can edit this event.',
-    };
-  }
-
-  return { canEdit: true };
-}
-
-/**
- * Get all attendee user IDs for an event
- */
-async function getEventAttendeeIds(eventId: string): Promise<string[]> {
-  const attendees = await db
-    .select({ userId: eventAttendees.userId })
-    .from(eventAttendees)
-    .where(eq(eventAttendees.eventId, eventId));
-  return attendees.map((a) => a.userId);
-}
 
 // Recurrence rule schema
 const recurrenceRuleSchema = z
@@ -99,6 +35,17 @@ const recurrenceRuleSchema = z
   })
   .nullable()
   .optional();
+
+/**
+ * Get all attendee user IDs for an event
+ */
+async function getEventAttendeeIds(eventId: string): Promise<string[]> {
+  const attendees = await db
+    .select({ userId: eventAttendees.userId })
+    .from(eventAttendees)
+    .where(eq(eventAttendees.eventId, eventId));
+  return attendees.map((a) => a.userId);
+}
 
 export const calendarWriteTools = {
   /**
@@ -151,10 +98,7 @@ export const calendarWriteTools = {
       },
       { experimental_context: ctx }
     ) => {
-      const userId = (ctx as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(ctx);
 
       // Get user timezone from execution context for timezone-aware operations
       const userTimezone = (ctx as ToolExecutionContext)?.timezone;
@@ -350,10 +294,7 @@ export const calendarWriteTools = {
       { eventId, title, startAt, endAt, description, location, allDay, timezone, recurrence, visibility, color, pageId },
       { experimental_context: ctx }
     ) => {
-      const userId = (ctx as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(ctx);
 
       try {
         // Get existing event
@@ -362,14 +303,11 @@ export const calendarWriteTools = {
         });
 
         if (!event) {
-          return {
-            success: false,
-            error: 'Event not found.',
-          };
+          return errorResponse('Event not found.');
         }
 
         // Check edit permission
-        const editCheck = await canEditEvent(userId, event);
+        const editCheck = canEditCalendarEvent(userId, event);
         if (!editCheck.canEdit) {
           return {
             success: false,
@@ -501,10 +439,7 @@ export const calendarWriteTools = {
       eventId: z.string().describe('The unique ID of the event to delete'),
     }),
     execute: async ({ eventId }, { experimental_context: ctx }) => {
-      const userId = (ctx as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(ctx);
 
       try {
         // Get existing event
@@ -520,7 +455,7 @@ export const calendarWriteTools = {
         }
 
         // Check edit permission
-        const editCheck = await canEditEvent(userId, event);
+        const editCheck = canEditCalendarEvent(userId, event);
         if (!editCheck.canEdit) {
           return {
             success: false,
@@ -599,10 +534,7 @@ export const calendarWriteTools = {
         .describe('Optional note with your response'),
     }),
     execute: async ({ eventId, status, responseNote }, { experimental_context: ctx }) => {
-      const userId = (ctx as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(ctx);
 
       try {
         // Verify event exists
@@ -696,10 +628,7 @@ export const calendarWriteTools = {
       isOptional: z.boolean().optional().describe('Whether these attendees are optional (default: false)'),
     }),
     execute: async ({ eventId, userIds, isOptional: isOptionalInput }, { experimental_context: ctx }) => {
-      const userId = (ctx as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(ctx);
 
       // Apply defaults
       const isOptional = isOptionalInput ?? false;
@@ -839,10 +768,7 @@ export const calendarWriteTools = {
         .describe('User ID to remove. If not specified, removes the current user.'),
     }),
     execute: async ({ eventId, targetUserId }, { experimental_context: ctx }) => {
-      const userId = (ctx as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(ctx);
 
       const removeUserId = targetUserId ?? userId;
 

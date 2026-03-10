@@ -1,31 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db, pages, drives, eq, and, driveMembers, pagePermissions, ne } from '@pagespace/db';
-import { slugify, logDriveActivity, getActorInfo, getDriveAccessWithDrive } from '@pagespace/lib/server';
+import { slugify, logDriveActivity, getDriveAccessWithDrive } from '@pagespace/lib/server';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { type ToolExecutionContext } from '../core';
-
-// Helper: Extract AI attribution context with actor info for activity logging
-async function getAiContextWithActor(context: ToolExecutionContext) {
-  const actorInfo = await getActorInfo(context.userId);
-  // Build chain metadata (Tier 1)
-  const chainMetadata = {
-    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
-    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
-    ...(context.agentChain?.length && { agentChain: context.agentChain }),
-    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
-  };
-
-  return {
-    ...actorInfo,
-    isAiGenerated: true,
-    aiProvider: context.aiProvider,
-    aiModel: context.aiModel,
-    aiConversationId: context.conversationId,
-    metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
-  };
-}
+import {
+  getAuthenticatedUserId,
+  buildAiContext,
+} from './tool-utils';
 
 export const driveTools = {
   /**
@@ -35,10 +18,7 @@ export const driveTools = {
     description: 'List all available workspaces/drives that the user has access to. Returns drive names, slugs, and basic metadata.',
     inputSchema: z.object({}),
     execute: async ({}, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // 1. Get user's own drives
@@ -125,10 +105,7 @@ export const driveTools = {
       context: z.string().max(10000).optional().describe('Optional initial drive context (workspace memory) - information about the project, conventions, or preferences'),
     }),
     execute: async ({ name, context: driveContext }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Validate name
@@ -174,7 +151,7 @@ export const driveTools = {
         logDriveActivity(userId, 'create', {
           id: newDrive.id,
           name: newDrive.name,
-        }, await getAiContextWithActor(context as ToolExecutionContext));
+        }, await buildAiContext(context as ToolExecutionContext));
 
         const contextMessage = driveContext ? ` with initial context (${driveContext.length} chars)` : '';
 
@@ -217,10 +194,7 @@ export const driveTools = {
       name: z.string().describe('The new name for the drive'),
     }),
     execute: async ({ currentName, driveId, name }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Validate name
@@ -270,7 +244,7 @@ export const driveTools = {
         );
 
         // Log activity for AI-generated drive rename
-        const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
+        const aiContext = await buildAiContext(context as ToolExecutionContext);
         logDriveActivity(userId, 'update', {
           id: updatedDrive.id,
           name: updatedDrive.name,
@@ -377,7 +351,7 @@ This context persists across conversations and helps provide better assistance. 
         );
 
         // Log activity for AI-generated context update
-        const aiContext = await getAiContextWithActor(execContext as ToolExecutionContext);
+        const aiContext = await buildAiContext(execContext as ToolExecutionContext);
         logDriveActivity(userId, 'update', {
           id: updatedDrive.id,
           name: updatedDrive.name,

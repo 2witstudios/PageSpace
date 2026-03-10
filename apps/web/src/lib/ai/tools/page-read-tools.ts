@@ -4,6 +4,7 @@ import { db, pages, taskItems, taskLists, chatMessages, channelMessages, eq, and
 import { buildTree, getUserAccessLevel, getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails, getPageTypeEmoji, isFolderPage, PageType } from '@pagespace/lib/server';
 import { type ToolExecutionContext, getSuggestedVisionModels } from '../core';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
+import { getAuthenticatedUserId } from './tool-utils';
 
 export const pageReadTools = {
   /**
@@ -16,10 +17,7 @@ export const pageReadTools = {
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
     }),
     execute: async ({ driveSlug, driveId }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Check if user has access to this drive using the provided ID
@@ -99,10 +97,7 @@ export const pageReadTools = {
       lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end.'),
     }),
     execute: async ({ title, pageId, lineStart, lineEnd }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the page directly by ID
@@ -587,10 +582,7 @@ export const pageReadTools = {
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
     }),
     execute: async ({ driveSlug, driveId }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Check if user has access to this drive using the provided ID
@@ -667,10 +659,7 @@ export const pageReadTools = {
       title: z.string().describe('The agent title for display context'),
     }),
     execute: async ({ pageId, title }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Get the page by ID
@@ -819,10 +808,7 @@ export const pageReadTools = {
       lineEnd: z.number().int().optional().describe('End message number (1-indexed, inclusive). Omit to read to end.'),
     }),
     execute: async ({ pageId, conversationId, title, lineStart, lineEnd }, { experimental_context: context }) => {
-      const userId = (context as ToolExecutionContext)?.userId;
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       try {
         // Validate line range parameters

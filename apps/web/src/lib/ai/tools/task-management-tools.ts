@@ -3,29 +3,12 @@ import { z } from 'zod';
 import { db, taskLists, taskItems, taskStatusConfigs, taskAssignees, pages, eq, and, desc, asc, isNull, inArray } from '@pagespace/db';
 import { type ToolExecutionContext } from '../core';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity, getActorInfo } from '@pagespace/lib/server';
+import { canUserEditPage, canUserViewPage, getUserDriveAccess, logPageActivity } from '@pagespace/lib/server';
 import { getDefaultContent, PageType } from '@pagespace/lib';
-
-// Helper: Extract AI attribution context with actor info for activity logging
-async function getAiContextWithActor(context: ToolExecutionContext) {
-  const actorInfo = await getActorInfo(context.userId);
-  // Build chain metadata (Tier 1)
-  const chainMetadata = {
-    ...(context.parentAgentId && { parentAgentId: context.parentAgentId }),
-    ...(context.parentConversationId && { parentConversationId: context.parentConversationId }),
-    ...(context.agentChain?.length && { agentChain: context.agentChain }),
-    ...(context.requestOrigin && { requestOrigin: context.requestOrigin }),
-  };
-
-  return {
-    ...actorInfo,
-    isAiGenerated: true,
-    aiProvider: context.aiProvider,
-    aiModel: context.aiModel,
-    aiConversationId: context.conversationId,
-    metadata: Object.keys(chainMetadata).length > 0 ? chainMetadata : undefined,
-  };
-}
+import {
+  getAuthenticatedUserId,
+  buildAiContext,
+} from './tool-utils';
 
 /**
  * Helper to verify page access for page-linked task lists
@@ -81,11 +64,7 @@ Assignment:
     }),
     execute: async (params, { experimental_context: context }) => {
       const { taskId, pageId, title, description, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position } = params;
-      const userId = (context as ToolExecutionContext)?.userId;
-
-      if (!userId) {
-        throw new Error('User authentication required');
-      }
+      const userId = getAuthenticatedUserId(context);
 
       // Determine if this is an update or create operation
       const isUpdate = !!taskId;
@@ -441,7 +420,7 @@ Assignment:
           ]);
 
           // Log activity for AI-generated task/page creation
-          const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
+          const aiContext = await buildAiContext(context as ToolExecutionContext);
           logPageActivity(userId, 'create', {
             id: createdPage.id,
             title: createdPage.title,
