@@ -51,7 +51,6 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChat } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
-import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { VoiceModeDock } from '@/components/ai/voice/VoiceModeDock';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 
@@ -66,6 +65,8 @@ import {
   useSendHandoff,
   useStreamRecovery,
   LocationContext,
+  useVoiceModeChat,
+  useChatError,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -81,7 +82,7 @@ import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
 import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 
-const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
+const VOICE_OWNER = 'global-assistant';
 
 const GlobalAssistantView: React.FC = () => {
   const pathname = usePathname();
@@ -134,21 +135,10 @@ const GlobalAssistantView: React.FC = () => {
   // LOCAL STATE
   // ============================================
   const [input, setInput] = useState<string>('');
-  const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-  const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
-  const [isOpenAIConfigured, setIsOpenAIConfigured] = useState(false);
   // Agent mode state (provider/model settings)
   const [agentSelectedProvider, setAgentSelectedProvider] = useState<string>('pagespace');
   const [agentSelectedModel, setAgentSelectedModel] = useState<string>('');
-
-  // Voice mode state
-  const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
-  const voiceOwner = useVoiceModeStore((s) => s.owner);
-  const enableVoiceMode = useVoiceModeStore((s) => s.enable);
-  const disableVoiceMode = useVoiceModeStore((s) => s.disable);
-  const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -249,22 +239,6 @@ const GlobalAssistantView: React.FC = () => {
     };
     loadAgentConfig();
   }, [selectedAgent]);
-
-  // Check if OpenAI is configured (required for voice mode)
-  useEffect(() => {
-    const checkOpenAI = async () => {
-      try {
-        const response = await fetchWithAuth('/api/ai/settings');
-        if (response.ok) {
-          const data = await response.json();
-          setIsOpenAIConfigured(data.providers?.openai?.isConfigured ?? false);
-        }
-      } catch {
-        setIsOpenAIConfigured(false);
-      }
-    };
-    checkOpenAI();
-  }, []);
 
   // ============================================
   // CHAT CONFIGURATION
@@ -378,6 +352,23 @@ const GlobalAssistantView: React.FC = () => {
 
   // Auto-retry on network errors (e.g. ERR_NETWORK_CHANGED killing mid-stream)
   useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2 });
+
+  // Voice mode management
+  const {
+    isVoiceModeActive,
+    showVoiceSettings,
+    setShowVoiceSettings,
+    isOpenAIConfigured,
+    lastAIResponse,
+    handleVoiceModeToggle,
+  } = useVoiceModeChat({
+    owner: VOICE_OWNER,
+    messages,
+    isStreaming,
+  });
+
+  // Error visibility management
+  const { showError, setShowError } = useChatError({ error });
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -584,17 +575,6 @@ const GlobalAssistantView: React.FC = () => {
     { conversationId: currentConversationId || undefined, componentName: 'GlobalAssistantView' }
   );
 
-  // Reset error visibility when new error occurs
-  useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
-
-  useEffect(() => {
-    if (!isVoiceModeActive) {
-      setShowVoiceSettings(false);
-    }
-  }, [isVoiceModeActive]);
-
   // ============================================
   // HANDLERS
   // ============================================
@@ -693,36 +673,6 @@ const GlobalAssistantView: React.FC = () => {
     sendMessage,
     wrapSend,
   ]);
-
-  // Track last AI response for voice mode TTS
-  useEffect(() => {
-    if (!isVoiceModeActive || isStreaming) return;
-
-    // Get the last assistant message
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
-    if (lastAssistantMsg) {
-      // Extract text from message parts
-      const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') || [];
-      const text = textParts.map((p) => (p as { text: string }).text).join(' ');
-      if (text.trim()) {
-        setLastAIResponse((current) =>
-          current?.id === lastAssistantMsg.id
-            ? current
-            : { id: lastAssistantMsg.id, text }
-        );
-      }
-    }
-  }, [messages, isStreaming, isVoiceModeActive]);
-
-  // Voice mode toggle handler
-  const handleVoiceModeToggle = useCallback(() => {
-    if (isVoiceModeActive) {
-      disableVoiceMode();
-      setShowVoiceSettings(false);
-    } else {
-      enableVoiceMode(VOICE_OWNER);
-    }
-  }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
 
   // ============================================
   // RENDER
@@ -856,7 +806,7 @@ const GlobalAssistantView: React.FC = () => {
               aiResponse={lastAIResponse}
               isAIStreaming={isStreaming}
               showSettings={showVoiceSettings}
-              onToggleSettings={() => setShowVoiceSettings((s) => !s)}
+              onToggleSettings={() => setShowVoiceSettings(!showVoiceSettings)}
               onClose={() => setShowVoiceSettings(false)}
             />
           ) : (
