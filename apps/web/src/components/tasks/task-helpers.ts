@@ -25,10 +25,6 @@ export function getStatusDisplay(task: Task): StatusDisplay {
 }
 
 /**
- * Get comma-separated display text for task assignees.
- * Prefers the multi-assignee array, falls back to legacy single assignee fields.
- */
-/**
  * Aggregate statuses across task lists, deduped by slug. Falls back to
  * default statuses when no configs are present.
  */

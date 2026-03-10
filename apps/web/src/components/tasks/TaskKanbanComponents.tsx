@@ -16,7 +16,9 @@ import {
 import { MoreHorizontal, Pencil, Trash2, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
+  SortableContext,
   useSortable,
+  verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useDroppable } from '@dnd-kit/core';
@@ -234,31 +236,37 @@ export function KanbanColumn({
       </div>
 
       <ScrollArea className="flex-1">
-        <div
-          ref={setNodeRef}
-          className="space-y-2 min-h-[100px] p-1 rounded-lg bg-muted/30"
+        <SortableContext
+          id={statusGroup}
+          items={tasks.map(t => t.id)}
+          strategy={verticalListSortingStrategy}
         >
-          {tasks.map((task) => (
-            <SortableKanbanCard
-              key={task.id}
-              task={task}
-              onToggleComplete={onToggleComplete}
-              onNavigate={onNavigate}
-              onStartEdit={onStartEdit}
-              onDelete={onDelete}
-              isEditing={editingTaskId === task.id}
-              editingTitle={editingTitle}
-              onEditingTitleChange={onEditingTitleChange}
-              onSaveTitle={onSaveTitle}
-              onCancelEdit={onCancelEdit}
-            />
-          ))}
-          {tasks.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground text-sm">
-              No tasks
-            </div>
-          )}
-        </div>
+          <div
+            ref={setNodeRef}
+            className="space-y-2 min-h-[100px] p-1 rounded-lg bg-muted/30"
+          >
+            {tasks.map((task) => (
+              <SortableKanbanCard
+                key={task.id}
+                task={task}
+                onToggleComplete={onToggleComplete}
+                onNavigate={onNavigate}
+                onStartEdit={onStartEdit}
+                onDelete={onDelete}
+                isEditing={editingTaskId === task.id}
+                editingTitle={editingTitle}
+                onEditingTitleChange={onEditingTitleChange}
+                onSaveTitle={onSaveTitle}
+                onCancelEdit={onCancelEdit}
+              />
+            ))}
+            {tasks.length === 0 && (
+              <div className="text-center py-8 text-muted-foreground text-sm">
+                No tasks
+              </div>
+            )}
+          </div>
+        </SortableContext>
       </ScrollArea>
     </div>
   );
