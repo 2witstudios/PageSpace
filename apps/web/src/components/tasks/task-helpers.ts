@@ -2,12 +2,20 @@ import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-c
 import { STATUS_ORDER } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import type { Task, StatusConfigsByTaskList } from './types';
 
+export type { StatusConfigsByTaskList };
+
+export interface StatusDisplay {
+  label: string;
+  color: string;
+  group: TaskStatusGroup;
+}
+
 /**
  * Resolve status display for a task. Prefers server-enriched metadata
  * (statusLabel/statusColor/statusGroup) when all three are present,
  * then falls back to DEFAULT_STATUS_CONFIG, then to a safe default.
  */
-export function getStatusDisplay(task: Task): { label: string; color: string; group: TaskStatusGroup } {
+export function getStatusDisplay(task: Task): StatusDisplay {
   if (task.statusLabel && task.statusColor && task.statusGroup) {
     return { label: task.statusLabel, color: task.statusColor, group: task.statusGroup };
   }
