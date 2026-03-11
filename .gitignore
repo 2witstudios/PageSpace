@@ -159,3 +159,9 @@ playground.xcworkspace
 # Git worktrees
 .worktrees/
 .codename-grove/
+
+# Point Guard
+.pg/
+
+# Parallel Universe worktrees
+.pu/
