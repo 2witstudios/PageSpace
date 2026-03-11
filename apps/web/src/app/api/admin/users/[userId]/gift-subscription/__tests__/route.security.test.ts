@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, DELETE } from '../route';
 import { NextRequest } from 'next/server';
-import { db, users, subscriptions, eq } from '@pagespace/db';
+import { db, users, subscriptions, sessions, eq } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 import { updateUserRole } from '@/lib/auth/admin-role';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
@@ -43,7 +43,7 @@ vi.mock('@/lib/stripe', () => ({
   },
   Stripe: {
     errors: {
-      StripeError: class StripeError extends Error {},
+      StripeError: class StripeError extends Error { },
     },
   },
 }));
@@ -96,8 +96,9 @@ import { logSecurityEvent } from '@pagespace/lib/server';
 describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
   let adminUserId: string;
   let regularUserId: string;
-  let adminSessionToken: string;
+  const adminSessionToken = 'mock_admin_session_token';
   let adminCsrfToken: string;
+  const mockSessionId = 'mock-session-id';
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -106,7 +107,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
     const [adminUser] = await db.insert(users).values({
       id: createId(),
       name: 'Test Admin User',
-      email: `admin-${Date.now()}@example.com`,
+      email: `admin-${Date.now()}-${createId().slice(0, 6)}@example.com`,
       password: 'hashed_password',
       provider: 'email',
       role: 'admin',
@@ -119,7 +120,7 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
     const [regularUser] = await db.insert(users).values({
       id: createId(),
       name: 'Test Regular User',
-      email: `regular-${Date.now()}@example.com`,
+      email: `regular-${Date.now()}-${createId().slice(0, 6)}@example.com`,
       password: 'hashed_password',
       provider: 'email',
       role: 'user',
@@ -129,25 +130,31 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
     }).returning();
     regularUserId = regularUser.id;
 
-    // Create a session token for the admin user
-    adminSessionToken = await sessionService.createSession({
+    // Spy on sessionService to avoid the TOCTOU race condition.
+    // The real createSession has a gap between user lookup and session insert —
+    // another test file's cleanup can delete the user between these two DB
+    // operations, causing an FK violation.
+    vi.spyOn(sessionService, 'createSession').mockResolvedValue(adminSessionToken);
+    vi.spyOn(sessionService, 'validateSession').mockResolvedValue({
+      sessionId: mockSessionId,
       userId: adminUserId,
+      userRole: 'admin',
+      tokenVersion: 1,
+      adminRoleVersion: 0,
       type: 'user',
       scopes: ['*'],
-      expiresInMs: 3600000,
+      expiresAt: new Date(Date.now() + 3600000),
     });
 
-    // Generate CSRF token bound to the session
-    const sessionClaims = await sessionService.validateSession(adminSessionToken);
-    if (!sessionClaims) {
-      throw new Error('Failed to validate session for CSRF token generation');
-    }
-    adminCsrfToken = generateCSRFToken(sessionClaims.sessionId);
+    // Generate real CSRF token bound to the mock session ID
+    adminCsrfToken = generateCSRFToken(mockSessionId);
   });
 
   afterEach(async () => {
     // Clean up test data - wrapped to prevent cascading failures
     try {
+      await db.delete(sessions).where(eq(sessions.userId, adminUserId));
+      await db.delete(sessions).where(eq(sessions.userId, regularUserId));
       await db.delete(subscriptions).where(eq(subscriptions.userId, regularUserId));
       await db.delete(users).where(eq(users.id, adminUserId));
       await db.delete(users).where(eq(users.id, regularUserId));
