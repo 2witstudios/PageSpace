@@ -272,6 +272,11 @@
       "types": "./dist/compliance/export/gdpr-export.d.ts",
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
+    },
+    "./compliance/anonymize": {
+      "types": "./dist/compliance/anonymize.d.ts",
+      "import": "./dist/compliance/anonymize.js",
+      "require": "./dist/compliance/anonymize.js"
     }
   },
   "typesVersions": {
@@ -428,6 +433,9 @@
       ],
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
+      ],
+      "compliance/anonymize": [
+        "./dist/compliance/anonymize.d.ts"
       ]
     }
   },

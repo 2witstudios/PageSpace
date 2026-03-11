@@ -122,6 +122,7 @@ export async function GET(request: Request) {
       .where(and(
         inArray(pages.driveId, driveIds),
         eq(pages.isTrashed, false),
+        eq(pages.excludeFromSearch, false),
         searchCondition
       ))
       .as('ranked_matches');

@@ -417,8 +417,6 @@ export interface AIUsageData {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
-  prompt?: string;
-  completion?: string;
   duration?: number;
   streamingDuration?: number;
   conversationId?: string;
@@ -447,15 +445,6 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
   try {
     // Calculate tokens if not provided
     let { inputTokens, outputTokens, totalTokens } = data;
-    
-    // If we have prompt/completion but no tokens, estimate them
-    if (!inputTokens && data.prompt) {
-      inputTokens = estimateTokens(data.prompt);
-    }
-    if (!outputTokens && data.completion) {
-      outputTokens = estimateTokens(data.completion);
-    }
-    
     // Calculate total if not provided
     if (!totalTokens && (inputTokens || outputTokens)) {
       totalTokens = (inputTokens || 0) + (outputTokens || 0);
@@ -494,8 +483,6 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
       metadata: {
         ...data.metadata,
         streamingDuration: data.streamingDuration,
-        prompt: data.prompt?.substring(0, 1000),
-        completion: data.completion?.substring(0, 1000)
       },
     }).catch((error) => {
       loggers.ai.debug('AI usage tracking failed', {
