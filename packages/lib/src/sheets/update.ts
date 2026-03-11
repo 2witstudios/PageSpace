@@ -40,6 +40,8 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
 
   return {
     ...sheet,
+    rowCount: Math.max(1, sheet.rowCount),
+    columnCount: Math.max(1, sheet.columnCount),
     cells: sanitizedCells,
   };
 }
