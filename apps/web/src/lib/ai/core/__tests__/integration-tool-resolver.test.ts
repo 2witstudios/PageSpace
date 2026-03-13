@@ -86,7 +86,7 @@ describe('resolvePageAgentIntegrationTools', () => {
     mockConvert.mockReturnValue({
       'int__github__conn1234__list_repos': {
         description: '[GitHub] List repos',
-        parameters: {} as never,
+        inputSchema: {} as never,
         execute: vi.fn(),
       },
     });
