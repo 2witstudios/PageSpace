@@ -12,9 +12,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, Cable, Plug2, Loader2, ExternalLink, AlertCircle, Package, Clock } from 'lucide-react';
+import { ArrowLeft, Cable, Calendar, Plug2, Loader2, AlertCircle, Package, Clock, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useProviders, useUserConnections, useAvailableBuiltins } from '@/hooks/useIntegrations';
+import { useProviders, useUserConnections, useAvailableBuiltins, useGoogleCalendarStatus } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { DisconnectWithAgentCount } from '@/components/integrations/DisconnectConfirmDialog';
@@ -34,6 +34,7 @@ export default function IntegrationsSettingsPage() {
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
 
   const { builtins, isLoading: loadingBuiltins, error: builtinsError, mutate: mutateBuiltins } = useAvailableBuiltins();
+  const { connected: gcalConnected, connection: gcalConnection, error: gcalError, isLoading: gcalLoading } = useGoogleCalendarStatus();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -103,13 +104,6 @@ export default function IntegrationsSettingsPage() {
 
   const isLoading = loadingProviders || loadingConnections;
 
-  const getProviderDetailHref = (connection: SafeConnection) => {
-    if (connection.provider?.slug === 'google-calendar') {
-      return '/settings/integrations/google-calendar';
-    }
-    return null;
-  };
-
   return (
     <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl">
       <div className="mb-8">
@@ -129,6 +123,66 @@ export default function IntegrationsSettingsPage() {
       </div>
 
       <div className="space-y-6">
+        {/* Google Calendar */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5" />
+              Google Calendar
+            </CardTitle>
+            <CardDescription>
+              Sync events with Google Calendar.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {gcalLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : gcalError ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                <AlertCircle className="h-4 w-4" />
+                <span>Failed to load Google Calendar status</span>
+              </div>
+            ) : gcalConnected && gcalConnection ? (
+              <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+                <div className="flex items-center gap-3 min-w-0">
+                  <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0" />
+                  <div className="min-w-0">
+                    <span className="font-medium">Connected</span>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {gcalConnection.googleEmail}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => router.push('/settings/integrations/google-calendar')}
+                >
+                  Manage
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Calendar className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                  <div className="min-w-0">
+                    <span className="font-medium">Not connected</span>
+                    <p className="text-xs text-muted-foreground">
+                      Connect your Google Calendar to sync events.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => router.push('/settings/integrations/google-calendar')}
+                >
+                  Set up
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Connected Integrations */}
         <Card>
           <CardHeader>
@@ -161,10 +215,8 @@ export default function IntegrationsSettingsPage() {
                   <ConnectionRow
                     key={connection.id}
                     connection={connection}
-                    detailHref={getProviderDetailHref(connection)}
                     updatingVisibility={updatingVisibility === connection.id}
                     onVisibilityChange={(v) => handleVisibilityChange(connection.id, v)}
-                    onDetail={(href) => router.push(href)}
                     onDisconnect={() => setDisconnectConnection(connection)}
                   />
                 ))}
@@ -334,17 +386,13 @@ function formatRelativeTime(dateStr: string): string {
 
 function ConnectionRow({
   connection,
-  detailHref,
   updatingVisibility,
   onVisibilityChange,
-  onDetail,
   onDisconnect,
 }: {
   connection: SafeConnection;
-  detailHref: string | null;
   updatingVisibility: boolean;
   onVisibilityChange: (visibility: string) => void;
-  onDetail: (href: string) => void;
   onDisconnect: () => void;
 }) {
   const accountInfo = connection.accountMetadata;
@@ -399,16 +447,6 @@ function ConnectionRow({
               <SelectItem value="all_drives">All drives</SelectItem>
             </SelectContent>
           </Select>
-        )}
-        {detailHref && (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`${connection.name} details`}
-            onClick={() => onDetail(detailHref)}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Button>
         )}
         <Button
           variant="ghost"
