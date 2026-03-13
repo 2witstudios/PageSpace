@@ -86,6 +86,29 @@ export function useConnectionGrantCount(connectionId: string | null) {
   return { count: data?.total ?? 0, error, isLoading };
 }
 
+export function useGoogleCalendarStatus() {
+  const { data, error, isLoading } = useSWR<{
+    connected: boolean;
+    connection: {
+      status: string;
+      googleEmail: string;
+      lastSyncAt: string | null;
+    } | null;
+    syncedEventCount: number;
+  }>(
+    '/api/integrations/google-calendar/status',
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+  return {
+    connected: data?.connected ?? false,
+    connection: data?.connection ?? null,
+    syncedEventCount: data?.syncedEventCount ?? 0,
+    error,
+    isLoading,
+  };
+}
+
 export function useIntegrationAuditLogs(driveId: string | null, params: AuditLogsParams = {}) {
   const searchParams = new URLSearchParams();
   if (params.limit != null) searchParams.set('limit', String(params.limit));

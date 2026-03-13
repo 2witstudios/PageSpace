@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Eye, Cable } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, ChevronRight, Keyboard, Sparkles, Eye, Cable, Calendar } from "lucide-react";
 
 interface SettingsItem {
   title: string;
@@ -132,6 +132,13 @@ export default function SettingsPage() {
     {
       title: "Integrations",
       items: filterItems([
+        {
+          title: "Google Calendar",
+          description: "Sync events with Google Calendar",
+          icon: Calendar,
+          href: "/settings/integrations/google-calendar",
+          available: true,
+        },
         {
           title: "Service Connections",
           description: "Connect external APIs and services to your AI assistants",
