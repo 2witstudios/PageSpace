@@ -34,7 +34,7 @@ export default function IntegrationsSettingsPage() {
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
 
   const { builtins, isLoading: loadingBuiltins, error: builtinsError, mutate: mutateBuiltins } = useAvailableBuiltins();
-  const { connected: gcalConnected, connection: gcalConnection, isLoading: gcalLoading } = useGoogleCalendarStatus();
+  const { connected: gcalConnected, connection: gcalConnection, error: gcalError, isLoading: gcalLoading } = useGoogleCalendarStatus();
 
   const [connectProvider, setConnectProvider] = useState<SafeProvider | null>(null);
   const [disconnectConnection, setDisconnectConnection] = useState<SafeConnection | null>(null);
@@ -137,6 +137,11 @@ export default function IntegrationsSettingsPage() {
           <CardContent>
             {gcalLoading ? (
               <Skeleton className="h-16 w-full" />
+            ) : gcalError ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                <AlertCircle className="h-4 w-4" />
+                <span>Failed to load Google Calendar status</span>
+              </div>
             ) : gcalConnected && gcalConnection ? (
               <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
                 <div className="flex items-center gap-3 min-w-0">
