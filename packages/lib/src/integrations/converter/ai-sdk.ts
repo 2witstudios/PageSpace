@@ -247,7 +247,7 @@ export function convertIntegrationToolsToAISDK(
       );
 
       try {
-        const parameters = convertToolSchemaToZod(tool.inputSchema);
+        const inputSchema = convertToolSchemaToZod(tool.inputSchema);
 
         const override = grant.rateLimitOverride;
         const grantForRequest: ToolGrant = {
@@ -261,7 +261,7 @@ export function convertIntegrationToolsToAISDK(
 
         tools[toolName] = {
           description: `[${connection.provider.name}] ${tool.description}`,
-          inputSchema: parameters,
+          inputSchema,
           execute: async (args: Record<string, unknown>) => {
             const result = await executor({
               userId: executorContext.userId,
