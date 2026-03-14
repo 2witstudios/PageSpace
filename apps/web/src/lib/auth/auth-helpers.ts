@@ -3,6 +3,8 @@ import {
   authenticateSessionRequest,
   isAuthError as isAuthResultError,
 } from './index';
+import { logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { securityAudit, maskEmail } from '@pagespace/lib/audit';
 
 /**
  * Validates that a return URL is a safe same-origin path.
@@ -116,4 +118,69 @@ export async function requireAdmin(
 
 export function isAuthError(result: AuthUser | NextResponse): result is NextResponse {
   return result instanceof NextResponse;
+}
+
+export function logLoginAudit(
+  user: { id: string; email: string },
+  sessionId: string,
+  clientIP: string,
+  userAgent: string | null
+): void {
+  logUserActivity(user.id, 'login', {
+    targetUserId: user.id,
+    targetUserEmail: user.email,
+    ip: clientIP,
+    userAgent: userAgent || undefined,
+  }, { actorEmail: user.email });
+  securityAudit.logAuthSuccess(
+    user.id, sessionId, clientIP, userAgent || 'unknown'
+  ).catch(() => {});
+  securityAudit.logTokenCreated(user.id, 'session', clientIP).catch(() => {});
+}
+
+export function logSignupAudit(
+  user: { id: string; email: string },
+  clientIP: string,
+  userAgent: string | null,
+  method: string
+): void {
+  logUserActivity(user.id, 'signup', {
+    targetUserId: user.id,
+    targetUserEmail: user.email,
+    ip: clientIP,
+    userAgent: userAgent || undefined,
+  }, { actorEmail: user.email });
+  securityAudit.logEvent({
+    eventType: 'auth.session.created',
+    userId: user.id,
+    ipAddress: clientIP,
+    userAgent: userAgent || undefined,
+    details: { method, email: maskEmail(user.email) },
+  }).catch(() => {});
+  securityAudit.logTokenCreated(user.id, 'session', clientIP).catch(() => {});
+}
+
+export function logAdminUserCreateAudit(
+  adminUserId: string,
+  targetUserId: string,
+  targetEmail: string,
+  role: string,
+  clientIP: string,
+  userAgent: string | null
+): void {
+  logUserActivity(adminUserId, 'signup', {
+    targetUserId,
+    targetUserEmail: targetEmail,
+    ip: clientIP,
+    userAgent: userAgent || undefined,
+  });
+  securityAudit.logEvent({
+    eventType: 'admin.user.created',
+    userId: adminUserId,
+    ipAddress: clientIP,
+    userAgent: userAgent || undefined,
+    resourceType: 'user',
+    resourceId: targetUserId,
+    details: { targetEmail: maskEmail(targetEmail), role },
+  }).catch(() => {});
 }

@@ -575,7 +575,7 @@ export {
   type OriginValidationMode,
   type MiddlewareOriginValidationResult,
 } from './origin-validation';
-export { getClientIP, isSafeReturnUrl } from './auth-helpers';
+export { getClientIP, isSafeReturnUrl, logLoginAudit, logSignupAudit, logAdminUserCreateAudit } from './auth-helpers';
 export { validateLoginCSRFToken } from './login-csrf-utils';
 export {
   COOKIE_CONFIG,

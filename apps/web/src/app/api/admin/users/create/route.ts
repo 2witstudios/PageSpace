@@ -8,6 +8,7 @@ import { isOnPrem, getOnPremUserDefaults, getOnPremOllamaSettings } from '@pages
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { loggers } from '@pagespace/lib/server';
+import { getClientIP, logAdminUserCreateAudit } from '@/lib/auth';
 
 const createUserSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -86,6 +87,9 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       newUserId: userId,
       role,
     });
+
+    const clientIP = getClientIP(request);
+    logAdminUserCreateAudit(adminUser.id, userId, normalizedEmail, role, clientIP, request.headers.get('user-agent'));
 
     return NextResponse.json(
       { success: true, userId, message: `User ${normalizedEmail} created successfully` },

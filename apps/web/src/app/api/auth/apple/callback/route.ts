@@ -12,7 +12,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { getClientIP, isSafeReturnUrl, logLoginAudit } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
@@ -270,6 +270,8 @@ export async function POST(req: Request) {
       provider: 'apple',
       userAgent: req.headers.get('user-agent')
     });
+
+    logLoginAudit({ id: user.id, email }, sessionClaims.sessionId, clientIP, req.headers.get('user-agent'));
 
     // DESKTOP PLATFORM: Redirect with tokens encoded via exchange code
     if (platform === 'desktop') {
