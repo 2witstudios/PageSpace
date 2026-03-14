@@ -19,7 +19,7 @@ import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEm
 import React from 'react';
 import { NextResponse } from 'next/server';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, logSignupAudit } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const signupSchema = z.object({
@@ -195,6 +195,8 @@ export async function POST(req: Request) {
 
     logAuthEvent('signup', user.id, email, clientIP);
     loggers.auth.info('New user created', { userId: user.id, email, name });
+
+    logSignupAudit({ id: user.id, email }, clientIP, req.headers.get('user-agent'), 'email-signup');
 
     // Reset rate limits on successful signup
     const resetResults = await Promise.allSettled([

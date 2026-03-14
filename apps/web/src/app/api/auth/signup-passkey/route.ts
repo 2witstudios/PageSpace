@@ -14,7 +14,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, logSignupAudit } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
 
@@ -166,6 +166,8 @@ export async function POST(req: Request) {
     // Log auth events
     logAuthEvent('signup', userId, email, clientIP);
     loggers.auth.info('Passkey signup successful', { userId, email: email.substring(0, 3) + '***', name });
+
+    logSignupAudit({ id: userId, email }, clientIP, req.headers.get('user-agent'), 'passkey-signup');
 
     // Reset rate limits on successful signup
     await Promise.allSettled([

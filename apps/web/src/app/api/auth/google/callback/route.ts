@@ -13,7 +13,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { getClientIP, isSafeReturnUrl, logLoginAudit } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
@@ -263,6 +263,8 @@ export async function GET(req: Request) {
       provider: 'google',
       userAgent: req.headers.get('user-agent')
     });
+
+    logLoginAudit({ id: user.id, email }, sessionClaims.sessionId, clientIP, req.headers.get('user-agent'));
 
     // DESKTOP PLATFORM: Redirect with tokens encoded in URL
     // OAuth callbacks happen via browser redirect from Google, so we can't return JSON

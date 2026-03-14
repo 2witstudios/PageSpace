@@ -62,7 +62,7 @@ import { loggers, logAuthEvent } from '@pagespace/lib/server';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { verifyOAuthIdToken, createOrLinkOAuthUser, OAuthProvider } from '@pagespace/lib/server';
 import type { MobileOAuthResponse } from '@pagespace/lib/server';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, logLoginAudit } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
@@ -301,6 +301,8 @@ export async function POST(req: Request) {
       platform,
       appVersion,
     });
+
+    logLoginAudit(user, sessionClaims.sessionId, clientIP, req.headers.get('user-agent'));
 
     // Generate CSRF token using session ID
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);

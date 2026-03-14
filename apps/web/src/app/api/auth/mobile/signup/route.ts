@@ -21,7 +21,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import React from 'react';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, logSignupAudit } from '@/lib/auth';
 
 const signupSchema = z.object({
   name: z.string().min(1, {
@@ -164,6 +164,8 @@ export async function POST(req: Request) {
     // Log successful signup
     logAuthEvent('signup', user.id, email, clientIP);
     loggers.auth.info('New user created via mobile', { userId: user.id, email, name, platform });
+
+    logSignupAudit({ id: user.id, email }, clientIP, req.headers.get('user-agent'), 'mobile-signup');
 
     // Reset rate limits on successful signup
     await Promise.all([

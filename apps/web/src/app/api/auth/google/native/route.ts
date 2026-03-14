@@ -6,7 +6,7 @@ import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/l
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, logLoginAudit } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import {
@@ -227,6 +227,8 @@ export async function POST(req: Request) {
       platform,
       userAgent: req.headers.get('user-agent'),
     });
+
+    logLoginAudit({ id: user.id, email }, sessionClaims.sessionId, clientIP, req.headers.get('user-agent'));
 
     loggers.auth.info('Native Google OAuth login successful', {
       userId: user.id,
