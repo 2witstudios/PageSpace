@@ -291,7 +291,15 @@ export const activityOperationEnum = pgEnum('activity_operation', [
   'rollback',
   // AI conversation undo operations
   'conversation_undo',
-  'conversation_undo_with_changes'
+  'conversation_undo_with_changes',
+  // Subscription/payment operations
+  'subscription_create',
+  'subscription_update',
+  'subscription_cancel',
+  'subscription_reactivate',
+  'billing_update',
+  'customer_create',
+  'schedule_cancel',
 ]);
 
 export const contentFormatEnum = pgEnum('content_format', ['text', 'html', 'json', 'tiptap']);
@@ -317,7 +325,9 @@ export const activityResourceEnum = pgEnum('activity_resource', [
   // Message resource (Tier 1)
   'message',
   // AI conversation resource
-  'conversation'
+  'conversation',
+  // Subscription/billing resource
+  'subscription',
 ]);
 
 /**

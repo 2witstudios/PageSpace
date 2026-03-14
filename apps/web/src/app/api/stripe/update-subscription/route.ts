@@ -3,6 +3,7 @@ import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db'
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { logSubscriptionActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -131,6 +132,17 @@ export async function POST(request: NextRequest) {
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
 
+      logSubscriptionActivity(userId, 'subscription_update', {
+        subscriptionId: subscription.id,
+        priceId,
+      }, {
+        actorEmail: user.email,
+        actorDisplayName: user.name ?? undefined,
+        previousValues: { priceId: currentPriceId },
+        newValues: { scheduledPriceId: priceId, effectiveDate: new Date(currentPeriodEnd * 1000).toISOString() },
+        metadata: { changeType: 'downgrade', scheduleId: schedule.id },
+      });
+
       return NextResponse.json({
         subscriptionId: subscription.id,
         scheduleId: schedule.id,
@@ -173,6 +185,17 @@ export async function POST(request: NextRequest) {
           updatedAt: new Date(),
         })
         .where(eq(subscriptions.stripeSubscriptionId, subscription.id));
+
+      logSubscriptionActivity(userId, 'subscription_update', {
+        subscriptionId: subscription.id,
+        priceId,
+      }, {
+        actorEmail: user.email,
+        actorDisplayName: user.name ?? undefined,
+        previousValues: { priceId: subscription.items.data[0]?.price.id },
+        newValues: { priceId, status: updatedSubscription.status },
+        metadata: { changeType: 'upgrade' },
+      });
 
       return NextResponse.json({
         subscriptionId: updatedSubscription.id,

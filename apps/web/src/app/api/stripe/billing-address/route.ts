@@ -3,6 +3,7 @@ import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { logSubscriptionActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -106,6 +107,15 @@ export async function PUT(request: NextRequest) {
         throw dbError;
       }
 
+      logSubscriptionActivity(userId, 'billing_update', {
+        customerId,
+      }, {
+        actorEmail: user.email,
+        actorDisplayName: user.name ?? undefined,
+        newValues: { address, name },
+        metadata: { customerCreated: true },
+      });
+
       return NextResponse.json({
         success: true,
         address: customer.address,
@@ -124,6 +134,14 @@ export async function PUT(request: NextRequest) {
         postal_code: address.postal_code || undefined,
         country: address.country,
       },
+    });
+
+    logSubscriptionActivity(userId, 'billing_update', {
+      customerId,
+    }, {
+      actorEmail: user.email,
+      actorDisplayName: user.name ?? undefined,
+      newValues: { address, name },
     });
 
     return NextResponse.json({

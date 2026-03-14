@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db, eq, subscriptions, stripeEvents, users } from '@pagespace/db';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { logSubscriptionActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 export async function POST(request: NextRequest) {
   try {
@@ -49,15 +50,15 @@ export async function POST(request: NextRequest) {
       switch (event.type) {
         case 'customer.subscription.created':
         case 'customer.subscription.updated':
-          await handleSubscriptionChange(event.data.object as Stripe.Subscription);
+          await handleSubscriptionChange(event.data.object as Stripe.Subscription, event);
           break;
 
         case 'customer.subscription.deleted':
-          await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+          await handleSubscriptionDeleted(event.data.object as Stripe.Subscription, event);
           break;
 
         case 'checkout.session.completed':
-          await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+          await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session, event);
           break;
 
         case 'invoice.payment_failed':
@@ -105,7 +106,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function handleSubscriptionChange(subscription: Stripe.Subscription) {
+async function handleSubscriptionChange(subscription: Stripe.Subscription, event: Stripe.Event) {
   const customerId = subscription.customer as string;
 
   // Find user by stripe customer ID
@@ -221,10 +222,22 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
   // Storage limits are now computed dynamically from subscription tier - no sync needed
 
+  const operation = event.type === 'customer.subscription.created' ? 'subscription_create' as const : 'subscription_update' as const;
+  logSubscriptionActivity(userId, operation, {
+    subscriptionId: subscription.id,
+    customerId,
+    priceId: firstItem.price.id,
+    subscriptionTier,
+    stripeEventId: event.id,
+    stripeEventType: event.type,
+  }, {
+    newValues: { status: subscription.status, tier: subscriptionTier, cancelAtPeriodEnd: subscription.cancel_at_period_end },
+  });
+
   loggers.api.info('Updated subscription for user', { userId, subscriptionTier });
 }
 
-async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+async function handleSubscriptionDeleted(subscription: Stripe.Subscription, event: Stripe.Event) {
   const customerId = subscription.customer as string;
 
   // Find user by stripe customer ID
@@ -262,24 +275,52 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
   // Storage limits are now computed dynamically from subscription tier - no sync needed
 
+  logSubscriptionActivity(userId, 'subscription_cancel', {
+    subscriptionId: subscription.id,
+    customerId,
+    subscriptionTier: 'free',
+    stripeEventId: event.id,
+    stripeEventType: event.type,
+  }, {
+    newValues: { status: 'canceled', tier: 'free' },
+  });
+
   loggers.api.info('Downgraded user to free tier', { userId });
 }
 
-async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
+async function handleCheckoutCompleted(session: Stripe.Checkout.Session, event: Stripe.Event) {
   if (session.mode === 'subscription' && session.customer) {
     const customerId = session.customer as string;
     const customerEmail = session.customer_details?.email;
 
     if (customerEmail) {
-      // Update user with stripe customer ID
-      await db.update(users)
-        .set({
-          stripeCustomerId: customerId,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.email, customerEmail));
+      // Find user by email first, then update if found (avoids no-op update + redundant select)
+      const [linkedUser] = await db.select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, customerEmail))
+        .limit(1);
 
-      loggers.api.info('Linked Stripe customer to user', { customerId, email: customerEmail });
+      if (linkedUser) {
+        await db.update(users)
+          .set({
+            stripeCustomerId: customerId,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, linkedUser.id));
+
+        logSubscriptionActivity(linkedUser.id, 'customer_create', {
+          customerId,
+          stripeEventId: event.id,
+          stripeEventType: event.type,
+        }, {
+          actorEmail: customerEmail,
+          newValues: { stripeCustomerId: customerId },
+        });
+
+        loggers.api.info('Linked Stripe customer to user', { customerId, email: customerEmail });
+      } else {
+        loggers.api.warn('No user found for checkout email', { customerId, email: customerEmail });
+      }
     }
   }
 }
