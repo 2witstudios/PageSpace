@@ -52,6 +52,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # We are installing devDependencies via the --prod=false flag, so this is not needed
 # ENV NODE_ENV=development
 
+# Build dependent packages first (db + lib must compile before web)
+RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
+
 # Build with development env to ensure Tailwind v4 processes correctly
 # Increased memory for Scribe.js and other heavy dependencies
 RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=2048" pnpm build

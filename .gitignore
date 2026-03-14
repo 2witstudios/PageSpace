@@ -165,3 +165,8 @@ playground.xcworkspace
 
 # Parallel Universe worktrees
 .pu/
+
+# Claude Code skills & agents (local plugin data)
+.agents/
+.claude/skills/
+skills-lock.json
