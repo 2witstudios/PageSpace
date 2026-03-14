@@ -11,6 +11,7 @@ import { loggers, getDriveMemberUserIds } from '@pagespace/lib/server';
 import { isUserDriveMember } from '@pagespace/lib';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -278,6 +279,19 @@ export async function POST(
       attendeeIds: newUserIds,
     });
 
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'update',
+        resourceType: 'calendar_event',
+        resourceId: eventId,
+        driveId: event.driveId,
+        metadata: { action: 'attendees_added', addedUserIds: newUserIds, count: newUserIds.length },
+      }).catch(() => {});
+    }).catch(() => {});
+
     return NextResponse.json({ attendees });
   } catch (error) {
     loggers.api.error('Error adding event attendees:', error as Error);
@@ -381,6 +395,19 @@ export async function PATCH(
       attendeeIds: allAttendees.map(a => a.userId),
     });
 
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'update',
+        resourceType: 'calendar_event',
+        resourceId: eventId,
+        driveId: event.driveId,
+        metadata: { action: 'rsvp_updated', status, previousStatus: attendee.status },
+      }).catch(() => {});
+    }).catch(() => {});
+
     return NextResponse.json(updatedAttendee);
   } catch (error) {
     loggers.api.error('Error updating RSVP:', error as Error);
@@ -478,6 +505,19 @@ export async function DELETE(
       userId,
       attendeeIds: [targetUserId],
     });
+
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'update',
+        resourceType: 'calendar_event',
+        resourceId: eventId,
+        driveId: event.driveId,
+        metadata: { action: 'attendee_removed', removedUserId: targetUserId },
+      }).catch(() => {});
+    }).catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

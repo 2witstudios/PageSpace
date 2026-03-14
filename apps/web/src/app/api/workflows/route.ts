@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -131,6 +132,20 @@ export async function POST(request: Request) {
     nextRunAt,
     updatedAt: new Date(),
   }).returning();
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(userId).then(actorInfo => {
+    logActivity({
+      userId,
+      ...actorInfo,
+      operation: 'create',
+      resourceType: 'workflow',
+      resourceId: workflow.id,
+      resourceTitle: workflow.name,
+      driveId: data.driveId,
+      metadata: { triggerType: data.triggerType, agentPageId: data.agentPageId },
+    }).catch(() => {});
+  }).catch(() => {});
 
   return NextResponse.json(workflow, { status: 201 });
 }

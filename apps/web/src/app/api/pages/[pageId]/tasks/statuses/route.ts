@@ -4,6 +4,7 @@ import { DEFAULT_TASK_STATUSES } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/server';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -175,6 +176,20 @@ export async function POST(
     data: { statusConfigAdded: newConfig },
   });
 
+  // Audit logging (fire-and-forget)
+  getActorInfo(userId).then(actorInfo => {
+    logActivity({
+      userId,
+      ...actorInfo,
+      operation: 'create',
+      resourceType: 'page',
+      resourceId: pageId,
+      driveId: null,
+      pageId,
+      metadata: { featureType: 'task_status', statusName: newConfig.name, statusSlug: newConfig.slug },
+    }).catch(() => {});
+  }).catch(() => {});
+
   return NextResponse.json(newConfig, { status: 201 });
 }
 
@@ -261,6 +276,20 @@ export async function PUT(
     pageId,
     data: { statusConfigsUpdated: updatedConfigs },
   });
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(userId).then(actorInfo => {
+    logActivity({
+      userId,
+      ...actorInfo,
+      operation: 'update',
+      resourceType: 'page',
+      resourceId: pageId,
+      driveId: null,
+      pageId,
+      metadata: { featureType: 'task_status', statusCount: statuses.length },
+    }).catch(() => {});
+  }).catch(() => {});
 
   return NextResponse.json({ statusConfigs: updatedConfigs });
 }
@@ -387,6 +416,25 @@ export async function DELETE(
       migratedCount: tasksWithStatus.length,
     },
   });
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(userId).then(actorInfo => {
+    logActivity({
+      userId,
+      ...actorInfo,
+      operation: 'delete',
+      resourceType: 'page',
+      resourceId: pageId,
+      driveId: null,
+      pageId,
+      metadata: {
+        featureType: 'task_status',
+        deletedStatus: statusToDelete.slug,
+        migratedTo: migrateToSlug,
+        migratedCount: tasksWithStatus.length,
+      },
+    }).catch(() => {});
+  }).catch(() => {});
 
   return NextResponse.json({ success: true });
 }

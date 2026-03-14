@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/server';
 import { db, workflows, pages, eq, and } from '@pagespace/db';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -147,6 +148,21 @@ export async function PATCH(
     .where(eq(workflows.id, workflowId))
     .returning();
 
+  // Audit logging (fire-and-forget)
+  getActorInfo(auth.userId).then(actorInfo => {
+    logActivity({
+      userId: auth.userId,
+      ...actorInfo,
+      operation: 'update',
+      resourceType: 'workflow',
+      resourceId: workflowId,
+      resourceTitle: updated.name,
+      driveId: workflow.driveId,
+      updatedFields: Object.keys(data).filter(k => (data as Record<string, unknown>)[k] !== undefined),
+      metadata: { triggerType: updated.triggerType },
+    }).catch(() => {});
+  }).catch(() => {});
+
   return NextResponse.json(updated);
 }
 
@@ -163,6 +179,19 @@ export async function DELETE(
   if ('error' in result) return result.error;
 
   await db.delete(workflows).where(eq(workflows.id, workflowId));
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(auth.userId).then(actorInfo => {
+    logActivity({
+      userId: auth.userId,
+      ...actorInfo,
+      operation: 'delete',
+      resourceType: 'workflow',
+      resourceId: workflowId,
+      resourceTitle: result.workflow.name,
+      driveId: result.workflow.driveId,
+    }).catch(() => {});
+  }).catch(() => {});
 
   return NextResponse.json({ success: true });
 }

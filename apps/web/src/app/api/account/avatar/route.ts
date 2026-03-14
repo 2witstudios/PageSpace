@@ -4,6 +4,7 @@ import { db, users, eq } from '@pagespace/db';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib';
+import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -125,6 +126,14 @@ export async function POST(request: NextRequest) {
       .set({ image: avatarUrl })
       .where(eq(users.id, userId));
 
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logUserActivity(userId, 'avatar_update', {
+        targetUserId: userId,
+        targetUserEmail: actorInfo.actorEmail,
+      }, actorInfo);
+    }).catch(() => {});
+
     return NextResponse.json({
       success: true,
       avatarUrl,
@@ -175,6 +184,15 @@ export async function DELETE(request: NextRequest) {
     await db.update(users)
       .set({ image: null })
       .where(eq(users.id, userId));
+
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logUserActivity(userId, 'avatar_update', {
+        targetUserId: userId,
+        targetUserEmail: actorInfo.actorEmail,
+        updatedFields: ['image'],
+      }, actorInfo);
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,

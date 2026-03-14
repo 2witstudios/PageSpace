@@ -320,7 +320,10 @@ export type ActivityResourceType =
   // Message resource (Tier 1)
   | 'message'
   // AI conversation resource
-  | 'conversation';
+  | 'conversation'
+  // Feature resources
+  | 'workflow'
+  | 'calendar_event';
 
 export interface ActivityLogInput {
   userId: string;
