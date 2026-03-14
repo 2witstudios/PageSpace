@@ -304,7 +304,15 @@ export type ActivityOperation =
   | 'rollback'
   // AI conversation undo operations
   | 'conversation_undo'
-  | 'conversation_undo_with_changes';
+  | 'conversation_undo_with_changes'
+  // Subscription/payment operations
+  | 'subscription_create'
+  | 'subscription_update'
+  | 'subscription_cancel'
+  | 'subscription_reactivate'
+  | 'billing_update'
+  | 'customer_create'
+  | 'schedule_cancel';
 
 export type ActivityResourceType =
   | 'page'
@@ -320,7 +328,9 @@ export type ActivityResourceType =
   // Message resource (Tier 1)
   | 'message'
   // AI conversation resource
-  | 'conversation';
+  | 'conversation'
+  // Subscription/billing resource
+  | 'subscription';
 
 export interface ActivityLogInput {
   userId: string;
@@ -1304,6 +1314,59 @@ export function logConversationUndo(
       activitiesRolledBack: options.activitiesRolledBack,
       rolledBackActivityIds: options.rolledBackActivityIds,
       mode: options.mode,
+    },
+  }).catch(() => {
+    // Silent fail - already logged in logActivity
+  });
+}
+
+/**
+ * Convenience wrapper for subscription/payment operations.
+ * Fire-and-forget - call without await.
+ */
+export function logSubscriptionActivity(
+  userId: string,
+  operation:
+    | 'subscription_create'
+    | 'subscription_update'
+    | 'subscription_cancel'
+    | 'subscription_reactivate'
+    | 'billing_update'
+    | 'customer_create'
+    | 'schedule_cancel',
+  data: {
+    subscriptionId?: string;
+    customerId?: string;
+    priceId?: string;
+    subscriptionTier?: string;
+    stripeEventId?: string;
+    stripeEventType?: string;
+  },
+  options?: {
+    actorEmail?: string;
+    actorDisplayName?: string;
+    previousValues?: Record<string, unknown>;
+    newValues?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }
+): void {
+  logActivity({
+    userId,
+    actorEmail: options?.actorEmail ?? 'system@stripe',
+    actorDisplayName: options?.actorDisplayName,
+    operation,
+    resourceType: 'subscription',
+    resourceId: data.subscriptionId ?? data.customerId ?? userId,
+    driveId: null,
+    previousValues: options?.previousValues,
+    newValues: options?.newValues,
+    metadata: {
+      ...options?.metadata,
+      customerId: data.customerId,
+      priceId: data.priceId,
+      subscriptionTier: data.subscriptionTier,
+      stripeEventId: data.stripeEventId,
+      stripeEventType: data.stripeEventType,
     },
   }).catch(() => {
     // Silent fail - already logged in logActivity

@@ -3,6 +3,7 @@ import { db, eq, users } from '@pagespace/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { logSubscriptionActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -115,6 +116,14 @@ export async function POST(request: NextRequest) {
       await stripe.customers.del(customer.id);
       throw dbError;
     }
+
+    logSubscriptionActivity(userId, 'customer_create', {
+      customerId: customer.id,
+    }, {
+      actorEmail: user.email,
+      actorDisplayName: user.name ?? undefined,
+      newValues: { stripeCustomerId: customer.id },
+    });
 
     return NextResponse.json({
       customer: {

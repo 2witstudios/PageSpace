@@ -3,6 +3,7 @@ import { db, eq, and, inArray, desc, users, subscriptions } from '@pagespace/db'
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/server';
+import { logSubscriptionActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -80,6 +81,15 @@ export async function POST(request: NextRequest) {
         updatedAt: new Date(),
       })
       .where(eq(subscriptions.id, currentSubscription.id));
+
+    logSubscriptionActivity(userId, 'subscription_cancel', {
+      subscriptionId: currentSubscription.stripeSubscriptionId,
+      priceId: currentSubscription.stripePriceId ?? undefined,
+    }, {
+      actorEmail: user.email,
+      actorDisplayName: user.name ?? undefined,
+      newValues: { cancelAtPeriodEnd: true, currentPeriodEnd: new Date(currentPeriodEnd * 1000).toISOString() },
+    });
 
     return NextResponse.json({
       subscriptionId: subscription.id,
