@@ -21,6 +21,7 @@ import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { CronExpressionParser } from 'cron-parser';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -528,6 +529,25 @@ export async function POST(request: Request) {
         loggers.api.warn('Push to Google failed', { eventId: event.id, error: err?.message })
       );
     });
+
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'create',
+        resourceType: 'calendar_event',
+        resourceId: event.id,
+        resourceTitle: data.title,
+        driveId: data.driveId ?? null,
+        metadata: {
+          allDay: data.allDay,
+          visibility: data.visibility,
+          hasRecurrence: !!data.recurrenceRule,
+          attendeeCount: (data.attendeeIds?.length ?? 0) + 1,
+        },
+      }).catch(() => {});
+    }).catch(() => {});
 
     return NextResponse.json(completeEvent, { status: 201 });
   } catch (error) {

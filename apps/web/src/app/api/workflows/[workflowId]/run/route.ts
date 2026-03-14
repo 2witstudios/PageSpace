@@ -4,6 +4,7 @@ import { checkDriveAccess } from '@pagespace/lib/server';
 import { db, workflows, eq, and, ne } from '@pagespace/db';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -73,6 +74,20 @@ export async function POST(
       nextRunAt,
     })
     .where(eq(workflows.id, workflowId));
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(auth.userId).then(actorInfo => {
+    logActivity({
+      userId: auth.userId,
+      ...actorInfo,
+      operation: 'update',
+      resourceType: 'workflow',
+      resourceId: workflowId,
+      resourceTitle: workflow.name,
+      driveId: workflow.driveId,
+      metadata: { action: 'manual_run', success: result.success, durationMs: result.durationMs },
+    }).catch(() => {});
+  }).catch(() => {});
 
   return NextResponse.json({
     success: result.success,

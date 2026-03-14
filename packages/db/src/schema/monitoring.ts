@@ -317,7 +317,10 @@ export const activityResourceEnum = pgEnum('activity_resource', [
   // Message resource (Tier 1)
   'message',
   // AI conversation resource
-  'conversation'
+  'conversation',
+  // Feature resources
+  'workflow',
+  'calendar_event'
 ]);
 
 /**

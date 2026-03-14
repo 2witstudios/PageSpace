@@ -13,6 +13,7 @@ import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -285,6 +286,22 @@ export async function PATCH(
       );
     });
 
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'update',
+        resourceType: 'calendar_event',
+        resourceId: eventId,
+        resourceTitle: updatedEvent.title,
+        driveId: updatedEvent.driveId,
+        updatedFields: Object.keys(data).filter(k => (data as Record<string, unknown>)[k] !== undefined),
+        previousValues: { title: event.title, startAt: event.startAt?.toISOString(), endAt: event.endAt?.toISOString() },
+        newValues: { title: updatedEvent.title, startAt: updatedEvent.startAt?.toISOString(), endAt: updatedEvent.endAt?.toISOString() },
+      }).catch(() => {});
+    }).catch(() => {});
+
     return NextResponse.json(completeEvent);
   } catch (error) {
     loggers.api.error('Error updating calendar event:', error as Error);
@@ -371,6 +388,19 @@ export async function DELETE(
       userId,
       attendeeIds: attendees.map(a => a.userId),
     });
+
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'delete',
+        resourceType: 'calendar_event',
+        resourceId: eventId,
+        resourceTitle: event.title,
+        driveId: event.driveId,
+      }).catch(() => {});
+    }).catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error) {

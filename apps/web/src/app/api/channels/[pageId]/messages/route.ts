@@ -5,6 +5,7 @@ import { canUserViewPage, canUserEditPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 // Type for attachment metadata stored in the database
 interface AttachmentMeta {
@@ -166,6 +167,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       target: [channelReadStatus.userId, channelReadStatus.channelId],
       set: { lastReadAt: new Date() },
     });
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(userId).then(actorInfo => {
+    logMessageActivity(userId, 'create', {
+      id: createdMessage.id,
+      pageId,
+      driveId: null,
+      conversationType: 'channel',
+    }, actorInfo);
+  }).catch(() => {});
 
   const newMessage = await db.query.channelMessages.findFirst({
       where: eq(channelMessages.id, createdMessage.id),

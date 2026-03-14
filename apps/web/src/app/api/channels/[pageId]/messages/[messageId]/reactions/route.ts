@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
 import { loggers } from '@pagespace/lib/server';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/broadcast-auth';
+import { getActorInfo, logActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -90,6 +91,20 @@ export async function POST(req: Request, { params }: RouteParams) {
       }
     }
 
+    // Audit logging (fire-and-forget)
+    getActorInfo(userId).then(actorInfo => {
+      logActivity({
+        userId,
+        ...actorInfo,
+        operation: 'create',
+        resourceType: 'message',
+        resourceId: messageId,
+        driveId: null,
+        pageId,
+        metadata: { action: 'reaction_added', emoji },
+      }).catch(() => {});
+    }).catch(() => {});
+
     return NextResponse.json(reactionWithUser, { status: 201 });
   } catch (error) {
     // Unique constraint violation - user already reacted with this emoji
@@ -172,6 +187,20 @@ export async function DELETE(req: Request, { params }: RouteParams) {
       loggers.realtime.error('Failed to broadcast reaction removal:', error as Error);
     }
   }
+
+  // Audit logging (fire-and-forget)
+  getActorInfo(userId).then(actorInfo => {
+    logActivity({
+      userId,
+      ...actorInfo,
+      operation: 'delete',
+      resourceType: 'message',
+      resourceId: messageId,
+      driveId: null,
+      pageId,
+      metadata: { action: 'reaction_removed', emoji },
+    }).catch(() => {});
+  }).catch(() => {});
 
   return NextResponse.json({ success: true });
 }
