@@ -2,32 +2,25 @@
  * Security Audit Chain Verifier Tests
  *
  * Tests for verifying the integrity of the security audit log hash chain.
- * Uses actual computeSecurityEventHash to build valid chains, then
- * tampers with entries to verify detection.
+ * Builds valid chains via shared helpers, then tampers with entries to verify detection.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { computeSecurityEventHash, type AuditEvent } from '../security-audit';
+import { createValidSecurityChain, type MockSecurityAuditEntry } from './audit-test-helpers';
 
-// Mock data storage
-let mockEntries: Array<{
-  id: string;
-  eventType: string;
-  userId: string | null;
-  sessionId: string | null;
-  serviceId: string | null;
-  resourceType: string | null;
-  resourceId: string | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  geoLocation: string | null;
-  details: Record<string, unknown> | null;
-  riskScore: number | null;
-  anomalyFlags: string[] | null;
-  timestamp: Date;
-  previousHash: string;
-  eventHash: string;
-}> = [];
+let mockEntries: MockSecurityAuditEntry[] = [];
+
+vi.mock('../../logging/logger-config', () => ({
+  loggers: { security: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
+}));
+
+vi.mock('drizzle-orm', () => ({
+  asc: vi.fn(),
+  count: vi.fn(() => 'count'),
+  and: vi.fn((...args: unknown[]) => args),
+  gte: vi.fn(),
+  lte: vi.fn(),
+}));
 
 vi.mock('@pagespace/db', () => ({
   db: {
@@ -50,15 +43,12 @@ vi.mock('@pagespace/db', () => ({
         findMany: vi.fn().mockImplementation(async (opts) => {
           let entries = [...mockEntries];
 
-          // Apply orderBy (always ASC by timestamp for verification)
           entries.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-          // Apply offset
           if (opts?.offset) {
             entries = entries.slice(opts.offset);
           }
 
-          // Apply limit
           if (opts?.limit) {
             entries = entries.slice(0, opts.limit);
           }
@@ -86,64 +76,12 @@ vi.mock('@pagespace/db', () => ({
     previousHash: 'previousHash',
     eventHash: 'eventHash',
   },
-  asc: vi.fn(),
-  count: vi.fn(() => 'count'),
-  and: vi.fn((...args) => args),
-  gte: vi.fn(),
-  lte: vi.fn(),
 }));
 
 import {
   verifySecurityAuditChain,
   type SecurityChainVerificationResult,
 } from '../security-audit-chain-verifier';
-
-/**
- * Helper to create a valid security audit chain of entries
- * using actual computeSecurityEventHash for real hashes.
- */
-function createValidSecurityChain(count: number): typeof mockEntries {
-  const entries: typeof mockEntries = [];
-  let previousHash = 'genesis';
-
-  for (let i = 0; i < count; i++) {
-    const timestamp = new Date(Date.now() + i * 1000);
-    const id = `audit-${i + 1}`;
-
-    const event: AuditEvent = {
-      eventType: 'auth.login.success',
-      userId: 'user-123',
-      sessionId: `session-${i}`,
-      ipAddress: '127.0.0.1',
-      userAgent: 'test-agent',
-    };
-
-    const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
-
-    entries.push({
-      id,
-      eventType: event.eventType,
-      userId: event.userId ?? null,
-      sessionId: event.sessionId ?? null,
-      serviceId: null,
-      resourceType: null,
-      resourceId: null,
-      ipAddress: event.ipAddress ?? null,
-      userAgent: event.userAgent ?? null,
-      geoLocation: null,
-      details: null,
-      riskScore: null,
-      anomalyFlags: null,
-      timestamp,
-      previousHash,
-      eventHash,
-    });
-
-    previousHash = eventHash;
-  }
-
-  return entries;
-}
 
 describe('security-audit-chain-verifier', () => {
   beforeEach(() => {
@@ -188,16 +126,35 @@ describe('security-audit-chain-verifier', () => {
       expect(result.breakPoint?.position).toBe(2);
     });
 
-    it('should detect tampered entry data', async () => {
+    it('should detect tampered entry data (non-PII field)', async () => {
       mockEntries = createValidSecurityChain(3);
-      // Modify the userId which changes the computed hash
-      mockEntries[1]!.userId = 'tampered-user';
+      // Modify eventType (non-PII) — this changes the computed hash
+      mockEntries[1]!.eventType = 'auth.login.failure';
 
       const result = await verifySecurityAuditChain();
 
       expect(result.isValid).toBe(false);
       expect(result.breakPoint).not.toBeNull();
       expect(result.breakPoint?.entryId).toBe('audit-2');
+    });
+
+    it('should remain valid after PII anonymization (#541)', async () => {
+      mockEntries = createValidSecurityChain(5);
+      // Simulate GDPR anonymization: null out all PII fields
+      for (const entry of mockEntries) {
+        entry.userId = null;
+        entry.sessionId = null;
+        entry.ipAddress = null;
+        entry.userAgent = null;
+        entry.geoLocation = null;
+      }
+
+      const result = await verifySecurityAuditChain();
+
+      expect(result.isValid).toBe(true);
+      expect(result.entriesVerified).toBe(5);
+      expect(result.validEntries).toBe(5);
+      expect(result.invalidEntries).toBe(0);
     });
 
     it('should detect broken chain link (previousHash mismatch)', async () => {
