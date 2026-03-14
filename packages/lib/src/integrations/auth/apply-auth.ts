@@ -62,7 +62,7 @@ export const applyAuth = (
 
     case 'oauth2': {
       const { tokenPlacement = 'header', tokenPrefix = 'Bearer ' } = authMethod.config;
-      const accessToken = credentials.accessToken;
+      const accessToken = credentials.accessToken || credentials.access_token;
       if (accessToken) {
         if (tokenPlacement === 'header') {
           headers['Authorization'] = `${tokenPrefix}${accessToken}`;

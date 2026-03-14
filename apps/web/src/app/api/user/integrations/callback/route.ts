@@ -99,13 +99,13 @@ export async function GET(request: Request) {
 
     // Encrypt credentials
     const credentialsToEncrypt: Record<string, string> = {
-      access_token: tokens.accessToken,
+      accessToken: tokens.accessToken,
     };
     if (tokens.refreshToken) {
-      credentialsToEncrypt.refresh_token = tokens.refreshToken;
+      credentialsToEncrypt.refreshToken = tokens.refreshToken;
     }
     if (tokens.expiresIn) {
-      credentialsToEncrypt.expires_at = String(Date.now() + tokens.expiresIn * 1000);
+      credentialsToEncrypt.expiresAt = String(Date.now() + tokens.expiresIn * 1000);
     }
 
     const encrypted = await encryptCredentials(credentialsToEncrypt);
