@@ -7,7 +7,8 @@ const TEST_SECRET = 'test-secret-key-for-oauth-state';
 describe('createSignedState', () => {
   it('should create a base64 encoded state string', () => {
     const state = createSignedState({ userId: 'user-1' }, TEST_SECRET);
-    expect(state).toBeTruthy();
+    expect(typeof state).toBe('string');
+    expect(state.length).toBeGreaterThanOrEqual(1);
     // Should be valid base64
     expect(() => Buffer.from(state, 'base64')).not.toThrow();
   });

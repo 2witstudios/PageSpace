@@ -87,7 +87,7 @@ describe('tree-utils', () => {
 
       // Orphaned nodes become root nodes
       expect(tree).toHaveLength(2)
-      expect(tree.find(n => n.id === '2')).toBeTruthy()
+      expect(tree.find(n => n.id === '2')).toEqual(expect.objectContaining({ id: '2' }))
     })
 
     it('preserves node properties in tree', () => {
@@ -204,7 +204,7 @@ describe('tree-utils', () => {
       expect(tree[0].title).toBe('Root Second')
     })
 
-    it('handles large dataset efficiently', () => {
+    it('builds large dataset without dropping nodes', () => {
       const nodes = []
       for (let i = 0; i < 1000; i++) {
         nodes.push({
@@ -214,12 +214,15 @@ describe('tree-utils', () => {
         })
       }
 
-      const startTime = Date.now()
       const tree = buildTree(nodes)
-      const duration = Date.now() - startTime
 
-      expect(tree).toBeTruthy()
-      expect(duration).toBeLessThan(100) // Should build in under 100ms
+      const countAll = (items: { children?: unknown[] }[]): number =>
+        items.reduce((sum, n) => sum + 1 + countAll((n.children ?? []) as { children?: unknown[] }[]), 0)
+
+      // 1000 nodes with binary-tree parentage: root is node-0
+      expect(tree).toHaveLength(1)
+      expect(tree[0].id).toBe('node-0')
+      expect(countAll(tree)).toBe(1000)
     })
 
     it('handles all nodes being roots', () => {

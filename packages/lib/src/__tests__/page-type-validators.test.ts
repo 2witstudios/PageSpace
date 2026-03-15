@@ -390,7 +390,7 @@ describe('page-type-validators', () => {
       const result = validateAIChatTools(['invalid_tool'], availableTools)
 
       expect(result.valid).toBe(false)
-      expect(result.errors.length).toBeGreaterThan(0)
+      expect(result.errors).toHaveLength(1)
       expect(result.errors[0]).toContain('Invalid tools specified')
       expect(result.errors[0]).toContain('invalid_tool')
     })

@@ -71,7 +71,7 @@ describe('export-utils', () => {
       (HTMLtoDOCX as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('conversion failed'));
 
       await expect(generateDOCX('<p>bad</p>', 'Fail')).rejects.toThrow('Failed to generate DOCX');
-      expect(consoleSpy).toHaveBeenCalledWith('Error generating DOCX:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith('Error generating DOCX:', expect.objectContaining({ message: 'conversion failed' }));
       consoleSpy.mockRestore();
     });
   });
@@ -202,37 +202,32 @@ describe('export-utils', () => {
       const result = generateExcel(data);
 
       expect(result).toBeInstanceOf(Buffer);
-      expect(XLSX.utils.book_new).toHaveBeenCalled();
+      expect(XLSX.utils.book_new).toHaveBeenCalledTimes(1);
       expect(XLSX.utils.aoa_to_sheet).toHaveBeenCalledWith(data);
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalled();
-      expect(XLSX.write).toHaveBeenCalledWith(
-        expect.any(Object),
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
+      expect((XLSX.utils.book_append_sheet as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe('Sheet1');
+      expect(XLSX.write).toHaveBeenCalledTimes(1);
+      expect((XLSX.write as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(
         expect.objectContaining({ type: 'buffer', bookType: 'xlsx', compression: true })
       );
     });
 
-    it('uses custom sheet name', () => {
+    it('given_customSheetName_passesNameToAppendSheet', () => {
       const data = [['A']];
 
       generateExcel(data, 'MySheet');
 
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Object),
-        'MySheet'
-      );
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
+      expect((XLSX.utils.book_append_sheet as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe('MySheet');
     });
 
-    it('uses default sheet name when not provided', () => {
+    it('given_noSheetName_usesDefaultSheet1', () => {
       const data = [['A']];
 
       generateExcel(data);
 
-      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Object),
-        'Sheet1'
-      );
+      expect(XLSX.utils.book_append_sheet).toHaveBeenCalledTimes(1);
+      expect((XLSX.utils.book_append_sheet as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe('Sheet1');
     });
 
     it('sets workbook properties when title is provided', () => {
@@ -243,9 +238,7 @@ describe('export-utils', () => {
       // The function sets Props on the workbook object
       const bookNewMock = XLSX.utils.book_new as ReturnType<typeof vi.fn>;
       const workbook = bookNewMock.mock.results[0].value;
-      expect(workbook.Props).toBeDefined();
-      expect(workbook.Props.Title).toBe('My Workbook');
-      expect(workbook.Props.Author).toBe('PageSpace');
+      expect(workbook.Props).toMatchObject({ Title: 'My Workbook', Author: 'PageSpace' });
     });
 
     it('does not set workbook properties when title is not provided', () => {
@@ -265,7 +258,7 @@ describe('export-utils', () => {
       });
 
       expect(() => generateExcel([['A']])).toThrow('Failed to generate Excel file');
-      expect(consoleSpy).toHaveBeenCalledWith('Error generating Excel:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith('Error generating Excel:', expect.objectContaining({ message: 'write failed' }));
       consoleSpy.mockRestore();
     });
   });

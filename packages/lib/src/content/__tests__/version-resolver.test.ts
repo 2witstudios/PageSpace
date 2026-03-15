@@ -1,6 +1,15 @@
+/**
+ * @scaffold — version-resolver uses a module-level `db` import from
+ * @pagespace/db with no injected seam. Chain mocks are unavoidable here —
+ * the db mock captures the select chain that the module calls internally.
+ * Assertions focus on observable return values, not call tracking.
+ *
+ * REVIEW: introduce a VersionRepository seam (accepting db as a parameter
+ * or using dependency injection) so these tests can mock at the repository
+ * boundary instead of reproducing the ORM chain shape.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock the database module
 vi.mock('@pagespace/db', () => ({
   db: {
     select: vi.fn(),
@@ -12,10 +21,10 @@ vi.mock('@pagespace/db', () => ({
     pageRevision: 'pageRevision',
     changeGroupId: 'changeGroupId',
   },
-  eq: vi.fn((a, b) => ({ type: 'eq', field: a, value: b })),
-  and: vi.fn((...args) => ({ type: 'and', conditions: args })),
-  or: vi.fn((...args) => ({ type: 'or', conditions: args })),
-  desc: vi.fn((field) => ({ type: 'desc', field })),
+  eq: vi.fn((a: unknown, b: unknown) => ({ _op: 'eq', field: a, value: b })),
+  and: vi.fn((...args: unknown[]) => ({ _op: 'and', conditions: args })),
+  or: vi.fn((...args: unknown[]) => ({ _op: 'or', conditions: args })),
+  desc: vi.fn((field: unknown) => ({ _op: 'desc', field })),
 }));
 
 import {
@@ -26,18 +35,23 @@ import {
 } from '../version-resolver';
 import { db } from '@pagespace/db';
 
-describe('version-resolver (colocated)', () => {
+describe('version-resolver', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  // Helper to set up db.select mock chain
-  function setupSelectMock(returnValue: unknown[]) {
+  /**
+   * Wire db.select to resolve with `rows` at the end of the
+   * `.limit()` chain. Only the single-item path uses this helper;
+   * the batch path has its own `setupBatchSelectMock`.
+   */
+  function setupSelectMock(rows: unknown[]) {
+    const limit = vi.fn().mockResolvedValue(rows);
     const mockSelect = vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
           orderBy: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue(returnValue),
+            limit,
           }),
         }),
       }),
@@ -45,11 +59,11 @@ describe('version-resolver (colocated)', () => {
     (db.select as ReturnType<typeof vi.fn>).mockImplementation(mockSelect);
   }
 
-  function setupBatchSelectMock(returnValue: unknown[]) {
+  function setupBatchSelectMock(rows: unknown[]) {
     const mockSelect = vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
-          orderBy: vi.fn().mockResolvedValue(returnValue),
+          orderBy: vi.fn().mockResolvedValue(rows),
         }),
       }),
     });
@@ -57,7 +71,7 @@ describe('version-resolver (colocated)', () => {
   }
 
   describe('resolveVersionContent', () => {
-    it('returns null when no version found', async () => {
+    it('given_noVersionFound_returnsNull', async () => {
       setupSelectMock([]);
 
       const result = await resolveVersionContent({
@@ -68,7 +82,7 @@ describe('version-resolver (colocated)', () => {
       expect(result).toBeNull();
     });
 
-    it('returns version content pair when found', async () => {
+    it('given_versionFound_returnsContentPairWithCorrectRefs', async () => {
       setupSelectMock([{
         id: 'v1',
         pageId: 'page1',
@@ -83,16 +97,17 @@ describe('version-resolver (colocated)', () => {
         activityContentRef: 'beforeRef',
       });
 
-      expect(result).not.toBeNull();
-      expect(result?.pageId).toBe('page1');
-      expect(result?.changeGroupId).toBe('cg1');
-      expect(result?.beforeContentRef).toBe('beforeRef');
-      expect(result?.afterContentRef).toBe('afterRef');
-      expect(result?.beforeRevision).toBe(4);
-      expect(result?.afterRevision).toBe(5);
+      expect(result).toEqual({
+        pageId: 'page1',
+        changeGroupId: 'cg1',
+        beforeContentRef: 'beforeRef',
+        afterContentRef: 'afterRef',
+        beforeRevision: 4,
+        afterRevision: 5,
+      });
     });
 
-    it('uses null for beforeContentRef when activityContentRef is absent', async () => {
+    it('given_noActivityContentRef_usesNullForBefore', async () => {
       setupSelectMock([{
         id: 'v1',
         pageId: 'page1',
@@ -109,7 +124,7 @@ describe('version-resolver (colocated)', () => {
       expect(result?.beforeContentRef).toBeNull();
     });
 
-    it('handles pageRevision 0 edge case (beforeRevision stays 0)', async () => {
+    it('given_revisionZero_beforeRevisionStaysZero', async () => {
       setupSelectMock([{
         id: 'v1',
         pageId: 'page1',
@@ -126,15 +141,34 @@ describe('version-resolver (colocated)', () => {
       expect(result?.beforeRevision).toBe(0);
       expect(result?.afterRevision).toBe(0);
     });
+
+    it('given_databaseError_propagatesWithoutCatching', async () => {
+      const mockSelect = vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockReturnValue({
+              limit: vi.fn().mockRejectedValue(new Error('connection lost')),
+            }),
+          }),
+        }),
+      });
+      (db.select as ReturnType<typeof vi.fn>).mockImplementation(mockSelect);
+
+      await expect(resolveVersionContent({
+        pageId: 'page1',
+        changeGroupId: 'cg1',
+      })).rejects.toThrow('connection lost');
+    });
   });
 
   describe('batchResolveVersionContent', () => {
-    it('returns empty map for empty requests array', async () => {
+    it('given_emptyRequests_returnsEmptyMap', async () => {
       const result = await batchResolveVersionContent([]);
+
       expect(result.size).toBe(0);
     });
 
-    it('resolves multiple versions using composite keys', async () => {
+    it('given_multipleRequests_resolvesUsingCompositeKeys', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'ref1', pageRevision: 2, changeGroupId: 'cg1' },
         { id: 'v2', pageId: 'page2', contentRef: 'ref2', pageRevision: 4, changeGroupId: 'cg2' },
@@ -148,91 +182,101 @@ describe('version-resolver (colocated)', () => {
       const result = await batchResolveVersionContent(requests);
 
       expect(result.size).toBe(2);
-      expect(result.get('page1:cg1')?.afterContentRef).toBe('ref1');
-      expect(result.get('page2:cg2')?.afterContentRef).toBe('ref2');
+      expect(result.get('page1:cg1')).toEqual(expect.objectContaining({
+        afterContentRef: 'ref1',
+        beforeContentRef: 'before1',
+      }));
+      expect(result.get('page2:cg2')).toEqual(expect.objectContaining({
+        afterContentRef: 'ref2',
+        beforeContentRef: 'before2',
+      }));
     });
 
-    it('deduplicates by composite key, keeping highest revision', async () => {
+    it('given_duplicateCompositeKeys_keepsHighestRevision', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'ref-high', pageRevision: 5, changeGroupId: 'cg1' },
         { id: 'v2', pageId: 'page1', contentRef: 'ref-low', pageRevision: 3, changeGroupId: 'cg1' },
       ]);
 
-      const requests: VersionResolveRequest[] = [
+      const result = await batchResolveVersionContent([
         { pageId: 'page1', changeGroupId: 'cg1' },
-      ];
-
-      const result = await batchResolveVersionContent(requests);
+      ]);
 
       expect(result.size).toBe(1);
       expect(result.get('page1:cg1')?.afterContentRef).toBe('ref-high');
     });
 
-    it('skips versions with null changeGroupId', async () => {
+    it('given_nullChangeGroupId_skipsVersion', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'ref1', pageRevision: 2, changeGroupId: null },
       ]);
 
-      const requests: VersionResolveRequest[] = [
+      const result = await batchResolveVersionContent([
         { pageId: 'page1', changeGroupId: 'cg1' },
-      ];
-
-      const result = await batchResolveVersionContent(requests);
+      ]);
 
       expect(result.size).toBe(0);
     });
 
-    it('skips requests whose version is not found', async () => {
+    it('given_missingVersion_excludesFromResults', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'ref1', pageRevision: 2, changeGroupId: 'cg1' },
       ]);
 
-      const requests: VersionResolveRequest[] = [
+      const result = await batchResolveVersionContent([
         { pageId: 'page1', changeGroupId: 'cg1' },
         { pageId: 'page2', changeGroupId: 'cg-missing' },
-      ];
-
-      const result = await batchResolveVersionContent(requests);
+      ]);
 
       expect(result.size).toBe(1);
       expect(result.has('page1:cg1')).toBe(true);
       expect(result.has('page2:cg-missing')).toBe(false);
     });
 
-    it('handles revision 0 edge case in batch', async () => {
+    it('given_revisionZero_beforeRevisionStaysZero', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'ref1', pageRevision: 0, changeGroupId: 'cg1' },
       ]);
 
-      const requests: VersionResolveRequest[] = [
+      const result = await batchResolveVersionContent([
         { pageId: 'page1', changeGroupId: 'cg1' },
-      ];
-
-      const result = await batchResolveVersionContent(requests);
+      ]);
 
       const pair = result.get('page1:cg1');
       expect(pair?.beforeRevision).toBe(0);
       expect(pair?.afterRevision).toBe(0);
     });
+
+    it('given_databaseError_propagates', async () => {
+      const mockSelect = vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockRejectedValue(new Error('timeout')),
+          }),
+        }),
+      });
+      (db.select as ReturnType<typeof vi.fn>).mockImplementation(mockSelect);
+
+      await expect(batchResolveVersionContent([
+        { pageId: 'page1', changeGroupId: 'cg1' },
+      ])).rejects.toThrow('timeout');
+    });
   });
 
   describe('resolveStackedVersionContent', () => {
-    it('returns empty map for empty input', async () => {
+    it('given_emptyInput_returnsEmptyMap', async () => {
       const result = await resolveStackedVersionContent([]);
+
       expect(result.size).toBe(0);
     });
 
-    it('delegates to batchResolveVersionContent with first content ref', async () => {
+    it('given_groupedActivities_usesFirstContentRefAsBefore', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'finalRef', pageRevision: 5, changeGroupId: 'cg1' },
       ]);
 
       const result = await resolveStackedVersionContent([
-        {
-          changeGroupId: 'cg1',
-          pageId: 'page1',
-          firstContentRef: 'initialRef',
-        },
+        { changeGroupId: 'cg1', pageId: 'page1', firstContentRef: 'initialRef' },
       ]);
 
       expect(result.size).toBe(1);
@@ -241,24 +285,19 @@ describe('version-resolver (colocated)', () => {
       expect(pair?.afterContentRef).toBe('finalRef');
     });
 
-    it('handles null firstContentRef', async () => {
+    it('given_nullFirstContentRef_setsBeforeToNull', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'finalRef', pageRevision: 2, changeGroupId: 'cg1' },
       ]);
 
       const result = await resolveStackedVersionContent([
-        {
-          changeGroupId: 'cg1',
-          pageId: 'page1',
-          firstContentRef: null,
-        },
+        { changeGroupId: 'cg1', pageId: 'page1', firstContentRef: null },
       ]);
 
-      const pair = result.get('page1:cg1');
-      expect(pair?.beforeContentRef).toBeNull();
+      expect(result.get('page1:cg1')?.beforeContentRef).toBeNull();
     });
 
-    it('resolves multiple grouped activities', async () => {
+    it('given_multipleGroups_resolvesAll', async () => {
       setupBatchSelectMock([
         { id: 'v1', pageId: 'page1', contentRef: 'ref1', pageRevision: 3, changeGroupId: 'cg1' },
         { id: 'v2', pageId: 'page2', contentRef: 'ref2', pageRevision: 7, changeGroupId: 'cg2' },
