@@ -89,6 +89,7 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
 }));
 
 import { db } from '@pagespace/db';
+import { hashToken } from '../token-utils';
 import {
   TOKEN_LIFETIMES,
   generateDeviceToken,
@@ -116,6 +117,7 @@ const mockDb = db as unknown as {
   update: MockFn;
 };
 
+describe('device-auth-utils', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -442,7 +444,7 @@ const mockDb = db as unknown as {
       });
       expect(mockAtomicValidateOrCreate).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'user-1', deviceId: 'dev-1', platform: 'web' }),
-        expect.objectContaining({ hashToken: expect.any(Function), generateDeviceToken: expect.any(Function) }),
+        expect.objectContaining({ hashToken, generateDeviceToken }),
       );
     });
   });

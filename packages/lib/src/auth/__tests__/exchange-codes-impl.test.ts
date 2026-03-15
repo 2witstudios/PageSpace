@@ -50,7 +50,7 @@ describe('exchange-codes', () => {
       expect(mockRedis.setex).toHaveBeenCalledWith(
         expect.stringContaining('auth:exchange:'),
         300,
-        expect.any(String)
+        JSON.stringify(testData)
       );
     });
 

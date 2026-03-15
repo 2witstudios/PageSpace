@@ -522,9 +522,8 @@ describe('updateDrive', () => {
     expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
       drivePrompt: 'New prompt',
     }));
-    expect(setMock).not.toHaveBeenCalledWith(expect.objectContaining({
-      slug: expect.anything(),
-    }));
+    const setCallArg = setMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(setCallArg).not.toHaveProperty('slug');
   });
 
   it('should return null when update returns nothing', async () => {
@@ -557,10 +556,9 @@ describe('trashDrive', () => {
 
     const result = await trashDrive('drive_123');
 
-    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
-      isTrashed: true,
-      trashedAt: expect.any(Date),
-    }));
+    const setCallArg = setMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(setCallArg.isTrashed).toBe(true);
+    expect(setCallArg.trashedAt).toBeInstanceOf(Date);
     expect(result?.isTrashed).toBe(true);
   });
 });

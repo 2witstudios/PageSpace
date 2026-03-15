@@ -237,12 +237,13 @@ describe('storage-limits', () => {
 
       await updateStorageUsage('user-1', 1024, { eventType: 'upload', pageId: 'page-1' });
 
-      expect(storageRepository.runTransaction).toHaveBeenCalledWith(expect.any(Function));
+      const txCallback = vi.mocked(storageRepository.runTransaction).mock.calls[0][0];
+      expect(typeof txCallback).toBe('function');
       expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(
-        expect.anything(), 'user-1', 1024,
+        {}, 'user-1', 1024,
       );
       expect(storageRepository.insertStorageEvent).toHaveBeenCalledWith(
-        expect.anything(),
+        {},
         expect.objectContaining({
           userId: 'user-1',
           eventType: 'upload',

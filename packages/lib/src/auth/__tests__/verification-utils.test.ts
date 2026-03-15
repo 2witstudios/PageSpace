@@ -49,6 +49,7 @@ import {
 } from '../verification-utils';
 import { db, verificationTokens, users } from '@pagespace/db';
 
+describe('verification-utils', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -202,7 +203,9 @@ import { db, verificationTokens, users } from '@pagespace/db';
 
       await markEmailVerified('user-1');
       expect(db.update).toHaveBeenCalledWith(users);
-      expect(mockSet).toHaveBeenCalledWith({ emailVerified: expect.any(Date) });
+      const setArg = mockSet.mock.calls[0][0] as { emailVerified: unknown };
+      expect(setArg.emailVerified).toBeInstanceOf(Date);
+      expect(Object.keys(setArg)).toEqual(['emailVerified']);
     });
   });
 
