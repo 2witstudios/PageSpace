@@ -200,7 +200,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.url).toBeTruthy();
+      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com/);
     });
 
     it('given absolute external URL, should reject with 400', async () => {
@@ -214,7 +214,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given protocol-relative URL (//evil.com), should reject with 400', async () => {
@@ -228,7 +228,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given backslash URL (/\\evil.com), should reject with 400', async () => {
@@ -242,7 +242,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given javascript: URL, should reject with 400', async () => {
@@ -255,7 +255,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given URL-encoded malicious URL, should reject with 400', async () => {
@@ -269,7 +269,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toContain('Invalid return URL');
+      expect(data.error).toBe('Invalid return URL. Must be a relative path.');
     });
 
     it('given no returnUrl, should accept (defaults to /dashboard)', async () => {
@@ -281,7 +281,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.url).toBeTruthy();
+      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com/);
     });
   });
 
@@ -302,12 +302,9 @@ describe('Open Redirect Protection', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
-      // Should NOT redirect to evil.com
+      const location = response.headers.get('location')!;
       expect(location).not.toContain('evil.com');
-      // Should redirect to dashboard
-      expect(location).toContain('/dashboard');
+      expect(location).toContain('/dashboard?auth=success&csrfToken=mock-csrf-token');
     });
 
     it('given safe returnUrl in state, should redirect to that path with CSRF token', async () => {
@@ -324,10 +321,8 @@ describe('Open Redirect Protection', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
-      expect(location).toContain('/dashboard/my-drive');
-      expect(location).toContain('csrfToken=');
+      const location = response.headers.get('location')!;
+      expect(location).toContain('/dashboard/my-drive?auth=success&csrfToken=mock-csrf-token');
     });
 
     it('given protocol-relative URL in legacy state, should redirect to /dashboard', async () => {

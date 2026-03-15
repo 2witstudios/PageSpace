@@ -213,13 +213,13 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       // Verify session creation
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockExistingUser.id,
-          type: 'user',
-          scopes: ['*'],
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockExistingUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '127.0.0.1',
+      });
 
       // Verify session cookie is set
       expect(appendSessionCookie).toHaveBeenCalledTimes(1);
@@ -229,8 +229,7 @@ describe('GET /api/auth/google/callback', () => {
       // Response should be a redirect
       expect(response.status).toBe(307);
 
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
+      const location = response.headers.get('location')!;
       expect(location).toContain('csrfToken=mock-csrf-token');
       expect(location).toContain('auth=success');
     });
@@ -291,8 +290,7 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      const location = response.headers.get('location');
-      expect(location).toBeTruthy();
+      const location = response.headers.get('location')!;
       expect(location).toContain('/dashboard/my-drive');
     });
   });
