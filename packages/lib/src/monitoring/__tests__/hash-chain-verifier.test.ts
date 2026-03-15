@@ -7,7 +7,6 @@
  * - Quick integrity checks
  * - Entry-level verification
  *
- * @scaffold - characterizing verification behavior with ORM mock.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -34,7 +33,6 @@ let mockLogEntries: Array<{
 }> = [];
 
 // Mock database
-// @scaffold - complex ORM mock that simulates findFirst/findMany/select chain behavior
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
@@ -201,7 +199,6 @@ describe('hash-chain-verifier', () => {
       // Arrange - empty entries
       mockLogEntries = [];
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 0 }]),
@@ -222,7 +219,6 @@ describe('hash-chain-verifier', () => {
       // Arrange - create valid chain
       mockLogEntries = createValidHashChain(5);
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 5 }]),
@@ -247,7 +243,6 @@ describe('hash-chain-verifier', () => {
       // Tamper with the 3rd entry's hash
       mockLogEntries[2]!.logHash = 'tampered-hash-value';
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 5 }]),
@@ -272,7 +267,6 @@ describe('hash-chain-verifier', () => {
       // Modify the userId of the 2nd entry (which changes its hash)
       mockLogEntries[1]!.userId = 'modified-user';
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 3 }]),
@@ -295,7 +289,6 @@ describe('hash-chain-verifier', () => {
       mockLogEntries[1]!.logHash = 'tampered-1';
       mockLogEntries[3]!.logHash = 'tampered-2';
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 5 }]),
@@ -315,7 +308,6 @@ describe('hash-chain-verifier', () => {
       // Arrange
       mockLogEntries = createValidHashChain(10);
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 10 }]),
@@ -353,7 +345,6 @@ describe('hash-chain-verifier', () => {
         chainSeed: null,
       });
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 4 }]),
@@ -372,7 +363,6 @@ describe('hash-chain-verifier', () => {
       // Arrange
       mockLogEntries = createValidHashChain(2);
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 2 }]),
@@ -483,7 +473,6 @@ describe('hash-chain-verifier', () => {
       mockLogEntries = createValidHashChain(3);
       mockLogEntries[1]!.logHash = 'invalid-hash';
 
-      // @scaffold - ORM chain mock for count query
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ count: 3 }]),

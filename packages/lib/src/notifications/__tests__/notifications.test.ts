@@ -84,7 +84,6 @@ const mockNotification = {
   metadata: {},
 };
 
-/** @scaffold — ORM chain mock: db.insert().values().returning() */
 function setupInsertChain(returnValue: object) {
   const returningFn = vi.fn().mockResolvedValue([returnValue]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -92,7 +91,6 @@ function setupInsertChain(returnValue: object) {
   return { returningFn, valuesFn };
 }
 
-/** @scaffold — ORM chain mock: db.select().from().leftJoin().where().orderBy().limit() */
 function setupSelectChain(returnValue: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(returnValue);
   const orderByFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -104,7 +102,6 @@ function setupSelectChain(returnValue: unknown[]) {
   return { selectFn, fromFn, whereFn, orderByFn, limitFn };
 }
 
-/** @scaffold — ORM chain mock: db.update().set().where().returning() */
 function setupUpdateChain(returnValue: object[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -113,7 +110,6 @@ function setupUpdateChain(returnValue: object[]) {
   return { setFn, whereFn, returningFn };
 }
 
-/** @scaffold — ORM chain mock: db.delete().where() */
 function setupDeleteChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);

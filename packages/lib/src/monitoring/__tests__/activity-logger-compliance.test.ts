@@ -7,7 +7,6 @@
  * - Convenience wrappers pass actor info through
  * - Hash chain fields computed on log insertion
  *
- * @scaffold - characterizing current behavior with ORM mock.
  * The activity-logger itself is the seam; these tests verify its contract.
  */
 
@@ -19,7 +18,6 @@ let capturedInsertValues: Record<string, unknown> | null = null;
 // Track the last inserted log hash for chain simulation
 let lastInsertedHash: string | null = null;
 
-// @scaffold - ORM chain mock for db.insert().values() and db.query.activityLogs.findFirst
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({

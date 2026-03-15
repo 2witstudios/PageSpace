@@ -93,7 +93,6 @@ const PAGE_ID = 'page-abc';
 const DRIVE_ID = 'drive-xyz';
 
 /**
- * @scaffold — ORM chain mock: db.select().from().leftJoin().where().limit()
  *
  * Each call to db.select() returns { from }, from returns { leftJoin, where },
  * leftJoin returns { leftJoin, where }, and where returns { limit }.
@@ -116,7 +115,6 @@ function mockSelectChain(rowSets: unknown[][]) {
   }
 }
 
-/** @scaffold — ORM chain mock that throws on resolve */
 function mockSelectThrow(error: Error) {
   const limitFn = vi.fn().mockRejectedValue(error);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });

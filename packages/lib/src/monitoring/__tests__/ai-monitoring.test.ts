@@ -2,7 +2,6 @@
  * Tests for ai-monitoring.ts
  * Mocks @pagespace/db, logger-database, and logger-config
  *
- * @scaffold - ORM chain mocks (db.select().from().where().limit()) required
  * because the source builds Drizzle query chains that must be mimicked.
  */
 
@@ -76,7 +75,6 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * @scaffold - ORM chain mock: db.select().from().where() → resolves to rows.
  * Also supports: db.select().from().where().limit() for detectAIErrorPatterns.
  * Also supports: db.select().from() → resolves to rows (no .where() call).
  *
@@ -461,7 +459,6 @@ describe('detectAIErrorPatterns', () => {
     vi.clearAllMocks();
   });
 
-  /** @scaffold - ORM chain mock: db.select().from().where().limit() */
   function setupErrorChain(rows: Array<{ error: string | null; provider: string; model: string }>) {
     const limitFn = vi.fn().mockResolvedValue(rows);
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });

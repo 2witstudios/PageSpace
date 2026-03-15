@@ -8,7 +8,6 @@
  *  - verifyEntry: found valid, found invalid, not found, with chainSeed,
  *                 with previousLogHash, neither, error
  *
- * @scaffold - ORM chain mocks required for db.select().from().where() and
  * db.query.activityLogs.findFirst/findMany patterns.
  */
 
@@ -113,7 +112,6 @@ function buildValidChain(count: number): MockEntry[] {
 }
 
 /**
- * @scaffold - Sets up db.select().from().where() for count query and
  * db.query.activityLogs.findMany for paged batch retrieval.
  */
 function setupDbMocks(entries: MockEntry[]) {
@@ -396,7 +394,6 @@ describe('hash-chain-verifier (full coverage)', () => {
       const firstTs = chain[0]!.timestamp;
       const lastTs = chain[chain.length - 1]!.timestamp;
 
-      // @scaffold - db.select() is called twice: once for total count, once for with-hash count
       let selectCallCount = 0;
       mockDbSelect.mockImplementation(() => {
         selectCallCount++;
@@ -431,7 +428,6 @@ describe('hash-chain-verifier (full coverage)', () => {
     });
 
     it('should return hasChainSeed=false when no chain seed entry found', async () => {
-      // @scaffold - Both count queries return 0: first awaits from() directly, second uses .where()
       let selectCallCount = 0;
       mockDbSelect.mockImplementation(() => {
         selectCallCount++;

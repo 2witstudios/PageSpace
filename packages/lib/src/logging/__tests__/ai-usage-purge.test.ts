@@ -10,7 +10,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * @scaffold — Hoisted ORM chain mocks: db.update().set().where().returning()
  * and db.delete().where().returning()
  * Pure functions (lt, eq, and, or, isNotNull) are mocked because they are
  * re-exported from @pagespace/db and used as query-builder arguments.

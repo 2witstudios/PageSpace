@@ -1,13 +1,11 @@
 /**
  * Comprehensive tests for activity-logger.ts
  *
- * @scaffold - ORM chain mocks for db.insert().values() and
  * db.query.activityLogs.findFirst patterns.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// @scaffold - Hoisted mock factories for db.insert().values() chain
 const capturedState = vi.hoisted(() => ({
   insertValues: null as Record<string, unknown> | null,
   logEntries: [] as Array<{ logHash: string }>,

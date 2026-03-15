@@ -52,7 +52,6 @@ const pageRow = {
   stateHash: null,
 };
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(rows: unknown[]) {
   const orderByFn = vi.fn().mockResolvedValue(rows);
   const limitFn = vi.fn().mockResolvedValue(rows);
@@ -62,7 +61,6 @@ function setupSelectChain(rows: unknown[]) {
   return { whereFn, orderByFn, limitFn };
 }
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupInsertChain(row: unknown) {
   const returningFn = vi.fn().mockResolvedValue([row]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -70,7 +68,6 @@ function setupInsertChain(row: unknown) {
   return { valuesFn, returningFn };
 }
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain(rows: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -188,7 +185,6 @@ describe('pageRepository.getNextPosition', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('returns 1 when no siblings exist', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const orderByFn = vi.fn().mockResolvedValue([]);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -199,7 +195,6 @@ describe('pageRepository.getNextPosition', () => {
   });
 
   it('returns max position + 1 when siblings exist', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const siblings = [{ position: 5 }, { position: 3 }];
     const orderByFn = vi.fn().mockResolvedValue(siblings);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
@@ -211,7 +206,6 @@ describe('pageRepository.getNextPosition', () => {
   });
 
   it('handles parentId when provided', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const orderByFn = vi.fn().mockResolvedValue([{ position: 2 }]);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -297,7 +291,6 @@ describe('pageRepository.trash', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('calls update with isTrashed=true and trashedAt as a Date', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
@@ -316,7 +309,6 @@ describe('pageRepository.trashMany', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('calls update with isTrashed=true and trashedAt for multiple pages', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const whereFn = vi.fn().mockResolvedValue(undefined);
     const setFn = vi.fn().mockReturnValue({ where: whereFn });
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
@@ -362,7 +354,6 @@ describe('pageRepository.getChildIds', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('returns empty array when no children', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const whereFn = vi.fn().mockResolvedValue([]);
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
     vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
@@ -372,7 +363,6 @@ describe('pageRepository.getChildIds', () => {
   });
 
   it('returns direct child IDs', async () => {
-    /** @scaffold - ORM chain mock (recursive) until Drizzle query builder is abstracted */
     vi.mocked(db.select)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -391,7 +381,6 @@ describe('pageRepository.getChildIds', () => {
   });
 
   it('returns all descendant IDs recursively', async () => {
-    /** @scaffold - ORM chain mock (recursive) until Drizzle query builder is abstracted */
     vi.mocked(db.select)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({

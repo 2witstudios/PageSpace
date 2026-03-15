@@ -23,7 +23,6 @@ import { db } from '@pagespace/db';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });

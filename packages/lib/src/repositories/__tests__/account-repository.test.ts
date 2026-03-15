@@ -38,7 +38,6 @@ import { db } from '@pagespace/db';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(result: unknown[]) {
   const whereFn = vi.fn().mockResolvedValue(result);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -46,7 +45,6 @@ function setupSelectChain(result: unknown[]) {
   return { whereFn, fromFn };
 }
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupDeleteChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);

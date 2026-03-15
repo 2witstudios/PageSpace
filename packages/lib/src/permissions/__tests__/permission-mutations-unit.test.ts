@@ -98,7 +98,6 @@ function validRevokeInput() {
   return { pageId: PAGE_ID, targetUserId: TARGET_ID };
 }
 
-/** @scaffold — ORM chain mock: page lookup returning drive owner match */
 function mockPageAsOwner() {
   vi.mocked(db.select)
     .mockReturnValueOnce({
@@ -112,7 +111,6 @@ function mockPageAsOwner() {
     } as unknown as ReturnType<typeof db.select>);
 }
 
-/** @scaffold — ORM chain mock: page lookup returning empty (not found) */
 function mockPageNotFound() {
   vi.mocked(db.select)
     .mockReturnValueOnce({
@@ -124,7 +122,6 @@ function mockPageNotFound() {
     } as unknown as ReturnType<typeof db.select>);
 }
 
-/** @scaffold — ORM chain mock: user existence check */
 function mockUserExists(exists = true) {
   vi.mocked(db.select)
     .mockReturnValueOnce({
@@ -136,7 +133,6 @@ function mockUserExists(exists = true) {
     } as unknown as ReturnType<typeof db.select>);
 }
 
-/** @scaffold — ORM chain mock: transaction with insert (new permission) */
 function mockTransactionInsert(newId: string) {
   const tx = {
     insert: vi.fn().mockReturnValue({
@@ -152,7 +148,6 @@ function mockTransactionInsert(newId: string) {
   return tx;
 }
 
-/** @scaffold — ORM chain mock: transaction with conflict (update path) */
 function mockTransactionConflict(existingId: string) {
   const tx = {
     insert: vi.fn().mockReturnValue({

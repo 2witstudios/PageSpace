@@ -88,7 +88,6 @@ function mockValidators(userOk = true, pageOk = true) {
   }
 }
 
-/** @scaffold — ORM chain mock: db.select().from().leftJoin/innerJoin().where().limit() */
 function makeSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
@@ -101,7 +100,6 @@ function makeSelectChain(rows: unknown[]) {
 
 // ---------------------------------------------------------------------------
 // getDriveIdsForUser
-// REVIEW: All tests in this block use inline @scaffold ORM chain mocks
 // ---------------------------------------------------------------------------
 describe('getDriveIdsForUser', () => {
   beforeEach(() => {
@@ -170,7 +168,6 @@ describe('getDriveIdsForUser', () => {
 
 // ---------------------------------------------------------------------------
 // getUserAccessLevel
-// REVIEW: All tests use inline @scaffold ORM chain mocks with sequential mockReturnValueOnce
 // ---------------------------------------------------------------------------
 describe('getUserAccessLevel', () => {
   beforeEach(() => {
@@ -443,7 +440,6 @@ describe('getUserAccessLevel', () => {
 // ---------------------------------------------------------------------------
 
 /**
- * @scaffold — ORM chain mock: sets up getUserAccessLevel return via inline chain mocks
  * REVIEW: This helper uses deep chain mocks; consider replacing with a repository abstraction
  */
 function setupAccessLevel(perms: { canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean } | null) {

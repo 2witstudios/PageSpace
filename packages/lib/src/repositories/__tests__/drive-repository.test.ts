@@ -37,7 +37,6 @@ const driveRecord = {
   trashedAt: null,
 };
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupSelectChain(rows: unknown[]) {
   const whereFn = vi.fn().mockResolvedValue(rows);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
@@ -45,7 +44,6 @@ function setupSelectChain(rows: unknown[]) {
   return { whereFn };
 }
 
-/** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
 function setupUpdateChain(returnValue: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
@@ -134,7 +132,6 @@ describe('driveRepository.trash', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('sets isTrashed to true and trashedAt to a Date, scoped by driveId', async () => {
-    /** @scaffold - ORM chain mock until Drizzle query builder is abstracted */
     const whereFn = vi.fn().mockResolvedValue(undefined);
     const setFn = vi.fn().mockReturnValue({ where: whereFn });
     vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
