@@ -140,7 +140,6 @@ vi.mock('react', () => ({
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { oauthRepository } from '@/lib/repositories/oauth-repository';
 import bcrypt from 'bcryptjs';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
