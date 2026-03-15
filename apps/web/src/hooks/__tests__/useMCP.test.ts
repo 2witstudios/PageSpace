@@ -150,7 +150,7 @@ describe('useMCP', () => {
     });
 
     it('should handle startServer failure from electron', async () => {
-      const mcpMock = setupElectronMock({
+      setupElectronMock({
         startServer: vi.fn().mockResolvedValue({ success: false, error: 'Port in use' }),
       });
 
