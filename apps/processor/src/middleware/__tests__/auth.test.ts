@@ -126,3 +126,65 @@ describe('AUTH_REQUIRED security behavior', () => {
     });
   });
 });
+
+describe('hasAuthScope', () => {
+  // These tests use the real implementation, but we need the module to load
+  // with AUTH_REQUIRED=true (the default), so reset modules cleanly.
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.NODE_ENV = 'test';
+    delete process.env.PROCESSOR_AUTH_REQUIRED;
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('returns false when auth is undefined', async () => {
+    const { hasAuthScope } = await import('../auth');
+    expect(hasAuthScope(undefined, 'files:write')).toBe(false);
+  });
+
+  it('returns result of auth.hasScope when auth is provided', async () => {
+    const { hasAuthScope } = await import('../auth');
+    const mockAuth = { hasScope: vi.fn().mockReturnValue(true) } as unknown as Parameters<typeof hasAuthScope>[0];
+    expect(hasAuthScope(mockAuth, 'files:write')).toBe(true);
+    expect(mockAuth.hasScope).toHaveBeenCalledWith('files:write');
+  });
+
+  it('returns false when auth.hasScope returns false', async () => {
+    const { hasAuthScope } = await import('../auth');
+    const mockAuth = { hasScope: vi.fn().mockReturnValue(false) } as unknown as Parameters<typeof hasAuthScope>[0];
+    expect(hasAuthScope(mockAuth, 'admin')).toBe(false);
+  });
+});
+
+describe('getUserId', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.NODE_ENV = 'test';
+    delete process.env.PROCESSOR_AUTH_REQUIRED;
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('returns null when req.auth is not set', async () => {
+    const { getUserId } = await import('../auth');
+    const mockReq = { auth: undefined } as unknown as Parameters<typeof getUserId>[0];
+    expect(getUserId(mockReq)).toBeNull();
+  });
+
+  it('returns userId when auth is set', async () => {
+    const { getUserId } = await import('../auth');
+    const mockReq = { auth: { userId: 'user-123' } } as unknown as Parameters<typeof getUserId>[0];
+    expect(getUserId(mockReq)).toBe('user-123');
+  });
+
+  it('returns null userId when auth exists but userId is not set', async () => {
+    const { getUserId } = await import('../auth');
+    const mockReq = { auth: { userId: null } } as unknown as Parameters<typeof getUserId>[0];
+    expect(getUserId(mockReq)).toBeNull();
+  });
+});

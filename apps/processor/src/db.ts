@@ -9,8 +9,8 @@ interface PgPool {
   end(): Promise<void>;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { Pool } = require('pg') as { Pool: new (config: { connectionString: string; max: number }) => PgPool };
+import pg from 'pg';
+const { Pool } = pg as unknown as { Pool: new (config: { connectionString: string; max: number }) => PgPool };
 
 let pool: PgPool | null = null;
 

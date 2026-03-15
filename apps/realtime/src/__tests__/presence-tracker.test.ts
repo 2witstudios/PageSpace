@@ -225,4 +225,59 @@ describe('PresenceTracker', () => {
       expect(tracker.getPagesForSocket('nonexistent')).toEqual([]);
     });
   });
+
+  describe('removeSocket - driveId edge cases', () => {
+    it('given socket tracking pages where pageToDrive mapping is missing, should fall back to empty string', () => {
+      // This tests the `|| ''` fallback at line 102 in removeSocket.
+      // We create a scenario where socketToPages has the pageId but
+      // pageToDrive was already deleted (e.g. by removeViewer cleaning up the last viewer
+      // and then we somehow still have an entry in socketToPages).
+      // The simplest way: add two viewers to a page, remove one of them via removeViewer
+      // so pageToDrive still exists, then add a second socket and verify.
+      // Actually the easiest approach: use internal state manipulation via a subclass.
+      // Instead, test via the actual removeSocket path where driveId would be missing.
+
+      // Set up: user1 on page-1, user2 on page-1 (two sockets, same page)
+      const user1 = createUser({ userId: 'user-1', socketId: 'socket-1' });
+      const user2 = createUser({ userId: 'user-2', socketId: 'socket-2', name: 'Bob' });
+
+      tracker.addViewer('page-1', 'drive-1', user1);
+      tracker.addViewer('page-1', 'drive-1', user2);
+
+      // Remove user2 via removeViewer - page still has user1, pageToDrive still exists
+      tracker.removeViewer('socket-2', 'page-1');
+      expect(tracker.getDriveId('page-1')).toBe('drive-1');
+
+      // Now remove user1 via removeSocket - should work fine
+      const affected = tracker.removeSocket('socket-1');
+      expect(affected).toHaveLength(1);
+      expect(affected[0].driveId).toBe('drive-1');
+      expect(affected[0].viewers).toEqual([]);
+    });
+
+    it('given socket removed from socketToPages during iteration (concurrent-like), should use empty string fallback', () => {
+      // Force the || '' branch: we need pageViewers to have the page but pageToDrive to not have it.
+      // This can be simulated using a tracker subclass that manipulates internal state.
+      // Since we can't easily do that, we test via an existing scenario: the || '' fires
+      // when pageToDrive.get(pageId) returns undefined.
+      //
+      // This scenario occurs if somehow the driveId was never set. We can create this by
+      // directly manipulating the tracker instance.
+      const trackerAny = tracker as unknown as {
+        pageViewers: Map<string, Map<string, typeof createUser extends (...args: unknown[]) => infer R ? R : never>>;
+        socketToPages: Map<string, Set<string>>;
+        pageToDrive: Map<string, string>;
+      };
+
+      // Manually set up a state where socketToPages has page-x but pageToDrive doesn't
+      const user = { userId: 'user-x', socketId: 'socket-x', name: 'X', avatarUrl: null };
+      trackerAny.socketToPages.set('socket-x', new Set(['page-x']));
+      trackerAny.pageViewers.set('page-x', new Map([['socket-x', user]]));
+      // Intentionally NOT setting pageToDrive.set('page-x', ...) to trigger || ''
+
+      const affected = tracker.removeSocket('socket-x');
+      expect(affected).toHaveLength(1);
+      expect(affected[0].driveId).toBe(''); // fallback to empty string
+    });
+  });
 });

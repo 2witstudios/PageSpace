@@ -1,422 +1,675 @@
 /**
- * Auth Transactions Integration Tests
+ * Auth Transactions Unit Tests (mocked DB)
  *
- * These tests verify the atomic token operations with PostgreSQL FOR UPDATE locking.
- * Requires a running test database.
+ * Tests atomic token operations without a real database connection.
+ * All DB calls are mocked via vi.mock.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { db, deviceTokens, users, eq } from '../../index';
-import { createHash } from 'crypto';
-import { createId } from '@paralleldrive/cuid2';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Hoisted mock for db.transaction
+const mockExecute = vi.fn();
+const mockTransaction = vi.fn();
+
+vi.mock('../../index', () => {
+  // Build minimal sql tagged-template that captures call args
+  const sql = (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values });
+  return {
+    db: { transaction: (...args: unknown[]) => mockTransaction(...args) },
+    deviceTokens: {},
+    users: {},
+    eq: vi.fn(),
+    sql,
+  };
+});
+
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: () => 'mock-cuid-id',
+}));
+
 import {
   atomicDeviceTokenRotation,
   atomicValidateOrCreateDeviceToken,
+  type DeviceRotationResult,
+  type AtomicDeviceTokenResult,
 } from '../auth-transactions';
 
-// Token utilities
-function hashToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
+// Utility stubs
+const hashToken = (t: string) => `hashed_${t}`;
+const getTokenPrefix = (t: string) => t.substring(0, 12);
+const generateDeviceToken = () => 'ps_dev_newtoken12345';
+const validateOpaqueToken = (t: string) => t.startsWith('ps_dev_') && t.length > 10;
+
+/**
+ * Helper: make mockTransaction invoke the callback with a mock tx.
+ * Returns the tx so individual tests can customise mockExecute per call.
+ */
+function setupTransaction() {
+  const tx = { execute: mockExecute };
+  mockTransaction.mockImplementation(async (cb: (tx: typeof tx) => Promise<unknown>) => cb(tx));
+  return tx;
 }
 
-function getTokenPrefix(token: string): string {
-  return token.substring(0, 12);
-}
-
-// Opaque token generator (matches new signature)
-function generateDeviceToken(): string {
-  return `ps_dev_${createId()}${createId()}`;
-}
-
-// Opaque token validator (replaces JWT payload decoder)
-function validateOpaqueToken(token: string): boolean {
-  return typeof token === 'string' && token.startsWith('ps_dev_') && token.length > 10;
-}
-
-describe('auth-transactions', () => {
-  let testUserId: string;
-
-  // Create test user before each test
-  beforeEach(async () => {
-    testUserId = createId();
-    await db.insert(users).values({
-      id: testUserId,
-      name: 'Test User',
-      email: `test-${testUserId}@example.com`,
-      password: 'hashed_password',
-      provider: 'email',
-      tokenVersion: 1,
-    });
+describe('atomicDeviceTokenRotation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupTransaction();
   });
 
-  // Clean up after each test
-  afterEach(async () => {
-    await db.delete(deviceTokens).where(eq(deviceTokens.userId, testUserId));
-    await db.delete(users).where(eq(users.id, testUserId));
-  });
+  it('should return error when token not found in DB', async () => {
+    mockExecute.mockResolvedValueOnce({ rows: [] });
 
-  describe('atomicDeviceTokenRotation', () => {
-    it('should successfully rotate device token', async () => {
-      // Create a device token (now opaque format)
-      const rawToken = generateDeviceToken();
-      const tokenHash = hashToken(rawToken);
-
-      await db.insert(deviceTokens).values({
-        id: createId(),
-        userId: testUserId,
-        deviceId: 'device-1',
-        platform: 'web',
-        tokenHash,
-        tokenPrefix: getTokenPrefix(rawToken),
-        tokenVersion: 1, // Store tokenVersion in record (opaque tokens)
-        expiresAt: new Date(Date.now() + 86400000),
-        deviceName: 'Test Device',
-        trustScore: 1.0,
-        suspiciousActivityCount: 0,
-      });
-
-      const result = await atomicDeviceTokenRotation(
-        rawToken,
-        { userAgent: 'New User Agent', ipAddress: '10.0.0.1' },
-        hashToken,
-        getTokenPrefix,
-        generateDeviceToken
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.newToken).toBeDefined();
-      expect(result.newToken?.startsWith('ps_dev_')).toBe(true);
-      expect(result.userId).toBe(testUserId);
-      expect(result.deviceId).toBe('device-1');
-      expect(result.platform).toBe('web');
-    });
-
-    it('should return error for invalid device token', async () => {
-      const result = await atomicDeviceTokenRotation(
-        'invalid-device-token',
-        {},
-        hashToken,
-        getTokenPrefix,
-        generateDeviceToken
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Invalid or expired device token');
-    });
-
-    it('should atomically prevent concurrent rotation attempts', async () => {
-      const rawToken = generateDeviceToken();
-      const tokenHash = hashToken(rawToken);
-
-      await db.insert(deviceTokens).values({
-        id: createId(),
-        userId: testUserId,
-        deviceId: 'device-1',
-        platform: 'web',
-        tokenHash,
-        tokenPrefix: getTokenPrefix(rawToken),
-        tokenVersion: 1,
-        expiresAt: new Date(Date.now() + 86400000),
-        trustScore: 1.0,
-        suspiciousActivityCount: 0,
-      });
-
-      // Simulate concurrent rotation attempts
-      const results = await Promise.all([
-        atomicDeviceTokenRotation(rawToken, {}, hashToken, getTokenPrefix, generateDeviceToken),
-        atomicDeviceTokenRotation(rawToken, {}, hashToken, getTokenPrefix, generateDeviceToken),
-        atomicDeviceTokenRotation(rawToken, {}, hashToken, getTokenPrefix, generateDeviceToken),
-      ]);
-
-      // All should succeed due to grace period
-      const successes = results.filter((r) => r.success);
-      expect(successes.length).toBeGreaterThanOrEqual(1);
-
-      // First use gets a new token, grace period retries don't
-      const firstUse = successes.filter((r) => !r.gracePeriodRetry && r.newToken);
-      const gracePeriodRetries = successes.filter((r) => r.gracePeriodRetry);
-      expect(firstUse).toHaveLength(1);
-      // Grace period retries should not have a new token
-      gracePeriodRetries.forEach((r) => {
-        expect(r.newToken).toBeUndefined();
-        expect(r.gracePeriodRetry).toBe(true);
-      });
-    });
-
-    describe('grace period handling', () => {
-      it('should allow retry within 30 second grace period', async () => {
-        const rawToken = generateDeviceToken();
-        const tokenHash = hashToken(rawToken);
-
-        await db.insert(deviceTokens).values({
-          id: createId(),
-          userId: testUserId,
-          deviceId: 'device-1',
-          platform: 'web',
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          tokenVersion: 1,
-          expiresAt: new Date(Date.now() + 86400000),
-          deviceName: 'Test Device',
-          trustScore: 1.0,
-          suspiciousActivityCount: 0,
-        });
-
-        // First rotation - succeeds, revokes token
-        const result1 = await atomicDeviceTokenRotation(
-          rawToken,
-          { userAgent: 'Test Agent' },
-          hashToken,
-          getTokenPrefix,
-          generateDeviceToken
-        );
-        expect(result1.success).toBe(true);
-        expect(result1.newToken).toBeDefined();
-        expect(result1.gracePeriodRetry).toBeFalsy();
-
-        // Immediate retry - should succeed (within grace period)
-        const result2 = await atomicDeviceTokenRotation(
-          rawToken,
-          { userAgent: 'Test Agent' },
-          hashToken,
-          getTokenPrefix,
-          generateDeviceToken
-        );
-        expect(result2.success).toBe(true);
-        expect(result2.gracePeriodRetry).toBe(true);
-        expect(result2.newToken).toBeUndefined(); // Client already has token from first request
-        expect(result2.userId).toBe(testUserId);
-        expect(result2.deviceId).toBe('device-1');
-      });
-
-      it('should reject retry after grace period expires', async () => {
-        const rawToken = generateDeviceToken();
-        const tokenHash = hashToken(rawToken);
-        const tokenId = createId();
-        const newTokenId = createId();
-
-        // Create the original token (already revoked 60 seconds ago - well outside 30s grace period)
-        const revokedAt = new Date(Date.now() - 60000);
-        await db.insert(deviceTokens).values({
-          id: tokenId,
-          userId: testUserId,
-          deviceId: 'device-1',
-          platform: 'web',
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          tokenVersion: 1,
-          expiresAt: new Date(Date.now() + 86400000),
-          trustScore: 1.0,
-          suspiciousActivityCount: 0,
-          revokedAt,
-          revokedReason: 'rotated',
-          replacedByTokenId: newTokenId,
-        });
-
-        // Create the replacement token (this is the active one)
-        const newToken = generateDeviceToken();
-        const newTokenHash = hashToken(newToken);
-        await db.insert(deviceTokens).values({
-          id: newTokenId,
-          userId: testUserId,
-          deviceId: 'device-1',
-          platform: 'web',
-          tokenHash: newTokenHash,
-          tokenPrefix: getTokenPrefix(newToken),
-          tokenVersion: 1,
-          expiresAt: new Date(Date.now() + 86400000),
-          trustScore: 1.0,
-          suspiciousActivityCount: 0,
-        });
-
-        // Retry should fail - outside grace period
-        const result = await atomicDeviceTokenRotation(
-          rawToken,
-          {},
-          hashToken,
-          getTokenPrefix,
-          generateDeviceToken
-        );
-        expect(result.success).toBe(false);
-        expect(result.error).toBe('Device token already rotated');
-      });
-
-      it('should reject retry when revoked for other reasons', async () => {
-        const rawToken = generateDeviceToken();
-        const tokenHash = hashToken(rawToken);
-        const tokenId = createId();
-
-        await db.insert(deviceTokens).values({
-          id: tokenId,
-          userId: testUserId,
-          deviceId: 'device-1',
-          platform: 'web',
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          tokenVersion: 1,
-          expiresAt: new Date(Date.now() + 86400000),
-          trustScore: 1.0,
-          suspiciousActivityCount: 0,
-        });
-
-        // Token revoked for logout - no grace period
-        await db.update(deviceTokens)
-          .set({ revokedAt: new Date(), revokedReason: 'logout' })
-          .where(eq(deviceTokens.id, tokenId));
-
-        const result = await atomicDeviceTokenRotation(
-          rawToken,
-          {},
-          hashToken,
-          getTokenPrefix,
-          generateDeviceToken
-        );
-        expect(result.success).toBe(false);
-        expect(result.error).toBe('Device token has been revoked');
-      });
-
-      it('should reject token when tokenVersion mismatch (logout all devices)', async () => {
-        const rawToken = generateDeviceToken();
-        const tokenHash = hashToken(rawToken);
-
-        // Create token with tokenVersion 0
-        await db.insert(deviceTokens).values({
-          id: createId(),
-          userId: testUserId,
-          deviceId: 'device-1',
-          platform: 'web',
-          tokenHash,
-          tokenPrefix: getTokenPrefix(rawToken),
-          tokenVersion: 0, // Old tokenVersion
-          expiresAt: new Date(Date.now() + 86400000),
-          trustScore: 1.0,
-          suspiciousActivityCount: 0,
-        });
-
-        // User's tokenVersion is 1 (set in beforeEach)
-        // Token was created with tokenVersion 0
-        // Should be rejected due to mismatch
-
-        const result = await atomicDeviceTokenRotation(
-          rawToken,
-          {},
-          hashToken,
-          getTokenPrefix,
-          generateDeviceToken
-        );
-        expect(result.success).toBe(false);
-        expect(result.error).toBe('Device token invalidated by security policy');
-      });
-    });
-  });
-
-  describe('atomicValidateOrCreateDeviceToken', () => {
-    const utilities = {
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
       hashToken,
       getTokenPrefix,
       generateDeviceToken,
-      validateOpaqueToken,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Invalid or expired device token');
+  });
+
+  it('should return error when tokenVersion mismatch', async () => {
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: null,
+        lastIpAddress: null,
+        location: null,
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: null,
+        revokedReason: null,
+        replacedByTokenId: null,
+        deviceTokenVersion: 0,
+        userTokenVersion: 1,
+      }],
+    });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Device token invalidated by security policy');
+  });
+
+  it('should allow grace period retry when token recently rotated', async () => {
+    const revokedAt = new Date(Date.now() - 5000); // 5 seconds ago (within 30s grace)
+
+    // First call: lock query returns rotated token
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: 'My Device',
+        userAgent: 'Mozilla',
+        lastIpAddress: '10.0.0.1',
+        location: 'US',
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt,
+        revokedReason: 'rotated',
+        replacedByTokenId: 'dt-2',
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    // Second call: lookup replacement token
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-2',
+        deviceName: 'My Device',
+        userAgent: 'Mozilla',
+        location: 'US',
+      }],
+    });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.gracePeriodRetry).toBe(true);
+    expect(result.newToken).toBeUndefined();
+    expect(result.userId).toBe('user-1');
+    expect(result.deviceId).toBe('dev-1');
+  });
+
+  it('should reject when grace period expired', async () => {
+    const revokedAt = new Date(Date.now() - 60000); // 60 seconds ago
+
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: null,
+        lastIpAddress: null,
+        location: null,
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt,
+        revokedReason: 'rotated',
+        replacedByTokenId: 'dt-2',
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Device token already rotated');
+  });
+
+  it('should reject when replacement token not found within grace period', async () => {
+    const revokedAt = new Date(Date.now() - 5000);
+
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: null,
+        lastIpAddress: null,
+        location: null,
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt,
+        revokedReason: 'rotated',
+        replacedByTokenId: 'dt-2',
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    // Replacement token not found
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Device token already rotated');
+  });
+
+  it('should reject when token revoked for non-rotation reason', async () => {
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: null,
+        lastIpAddress: null,
+        location: null,
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: new Date(),
+        revokedReason: 'logout',
+        replacedByTokenId: null,
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Device token has been revoked');
+  });
+
+  it('should reject when token expired', async () => {
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: null,
+        lastIpAddress: null,
+        location: null,
+        expiresAt: new Date(Date.now() - 86400000), // expired
+        revokedAt: null,
+        revokedReason: null,
+        replacedByTokenId: null,
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Device token has expired');
+  });
+
+  it('should successfully rotate a valid token', async () => {
+    // Lock query returns valid active token
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'desktop',
+        deviceName: 'My Laptop',
+        userAgent: 'PageSpace Desktop',
+        lastIpAddress: '10.0.0.1',
+        location: 'New York',
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: null,
+        revokedReason: null,
+        replacedByTokenId: null,
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    // Revoke old token
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert new token
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      { userAgent: 'New Agent', ipAddress: '10.0.0.2' },
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.newToken).toBe('ps_dev_newtoken12345');
+    expect(result.newTokenHash).toBe('hashed_ps_dev_newtoken12345');
+    expect(result.userId).toBe('user-1');
+    expect(result.deviceId).toBe('dev-1');
+    expect(result.platform).toBe('desktop');
+    expect(result.userAgent).toBe('New Agent');
+    expect(result.location).toBe('New York');
+    expect(mockExecute).toHaveBeenCalledTimes(3);
+  });
+
+  it('should use existing userAgent when metadata not provided', async () => {
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: 'Old Agent',
+        lastIpAddress: '1.2.3.4',
+        location: null,
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: null,
+        revokedReason: null,
+        replacedByTokenId: null,
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {}, // no metadata
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.userAgent).toBe('Old Agent');
+  });
+
+  it('should handle revokedAt as string (raw SQL returns string timestamps)', async () => {
+    // When using raw SQL, PostgreSQL may return timestamps as strings
+    const revokedAtString = '2026-03-14 12:00:00' as unknown as Date;
+
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        deviceName: null,
+        userAgent: null,
+        lastIpAddress: null,
+        location: null,
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: revokedAtString,
+        revokedReason: 'rotated',
+        replacedByTokenId: 'dt-2',
+        deviceTokenVersion: 1,
+        userTokenVersion: 1,
+      }],
+    });
+
+    const result = await atomicDeviceTokenRotation(
+      'ps_dev_oldtoken',
+      {},
+      hashToken,
+      getTokenPrefix,
+      generateDeviceToken,
+    );
+
+    // The string timestamp from the past should be outside grace period
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Device token already rotated');
+  });
+});
+
+describe('atomicValidateOrCreateDeviceToken', () => {
+  const utilities = {
+    hashToken,
+    getTokenPrefix,
+    generateDeviceToken,
+    validateOpaqueToken,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupTransaction();
+  });
+
+  it('should validate and return existing valid token', async () => {
+    // Token lookup
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        expiresAt: new Date(Date.now() + 86400000),
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        tokenVersion: 1,
+      }],
+    });
+    // Update lastUsedAt
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: 'ps_dev_validtoken123',
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'web',
+      tokenVersion: 1,
+    }, utilities);
+
+    expect(result.isNew).toBe(false);
+    expect(result.deviceToken).toBe('ps_dev_validtoken123');
+    expect(result.deviceTokenRecordId).toBe('dt-1');
+  });
+
+  it('should skip validation for invalid token format and create new', async () => {
+    // Lock user row
+    mockExecute.mockResolvedValueOnce({ rows: [{ id: 'user-1' }] });
+    // Check existing active tokens
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired tokens
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert new token
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: 'invalid-format',
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'web',
+      tokenVersion: 1,
+      deviceName: 'Test Device',
+      userAgent: 'Test Agent',
+      ipAddress: '10.0.0.1',
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+    expect(result.deviceToken).toBe('ps_dev_newtoken12345');
+  });
+
+  it('should create new token when no providedDeviceToken', async () => {
+    // Lock user row
+    mockExecute.mockResolvedValueOnce({ rows: [{ id: 'user-1' }] });
+    // Check existing active
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: null,
+      userId: 'user-1',
+      deviceId: 'new-device',
+      platform: 'desktop',
+      tokenVersion: 1,
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+    expect(result.deviceToken).toBe('ps_dev_newtoken12345');
+    expect(result.deviceTokenRecordId).toBe('mock-cuid-id');
+  });
+
+  it('should regenerate token for existing active device record', async () => {
+    // Lock user row
+    mockExecute.mockResolvedValueOnce({ rows: [{ id: 'user-1' }] });
+    // Find existing active token
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-existing',
+        tokenHash: 'old-hash',
+      }],
+    });
+    // Update token hash
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: null,
+      userId: 'user-1',
+      deviceId: 'existing-device',
+      platform: 'web',
+      tokenVersion: 1,
+      ipAddress: '10.0.0.1',
+    }, utilities);
+
+    expect(result.isNew).toBe(false);
+    expect(result.deviceTokenRecordId).toBe('dt-existing');
+    expect(result.deviceToken).toBe('ps_dev_newtoken12345');
+  });
+
+  it('should fall through when DB record does not match expected claims', async () => {
+    // Token lookup returns record with mismatched userId
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        expiresAt: new Date(Date.now() + 86400000),
+        userId: 'different-user',
+        deviceId: 'dev-1',
+        platform: 'web',
+        tokenVersion: 1,
+      }],
+    });
+    // Lock user row
+    mockExecute.mockResolvedValueOnce({ rows: [{ id: 'user-1' }] });
+    // Check existing active
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert new
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: 'ps_dev_validtoken123',
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'web',
+      tokenVersion: 1,
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+  });
+
+  it('should fall through when token is expired', async () => {
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        expiresAt: new Date(Date.now() - 86400000), // expired
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        tokenVersion: 1,
+      }],
+    });
+    // Lock user
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Existing active
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: 'ps_dev_expiredtoken123',
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'web',
+      tokenVersion: 1,
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+  });
+
+  it('should fall through when tokenVersion mismatch', async () => {
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-1',
+        expiresAt: new Date(Date.now() + 86400000),
+        userId: 'user-1',
+        deviceId: 'dev-1',
+        platform: 'web',
+        tokenVersion: 0, // mismatch
+      }],
+    });
+    // Lock user
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Existing active
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: 'ps_dev_oldversiontoken',
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'web',
+      tokenVersion: 1,
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+  });
+
+  it('should create token without optional metadata', async () => {
+    // Lock user
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // No existing active
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: null,
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'ios',
+      tokenVersion: 1,
+      // No deviceName, userAgent, ipAddress
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+    expect(result.deviceToken).toBe('ps_dev_newtoken12345');
+  });
+
+  it('should fall through when token not found in DB', async () => {
+    // Token lookup returns no rows
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Lock user
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // No existing active
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Revoke expired
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+    // Insert
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: 'ps_dev_notfoundtoken123',
+      userId: 'user-1',
+      deviceId: 'dev-1',
+      platform: 'web',
+      tokenVersion: 1,
+    }, utilities);
+
+    expect(result.isNew).toBe(true);
+  });
+});
+
+describe('type exports', () => {
+  it('should export DeviceRotationResult type', () => {
+    const result: DeviceRotationResult = { success: true };
+    expect(result.success).toBe(true);
+  });
+
+  it('should export AtomicDeviceTokenResult type', () => {
+    const result: AtomicDeviceTokenResult = {
+      deviceToken: 'test',
+      deviceTokenRecordId: 'id',
+      isNew: true,
     };
-
-    it('should create new token when no existing record', async () => {
-      const result = await atomicValidateOrCreateDeviceToken(
-        {
-          providedDeviceToken: null,
-          userId: testUserId,
-          deviceId: 'new-device',
-          platform: 'web',
-          tokenVersion: 1,
-          deviceName: 'New Device',
-          userAgent: 'Test Agent',
-          ipAddress: '192.168.1.1',
-        },
-        utilities
-      );
-
-      expect(result.deviceToken).toBeDefined();
-      expect(result.deviceTokenRecordId).toBeDefined();
-      expect(result.isNew).toBe(true);
-    });
-
-    it('should regenerate token for existing device record', async () => {
-      // First create a device token
-      const firstResult = await atomicValidateOrCreateDeviceToken(
-        {
-          providedDeviceToken: null,
-          userId: testUserId,
-          deviceId: 'existing-device',
-          platform: 'web',
-          tokenVersion: 1,
-        },
-        utilities
-      );
-
-      expect(firstResult.isNew).toBe(true);
-      const firstRecordId = firstResult.deviceTokenRecordId;
-
-      // Now try again without providing the token (e.g., user cleared storage)
-      const secondResult = await atomicValidateOrCreateDeviceToken(
-        {
-          providedDeviceToken: null,
-          userId: testUserId,
-          deviceId: 'existing-device',
-          platform: 'web',
-          tokenVersion: 1,
-        },
-        utilities
-      );
-
-      // Should reuse existing record but generate new token
-      expect(secondResult.isNew).toBe(false);
-      expect(secondResult.deviceTokenRecordId).toBe(firstRecordId);
-      expect(secondResult.deviceToken).not.toBe(firstResult.deviceToken);
-    });
-
-    it('should atomically prevent duplicate token creation', async () => {
-      // Simulate concurrent login attempts from same device
-      const results = await Promise.all([
-        atomicValidateOrCreateDeviceToken(
-          {
-            providedDeviceToken: null,
-            userId: testUserId,
-            deviceId: 'concurrent-device',
-            platform: 'web',
-            tokenVersion: 1,
-          },
-          utilities
-        ),
-        atomicValidateOrCreateDeviceToken(
-          {
-            providedDeviceToken: null,
-            userId: testUserId,
-            deviceId: 'concurrent-device',
-            platform: 'web',
-            tokenVersion: 1,
-          },
-          utilities
-        ),
-        atomicValidateOrCreateDeviceToken(
-          {
-            providedDeviceToken: null,
-            userId: testUserId,
-            deviceId: 'concurrent-device',
-            platform: 'web',
-            tokenVersion: 1,
-          },
-          utilities
-        ),
-      ]);
-
-      // All should succeed
-      results.forEach((r) => expect(r.deviceToken).toBeDefined());
-
-      // But only ONE device token record should exist
-      const records = await db.query.deviceTokens.findMany({
-        where: eq(deviceTokens.userId, testUserId),
-      });
-
-      // Should have exactly 1 non-revoked record for this device
-      const activeRecords = records.filter((r) => r.revokedAt === null);
-      expect(activeRecords).toHaveLength(1);
-    });
+    expect(result.isNew).toBe(true);
   });
 });

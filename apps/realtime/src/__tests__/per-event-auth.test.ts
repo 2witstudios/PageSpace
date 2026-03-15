@@ -163,6 +163,33 @@ describe('reauthorizePageAccess', () => {
 
     expect(result.authorized).toBe(true);
   });
+
+  it('given requiredLevel=view and canView is true, should return authorized: true', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: true,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const result = await reauthorizePageAccess('user-viewer', 'page-1', 'view');
+
+    expect(result.authorized).toBe(true);
+  });
+
+  it('given requiredLevel=view and canView is false, should return authorized: false', async () => {
+    mockedGetUserAccessLevel.mockResolvedValue({
+      canView: false,
+      canEdit: false,
+      canShare: false,
+      canDelete: false,
+    });
+
+    const result = await reauthorizePageAccess('user-no-access', 'page-1', 'view');
+
+    expect(result.authorized).toBe(false);
+    expect(result.reason).toBe('Requires view permission');
+  });
 });
 
 describe('withPerEventAuth', () => {

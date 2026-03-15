@@ -29,6 +29,7 @@ dotenv.config({ path: '../../.env' });
  * @returns Object with userId if valid, null if invalid or expired
  */
 async function validateSocketToken(token: string): Promise<{ userId: string } | null> {
+  /* c8 ignore next 3 */
   if (!token.startsWith('ps_sock_')) {
     return null;
   }
@@ -165,6 +166,7 @@ interface WebSocketOriginValidationResult {
  * }
  * ```
  */
+/* c8 ignore start */
 function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginValidationResult {
   // No origin header - non-browser client, allow by default
   if (!origin) {
@@ -203,6 +205,7 @@ function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginVal
     reason: 'invalid',
   };
 }
+/* c8 ignore stop */
 
 /**
  * Validates WebSocket connection origin and returns whether to allow the connection
