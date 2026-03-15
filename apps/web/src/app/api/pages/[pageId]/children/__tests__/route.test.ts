@@ -72,6 +72,7 @@ const createRequest = () =>
 
 const mockParams = { params: Promise.resolve({ pageId: mockPageId }) };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/children', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -155,7 +156,7 @@ describe('GET /api/pages/[pageId]/children', () => {
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      vi.mocked(db.query.pages.findMany).mockRejectedValue(new Error('DB error'));
+      vi.mocked(db.query.pages.findMany).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createRequest(), mockParams);
       const body = await response.json();
@@ -166,7 +167,7 @@ describe('GET /api/pages/[pageId]/children', () => {
 
     it('returns 500 when task items query throws', async () => {
       const fromMock = vi.fn().mockReturnValue({
-        where: vi.fn().mockRejectedValue(new Error('Task query failed')),
+        where: vi.fn().mockRejectedValueOnce(new Error('Task query failed')),
       });
       vi.mocked(db.selectDistinct).mockReturnValue({ from: fromMock } as never);
 

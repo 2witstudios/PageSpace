@@ -98,6 +98,7 @@ const createDeleteRequest = () => {
   } as unknown as import('next/server').NextRequest;
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/account/avatar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -380,7 +381,7 @@ describe('POST /api/account/avatar', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected top-level error', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateRequestWithOptions).mockRejectedValueOnce(new Error('Unexpected'));
 
       const file = createMockFile('image/png', 1024);
       const response = await POST(createUploadRequest(file));
@@ -392,6 +393,7 @@ describe('POST /api/account/avatar', () => {
   });
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/account/avatar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -454,7 +456,7 @@ describe('DELETE /api/account/avatar', () => {
     it('continues when processor delete fails', async () => {
       mockSelectChain([{ image: '/api/avatar/user-1/avatar.png' }]);
       mockUpdateChain();
-      mockFetch.mockRejectedValue(new Error('Network error'));
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
       const response = await DELETE(createDeleteRequest());
       const body = await response.json();
@@ -502,7 +504,7 @@ describe('DELETE /api/account/avatar', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateRequestWithOptions).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await DELETE(createDeleteRequest());
       const body = await response.json();

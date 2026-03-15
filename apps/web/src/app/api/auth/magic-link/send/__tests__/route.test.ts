@@ -385,7 +385,7 @@ describe('POST /api/auth/magic-link/send', () => {
     });
 
     it('returns success even when email sending fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('SMTP error'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
 
       const request = createMagicLinkRequest();
       const response = await POST(request);
@@ -403,7 +403,7 @@ describe('POST /api/auth/magic-link/send', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const request = createMagicLinkRequest();
       const response = await POST(request);

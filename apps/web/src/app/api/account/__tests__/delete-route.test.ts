@@ -337,7 +337,7 @@ describe('DELETE /api/account', () => {
         image: '/avatars/user_123.jpg',
       });
 
-      vi.mocked(createUserServiceToken).mockRejectedValue(new Error('Token creation failed'));
+      vi.mocked(createUserServiceToken).mockRejectedValueOnce(new Error('Token creation failed'));
 
       const request = new Request('https://example.com/api/account', {
         method: 'DELETE',
@@ -424,7 +424,7 @@ describe('DELETE /api/account', () => {
 
     it('should handle database errors gracefully', async () => {
       // Arrange
-      mockAccountRepo.deleteUser.mockRejectedValue(new Error('Database connection lost'));
+      mockAccountRepo.deleteUser.mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request('https://example.com/api/account', {
         method: 'DELETE',
@@ -438,7 +438,10 @@ describe('DELETE /api/account', () => {
       // Assert
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to delete account');
-      expect(loggers.auth.error).toHaveBeenCalled();
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        expect.stringContaining('Account deletion error'),
+        expect.any(Error)
+      );
     });
   });
 });

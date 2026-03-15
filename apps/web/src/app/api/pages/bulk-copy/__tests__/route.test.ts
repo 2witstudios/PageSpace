@@ -208,6 +208,7 @@ function setupSuccessScenario() {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/bulk-copy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -457,13 +458,13 @@ describe('POST /api/pages/bulk-copy', () => {
     it('runs copy within a transaction', async () => {
       await POST(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalled();
+      expect(mockTransaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
     it('creates page with (Copy) suffix in title', async () => {
       await POST(createRequest(validBody));
 
-      expect(txInsert).toHaveBeenCalled();
+      expect(txInsert).toHaveBeenCalledWith(expect.anything());
       const insertedValues = txInsertValues.mock.calls[0][0];
       expect(insertedValues.title).toBe('Source Page (Copy)');
     });
@@ -575,7 +576,9 @@ describe('POST /api/pages/bulk-copy', () => {
     it('broadcasts page created event', async () => {
       await POST(createRequest(validBody));
 
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId })
+      );
     });
 
     it('logs activity for each copied page', async () => {
@@ -618,7 +621,7 @@ describe('POST /api/pages/bulk-copy', () => {
     });
 
     it('handles cache invalidation failure gracefully', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();

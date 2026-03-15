@@ -72,6 +72,7 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   drivePrompt: null,
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account/drives-status', () => {
   const mockUserId = 'user_123';
 
@@ -251,7 +252,7 @@ describe('GET /api/account/drives-status', () => {
   });
 
   it('should handle database errors gracefully', async () => {
-    vi.mocked(db.query.drives.findMany).mockRejectedValue(new Error('Database connection lost'));
+    vi.mocked(db.query.drives.findMany).mockRejectedValueOnce(new Error('Database connection lost'));
 
     const request = new Request('https://example.com/api/account/drives-status');
 
@@ -260,7 +261,10 @@ describe('GET /api/account/drives-status', () => {
 
     expect(response.status).toBe(500);
     expect(body.error).toBe('Failed to fetch drives status');
-    expect(loggers.auth.error).toHaveBeenCalled();
+    expect(loggers.auth.error).toHaveBeenCalledWith(
+      expect.stringContaining('Error fetching drives status'),
+      expect.any(Error)
+    );
   });
 
   it('should handle drive with 0 members (edge case)', async () => {

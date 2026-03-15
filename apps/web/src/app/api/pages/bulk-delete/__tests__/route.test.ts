@@ -169,6 +169,7 @@ function setupSuccessScenario() {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/pages/bulk-delete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -308,7 +309,7 @@ describe('DELETE /api/pages/bulk-delete', () => {
     it('runs trash within a transaction', async () => {
       await DELETE(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalled();
+      expect(mockTransaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
     it('trashes children recursively when trashChildren is true', async () => {

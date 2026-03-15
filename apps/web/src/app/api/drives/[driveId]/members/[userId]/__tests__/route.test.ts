@@ -205,6 +205,7 @@ const createContext = (driveId: string, userId: string) => ({
 // GET /api/drives/[driveId]/members/[userId] - Contract Tests
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/members/[userId]', () => {
   const mockCurrentUserId = 'user_123';
   const mockTargetUserId = 'user_456';
@@ -433,7 +434,7 @@ describe('GET /api/drives/[driveId]/members/[userId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccess).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccess).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`);
       const response = await GET(request, createContext(mockDriveId, mockTargetUserId));
@@ -445,7 +446,7 @@ describe('GET /api/drives/[driveId]/members/[userId]', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(checkDriveAccess).mockRejectedValue(error);
+      vi.mocked(checkDriveAccess).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`);
       await GET(request, createContext(mockDriveId, mockTargetUserId));
@@ -781,7 +782,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         'member_role_changed',
         { role: 'ADMIN', driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalled();
+      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
     });
 
     it('should NOT send notification when role stays the same', async () => {
@@ -886,7 +887,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockRejectedValue(new Error('Update failed'));
+      vi.mocked(updateMemberRole).mockRejectedValueOnce(new Error('Update failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -908,7 +909,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockRejectedValue(error);
+      vi.mocked(updateMemberRole).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -1108,7 +1109,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
     it('should execute removal in a transaction', async () => {
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
-      expect(db.transaction).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
     it('should track drive operation', async () => {
@@ -1134,7 +1135,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
         'member_removed',
         { driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalled();
+      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
     });
 
     it('should kick user from drive rooms', async () => {
@@ -1222,7 +1223,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
       expect(response.status).toBe(200);
-      expect(db.transaction).toHaveBeenCalled();
+      expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
     it('should handle pages with no matching permissions gracefully', async () => {
@@ -1246,7 +1247,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccess).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccess).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
       const body = await response.json();
@@ -1257,7 +1258,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(checkDriveAccess).mockRejectedValue(error);
+      vi.mocked(checkDriveAccess).mockRejectedValueOnce(error);
 
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 

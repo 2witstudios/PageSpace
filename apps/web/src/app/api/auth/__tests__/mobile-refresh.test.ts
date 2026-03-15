@@ -99,6 +99,7 @@ import {
 import { sessionService } from '@pagespace/lib/auth';
 import { getClientIP } from '@/lib/auth';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/refresh', () => {
   const mockUser = {
     id: 'rfh0haxfpzowht3oi213ref1',
@@ -232,7 +233,13 @@ describe('/api/auth/mobile/refresh', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
+      expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
+        validRefreshPayload.deviceToken,
+        expect.objectContaining({ ipAddress: expect.any(String) }),
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
       expect(body.deviceToken).toBe('new-device-token');
     });
 
@@ -523,7 +530,7 @@ describe('/api/auth/mobile/refresh', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('Database error'));
+      vi.mocked(validateDeviceToken).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
         method: 'POST',
@@ -562,7 +569,7 @@ describe('/api/auth/mobile/refresh', () => {
     });
 
     it('handles rate limit reset failure gracefully', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(
         new Error('Redis error')
       );
 

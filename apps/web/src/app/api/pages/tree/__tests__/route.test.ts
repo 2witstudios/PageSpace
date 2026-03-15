@@ -75,6 +75,7 @@ const createRequest = (body: Record<string, unknown>) =>
     body: JSON.stringify(body),
   });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/tree', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -214,7 +215,7 @@ describe('POST /api/pages/tree', () => {
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(new Error('DB error'));
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
       const body = await response.json();

@@ -245,7 +245,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(checkDriveAccessForRoles).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForRoles).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`);
       const response = await GET(request, createContext(mockDriveId));
@@ -496,7 +496,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
-      vi.mocked(createDriveRole).mockRejectedValue(new Error('unique constraint violation'));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new Error('unique constraint violation'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
         method: 'POST',
@@ -514,7 +514,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
       }));
-      vi.mocked(createDriveRole).mockRejectedValue(new Error('Connection lost'));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new Error('Connection lost'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
         method: 'POST',

@@ -24,7 +24,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// REVIEW: Deep ORM chain mocks (db.update().set().where().returning()) are used here
+// @scaffold - Deep ORM chain mocks (db.update().set().where().returning(), db.query.users.findFirst)
 // because the route directly calls Drizzle ORM with no service layer. The ORM IS the
 // system boundary for this route. Extracting a service seam is a production refactor.
 vi.mock('@pagespace/db', () => ({
@@ -339,7 +339,7 @@ describe('POST /api/auth/device/refresh', () => {
       vi.mocked(db.update).mockReturnValue({
         set: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockRejectedValue(new Error('DB error')),
+            returning: vi.fn().mockRejectedValueOnce(new Error('DB error')),
           }),
         }),
       } as never);
@@ -390,7 +390,15 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
-      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
+      expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
+        'ps_dev_valid_token',
+        expect.objectContaining({
+          ipAddress: '127.0.0.1',
+        }),
+        expect.any(Function), // hashToken
+        expect.any(Function), // getTokenPrefix
+        expect.any(Function), // generateDeviceToken
+      );
     });
 
     it('returns 401 when rotation fails', async () => {
@@ -487,7 +495,7 @@ describe('POST /api/auth/device/refresh', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
@@ -500,7 +508,7 @@ describe('POST /api/auth/device/refresh', () => {
     });
 
     it('handles non-Error rate limit reset failure', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string-error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string-error');
 
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
@@ -527,7 +535,10 @@ describe('POST /api/auth/device/refresh', () => {
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('ps_dev_valid_token');
       expect(body.sessionToken).toBeUndefined();
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(
+        expect.any(Headers),
+        'ps_sess_mock_session_token',
+      );
     });
 
     it('returns 500 when web session validation fails', async () => {
@@ -562,7 +573,10 @@ describe('POST /api/auth/device/refresh', () => {
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(
+        expect.any(Headers),
+        'ps_sess_mock_session_token',
+      );
     });
 
     it('returns 500 when desktop session validation fails', async () => {
@@ -587,7 +601,10 @@ describe('POST /api/auth/device/refresh', () => {
       const request = createRefreshRequest(validRefreshPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(
+        expect.any(Headers),
+        'ps_sess_mock_session_token',
+      );
     });
   });
 
@@ -646,7 +663,7 @@ describe('POST /api/auth/device/refresh', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected exception', async () => {
-      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('DB error'));
+      vi.mocked(validateDeviceToken).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);

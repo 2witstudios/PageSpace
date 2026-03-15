@@ -356,7 +356,7 @@ describe('GET /api/pages/[pageId]/ai-usage', () => {
 
   describe('error handling', () => {
     it('returns 500 for unexpected errors', async () => {
-      mockAuthenticateRequest.mockRejectedValue(new Error('Unexpected'));
+      mockAuthenticateRequest.mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createRequest(), mockParams);
       const body = await response.json();

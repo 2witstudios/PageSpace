@@ -292,7 +292,7 @@ describe('GET /api/drives/[driveId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(getDriveWithAccess).mockRejectedValue(new Error('Database error'));
+      vi.mocked(getDriveWithAccess).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       const response = await GET(request, createContext(mockDriveId));
@@ -304,7 +304,7 @@ describe('GET /api/drives/[driveId]', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Service failure');
-      vi.mocked(getDriveWithAccess).mockRejectedValue(error);
+      vi.mocked(getDriveWithAccess).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       await GET(request, createContext(mockDriveId));
@@ -546,7 +546,7 @@ describe('PATCH /api/drives/[driveId]', () => {
     it('should return 500 when updateDrive throws', async () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(updateDrive).mockRejectedValue(new Error('Update failed'));
+      vi.mocked(updateDrive).mockRejectedValueOnce(new Error('Update failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -563,7 +563,7 @@ describe('PATCH /api/drives/[driveId]', () => {
       const error = new Error('Update failure');
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(updateDrive).mockRejectedValue(error);
+      vi.mocked(updateDrive).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'PATCH',
@@ -743,7 +743,7 @@ describe('DELETE /api/drives/[driveId]', () => {
     it('should return 500 when trashDrive throws', async () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(trashDrive).mockRejectedValue(new Error('Delete failed'));
+      vi.mocked(trashDrive).mockRejectedValueOnce(new Error('Delete failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',
@@ -759,7 +759,7 @@ describe('DELETE /api/drives/[driveId]', () => {
       const error = new Error('Delete failure');
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
       vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true }));
-      vi.mocked(trashDrive).mockRejectedValue(error);
+      vi.mocked(trashDrive).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
         method: 'DELETE',

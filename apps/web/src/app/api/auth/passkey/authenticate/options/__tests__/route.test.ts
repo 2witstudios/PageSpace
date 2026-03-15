@@ -232,7 +232,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest({ csrfToken: 'valid' }));
       const body = await response.json();

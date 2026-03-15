@@ -162,6 +162,7 @@ const createOneTapRequest = (
   });
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/auth/google/one-tap', () => {
   const originalGoogleClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
 
@@ -259,7 +260,7 @@ describe('POST /api/auth/google/one-tap', () => {
           scopes: ['*'],
         })
       );
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
     });
 
     it('should generate CSRF token bound to session', async () => {
@@ -297,7 +298,7 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(resetDistributedRateLimit).toHaveBeenCalled();
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith(expect.any(String));
     });
   });
 
@@ -398,7 +399,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);

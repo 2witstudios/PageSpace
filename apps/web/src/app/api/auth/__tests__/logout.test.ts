@@ -131,7 +131,7 @@ describe('/api/auth/logout', () => {
 
       await POST(request);
 
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledWith(expect.any(Headers));
     });
 
     it('logs logout event', async () => {
@@ -184,7 +184,7 @@ describe('/api/auth/logout', () => {
       // Session revoke should not be called since there's no session
       expect(sessionService.revokeSession).not.toHaveBeenCalled();
       // But cookies should still be cleared
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledWith(expect.any(Headers));
     });
 
     it('handles invalid session gracefully', async () => {
@@ -205,13 +205,13 @@ describe('/api/auth/logout', () => {
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
       // Session revoke should still be attempted
-      expect(sessionService.revokeSession).toHaveBeenCalled();
+      expect(sessionService.revokeSession).toHaveBeenCalledWith('ps_sess_mock_session_token', 'logout');
       // Cookies should be cleared
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledWith(expect.any(Headers));
     });
 
     it('handles session revocation failure gracefully', async () => {
-      vi.mocked(sessionService.revokeSession).mockRejectedValue(
+      vi.mocked(sessionService.revokeSession).mockRejectedValueOnce(
         new Error('Database error')
       );
 
@@ -230,7 +230,7 @@ describe('/api/auth/logout', () => {
       expect(response.status).toBe(200);
       expect(body.message).toBe('Logged out successfully');
       // Cookies should still be cleared
-      expect(appendClearCookies).toHaveBeenCalled();
+      expect(appendClearCookies).toHaveBeenCalledWith(expect.any(Headers));
     });
 
     it('does not log logout event when no user ID', async () => {

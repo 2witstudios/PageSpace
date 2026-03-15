@@ -231,7 +231,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await DELETE(createDeleteRequest(), createContext());
       const body = await response.json();
@@ -460,7 +460,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await PATCH(createPatchRequest({ name: 'Test' }), createContext());
       const body = await response.json();

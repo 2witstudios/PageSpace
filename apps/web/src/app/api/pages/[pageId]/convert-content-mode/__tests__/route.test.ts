@@ -137,6 +137,7 @@ const mockDocPage = {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/convert-content-mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -368,14 +369,16 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
         'content-updated',
         expect.objectContaining({ title: 'Test Document' })
       );
-      expect(mockBroadcastPageEvent).toHaveBeenCalled();
+      expect(mockBroadcastPageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: mockDriveId, pageId: mockPageId, type: 'content-updated' })
+      );
     });
   });
 
   describe('error handling', () => {
     it('returns 500 for unexpected errors', async () => {
       mockPagesFindFirst.mockReset();
-      mockCanUserEditPage.mockRejectedValue(new Error('DB failure'));
+      mockCanUserEditPage.mockRejectedValueOnce(new Error('DB failure'));
 
       const response = await POST(
         createRequest({ targetMode: 'markdown' }),

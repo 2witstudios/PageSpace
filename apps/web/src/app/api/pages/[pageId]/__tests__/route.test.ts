@@ -218,7 +218,7 @@ describe('GET /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.getPage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.getPage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -415,7 +415,7 @@ describe('PATCH /api/pages/[pageId]', () => {
           title: 'Updated Title',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
     it('broadcasts content update event with correct payload', async () => {
@@ -432,7 +432,7 @@ describe('PATCH /api/pages/[pageId]', () => {
         'content-updated',
         expect.any(Object)
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
     it('invalidates page tree cache on title change', async () => {
@@ -495,7 +495,7 @@ describe('PATCH /api/pages/[pageId]', () => {
         ...successResult,
         isAIChatPage: true,
       });
-      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValueOnce(new Error('Redis down'));
 
       await PATCH(createRequest({ title: 'AI Agent' }), { params: mockParams });
 
@@ -509,7 +509,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('logs warning when page tree cache invalidation fails on title change', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
@@ -527,7 +527,7 @@ describe('PATCH /api/pages/[pageId]', () => {
         ...successResult,
         isAIChatPage: true,
       });
-      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue('string error');
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValueOnce('string error');
 
       await PATCH(createRequest({ title: 'AI Agent' }), { params: mockParams });
 
@@ -540,7 +540,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     });
 
     it('handles non-Error objects in page tree cache catch handler', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce('string error');
 
       await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
 
@@ -590,7 +590,7 @@ describe('PATCH /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.updatePage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.updatePage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await PATCH(createRequest({ title: 'Updated' }), { params: mockParams });
       const body = await response.json();
@@ -750,7 +750,7 @@ describe('DELETE /api/pages/[pageId]', () => {
           title: 'Test Page',
         })
       );
-      expect(broadcastPageEvent).toHaveBeenCalled();
+      expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
     });
 
     it('invalidates page tree cache', async () => {
@@ -857,7 +857,7 @@ describe('DELETE /api/pages/[pageId]', () => {
         ...successResult,
         isAIChatPage: true,
       });
-      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValueOnce(new Error('Redis down'));
 
       await DELETE(createRequest({}), { params: mockParams });
 
@@ -870,7 +870,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('logs warning when page tree cache invalidation fails on trash', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       await DELETE(createRequest({}), { params: mockParams });
 
@@ -887,7 +887,7 @@ describe('DELETE /api/pages/[pageId]', () => {
         ...successResult,
         isAIChatPage: true,
       });
-      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValue('string error');
+      vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockRejectedValueOnce('string error');
 
       await DELETE(createRequest({}), { params: mockParams });
 
@@ -900,7 +900,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     });
 
     it('handles non-Error objects in DELETE page tree cache catch handler', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue('string error');
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce('string error');
 
       await DELETE(createRequest({}), { params: mockParams });
 
@@ -915,7 +915,7 @@ describe('DELETE /api/pages/[pageId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(pageService.trashPage).mockRejectedValue(new Error('Database error'));
+      vi.mocked(pageService.trashPage).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await DELETE(createRequest({}), { params: mockParams });
       const body = await response.json();

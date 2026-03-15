@@ -131,6 +131,7 @@ import { sendEmail } from '@pagespace/lib/services/email-service';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { populateUserDrive } from '@/lib/onboarding/drive-setup';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/signup', () => {
   const mockNewUser = {
     id: 'pfh0haxfpzowht3oi213cqos',
@@ -260,7 +261,7 @@ describe('/api/auth/mobile/signup', () => {
 
       await POST(request);
 
-      expect(createVerificationToken).toHaveBeenCalled();
+      expect(createVerificationToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 'pfh0haxfpzowht3oi213cqos', type: 'email_verification' }));
       expect(sendEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           to: validSignupPayload.email,
@@ -706,7 +707,7 @@ describe('/api/auth/mobile/signup', () => {
 
   describe('error handling', () => {
     it('returns 500 on database error', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -722,7 +723,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('continues signup if email sending fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('Email service down'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('Email service down'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',
@@ -737,7 +738,7 @@ describe('/api/auth/mobile/signup', () => {
     });
 
     it('continues signup if drive population fails', async () => {
-      vi.mocked(populateUserDrive).mockRejectedValue(new Error('Population failed'));
+      vi.mocked(populateUserDrive).mockRejectedValueOnce(new Error('Population failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/signup', {
         method: 'POST',

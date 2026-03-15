@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
+// @scaffold - ORM chain mocks (db.query.mcpTokens.findFirst, db.update().set().where())
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
@@ -139,7 +140,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
   });
 
   it('returns 500 when db throws an error', async () => {
-    vi.mocked(db.query.mcpTokens.findFirst).mockRejectedValue(new Error('DB connection error'));
+    vi.mocked(db.query.mcpTokens.findFirst).mockRejectedValueOnce(new Error('DB connection error'));
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'DELETE',

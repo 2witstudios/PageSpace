@@ -204,6 +204,7 @@ const createCallbackRequest = (
   });
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/auth/google/callback', () => {
   const originalEnv = {
     GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -541,7 +542,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('uses email prefix as name when Google name is not provided', async () => {
@@ -558,7 +559,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('updates new user avatar when resolvedImage differs from null', async () => {
@@ -568,7 +569,7 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('does not update new user avatar when resolvedImage matches initial null', async () => {
@@ -592,7 +593,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('updates existing user without name', async () => {
@@ -604,7 +605,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('updates existing user with different avatar', async () => {
@@ -617,7 +618,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('updates existing user with unverified email when email_verified', async () => {
@@ -629,7 +630,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('does not update complete existing user', async () => {
@@ -657,7 +658,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('handles re-fetch returning null after update (falls back to original user)', async () => {
@@ -702,7 +703,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
@@ -764,7 +765,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
@@ -777,7 +778,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('handles non-Error rate limit reset failure', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string-error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string-error');
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
@@ -805,7 +806,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
     });
   });
 
@@ -891,7 +892,7 @@ describe('GET /api/auth/google/callback', () => {
       await GET(request);
 
       // resetDistributedRateLimit is called in both the main flow and the desktop flow
-      expect(resetDistributedRateLimit).toHaveBeenCalled();
+      expect(resetDistributedRateLimit).toHaveBeenCalledWith(expect.any(String));
     });
 
     it('logs warning when desktop rate limit reset fails', async () => {

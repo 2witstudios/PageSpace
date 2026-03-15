@@ -208,7 +208,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       const error = new Error('DB failed');
-      vi.mocked(listDriveConnections).mockRejectedValue(error);
+      vi.mocked(listDriveConnections).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -722,7 +722,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       const error = new Error('Unexpected error');
-      vi.mocked(getProviderById).mockRejectedValue(error);
+      vi.mocked(getProviderById).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations', {
         method: 'POST',

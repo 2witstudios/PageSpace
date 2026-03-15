@@ -96,6 +96,7 @@ const mockDriveMember = (overrides: {
   lastAccessedAt: null,
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/account/handle-drive', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
@@ -275,7 +276,7 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.success).toBe(true);
       expect(body.action).toBe('transfer');
       expect(body.message).toContain('transferred successfully');
-      expect(updateMock).toHaveBeenCalled();
+      expect(updateMock).toHaveBeenCalledTimes(1);
       expect(loggers.auth.info).toHaveBeenCalledWith(
         expect.stringContaining('Drive ownership transferred')
       );
@@ -363,7 +364,7 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.success).toBe(true);
       expect(body.action).toBe('delete');
       expect(body.message).toContain('deleted successfully');
-      expect(deleteMock).toHaveBeenCalled();
+      expect(deleteMock).toHaveBeenCalledTimes(1);
       expect(loggers.auth.info).toHaveBeenCalledWith(
         expect.stringContaining('Drive deleted during account deletion preparation')
       );
@@ -384,13 +385,13 @@ describe('POST /api/account/handle-drive', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(deleteMock).toHaveBeenCalled();
+      expect(deleteMock).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('error handling', () => {
     it('should handle database errors gracefully', async () => {
-      const whereMock = vi.fn().mockRejectedValue(new Error('Database connection lost'));
+      const whereMock = vi.fn().mockRejectedValueOnce(new Error('Database connection lost'));
       vi.mocked(db.delete).mockReturnValue({ where: whereMock } as unknown as ReturnType<typeof db.delete>);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
@@ -406,11 +407,14 @@ describe('POST /api/account/handle-drive', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).toBe('Failed to handle drive');
-      expect(loggers.auth.error).toHaveBeenCalled();
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        expect.stringContaining('Error handling drive'),
+        expect.any(Error)
+      );
     });
 
     it('should handle transfer database errors', async () => {
-      const whereMock = vi.fn().mockRejectedValue(new Error('Update failed'));
+      const whereMock = vi.fn().mockRejectedValueOnce(new Error('Update failed'));
       const setMock = vi.fn().mockReturnValue({ where: whereMock });
       vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
 

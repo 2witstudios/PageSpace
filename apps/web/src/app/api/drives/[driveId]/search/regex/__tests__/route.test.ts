@@ -430,7 +430,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws unexpected error', async () => {
-      vi.mocked(checkDriveAccessForSearch).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForSearch).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=test`);
       const response = await GET(request, createContext(mockDriveId));
@@ -442,7 +442,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
     it('should return 500 when regexSearchPages throws', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
-      vi.mocked(regexSearchPages).mockRejectedValue(new Error('Invalid regex pattern'));
+      vi.mocked(regexSearchPages).mockRejectedValueOnce(new Error('Invalid regex pattern'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=[invalid`);
       const response = await GET(request, createContext(mockDriveId));

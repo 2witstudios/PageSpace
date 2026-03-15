@@ -100,6 +100,7 @@ const MOCK_DRIVE_ID = 'drive_abc';
 // GET /api/drives/[driveId]/integrations/audit/export
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/integrations/audit/export', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -505,7 +506,7 @@ describe('GET /api/drives/[driveId]/integrations/audit/export', () => {
         },
       });
       const error = new Error('DB failed');
-      vi.mocked(db.query.integrationAuditLog.findMany).mockRejectedValue(error);
+      vi.mocked(db.query.integrationAuditLog.findMany).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/integrations/audit/export');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

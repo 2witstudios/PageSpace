@@ -357,7 +357,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws unexpected error', async () => {
-      vi.mocked(checkDriveAccessForSearch).mockRejectedValue(new Error('Database error'));
+      vi.mocked(checkDriveAccessForSearch).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));
@@ -369,7 +369,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
     it('should return 500 when globSearchPages throws', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
-      vi.mocked(globSearchPages).mockRejectedValue(new Error('Search failed'));
+      vi.mocked(globSearchPages).mockRejectedValueOnce(new Error('Search failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*`);
       const response = await GET(request, createContext(mockDriveId));

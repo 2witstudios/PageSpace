@@ -235,7 +235,7 @@ describe('POST /api/permissions/batch', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws an Error', async () => {
-      mockGetBatchPagePermissions.mockRejectedValue(new Error('Database failure'));
+      mockGetBatchPagePermissions.mockRejectedValueOnce(new Error('Database failure'));
 
       const request = createPostRequest({ pageIds: ['page_1'] });
       const response = await POST(request as never);
@@ -247,7 +247,7 @@ describe('POST /api/permissions/batch', () => {
     });
 
     it('should return "Unknown error" when service throws non-Error', async () => {
-      mockGetBatchPagePermissions.mockRejectedValue('string-error');
+      mockGetBatchPagePermissions.mockRejectedValueOnce('string-error');
 
       const request = createPostRequest({ pageIds: ['page_1'] });
       const response = await POST(request as never);
@@ -260,7 +260,7 @@ describe('POST /api/permissions/batch', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Permission service down');
-      mockGetBatchPagePermissions.mockRejectedValue(error);
+      mockGetBatchPagePermissions.mockRejectedValueOnce(error);
 
       const request = createPostRequest({ pageIds: ['page_1'] });
       await POST(request as never);

@@ -88,6 +88,7 @@ const createDriveFixture = (overrides: { id: string; name?: string; ownerId?: st
 // GET /api/drives/[driveId]/trash - Contract Tests
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/trash', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
@@ -247,7 +248,7 @@ describe('GET /api/drives/[driveId]/trash', () => {
 
   describe('error handling', () => {
     it('should return 500 when database throws', async () => {
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
       const response = await GET(request, createContext(mockDriveId));
@@ -259,7 +260,7 @@ describe('GET /api/drives/[driveId]/trash', () => {
 
     it('should log error when database throws', async () => {
       const error = new Error('Fetch failure');
-      vi.mocked(db.query.drives.findFirst).mockRejectedValue(error);
+      vi.mocked(db.query.drives.findFirst).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
       await GET(request, createContext(mockDriveId));

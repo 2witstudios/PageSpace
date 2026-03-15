@@ -256,7 +256,7 @@ describe('/api/auth/desktop/exchange', () => {
   describe('error handling (500)', () => {
     it('POST_whenConsumeExchangeCodeThrows_returns500', async () => {
       // Arrange
-      vi.mocked(consumeExchangeCode).mockRejectedValue(
+      vi.mocked(consumeExchangeCode).mockRejectedValueOnce(
         new Error('Redis connection failed')
       );
 
@@ -295,7 +295,7 @@ describe('/api/auth/desktop/exchange', () => {
     it('POST_whenInternalErrorOccurs_logsError', async () => {
       // Arrange
       const error = new Error('Something went wrong');
-      vi.mocked(consumeExchangeCode).mockRejectedValue(error);
+      vi.mocked(consumeExchangeCode).mockRejectedValueOnce(error);
 
       const request = new Request('http://localhost/api/auth/desktop/exchange', {
         method: 'POST',

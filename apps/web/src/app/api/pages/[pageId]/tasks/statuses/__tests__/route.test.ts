@@ -141,6 +141,7 @@ function setupMCPScopeError() {
 
 // ---------- Tests ----------
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/tasks/statuses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -349,7 +350,7 @@ describe('POST /api/pages/[pageId]/tasks/statuses', () => {
 
     const response = await POST(createPostRequest({ name: 'Review', group: 'todo', color: '#fff' }), context);
     expect(response.status).toBe(201);
-    expect(db.transaction).toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it('creates a status with auto-calculated position when position is not provided', async () => {
@@ -535,7 +536,7 @@ describe('PUT /api/pages/[pageId]/tasks/statuses', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.statusConfigs).toHaveLength(2);
-    expect(db.transaction).toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'task_updated',
       data: expect.objectContaining({ statusConfigsUpdated: updatedConfigs }),
@@ -691,7 +692,7 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.success).toBe(true);
-    expect(db.transaction).toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'task_updated',
       data: expect.objectContaining({

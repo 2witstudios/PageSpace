@@ -177,6 +177,7 @@ const createSignedState = (data: Record<string, unknown>) => {
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/auth/google/callback', () => {
   const originalEnv = { ...process.env };
 
@@ -238,7 +239,7 @@ describe('GET /api/auth/google/callback', () => {
       );
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
 
       // Response should be a redirect
       expect(response.status).toBe(307);

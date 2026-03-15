@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 // Mock @pagespace/db to provide the Drizzle operators and schema references
 vi.mock('@pagespace/db', () => {
@@ -25,6 +25,10 @@ vi.mock('@pagespace/lib', () => ({
   isValidId: vi.fn((id: string) => /^[a-z0-9]{20,30}$/.test(id)),
 }));
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 import {
   parseAuditFilterParams,
   parseAuditListParams,
@@ -47,6 +51,7 @@ const VALID_CUID = 'clg8k9x0y000008l1d4hv8x0z';
 // parseAuditFilterParams
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('parseAuditFilterParams', () => {
   describe('with no params', () => {
     it('should return ok with all null filters', () => {
@@ -422,7 +427,7 @@ describe('buildAuditLogWhereClause', () => {
     });
 
     expect(eq).toHaveBeenCalledWith(integrationAuditLog.connectionId, 'conn-123');
-    expect(and).toHaveBeenCalled();
+    expect(and).toHaveBeenCalledWith(expect.anything(), expect.anything());
   });
 
   it('should add success filter', () => {
@@ -432,7 +437,7 @@ describe('buildAuditLogWhereClause', () => {
     });
 
     expect(eq).toHaveBeenCalledWith(integrationAuditLog.success, true);
-    expect(and).toHaveBeenCalled();
+    expect(and).toHaveBeenCalledWith(expect.anything(), expect.anything());
   });
 
   it('should add success=false filter', () => {

@@ -358,7 +358,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
           contentSnapshot: '<h1>Snapshot Fallback</h1>',
         })
         .mockResolvedValueOnce(mockActivity2);
-      mockReadPageContent.mockRejectedValue(new Error('Read failed'));
+      mockReadPageContent.mockRejectedValueOnce(new Error('Read failed'));
 
       const response = await GET(
         createRequest({ v1: 'v1_id', v2: 'v2_id' }),
@@ -422,7 +422,7 @@ describe('GET /api/pages/[pageId]/versions/compare', () => {
           contentSnapshot: '<h1>Fallback</h1>',
         })
         .mockResolvedValueOnce(mockActivity2);
-      mockReadPageContent.mockRejectedValue('string error');
+      mockReadPageContent.mockRejectedValueOnce('string error');
 
       const response = await GET(
         createRequest({ v1: 'v1_id', v2: 'v2_id' }),

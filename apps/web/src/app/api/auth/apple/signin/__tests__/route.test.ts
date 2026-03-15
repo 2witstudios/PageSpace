@@ -451,7 +451,7 @@ describe('GET /api/auth/apple/signin', () => {
 
   describe('error handling', () => {
     it('redirects to signin with oauth_error on unexpected error', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createGetRequest());
 
@@ -467,7 +467,7 @@ describe('GET /api/auth/apple/signin', () => {
     it('uses NEXTAUTH_URL fallback in error handler', async () => {
       delete process.env.WEB_APP_URL;
       process.env.NEXTAUTH_URL = 'https://next.example.com';
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Fail'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Fail'));
 
       const response = await GET(createGetRequest());
       const location = response.headers.get('Location')!;
@@ -477,7 +477,7 @@ describe('GET /api/auth/apple/signin', () => {
     it('uses localhost fallback in error handler when no env vars set', async () => {
       delete process.env.WEB_APP_URL;
       delete process.env.NEXTAUTH_URL;
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Fail'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Fail'));
 
       const response = await GET(createGetRequest());
       const location = response.headers.get('Location')!;

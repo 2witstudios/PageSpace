@@ -31,6 +31,7 @@ const mockSelectChain = (result: unknown[]) => {
   return chain;
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account/verification-status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -106,7 +107,7 @@ describe('GET /api/account/verification-status', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(verifyAuth).mockRejectedValue(new Error('DB connection lost'));
+      vi.mocked(verifyAuth).mockRejectedValueOnce(new Error('DB connection lost'));
 
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const response = await GET(createRequest());
@@ -129,7 +130,7 @@ describe('GET /api/account/verification-status', () => {
       chain.select = vi.fn().mockReturnValue(chain);
       chain.from = vi.fn().mockReturnValue(chain);
       chain.where = vi.fn().mockReturnValue(chain);
-      chain.limit = vi.fn().mockRejectedValue(new Error('Query failed'));
+      chain.limit = vi.fn().mockRejectedValueOnce(new Error('Query failed'));
       vi.mocked(db.select).mockImplementation(chain.select as never);
 
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

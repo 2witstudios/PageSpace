@@ -92,6 +92,7 @@ import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/device/refresh', () => {
   const mockUser = {
     id: 'test-user-id',
@@ -169,7 +170,7 @@ describe('/api/auth/device/refresh', () => {
       expect(body.token).toBeUndefined(); // No JWT for web - uses session cookie
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('valid-device-token');
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock-session-token');
     });
 
     it('creates new session for mobile/desktop', async () => {
@@ -272,7 +273,13 @@ describe('/api/auth/device/refresh', () => {
       const body = await response.json();
 
       // Assert
-      expect(atomicDeviceTokenRotation).toHaveBeenCalled();
+      expect(atomicDeviceTokenRotation).toHaveBeenCalledWith(
+        'valid-device-token',
+        expect.objectContaining({ ipAddress: expect.any(String) }),
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
       expect(body.deviceToken).toBe('ps_dev_rotated_token');
     });
 
@@ -448,7 +455,7 @@ describe('/api/auth/device/refresh', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      vi.mocked(validateDeviceToken).mockRejectedValue(new Error('Database error'));
+      vi.mocked(validateDeviceToken).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/device/refresh', {
         method: 'POST',

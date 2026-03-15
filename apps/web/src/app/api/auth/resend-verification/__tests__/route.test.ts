@@ -23,6 +23,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn().mockReturnValue(false),
 }));
 
+// @scaffold - ORM chain mocks (db.select().from().where().limit())
 vi.mock('@pagespace/db', () => ({
   users: { id: 'id', email: 'email', name: 'name', emailVerified: 'emailVerified' },
   db: {
@@ -314,7 +315,7 @@ describe('POST /api/auth/resend-verification', () => {
 
   describe('email rate limit from service', () => {
     it('returns 429 when email service throws rate limit error', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('Too many emails sent'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('Too many emails sent'));
 
       const response = await POST(createResendRequest());
       const body = await response.json();
@@ -324,7 +325,7 @@ describe('POST /api/auth/resend-verification', () => {
     });
 
     it('propagates other email errors as 500', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('SMTP connection failed'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP connection failed'));
 
       const response = await POST(createResendRequest());
       const body = await response.json();

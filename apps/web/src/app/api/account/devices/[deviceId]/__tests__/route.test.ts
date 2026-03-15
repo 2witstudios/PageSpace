@@ -86,6 +86,20 @@ const mockDevice = (overrides: Record<string, unknown> = {}) => ({
   platform: 'desktop',
   deviceName: 'My MacBook',
   tokenHash: 'hashed_device_token',
+  tokenPrefix: 'ps_dev_',
+  createdAt: new Date('2024-01-01'),
+  expiresAt: new Date('2025-01-01'),
+  tokenVersion: 0,
+  trustScore: 1.0,
+  suspiciousActivityCount: 0,
+  lastUsedAt: null,
+  revokedAt: null,
+  revokedReason: null,
+  userAgent: null,
+  ipAddress: null,
+  lastIpAddress: null,
+  location: null,
+  replacedByTokenId: null,
   ...overrides,
 });
 
@@ -93,6 +107,7 @@ const mockDevice = (overrides: Record<string, unknown> = {}) => ({
 // DELETE /api/account/devices/[deviceId]
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/account/devices/[deviceId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -309,7 +324,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockRejectedValue(
+      vi.mocked(db.query.deviceTokens.findFirst).mockRejectedValueOnce(
         new Error('DB error')
       );
 
@@ -323,7 +338,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
     it('returns 500 when revokeDeviceToken throws', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice() as never);
       vi.mocked(secureCompare).mockReturnValue(false);
-      vi.mocked(revokeDeviceToken).mockRejectedValue(new Error('Revocation failed'));
+      vi.mocked(revokeDeviceToken).mockRejectedValueOnce(new Error('Revocation failed'));
 
       const response = await DELETE(createRequest(), createContext('device-1'));
       const body = await response.json();

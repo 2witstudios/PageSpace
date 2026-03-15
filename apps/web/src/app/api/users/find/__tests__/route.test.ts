@@ -63,6 +63,7 @@ const mockAuthError = (status = 401): AuthError => ({
 // GET /api/users/find
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/users/find', () => {
   const mockUserId = 'user_123';
 
@@ -150,7 +151,7 @@ describe('GET /api/users/find', () => {
 
   describe('error handling', () => {
     it('should return 500 when database throws', async () => {
-      mockFindFirst.mockRejectedValue(new Error('Database connection lost'));
+      mockFindFirst.mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request('https://example.com/api/users/find?email=test@example.com');
       const response = await GET(request);
@@ -162,7 +163,7 @@ describe('GET /api/users/find', () => {
 
     it('should log error when database throws', async () => {
       const error = new Error('Database failure');
-      mockFindFirst.mockRejectedValue(error);
+      mockFindFirst.mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/users/find?email=test@example.com');
       await GET(request);

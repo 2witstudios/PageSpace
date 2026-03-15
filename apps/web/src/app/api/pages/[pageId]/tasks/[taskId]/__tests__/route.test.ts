@@ -222,6 +222,7 @@ function setupRelationsLookup(task: Record<string, unknown> | null = {
 
 // ---------- Tests ----------
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -684,8 +685,11 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(200);
-    expect(applyPageMutation).toHaveBeenCalled();
-    expect(broadcastPageEvent).toHaveBeenCalled();
+    expect(applyPageMutation).toHaveBeenCalledWith(expect.objectContaining({
+      pageId: expect.any(String),
+      operation: 'update',
+    }));
+    expect(broadcastPageEvent).toHaveBeenCalledWith(expect.anything());
   });
 
   it('handles PageRevisionMismatchError with expectedRevision (409)', async () => {
@@ -695,7 +699,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
 
     const { PageRevisionMismatchError: PRME } = await import('@/services/api/page-mutation-service');
-    vi.mocked(db.transaction).mockRejectedValue(new PRME('Conflict', 5, 3));
+    vi.mocked(db.transaction).mockRejectedValueOnce(new PRME('Conflict', 5, 3));
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(409);
@@ -712,7 +716,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
 
     const { PageRevisionMismatchError: PRME } = await import('@/services/api/page-mutation-service');
-    vi.mocked(db.transaction).mockRejectedValue(new PRME('Missing revision', 5, undefined));
+    vi.mocked(db.transaction).mockRejectedValueOnce(new PRME('Missing revision', 5, undefined));
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(428);
@@ -725,7 +729,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     setupCanEdit(true);
     setupTaskLookup();
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
-    vi.mocked(db.transaction).mockRejectedValue(new Error('DB crash'));
+    vi.mocked(db.transaction).mockRejectedValueOnce(new Error('DB crash'));
 
     await expect(PATCH(createPatchRequest({ title: 'x' }), context)).rejects.toThrow('DB crash');
   });
@@ -969,6 +973,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
   });
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1034,7 +1039,12 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       type: 'task_deleted',
       taskId: mockTaskId,
     }));
-    expect(logPageActivity).toHaveBeenCalled();
+    expect(logPageActivity).toHaveBeenCalledWith(
+      mockUserId,
+      expect.any(String),
+      expect.objectContaining({ id: mockPageId }),
+      expect.any(Object),
+    );
   });
 
   it('deletes task without logging when taskListPage is null', async () => {
@@ -1073,8 +1083,11 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       pageId: 'linked-page-1',
       operation: 'trash',
     }));
-    expect(broadcastTaskEvent).toHaveBeenCalled();
-    expect(broadcastPageEvent).toHaveBeenCalled();
+    expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'task_deleted',
+      taskId: mockTaskId,
+    }));
+    expect(broadcastPageEvent).toHaveBeenCalledWith(expect.anything());
   });
 
   it('handles PageRevisionMismatchError on trash with expectedRevision (409)', async () => {
@@ -1094,7 +1107,7 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     } as never);
 
     const { PageRevisionMismatchError: PRME } = await import('@/services/api/page-mutation-service');
-    vi.mocked(applyPageMutation).mockRejectedValue(new PRME('Conflict', 5, 3));
+    vi.mocked(applyPageMutation).mockRejectedValueOnce(new PRME('Conflict', 5, 3));
 
     const response = await DELETE(createDeleteRequest(), context);
     expect(response.status).toBe(409);
@@ -1119,7 +1132,7 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     } as never);
 
     const { PageRevisionMismatchError: PRME } = await import('@/services/api/page-mutation-service');
-    vi.mocked(applyPageMutation).mockRejectedValue(new PRME('Missing rev', 5, undefined));
+    vi.mocked(applyPageMutation).mockRejectedValueOnce(new PRME('Missing rev', 5, undefined));
 
     const response = await DELETE(createDeleteRequest(), context);
     expect(response.status).toBe(428);
@@ -1141,7 +1154,7 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       })),
     } as never);
 
-    vi.mocked(applyPageMutation).mockRejectedValue(new Error('Unknown error'));
+    vi.mocked(applyPageMutation).mockRejectedValueOnce(new Error('Unknown error'));
 
     await expect(DELETE(createDeleteRequest(), context)).rejects.toThrow('Unknown error');
   });
@@ -1189,7 +1202,10 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
 
     const response = await DELETE(createDeleteRequest(), context);
     expect(response.status).toBe(200);
-    expect(broadcastTaskEvent).toHaveBeenCalled();
+    expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'task_deleted',
+      taskId: mockTaskId,
+    }));
     expect(broadcastPageEvent).not.toHaveBeenCalled();
   });
 });

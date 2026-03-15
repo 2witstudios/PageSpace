@@ -184,6 +184,7 @@ const validOneTapPayload = {
   platform: 'web',
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/auth/google/one-tap', () => {
   const originalEnv = {
     GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -404,7 +405,7 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
     });
 
     it('revokes existing sessions before creating new one', async () => {
@@ -555,7 +556,7 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('updates existing user with different avatar', async () => {
@@ -568,7 +569,7 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('does not update complete existing user', async () => {
@@ -594,7 +595,7 @@ describe('POST /api/auth/google/one-tap', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('sets provider to both when existing user has password', async () => {
@@ -606,13 +607,13 @@ describe('POST /api/auth/google/one-tap', () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
   });
 
   describe('drive provisioning', () => {
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -635,7 +636,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -648,7 +649,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('handles non-Error rate limit reset failure', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string-error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string-error');
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
@@ -705,7 +706,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected exception', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);

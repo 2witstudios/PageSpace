@@ -100,6 +100,7 @@ import {
 import { sessionService } from '@pagespace/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/oauth/google/exchange', () => {
   const mockUserInfo = {
     provider: 'google',
@@ -632,7 +633,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(verifyOAuthIdToken).mockRejectedValue(new Error('Network error'));
+      vi.mocked(verifyOAuthIdToken).mockRejectedValueOnce(new Error('Network error'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -648,7 +649,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('tracks failed OAuth on unexpected error', async () => {
-      vi.mocked(verifyOAuthIdToken).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(verifyOAuthIdToken).mockRejectedValueOnce(new Error('Unexpected'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -669,7 +670,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
     });
 
     it('handles rate limit reset failures gracefully', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
@@ -685,7 +686,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
 
     it('logs rate limit reset failures', async () => {
       const { loggers } = await import('@pagespace/lib/server');
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Reset failed'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Reset failed'));
 
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',

@@ -302,7 +302,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
 
     it('continues login even if email verification fails', async () => {
-      vi.mocked(markEmailVerified).mockRejectedValue(new Error('DB error'));
+      vi.mocked(markEmailVerified).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createVerifyRequest('valid-token'));
 
@@ -374,7 +374,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         ok: true,
         data: { userId: 'test-user-id', isNewUser: true },
       });
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
@@ -413,7 +413,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('sets session cookie', async () => {
       await GET(createVerifyRequest('valid-token'));
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
     });
 
     it('sets CSRF token cookie without Secure flag in non-production', async () => {
@@ -478,7 +478,7 @@ describe('GET /api/auth/magic-link/verify', () => {
 
   describe('error handling', () => {
     it('redirects with server_error on unexpected exception', async () => {
-      vi.mocked(verifyMagicLinkToken).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(verifyMagicLinkToken).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createVerifyRequest('valid-token'));
 

@@ -174,6 +174,7 @@ const createSignedState = (data: Record<string, unknown>) => {
 
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('Open Redirect Protection', () => {
   const originalEnv = { ...process.env };
 

@@ -60,6 +60,7 @@ const createRequest = () =>
 
 const mockParams = { params: Promise.resolve({ pageId: mockPageId }) };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/breadcrumbs', () => {
   beforeEach(() => {
     vi.clearAllMocks();

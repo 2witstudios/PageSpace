@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  *   - crypto is NOT mocked (pure utility, real implementation used)
  */
 
+// @scaffold - ORM chain mocks (db.insert().values())
 const mockInsertValues = vi.fn().mockResolvedValue(undefined);
 const mockInsert = vi.fn().mockReturnValue({ values: mockInsertValues });
 

@@ -311,7 +311,7 @@ describe('/api/auth/google/signin', () => {
 
     describe('error handling', () => {
       it('returns 500 on unexpected exception', async () => {
-        vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+        vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
         const request = createPostRequest({});
         const response = await POST(request);
@@ -416,7 +416,7 @@ describe('/api/auth/google/signin', () => {
 
     describe('error handling', () => {
       it('redirects with oauth_error on unexpected exception', async () => {
-        vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+        vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
         const request = createGetRequest();
         const response = await GET(request);
@@ -433,7 +433,7 @@ describe('/api/auth/google/signin', () => {
       it('uses fallback URL when env vars not set on error', async () => {
         delete process.env.WEB_APP_URL;
         delete process.env.NEXTAUTH_URL;
-        vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+        vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
         const request = createGetRequest();
         const response = await GET(request);

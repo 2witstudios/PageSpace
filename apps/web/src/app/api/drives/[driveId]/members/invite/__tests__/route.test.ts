@@ -214,6 +214,7 @@ const createInviteRequest = (
 // Tests
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/drives/[driveId]/members/invite', () => {
   const mockUserId = 'user_123';
   const mockDriveId = 'drive_abc';
@@ -455,7 +456,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.memberId).toBe('existing_mem');
-      expect(mockUpdateSet).toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ role: 'ADMIN' }));
     });
   });
 
@@ -550,7 +551,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         'member_added',
         { role: 'MEMBER', driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalled();
+      expect(broadcastDriveMemberEvent).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('should invalidate permission caches', async () => {
@@ -677,7 +678,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('error handling', () => {
     it('should return 500 when an error is thrown', async () => {
-      vi.mocked(isEmailVerified).mockRejectedValue(new Error('Service failure'));
+      vi.mocked(isEmailVerified).mockRejectedValueOnce(new Error('Service failure'));
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -691,7 +692,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
     it('should log error when an error is thrown', async () => {
       const error = new Error('Service failure');
-      vi.mocked(isEmailVerified).mockRejectedValue(error);
+      vi.mocked(isEmailVerified).mockRejectedValueOnce(error);
 
       await POST(
         createInviteRequest(mockDriveId, defaultBody),

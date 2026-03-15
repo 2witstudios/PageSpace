@@ -210,7 +210,7 @@ describe('/api/auth/login redirect', () => {
   });
 
   test('given provisioning throws error, should still return 200 without redirectTo', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request('http://localhost/api/auth/login', {
       method: 'POST',

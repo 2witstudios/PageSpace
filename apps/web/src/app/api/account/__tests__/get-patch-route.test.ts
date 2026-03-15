@@ -79,6 +79,7 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account', () => {
   const mockUserId = 'user_123';
 
@@ -190,6 +191,7 @@ describe('GET /api/account', () => {
   });
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('PATCH /api/account', () => {
   const mockUserId = 'user_123';
 
@@ -375,7 +377,7 @@ describe('PATCH /api/account', () => {
 
   it('should return 500 when database throws', async () => {
     // Arrange
-    vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('DB error'));
+    vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request('https://example.com/api/account', {
       method: 'PATCH',
@@ -389,6 +391,9 @@ describe('PATCH /api/account', () => {
     // Assert
     expect(response.status).toBe(500);
     expect(body.error).toBe('Failed to update profile');
-    expect(loggers.auth.error).toHaveBeenCalled();
+    expect(loggers.auth.error).toHaveBeenCalledWith(
+      expect.stringContaining('Profile update error'),
+      expect.any(Error)
+    );
   });
 });

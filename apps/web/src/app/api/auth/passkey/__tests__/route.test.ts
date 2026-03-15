@@ -130,7 +130,7 @@ describe('GET /api/auth/passkey', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(authenticateSessionRequest).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(authenticateSessionRequest).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await GET(createRequest());
       const body = await response.json();

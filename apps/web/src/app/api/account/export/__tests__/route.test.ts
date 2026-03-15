@@ -178,7 +178,7 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      expect(mockArchive.finalize).toHaveBeenCalled();
+      expect(mockArchive.finalize).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -202,7 +202,7 @@ describe('GET /api/account/export', () => {
 
   describe('error handling', () => {
     it('returns 500 when collectAllUserData throws', async () => {
-      vi.mocked(collectAllUserData).mockRejectedValue(new Error('DB error'));
+      vi.mocked(collectAllUserData).mockRejectedValueOnce(new Error('DB error'));
 
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const response = await GET(createRequest());

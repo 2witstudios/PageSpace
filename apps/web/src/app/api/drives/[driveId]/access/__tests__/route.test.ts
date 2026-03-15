@@ -154,7 +154,7 @@ describe('POST /api/drives/[driveId]/access', () => {
 
   describe('error handling', () => {
     it('should return 500 when updateDriveLastAccessed throws an Error', async () => {
-      vi.mocked(updateDriveLastAccessed).mockRejectedValue(new Error('Database connection lost'));
+      vi.mocked(updateDriveLastAccessed).mockRejectedValueOnce(new Error('Database connection lost'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/access`, {
         method: 'POST',
@@ -167,7 +167,7 @@ describe('POST /api/drives/[driveId]/access', () => {
     });
 
     it('should return 500 when updateDriveLastAccessed throws a non-Error', async () => {
-      vi.mocked(updateDriveLastAccessed).mockRejectedValue('string error');
+      vi.mocked(updateDriveLastAccessed).mockRejectedValueOnce('string error');
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/access`, {
         method: 'POST',
@@ -181,7 +181,7 @@ describe('POST /api/drives/[driveId]/access', () => {
 
     it('should log error with message when Error is thrown', async () => {
       const error = new Error('Service failure');
-      vi.mocked(updateDriveLastAccessed).mockRejectedValue(error);
+      vi.mocked(updateDriveLastAccessed).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/access`, {
         method: 'POST',
@@ -195,7 +195,7 @@ describe('POST /api/drives/[driveId]/access', () => {
     });
 
     it('should log error with string conversion when non-Error is thrown', async () => {
-      vi.mocked(updateDriveLastAccessed).mockRejectedValue('string error');
+      vi.mocked(updateDriveLastAccessed).mockRejectedValueOnce('string error');
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/access`, {
         method: 'POST',

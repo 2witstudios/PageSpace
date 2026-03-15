@@ -246,7 +246,7 @@ describe('POST /api/auth/login', () => {
       );
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
     });
 
     it('generates CSRF token bound to session', async () => {
@@ -345,7 +345,7 @@ describe('POST /api/auth/login', () => {
       });
       await POST(request);
 
-      expect(bcrypt.compare).toHaveBeenCalled();
+      expect(bcrypt.compare).toHaveBeenCalledWith('anypassword', expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/));
       const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
       expect(password).toBe('anypassword');
       // Verify a valid bcrypt hash was used (not null/undefined/empty)
@@ -585,7 +585,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(authRepository.findUserByEmail).mockRejectedValue(
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(
         new Error('Database connection failed')
       );
 
@@ -598,7 +598,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('does not expose internal error details to client', async () => {
-      vi.mocked(authRepository.findUserByEmail).mockRejectedValue(
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(
         new Error('Sensitive database error: connection string leaked')
       );
 
@@ -940,7 +940,7 @@ describe('POST /api/auth/login', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const request = createLoginRequest(validLoginPayload);
       await POST(request);

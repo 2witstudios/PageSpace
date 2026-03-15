@@ -92,6 +92,7 @@ function _setupDbSelectChain(results: unknown[]) {
 // GET /api/drives/[driveId]/agents
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/drives/[driveId]/agents', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -120,7 +121,10 @@ describe('GET /api/drives/[driveId]/agents', () => {
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
 
       expect(response.status).toBe(403);
-      expect(checkMCPDriveScope).toHaveBeenCalled();
+      expect(checkMCPDriveScope).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: MOCK_USER_ID }),
+        MOCK_DRIVE_ID
+      );
     });
   });
 
@@ -626,7 +630,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(MOCK_USER_ID));
       vi.mocked(isAuthError).mockReturnValue(false);
       vi.mocked(checkMCPDriveScope).mockReturnValue(null);
-      vi.mocked(getUserDriveAccess).mockRejectedValue(error);
+      vi.mocked(getUserDriveAccess).mockRejectedValueOnce(error);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));
@@ -642,7 +646,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
     });
 
     it('should handle non-Error thrown values', async () => {
-      vi.mocked(getUserDriveAccess).mockRejectedValue('string error');
+      vi.mocked(getUserDriveAccess).mockRejectedValueOnce('string error');
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

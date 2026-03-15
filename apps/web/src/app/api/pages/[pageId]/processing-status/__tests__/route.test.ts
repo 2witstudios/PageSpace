@@ -87,6 +87,7 @@ function mockDbSelectResult(result: unknown[]) {
   vi.mocked(db.select).mockReturnValue({ from } as never);
 }
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/processing-status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -360,7 +361,7 @@ describe('GET /api/pages/[pageId]/processing-status', () => {
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      const limit = vi.fn().mockRejectedValue(new Error('DB error'));
+      const limit = vi.fn().mockRejectedValueOnce(new Error('DB error'));
       const where = vi.fn().mockReturnValue({ limit });
       const from = vi.fn().mockReturnValue({ where });
       vi.mocked(db.select).mockReturnValue({ from } as never);
@@ -382,7 +383,7 @@ describe('GET /api/pages/[pageId]/processing-status', () => {
         content: null,
       }]);
 
-      mockFetch.mockRejectedValue(new Error('Network error'));
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
       const response = await GET(createRequest(), mockContext);
       const body = await response.json();

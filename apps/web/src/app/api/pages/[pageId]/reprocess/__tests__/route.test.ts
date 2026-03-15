@@ -100,6 +100,7 @@ function mockDbSelectResult(result: unknown[]) {
   vi.mocked(db.select).mockReturnValue({ from } as never);
 }
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/reprocess', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -237,7 +238,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('returns 500 when processor responds with error (non-JSON body)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
-        json: vi.fn().mockRejectedValue(new Error('Not JSON')),
+        json: vi.fn().mockRejectedValueOnce(new Error('Not JSON')),
       });
 
       const response = await POST(createRequest(), mockContext);
@@ -250,7 +251,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
 
   describe('error handling', () => {
     it('returns 500 when database query throws', async () => {
-      const limit = vi.fn().mockRejectedValue(new Error('DB error'));
+      const limit = vi.fn().mockRejectedValueOnce(new Error('DB error'));
       const where = vi.fn().mockReturnValue({ limit });
       const from = vi.fn().mockReturnValue({ where });
       vi.mocked(db.select).mockReturnValue({ from } as never);
@@ -263,7 +264,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     });
 
     it('returns 500 when applyPageMutation throws', async () => {
-      vi.mocked(applyPageMutation).mockRejectedValue(new Error('Mutation failed'));
+      vi.mocked(applyPageMutation).mockRejectedValueOnce(new Error('Mutation failed'));
 
       const response = await POST(createRequest(), mockContext);
       const body = await response.json();
@@ -273,7 +274,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     });
 
     it('returns 500 when fetch throws', async () => {
-      mockFetch.mockRejectedValue(new Error('Network error'));
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
       const response = await POST(createRequest(), mockContext);
       const body = await response.json();

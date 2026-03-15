@@ -85,6 +85,7 @@ const mockDbUpdateChain = () => {
   return chain;
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/account/password', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -284,7 +285,7 @@ describe('POST /api/account/password', () => {
       }));
 
       // First call updates users, second revokes device tokens
-      expect(chain.update).toHaveBeenCalled();
+      expect(chain.update).toHaveBeenCalledTimes(2);
       expect(chain.set).toHaveBeenCalledWith(
         expect.objectContaining({
           password: '$2a$12$newhash',
@@ -313,7 +314,7 @@ describe('POST /api/account/password', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected error', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('DB error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createRequest({
         currentPassword: 'oldPassword123',

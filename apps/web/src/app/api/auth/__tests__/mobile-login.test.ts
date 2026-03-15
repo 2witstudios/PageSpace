@@ -98,6 +98,7 @@ import {
 import { securityAudit } from '@pagespace/lib/audit';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mobile/login', () => {
   const mockUser = {
     id: 'qfh0haxfpzowht3oi213lgn1',
@@ -365,7 +366,7 @@ describe('/api/auth/mobile/login', () => {
 
       // Assert - security property: bcrypt.compare must be called even for non-existent users
       // This prevents timing attacks that could reveal user existence
-      expect(bcrypt.compare).toHaveBeenCalled();
+      expect(bcrypt.compare).toHaveBeenCalledWith(validLoginPayload.password, expect.stringMatching(/^\$2[aby]?\$\d{1,2}\$[./A-Za-z0-9]{53}$/));
 
       // Verify the password was passed (first argument)
       const [password, hash] = vi.mocked(bcrypt.compare).mock.calls[0];
@@ -633,7 +634,7 @@ describe('/api/auth/mobile/login', () => {
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
       // Arrange
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request('http://localhost/api/auth/mobile/login', {
         method: 'POST',

@@ -155,6 +155,7 @@ const validPayload = {
   familyName: 'Doe',
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/auth/apple/native', () => {
   const originalEnv = process.env;
 
@@ -353,7 +354,7 @@ describe('POST /api/auth/apple/native', () => {
     it('builds name from givenName and familyName', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('uses email prefix as name when no name provided', async () => {
@@ -363,7 +364,7 @@ describe('POST /api/auth/apple/native', () => {
         deviceId: 'dev-123',
       }));
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('provisions getting started drive for new users', async () => {
@@ -373,7 +374,7 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('continues if drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -408,7 +409,7 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(false);
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('updates existing user when name is missing', async () => {
@@ -420,7 +421,7 @@ describe('POST /api/auth/apple/native', () => {
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('does not update user when no update is needed', async () => {
@@ -450,7 +451,7 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('handles re-fetch returning null after update', async () => {
@@ -580,7 +581,7 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('handles rate limit reset failure gracefully', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -592,7 +593,7 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('handles rate limit reset failure with non-Error object', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue('string error');
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce('string error');
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -628,13 +629,13 @@ describe('POST /api/auth/apple/native', () => {
     it('sets session cookie in response headers', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Object), expect.any(String));
     });
   });
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(verifyAppleIdToken).mockRejectedValue(new Error('Network error'));
+      vi.mocked(verifyAppleIdToken).mockRejectedValueOnce(new Error('Network error'));
 
       const response = await POST(createNativeRequest(validPayload));
       const body = await response.json();
@@ -644,7 +645,7 @@ describe('POST /api/auth/apple/native', () => {
     });
 
     it('returns 401 for expired token errors', async () => {
-      vi.mocked(verifyAppleIdToken).mockRejectedValue(new Error('Token has expired'));
+      vi.mocked(verifyAppleIdToken).mockRejectedValueOnce(new Error('Token has expired'));
 
       const response = await POST(createNativeRequest(validPayload));
       const body = await response.json();

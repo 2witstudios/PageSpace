@@ -205,7 +205,7 @@ describe('GET /api/drives/[driveId]/backups', () => {
 
   describe('error handling', () => {
     it('should return 500 when service throws', async () => {
-      vi.mocked(listDriveBackups).mockRejectedValue(new Error('Database error'));
+      vi.mocked(listDriveBackups).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/backups`);
       const response = await GET(request, createParams(mockDriveId));
@@ -217,7 +217,7 @@ describe('GET /api/drives/[driveId]/backups', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Fetch failure');
-      vi.mocked(listDriveBackups).mockRejectedValue(error);
+      vi.mocked(listDriveBackups).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/backups`);
       await GET(request, createParams(mockDriveId));
@@ -408,7 +408,7 @@ describe('POST /api/drives/[driveId]/backups', () => {
     });
 
     it('should return 500 when service throws', async () => {
-      vi.mocked(createDriveBackup).mockRejectedValue(new Error('Database error'));
+      vi.mocked(createDriveBackup).mockRejectedValueOnce(new Error('Database error'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/backups`, {
         method: 'POST',
@@ -423,7 +423,7 @@ describe('POST /api/drives/[driveId]/backups', () => {
 
     it('should log error when service throws', async () => {
       const error = new Error('Creation failure');
-      vi.mocked(createDriveBackup).mockRejectedValue(error);
+      vi.mocked(createDriveBackup).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/backups`, {
         method: 'POST',

@@ -173,6 +173,7 @@ import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/signup', () => {
   const validSignupPayload = {
     name: 'New User',
@@ -231,7 +232,7 @@ describe('/api/auth/signup', () => {
       );
 
       // Verify session cookie is set
-      expect(appendSessionCookie).toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledWith(expect.any(Headers), 'ps_sess_mock_session_token');
     });
 
     it('hashes password with bcrypt cost factor 12', async () => {
@@ -288,7 +289,7 @@ describe('/api/auth/signup', () => {
       const request = createSignupRequest(validSignupPayload);
       await POST(request);
 
-      expect(createVerificationToken).toHaveBeenCalled();
+      expect(createVerificationToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 'new-user-id', type: 'email_verification' }));
       expect(sendEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           to: 'new@example.com',
@@ -348,7 +349,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('continues signup even if verification email fails', async () => {
-      vi.mocked(sendEmail).mockRejectedValue(new Error('SMTP error'));
+      vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
 
       const request = createSignupRequest(validSignupPayload);
       const response = await POST(request);
@@ -358,7 +359,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('continues signup even if drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
         new Error('Database error')
       );
 
@@ -791,7 +792,7 @@ describe('/api/auth/signup', () => {
     });
 
     it('logs warning when rate limit reset fails', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis down'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis down'));
 
       const request = createSignupRequest(validSignupPayload);
       await POST(request);

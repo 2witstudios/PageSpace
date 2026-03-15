@@ -272,7 +272,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest());
       const body = await response.json();

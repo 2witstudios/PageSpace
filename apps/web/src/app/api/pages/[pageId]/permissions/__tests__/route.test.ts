@@ -131,6 +131,7 @@ const mockPermission: PermissionEntry = {
   },
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/permissions', () => {
   const createRequest = () => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
@@ -219,7 +220,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
 
   describe('error handling', () => {
     it('returns 500 when service throws', async () => {
-      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValue(new Error('Service error'));
+      vi.mocked(permissionManagementService.canUserViewPermissions).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();
@@ -230,6 +231,7 @@ describe('GET /api/pages/[pageId]/permissions', () => {
   });
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/[pageId]/permissions', () => {
   const createRequest = (body: Record<string, unknown>) => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
@@ -505,7 +507,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 500 when function throws', async () => {
-      vi.mocked(grantPagePermission).mockRejectedValue(new Error('Service error'));
+      vi.mocked(grantPagePermission).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await POST(
         createRequest({ userId: mockTargetUserId, canView: true }),
@@ -519,6 +521,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
   });
 });
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/pages/[pageId]/permissions', () => {
   const createRequest = (body: Record<string, unknown>) => {
     return new Request(`https://example.com/api/pages/${mockPageId}/permissions`, {
@@ -726,7 +729,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     });
 
     it('returns 500 when function throws', async () => {
-      vi.mocked(revokePagePermission).mockRejectedValue(new Error('Service error'));
+      vi.mocked(revokePagePermission).mockRejectedValueOnce(new Error('Service error'));
 
       const response = await DELETE(
         createRequest({ userId: mockTargetUserId }),

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before imports
+// @scaffold - ORM chain mocks (db.insert().values())
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
@@ -172,7 +173,14 @@ describe('POST /api/auth/signup-passkey', () => {
     it('inserts default AI settings', async () => {
       await POST(createRequest());
 
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.insert).toHaveBeenCalledWith(expect.anything());
+      const insertValues = vi.mocked(db.insert).mock.results[0]?.value;
+      expect(insertValues.values).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'new-user-1',
+          provider: 'ollama',
+        }),
+      );
     });
 
     it('logs auth events', async () => {
@@ -262,7 +270,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
   describe('graceful degradation', () => {
     it('continues when drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('Drive error'));
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -277,7 +285,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
     it('continues when AI settings insertion fails', async () => {
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('Insert error')),
+        values: vi.fn().mockRejectedValueOnce(new Error('Insert error')),
       } as never);
 
       const response = await POST(createRequest());
@@ -486,7 +494,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
   describe('unexpected errors', () => {
     it('returns 500 on unexpected throw', async () => {
-      vi.mocked(checkDistributedRateLimit).mockRejectedValue(new Error('Unexpected'));
+      vi.mocked(checkDistributedRateLimit).mockRejectedValueOnce(new Error('Unexpected'));
 
       const response = await POST(createRequest());
       const body = await response.json();

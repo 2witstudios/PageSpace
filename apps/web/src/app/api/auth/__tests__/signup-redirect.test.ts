@@ -132,6 +132,7 @@ import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { createVerificationToken } from '@pagespace/lib/verification-utils';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/signup redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -236,7 +237,7 @@ describe('/api/auth/signup redirect', () => {
   });
 
   test('given signup when provisioning throws, should still redirect to dashboard', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
       new Error('Provisioning failed')
     );
 

@@ -177,6 +177,7 @@ const createNativeRequest = (
   });
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/auth/google/native', () => {
   const originalEnv = {
     GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -598,7 +599,7 @@ describe('POST /api/auth/google/native', () => {
 
   describe('error handling', () => {
     it('given unexpected error, should return 500', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -609,7 +610,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
         new Error('Provisioning failed')
       );
 
@@ -622,7 +623,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given rate limit reset fails, should still succeed', async () => {
-      vi.mocked(resetDistributedRateLimit).mockRejectedValue(new Error('Redis error'));
+      vi.mocked(resetDistributedRateLimit).mockRejectedValueOnce(new Error('Redis error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -643,7 +644,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('given existing user without name, should set name from Google payload', async () => {
@@ -655,7 +656,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('given existing user with different avatar, should update image', async () => {
@@ -668,7 +669,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
@@ -680,7 +681,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('given existing user where no updates needed, should NOT call db.update', async () => {
@@ -708,7 +709,7 @@ describe('POST /api/auth/google/native', () => {
 
       expect(response.status).toBe(200);
       // db.update should be called to set the resolved image
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
 
     it('given existing user with password, should set provider to both', async () => {
@@ -720,7 +721,7 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
     });
   });
 });

@@ -220,7 +220,8 @@ describe('Task API Routes', () => {
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      expect(db.transaction).toHaveBeenCalled();
+      /** @scaffold - ORM chain mock until repository seam exists */
+      expect(db.transaction).toHaveBeenCalledTimes(1);
       expect(response.status).toBe(200);
     });
 
@@ -300,8 +301,8 @@ describe('Task API Routes', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      // db.insert should have been called to create default status configs
-      expect(db.insert).toHaveBeenCalled();
+      /** @scaffold - ORM chain mock until repository seam exists */
+      expect(db.insert).toHaveBeenCalledTimes(1);
     });
 
     it('swallows duplicate key errors during status config migration', async () => {
@@ -317,7 +318,7 @@ describe('Task API Routes', () => {
 
       // Simulate duplicate key error
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('unique constraint violation')),
+        values: vi.fn().mockRejectedValueOnce(new Error('unique constraint violation')),
       } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
@@ -338,7 +339,7 @@ describe('Task API Routes', () => {
 
       // Simulate a real error (not duplicate key)
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValue(new Error('connection refused')),
+        values: vi.fn().mockRejectedValueOnce(new Error('connection refused')),
       } as never);
 
       await expect(GET(createRequest(), { params: mockParams })).rejects.toThrow('connection refused');

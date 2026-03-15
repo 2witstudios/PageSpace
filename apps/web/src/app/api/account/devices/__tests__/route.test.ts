@@ -126,6 +126,7 @@ const mockUpdateChain = () => {
 // GET /api/account/devices
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/account/devices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -245,7 +246,7 @@ describe('GET /api/account/devices', () => {
 
   describe('error handling', () => {
     it('returns 500 when getUserDeviceTokens throws', async () => {
-      vi.mocked(getUserDeviceTokens).mockRejectedValue(new Error('DB error'));
+      vi.mocked(getUserDeviceTokens).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await GET(createGetRequest());
       const body = await response.json();
@@ -260,6 +261,7 @@ describe('GET /api/account/devices', () => {
 // DELETE /api/account/devices
 // ============================================================================
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('DELETE /api/account/devices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -551,7 +553,7 @@ describe('DELETE /api/account/devices', () => {
 
   describe('error handling', () => {
     it('returns 500 when user query throws', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValue(new Error('DB error'));
+      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await DELETE(createDeleteRequest());
       const body = await response.json();

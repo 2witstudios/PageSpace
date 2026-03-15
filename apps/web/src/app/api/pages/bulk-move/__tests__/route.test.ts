@@ -186,6 +186,7 @@ function setupSuccessScenario() {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/pages/bulk-move', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -462,7 +463,7 @@ describe('POST /api/pages/bulk-move', () => {
     it('runs move within a transaction', async () => {
       await POST(createRequest(validBody));
 
-      expect(mockTransaction).toHaveBeenCalled();
+      expect(mockTransaction).toHaveBeenCalledWith(expect.any(Function));
     });
 
     it('updates children driveId when moving to a different drive', async () => {
@@ -637,7 +638,7 @@ describe('POST /api/pages/bulk-move', () => {
     });
 
     it('handles cache invalidation failure gracefully', async () => {
-      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValue(new Error('Cache error'));
+      vi.mocked(pageTreeCache.invalidateDriveTree).mockRejectedValueOnce(new Error('Cache error'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();

@@ -24,6 +24,7 @@ import { NextRequest } from 'next/server';
 
 const mockDrivesFindMany = vi.hoisted(() => vi.fn());
 
+// @scaffold - ORM chain mocks (db.insert, db.transaction, db.query, db.update)
 vi.mock('@pagespace/db', () => ({
   db: {
     insert: vi.fn(),
@@ -196,6 +197,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(body.error).toContain('You do not have access');
         expect(body.error).toContain('drive-1');
         expect(body.error).toContain('drive-2');
+        expect(insertMock).not.toHaveBeenCalled();
       });
 
       it('allows scoping to drives where user is member but not owner', async () => {
@@ -299,15 +301,16 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(getDriveAccess).toHaveBeenCalledTimes(1);
 
         // Drive scopes should only have one entry (deduplication)
-        if (capturedDriveScopes) {
-          expect(capturedDriveScopes.length).toBe(1);
-        }
+        expect(capturedDriveScopes).toBeDefined();
+        expect(capturedDriveScopes).toEqual([
+          expect.objectContaining({ driveId: 'drive-1' }),
+        ]);
       });
     });
 
     describe('error handling', () => {
       it('returns 500 on generic error', async () => {
-        vi.mocked(db.transaction).mockRejectedValue(new Error('Transaction failed'));
+        vi.mocked(db.transaction).mockRejectedValueOnce(new Error('Transaction failed'));
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -324,7 +327,10 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         expect(response.status).toBe(500);
         expect(body.error).toBe('Failed to create MCP token');
-        expect(loggers.auth.error).toHaveBeenCalled();
+        expect(loggers.auth.error).toHaveBeenCalledWith(
+          'Error creating MCP token:',
+          expect.any(Error),
+        );
       });
     });
   });
@@ -411,7 +417,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
     describe('error handling', () => {
       it('returns 500 on generic error', async () => {
-        vi.mocked(db.query.mcpTokens.findMany).mockRejectedValue(new Error('DB error'));
+        vi.mocked(db.query.mcpTokens.findMany).mockRejectedValueOnce(new Error('DB error'));
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
@@ -423,7 +429,10 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         expect(response.status).toBe(500);
         expect(body.error).toBe('Failed to fetch MCP tokens');
-        expect(loggers.auth.error).toHaveBeenCalled();
+        expect(loggers.auth.error).toHaveBeenCalledWith(
+          'Error fetching MCP tokens:',
+          expect.any(Error),
+        );
       });
     });
   });

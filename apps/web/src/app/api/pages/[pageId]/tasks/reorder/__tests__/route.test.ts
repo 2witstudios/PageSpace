@@ -94,6 +94,7 @@ function setupAuthError() {
 
 // ---------- Tests ----------
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -193,7 +194,7 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     const body = await response.json();
     expect(body.success).toBe(true);
 
-    expect(db.transaction).toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tasks_reordered',
       taskId: 'task-a',

@@ -109,6 +109,7 @@ const mockEvaluation = {
   errors: {},
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/pages/[pageId]/export/xlsx', () => {
   const mockUserId = 'user_123';
   const mockPageId = 'page_123';
@@ -208,7 +209,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      expect(parseSheetContent).toHaveBeenCalled();
+      expect(parseSheetContent).toHaveBeenCalledWith(mockPage().content);
       expect(evaluateSheet).toHaveBeenCalledWith(
         mockSheetData,
         expect.objectContaining({
@@ -304,7 +305,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
     });
 
     it('returns 500 when database query fails', async () => {
-      vi.mocked(db.query.pages.findFirst).mockRejectedValue(new Error('Database error'));
+      vi.mocked(db.query.pages.findFirst).mockRejectedValueOnce(new Error('Database error'));
 
       const response = await GET(createRequest(), { params: mockParams });
       const body = await response.json();

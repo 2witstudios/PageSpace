@@ -125,6 +125,7 @@ import { db, users } from '@pagespace/db';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/google/callback redirect', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -210,7 +211,7 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValue(new Error('DB error'));
+    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request(
       'http://localhost/api/auth/google/callback?code=valid-code',

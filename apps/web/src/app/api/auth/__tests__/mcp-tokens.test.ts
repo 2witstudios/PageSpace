@@ -89,6 +89,7 @@ const setupTransactionMock = (insertMock: ReturnType<typeof vi.fn>) => {
   }) as never);
 };
 
+/** @scaffold - ORM chain mocks until repository seam exists */
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -206,7 +207,7 @@ describe('/api/auth/mcp-tokens', () => {
         const body = await response.json();
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
-        expect(db.transaction).toHaveBeenCalled();
+        expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
         expect(body.token).toBeDefined();
         expect(body.token).toMatch(/^mcp_/);
       });
@@ -240,7 +241,7 @@ describe('/api/auth/mcp-tokens', () => {
         await POST(request);
 
         // Assert - verify token is associated with authenticated user
-        expect(db.transaction).toHaveBeenCalled();
+        expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
         expect(capturedUserId).toBe('test-user-id');
       });
     });
@@ -557,8 +558,8 @@ describe('/api/auth/mcp-tokens', () => {
         await DELETE(request, context);
 
         // Assert - verify update was called and revokedAt was set to a non-null Date
-        expect(db.update).toHaveBeenCalled();
-        expect(mockSet).toHaveBeenCalled();
+        expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+        expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ revokedAt: expect.any(Date) }));
         expect(capturedSetValues).toBeDefined();
         expect(capturedSetValues!.revokedAt).toBeInstanceOf(Date);
       });
