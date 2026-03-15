@@ -200,7 +200,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com/);
+      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com\//);
     });
 
     it('given absolute external URL, should reject with 400', async () => {
@@ -281,7 +281,7 @@ describe('Open Redirect Protection', () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com/);
+      expect(data.url).toMatch(/^https:\/\/accounts\.google\.com\//);
     });
   });
 

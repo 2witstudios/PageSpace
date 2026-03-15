@@ -415,6 +415,7 @@ describe('POST /api/auth/apple/native', () => {
       const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
       expect(updateArgs[0]).toBe('existing-user-id');
       expect((updateArgs[1] as Record<string, unknown>).appleId).toBe('apple-sub-123');
+      expect((updateArgs[1] as Record<string, unknown>).name).toBe('John Doe');
     });
 
     it('does not update user when no update is needed', async () => {

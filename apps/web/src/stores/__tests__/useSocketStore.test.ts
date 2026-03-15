@@ -361,9 +361,12 @@ describe('useSocketStore', () => {
 
       disconnect();
 
-      expect(windowEventMock.removeEventListener).toHaveBeenCalled();
-      expect(windowEventMock.removeEventListener.mock.calls[0][0]).toBe('auth:refreshed');
-      expect(typeof windowEventMock.removeEventListener.mock.calls[0][1]).toBe('function');
+      // Called twice: once during connect() (dedupe cleanup) and once during disconnect()
+      expect(windowEventMock.removeEventListener).toHaveBeenCalledTimes(2);
+      expect(windowEventMock.removeEventListener).toHaveBeenCalledWith(
+        'auth:refreshed',
+        expect.any(Function),
+      );
     });
 
     it('given disconnect() called, should set socket to null', async () => {

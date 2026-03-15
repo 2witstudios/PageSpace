@@ -661,6 +661,7 @@ describe('POST /api/auth/google/native', () => {
 
       expect(authRepository.updateUser).toHaveBeenCalledTimes(1);
       expect(vi.mocked(authRepository.updateUser).mock.calls[0][0]).toBe(userWithOldAvatar.id);
+      expect((vi.mocked(authRepository.updateUser).mock.calls[0][1] as Record<string, unknown>).image).toBe('/new-avatar.jpg');
     });
 
     it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {

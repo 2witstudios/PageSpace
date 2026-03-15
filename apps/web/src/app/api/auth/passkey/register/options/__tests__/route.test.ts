@@ -179,16 +179,19 @@ describe('POST /api/auth/passkey/register/options', () => {
       expect(typeof body.options).toBe('object');
     });
 
-    it('skips CSRF validation when sessionId is null', async () => {
-      vi.mocked(isSessionAuthResult).mockReturnValue(true);
+    it('skips CSRF validation when auth result has no session (e.g. MCP token)', async () => {
+      vi.mocked(isSessionAuthResult).mockReturnValue(false);
       vi.mocked(authenticateSessionRequest).mockResolvedValue({
         userId: 'user-1',
         role: 'user',
         tokenVersion: 0,
         adminRoleVersion: 0,
-        tokenType: 'session',
-        sessionId: undefined as unknown as string,
-      });
+        tokenType: 'mcp',
+        scopes: ['*'],
+        tokenId: 'token-1',
+        allowedDriveIds: [],
+        isScoped: false,
+      } as never);
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
         // @ts-expect-error - partial mock data
