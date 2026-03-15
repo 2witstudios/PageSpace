@@ -1588,7 +1588,7 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     // Profile name takes precedence - socket data should be updated
     expect((socket.data.user as { name: string }).name).toBe('Profile Name');
   });
@@ -1614,7 +1614,7 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect((socket.data.user as { name: string }).name).toBe('User Name');
   });
 
@@ -1639,7 +1639,7 @@ describe('populateUserMetadata', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect((socket.data.user as { name: string }).name).toBe('Unknown');
   });
 

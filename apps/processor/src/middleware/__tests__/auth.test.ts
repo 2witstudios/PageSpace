@@ -275,7 +275,7 @@ describe('authenticateService when AUTH_REQUIRED is false (lines 37-39)', () => 
 
     await authenticateService(mockReq, mockRes, mockNext);
 
-    expect(mockNext).toHaveBeenCalled();
+    expect(mockNext).toHaveBeenCalledTimes(1);
     expect(mockRes.status).not.toHaveBeenCalled();
   });
 });
@@ -312,7 +312,7 @@ describe('requireScope when AUTH_REQUIRED is false (lines 115-117)', () => {
 
     middleware(mockReq, mockRes, mockNext);
 
-    expect(mockNext).toHaveBeenCalled();
+    expect(mockNext).toHaveBeenCalledTimes(1);
     expect(mockRes.status).not.toHaveBeenCalled();
   });
 });

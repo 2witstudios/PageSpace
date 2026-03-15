@@ -46,7 +46,7 @@ describe('rateLimitUpload', () => {
 
     rateLimitUpload(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     delete process.env.PROCESSOR_UPLOAD_RATE_LIMIT;
   });
 
@@ -60,7 +60,7 @@ describe('rateLimitUpload', () => {
 
     rateLimitUpload(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('blocks request when limit exceeded', async () => {
@@ -74,7 +74,7 @@ describe('rateLimitUpload', () => {
 
     // First request allowed
     rateLimitUpload(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     // Second request blocked
     const { res: res2, status: status2 } = createMockRes();
@@ -94,7 +94,7 @@ describe('rateLimitUpload', () => {
 
     rateLimitUpload(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('uses x-forwarded-for IP when available', async () => {
@@ -107,7 +107,7 @@ describe('rateLimitUpload', () => {
 
     rateLimitUpload(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('includes retryAfter in 429 response', async () => {
@@ -138,19 +138,19 @@ describe('rateLimitUpload', () => {
     const { res: res1 } = createMockRes();
     const next1 = createMockNext();
     rateLimitUpload(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     // Second request - bucket exists, count (1) < limit (3), so increments and allows
     const { res: res2 } = createMockRes();
     const next2 = createMockNext();
     rateLimitUpload(req, res2, next2);
-    expect(next2).toHaveBeenCalled();
+    expect(next2).toHaveBeenCalledTimes(1);
 
     // Third request - bucket exists, count (2) < limit (3), so increments and allows
     const { res: res3 } = createMockRes();
     const next3 = createMockNext();
     rateLimitUpload(req, res3, next3);
-    expect(next3).toHaveBeenCalled();
+    expect(next3).toHaveBeenCalledTimes(1);
   });
 
   it('cleanup interval removes expired buckets (lines 118-123)', async () => {
@@ -164,7 +164,7 @@ describe('rateLimitUpload', () => {
     const { res: res1 } = createMockRes();
     const next1 = createMockNext();
     rateLimitUpload(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     // Advance time past the cleanup interval (60 seconds)
     // The interval fires and should delete the already-expired bucket
@@ -175,7 +175,7 @@ describe('rateLimitUpload', () => {
     const { res: res2 } = createMockRes();
     const next2 = createMockNext();
     rateLimitUpload(req, res2, next2);
-    expect(next2).toHaveBeenCalled();
+    expect(next2).toHaveBeenCalledTimes(1);
 
     vi.useRealTimers();
   });
@@ -192,7 +192,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
 
     rateLimitRead(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     delete process.env.PROCESSOR_READ_RATE_LIMIT;
   });
 
@@ -206,7 +206,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
 
     rateLimitRead(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('blocks read request when limit exceeded', async () => {
@@ -219,7 +219,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
     const { res: res1 } = createMockRes();
     const next1 = createMockNext();
     rateLimitRead(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     const { res: res2, status: status2 } = createMockRes();
     const next2 = createMockNext();
@@ -238,13 +238,13 @@ describe('rateLimitRead (createRateLimiter)', () => {
     const { res: res1 } = createMockRes();
     const next1 = createMockNext();
     rateLimitRead(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     // Window of 0 seconds means reset is already past
     const { res: res2 } = createMockRes();
     const next2 = createMockNext();
     rateLimitRead(req, res2, next2);
-    expect(next2).toHaveBeenCalled();
+    expect(next2).toHaveBeenCalledTimes(1);
   });
 
   it('uses x-forwarded-for for read rate limiting with no auth', async () => {
@@ -257,7 +257,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
 
     rateLimitRead(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('uses req.ip for rate limiting when no forwarded-for', async () => {
@@ -270,7 +270,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
 
     rateLimitRead(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('increments bucket count in createRateLimiter and allows when count < limit (lines 72-73)', async () => {
@@ -284,13 +284,13 @@ describe('rateLimitRead (createRateLimiter)', () => {
     const { res: res1 } = createMockRes();
     const next1 = createMockNext();
     rateLimitRead(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     // Second request - bucket exists, count (1) < limit (3), increments to 2, calls next (lines 72-73)
     const { res: res2 } = createMockRes();
     const next2 = createMockNext();
     rateLimitRead(req, res2, next2);
-    expect(next2).toHaveBeenCalled();
+    expect(next2).toHaveBeenCalledTimes(1);
   });
 
   it('cleanup interval removes expired buckets in createRateLimiter (lines 40-43)', async () => {
@@ -304,7 +304,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
     const { res: res1 } = createMockRes();
     const next1 = createMockNext();
     rateLimitRead(req, res1, next1);
-    expect(next1).toHaveBeenCalled();
+    expect(next1).toHaveBeenCalledTimes(1);
 
     // Advance time past the cleanup interval (60 seconds) to trigger setInterval callback
     vi.advanceTimersByTime(61_000);
@@ -313,7 +313,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
     const { res: res2 } = createMockRes();
     const next2 = createMockNext();
     rateLimitRead(req, res2, next2);
-    expect(next2).toHaveBeenCalled();
+    expect(next2).toHaveBeenCalledTimes(1);
 
     vi.useRealTimers();
   });
