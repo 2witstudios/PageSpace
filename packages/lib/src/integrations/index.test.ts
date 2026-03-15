@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import * as integrations from './index';
 
+describe('integrations barrel export', () => {
   const expectedFunctions = [
     // auth
     'applyAuth',

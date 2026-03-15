@@ -15,6 +15,7 @@ vi.mock('@pagespace/db', () => ({
 
 import * as content from '../index';
 
+describe('content/index barrel export', () => {
   const expectedExports = [
     // tree-utils
     'buildTree',
