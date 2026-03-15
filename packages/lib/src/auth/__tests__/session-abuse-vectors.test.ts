@@ -91,7 +91,6 @@ vi.mock('../token-utils', () => ({
 
 import { SessionService } from '../session-service';
 
-describe('Session Abuse Vectors @scaffold', () => {
   let service: SessionService;
 
   beforeEach(() => {

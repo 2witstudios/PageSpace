@@ -106,7 +106,6 @@ import {
   validateOrCreateDeviceToken,
 } from '../device-auth-utils';
 
-// @scaffold: typed mock surface for ORM chain mocks (vi.mocked can't resolve Drizzle's overloaded generics)
 type MockFn = ReturnType<typeof vi.fn>;
 const mockDb = db as unknown as {
   query: {
@@ -117,7 +116,6 @@ const mockDb = db as unknown as {
   update: MockFn;
 };
 
-describe('device-auth-utils @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 

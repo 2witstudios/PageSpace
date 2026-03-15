@@ -18,7 +18,6 @@ vi.mock('@pagespace/db', () => ({
 import { findMCPTokenByValue } from '../token-lookup';
 import { db } from '@pagespace/db';
 
-describe('token-lookup @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

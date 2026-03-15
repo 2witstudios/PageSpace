@@ -49,7 +49,6 @@ import {
 } from '../verification-utils';
 import { db, verificationTokens, users } from '@pagespace/db';
 
-describe('verification-utils @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

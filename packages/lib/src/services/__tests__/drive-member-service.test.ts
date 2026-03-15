@@ -69,7 +69,6 @@ type MockDb = {
 };
 const mockDb = db as unknown as MockDb;
 
-describe('drive-member-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 

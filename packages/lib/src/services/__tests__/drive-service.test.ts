@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ============================================================================
-// Unit Tests for DriveService @scaffold
 //
 // These tests verify the business logic of the drive service functions.
 // We mock the database layer to isolate the service logic.

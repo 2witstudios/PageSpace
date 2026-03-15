@@ -66,7 +66,6 @@ type MockDb = {
 };
 const mockDb = db as unknown as MockDb;
 
-describe('drive-role-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

@@ -48,7 +48,6 @@ import {
   LOCKOUT_CONFIG,
 } from '../account-lockout';
 
-describe('account-lockout @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

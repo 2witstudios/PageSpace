@@ -58,7 +58,6 @@ type MockDb = {
 };
 const mockDb = db as unknown as MockDb;
 
-describe('notification-email-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 

@@ -40,7 +40,6 @@ import { OAuth2Client } from 'google-auth-library';
 import appleSignIn from 'apple-signin-auth';
 import { db, users } from '@pagespace/db';
 
-describe('oauth-utils @scaffold', () => {
   const origEnv = { ...process.env };
 
   beforeEach(() => {
