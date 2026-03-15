@@ -76,15 +76,15 @@ describe('db module', () => {
     it('should use default extraction method (text)', async () => {
       await setPageCompleted('page-1', 'content', null);
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['content', 'completed', 'text']),
+        'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5',
+        ['content', 'completed', 'text', null, 'page-1'],
       );
     });
 
     it('should pass null when metadata is null', async () => {
       await setPageCompleted('page-1', 'text', null, 'ocr');
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
+        'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5',
         ['text', 'completed', 'ocr', null, 'page-1'],
       );
     });
@@ -92,8 +92,8 @@ describe('db module', () => {
     it('should stringify non-null metadata', async () => {
       await setPageCompleted('page-1', 'text', { key: 'val' }, 'text');
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining([JSON.stringify({ key: 'val' })]),
+        'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5',
+        ['text', 'completed', 'text', '{"key":"val"}', 'page-1'],
       );
     });
 
