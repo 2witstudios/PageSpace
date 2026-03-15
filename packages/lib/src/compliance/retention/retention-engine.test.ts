@@ -229,7 +229,7 @@ describe('runRetentionCleanup', () => {
     expect(results).toHaveLength(12);
   });
 
-  it('given_allCleanupsSucceed_inclusBothExpiryAndMonitoringTables', async () => {
+  it('given_allCleanupsSucceed_includesBothExpiryAndMonitoringTables', async () => {
     const { db } = createMockDb([]);
 
     const results = await runRetentionCleanup(db);
