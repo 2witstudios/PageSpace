@@ -137,12 +137,12 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
     // Repository defaults
     vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
-    vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null);
-    vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null);
+    vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
+    vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({ id: 'mem_new' } as never);
     vi.mocked(driveInviteRepository.updateDriveMemberRole).mockResolvedValue(undefined);
     vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-    vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null);
+    vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({ id: 'perm_1' } as never);
     vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
@@ -207,7 +207,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('drive lookup', () => {
     it('should return 404 when drive not found', async () => {
-      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(null as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -237,7 +237,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         ...mockDrive,
         ownerId: 'other_user',
       } as never);
-      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -309,7 +309,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('new member creation', () => {
     it('should insert new member when not existing', async () => {
-      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
       vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
         id: 'mem_new',
       } as never);
@@ -429,7 +429,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
   describe('page permissions', () => {
     it('should create new permissions for valid pages', async () => {
       vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
       vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({
         id: 'perm_new',
       } as never);
@@ -527,7 +527,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
     it('should never grant canDelete via invite', async () => {
       vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
-      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null as never);
 
       await POST(
         createInviteRequest(mockDriveId, defaultBody),

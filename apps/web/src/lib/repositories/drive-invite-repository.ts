@@ -22,7 +22,7 @@ export const driveInviteRepository = {
       .from(drives)
       .where(eq(drives.id, driveId))
       .limit(1);
-    return results[0] ?? null;
+    return results.at(0) ?? null;
   },
 
   async findAdminMembership(driveId: string, userId: string) {
@@ -37,7 +37,7 @@ export const driveInviteRepository = {
         )
       )
       .limit(1);
-    return results[0] ?? null;
+    return results.at(0) ?? null;
   },
 
   async findExistingMember(driveId: string, userId: string) {
@@ -51,7 +51,7 @@ export const driveInviteRepository = {
         )
       )
       .limit(1);
-    return results[0] ?? null;
+    return results.at(0) ?? null;
   },
 
   async createDriveMember(data: {
@@ -99,7 +99,7 @@ export const driveInviteRepository = {
         )
       )
       .limit(1);
-    return results[0] ?? null;
+    return results.at(0) ?? null;
   },
 
   async createPagePermission(data: {

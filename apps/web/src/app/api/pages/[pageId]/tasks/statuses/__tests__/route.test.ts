@@ -725,6 +725,7 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.success).toBe(true);
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         statusConfigDeleted: 'review',

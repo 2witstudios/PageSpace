@@ -233,7 +233,7 @@ describe('POST /api/auth/passkey/register', () => {
         tokenVersion: 0,
         adminRoleVersion: 0,
         tokenType: 'session',
-        sessionId: null,
+        sessionId: undefined as unknown as string,
       });
       vi.mocked(verifyRegistration).mockResolvedValue({
         ok: true,

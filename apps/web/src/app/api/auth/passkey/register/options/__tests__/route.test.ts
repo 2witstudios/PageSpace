@@ -187,7 +187,7 @@ describe('POST /api/auth/passkey/register/options', () => {
         tokenVersion: 0,
         adminRoleVersion: 0,
         tokenType: 'session',
-        sessionId: null,
+        sessionId: undefined as unknown as string,
       });
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
