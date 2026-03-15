@@ -163,7 +163,7 @@ describe('ContentStore', () => {
 
     it('skips unsafe metadata keys like __proto__', async () => {
       const maliciousMetadata = JSON.stringify({
-        __proto__: { preset: 'hack' },
+        ['__proto__']: { preset: 'hack' },
         thumbnail: {
           preset: 'thumbnail',
           size: 100,

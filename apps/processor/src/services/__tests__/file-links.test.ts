@@ -140,7 +140,10 @@ describe('getFileDriveId', () => {
     const result = await getFileDriveId('hash1');
     expect(result).toBe('drive-1');
     expect(db.query.files.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ columns: { driveId: true } })
+      expect.objectContaining({
+        columns: { driveId: true },
+        where: { field: 'files.id', value: 'hash1', op: 'eq' },
+      })
     );
   });
 

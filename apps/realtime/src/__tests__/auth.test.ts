@@ -8,8 +8,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock the broadcast-auth module since it lives in @pagespace/lib
-vi.mock('@pagespace/lib/broadcast-auth', () => {
-  const crypto = require('crypto');
+vi.mock('@pagespace/lib/broadcast-auth', async () => {
+  const crypto = await import('node:crypto');
 
   const SECRET = 'broadcast-secret-key-minimum-32-characters-long';
   const REPLAY_WINDOW_SECONDS = 5 * 60;
@@ -26,27 +26,31 @@ vi.mock('@pagespace/lib/broadcast-auth', () => {
   }
 
   function verifyBroadcastSignature(header: string, body: string): boolean {
+    if (!header || !body) return false;
+    if (typeof header !== 'string' || typeof body !== 'string') return false;
+
     try {
       const parts = header.split(',');
-      if (parts.length < 2) return false;
+      if (parts.length !== 2) return false;
 
-      const tPart = parts[0];
-      const vPart = parts[1];
-
-      if (!tPart.startsWith('t=') || !vPart.startsWith('v1=')) return false;
-
-      const timestamp = parseInt(tPart.slice(2), 10);
-      const providedSig = vPart.slice(3);
-
-      if (isNaN(timestamp)) return false;
+      let timestamp: number | undefined;
+      let providedSig: string | undefined;
+      for (const part of parts) {
+        const [key, value] = part.split('=');
+        if (key === 't') timestamp = parseInt(value, 10);
+        else if (key === 'v1') providedSig = value;
+      }
+      if (!timestamp || !providedSig) return false;
 
       const now = Math.floor(Date.now() / 1000);
       if (Math.abs(now - timestamp) > REPLAY_WINDOW_SECONDS) return false;
 
       const payload = `${timestamp}.${body}`;
       const expected = crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
-
-      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(providedSig));
+      const expectedBuffer = Buffer.from(expected, 'hex');
+      const providedBuffer = Buffer.from(providedSig, 'hex');
+      if (expectedBuffer.length !== providedBuffer.length) return false;
+      return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
     } catch {
       return false;
     }

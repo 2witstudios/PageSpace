@@ -40,7 +40,7 @@ describe('Sessions Schema', () => {
       expect(columns.tokenPrefix.notNull).toBe(true);
     });
 
-    it('has userId as not null with cascade delete reference', () => {
+    it('has userId as not null', () => {
       expect(columns.userId.notNull).toBe(true);
     });
 
