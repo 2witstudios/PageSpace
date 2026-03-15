@@ -135,7 +135,7 @@ describe('getFileDriveId', () => {
   });
 
   it('returns driveId when file record exists', async () => {
-    vi.mocked(db.query.files.findFirst).mockResolvedValue({ driveId: 'drive-1' });
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({ driveId: 'drive-1' } as any);
 
     const result = await getFileDriveId('hash1');
     expect(result).toBe('drive-1');
