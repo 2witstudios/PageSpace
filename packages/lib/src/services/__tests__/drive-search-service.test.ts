@@ -59,7 +59,7 @@ function setupTransactionResult(rows: SearchRow[]) {
   return { execute, select, from, where, limit };
 }
 
-describe('regexSearchPages security behavior', () => {
+describe('regexSearchPages security behavior @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetUserAccessLevel.mockResolvedValue({ canView: true });

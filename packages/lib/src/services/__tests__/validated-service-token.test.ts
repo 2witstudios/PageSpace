@@ -644,7 +644,7 @@ describe('createValidatedServiceToken', () => {
       // Assert
       expect(result.grantedScopes).toEqual(['files:write']);
       expect(result.token).toBe('ps_svc_mock-session-token');
-      expect(mockFindFirst).toHaveBeenCalled();
+      expect(mockFindFirst).toHaveBeenCalledWith(expect.any(Object));
       expect(getUserAccessLevel).toHaveBeenCalledWith('user-1', 'parent-page-1');
       expect(getUserDrivePermissions).not.toHaveBeenCalled();
       expect(mockCreateSession).toHaveBeenCalledWith(

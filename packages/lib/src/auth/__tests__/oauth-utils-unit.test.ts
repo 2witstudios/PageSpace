@@ -40,7 +40,7 @@ import { OAuth2Client } from 'google-auth-library';
 import appleSignIn from 'apple-signin-auth';
 import { db } from '@pagespace/db';
 
-describe('oauth-utils', () => {
+describe('oauth-utils @scaffold', () => {
   const origEnv = { ...process.env };
 
   beforeEach(() => {
@@ -50,10 +50,14 @@ describe('oauth-utils', () => {
   });
 
   afterEach(() => {
-    process.env.GOOGLE_OAUTH_CLIENT_ID = origEnv.GOOGLE_OAUTH_CLIENT_ID;
-    process.env.APPLE_CLIENT_ID = origEnv.APPLE_CLIENT_ID;
-    process.env.APPLE_SERVICE_ID = origEnv.APPLE_SERVICE_ID;
-    process.env.GOOGLE_OAUTH_IOS_CLIENT_ID = origEnv.GOOGLE_OAUTH_IOS_CLIENT_ID;
+    const keys = ['GOOGLE_OAUTH_CLIENT_ID', 'APPLE_CLIENT_ID', 'APPLE_SERVICE_ID', 'GOOGLE_OAUTH_IOS_CLIENT_ID'] as const;
+    for (const key of keys) {
+      if (origEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = origEnv[key];
+      }
+    }
   });
 
   describe('verifyGoogleIdToken', () => {
@@ -227,7 +231,7 @@ describe('oauth-utils', () => {
       });
 
       expect(result).toBeDefined();
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.anything());
     });
 
     it('should create new user when not found', async () => {
@@ -275,6 +279,34 @@ describe('oauth-utils', () => {
 
       // insert called twice: once for user, once for drive
       expect(db.insert).toHaveBeenCalledTimes(2);
+    });
+
+    it('should surface personal drive creation failure for new user', async () => {
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+      const mockUserReturning = vi.fn().mockResolvedValue([{
+        id: 'new-user', name: 'New User', email: 'new@test.com',
+      }]);
+      vi.mocked(db.insert)
+        .mockReturnValueOnce({ values: vi.fn(() => ({ returning: mockUserReturning })) } as never)
+        .mockReturnValueOnce({
+          values: vi.fn(() => {
+            throw new Error('drive insert failed');
+          }),
+        } as never);
+      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
+      const mockCountFrom = vi.fn(() => ({ where: mockCountWhere }));
+      vi.mocked(db.select).mockReturnValue({ from: mockCountFrom } as never);
+
+      await expect(
+        createOrLinkOAuthUser({
+          providerId: 'apple-789',
+          email: 'new@test.com',
+          emailVerified: false,
+          name: undefined,
+          picture: undefined,
+          provider: OAuthProvider.APPLE,
+        }),
+      ).rejects.toThrow('drive insert failed');
     });
   });
 });

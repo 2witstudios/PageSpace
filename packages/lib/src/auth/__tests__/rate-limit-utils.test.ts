@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { checkRateLimit, resetRateLimit, getRateLimitStatus, RATE_LIMIT_CONFIGS } from '../rate-limit-utils';
 
 describe('rate-limit-utils', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     // Reset all rate limits between tests
     resetRateLimit('test-user');
     resetRateLimit('test-user-2');
@@ -10,6 +11,10 @@ describe('rate-limit-utils', () => {
     resetRateLimit('status-user');
     resetRateLimit('block-user');
     resetRateLimit('window-user');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('checkRateLimit', () => {
@@ -115,11 +120,10 @@ describe('rate-limit-utils', () => {
       expect(status.retryAfter).toBeGreaterThan(0);
     });
 
-    it('should report unblocked when window expired', async () => {
+    it('should report unblocked when window expired', () => {
       const shortConfig = { maxAttempts: 1, windowMs: 50 };
       checkRateLimit('window-user', shortConfig);
-      // Wait for window to expire
-      await new Promise(r => setTimeout(r, 100));
+      vi.advanceTimersByTime(100);
       const status = getRateLimitStatus('window-user', shortConfig);
       expect(status.blocked).toBe(false);
       expect(status.attemptsRemaining).toBe(1);
@@ -155,12 +159,12 @@ describe('rate-limit-utils', () => {
   });
 
   describe('block expiry', () => {
-    it('should allow requests after block expires', async () => {
+    it('should allow requests after block expires', () => {
       const config = { maxAttempts: 1, windowMs: 60000, blockDurationMs: 50 };
       checkRateLimit('block-user', config);
       checkRateLimit('block-user', config); // triggers block
 
-      await new Promise(r => setTimeout(r, 100));
+      vi.advanceTimersByTime(100);
 
       const result = checkRateLimit('block-user', config);
       expect(result.allowed).toBe(true);
@@ -169,12 +173,12 @@ describe('rate-limit-utils', () => {
   });
 
   describe('window expiry', () => {
-    it('should reset count after window expires', async () => {
+    it('should reset count after window expires', () => {
       const config = { maxAttempts: 2, windowMs: 50 };
       checkRateLimit('window-user', config);
       checkRateLimit('window-user', config);
 
-      await new Promise(r => setTimeout(r, 100));
+      vi.advanceTimersByTime(100);
 
       const result = checkRateLimit('window-user', config);
       expect(result.allowed).toBe(true);

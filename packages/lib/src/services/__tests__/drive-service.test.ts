@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ============================================================================
-// Unit Tests for DriveService (Service Seam)
+// Unit Tests for DriveService @scaffold
 //
 // These tests verify the business logic of the drive service functions.
 // We mock the database layer to isolate the service logic.
+// ORM chain mocks present — needs repository seam for full rubric compliance.
 // ============================================================================
 
 // Mock the db module
@@ -202,7 +203,7 @@ describe('createDrive', () => {
 
     const result = await createDrive('user_123', { name: 'New Project' });
 
-    expect(valuesMock).toHaveBeenCalled();
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Project' }));
     expect(result.isOwned).toBe(true);
     expect(result.role).toBe('OWNER');
   });

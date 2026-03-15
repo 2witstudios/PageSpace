@@ -82,9 +82,9 @@ import {
   verifySignupRegistration,
 } from '../passkey-service';
 
-const mockDb = db as any;
+const mockDb = vi.mocked(db);
 
-describe('passkey-service', () => {
+describe('passkey-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 

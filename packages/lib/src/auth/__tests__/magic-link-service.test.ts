@@ -50,7 +50,7 @@ import { createMagicLinkToken, verifyMagicLinkToken, MAGIC_LINK_EXPIRY_MINUTES }
 import { db } from '@pagespace/db';
 import { secureCompare } from '../secure-compare';
 
-describe('magic-link-service', () => {
+describe('magic-link-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

@@ -107,9 +107,9 @@ import {
 } from '../device-auth-utils';
 
 // Type helpers to access mock functions
-const mockDb = db as any;
+const mockDb = vi.mocked(db);
 
-describe('device-auth-utils', () => {
+describe('device-auth-utils @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 

@@ -58,9 +58,9 @@ import {
   listDriveMembers,
 } from '../drive-member-service';
 
-const mockDb = db as any;
+const mockDb = vi.mocked(db);
 
-describe('drive-member-service', () => {
+describe('drive-member-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 

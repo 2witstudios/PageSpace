@@ -18,7 +18,7 @@ vi.mock('@pagespace/db', () => ({
 import { findMCPTokenByValue } from '../token-lookup';
 import { db } from '@pagespace/db';
 
-describe('token-lookup', () => {
+describe('token-lookup @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -57,7 +57,15 @@ describe('token-lookup', () => {
 
       const result = await findMCPTokenByValue('mcp_some-valid-token');
       expect(result).toEqual(mockRecord);
-      expect(db.query.mcpTokens.findFirst).toHaveBeenCalled();
+      expect(db.query.mcpTokens.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          with: expect.objectContaining({
+            user: expect.objectContaining({
+              columns: { id: true, tokenVersion: true, role: true },
+            }),
+          }),
+        })
+      );
     });
 
     it('should return null when no matching token found', async () => {

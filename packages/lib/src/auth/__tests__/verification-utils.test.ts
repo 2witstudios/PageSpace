@@ -49,7 +49,7 @@ import {
 } from '../verification-utils';
 import { db } from '@pagespace/db';
 
-describe('verification-utils', () => {
+describe('verification-utils @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -69,8 +69,8 @@ describe('verification-utils', () => {
       expect(token).toBeDefined();
       expect(typeof token).toBe('string');
       expect(token.length).toBe(64); // 32 bytes hex
-      expect(db.delete).toHaveBeenCalled();
-      expect(db.insert).toHaveBeenCalled();
+      expect(db.delete).toHaveBeenCalledWith(expect.anything());
+      expect(db.insert).toHaveBeenCalledWith(expect.anything());
     });
 
     it('should use 60 minutes expiry for password_reset', async () => {
@@ -191,7 +191,7 @@ describe('verification-utils', () => {
 
       const result = await verifyToken('some-token', 'email_verification');
       expect(result).toBe('user-1');
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.anything());
     });
   });
 
@@ -202,7 +202,7 @@ describe('verification-utils', () => {
       vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       await markEmailVerified('user-1');
-      expect(db.update).toHaveBeenCalled();
+      expect(db.update).toHaveBeenCalledWith(expect.anything());
       expect(mockSet).toHaveBeenCalledWith({ emailVerified: expect.any(Date) });
     });
   });

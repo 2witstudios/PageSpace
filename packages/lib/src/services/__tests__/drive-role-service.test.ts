@@ -52,9 +52,9 @@ import {
   validateRolePermissions,
 } from '../drive-role-service';
 
-const mockDb = db as any;
+const mockDb = vi.mocked(db);
 
-describe('drive-role-service', () => {
+describe('drive-role-service @scaffold', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

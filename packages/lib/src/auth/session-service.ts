@@ -1,8 +1,7 @@
-import { db, sessions, users } from '@pagespace/db';
-import { eq, and, isNull, gt, lt } from 'drizzle-orm';
 import { generateOpaqueToken, isValidTokenFormat, type TokenType } from './opaque-tokens';
 import { hashToken } from './token-utils';
 import { IDLE_TIMEOUT_MS } from './constants';
+import { sessionRepository } from './session-repository';
 
 const SESSION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -37,10 +36,7 @@ export class SessionService {
    * Create new session - returns raw token ONCE (never stored)
    */
   async createSession(options: CreateSessionOptions): Promise<string> {
-    const user = await db.query.users.findFirst({
-      where: eq(users.id, options.userId),
-      columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true },
-    });
+    const user = await sessionRepository.findUserById(options.userId);
 
     if (!user) {
       throw new Error('User not found');
@@ -53,7 +49,7 @@ export class SessionService {
 
     const { token, tokenHash, tokenPrefix } = generateOpaqueToken(tokenType);
 
-    await db.insert(sessions).values({
+    await sessionRepository.insertSession({
       tokenHash,
       tokenPrefix,
       userId: options.userId,
@@ -82,18 +78,7 @@ export class SessionService {
 
     const tokenHash = hashToken(token);
 
-    const session = await db.query.sessions.findFirst({
-      where: and(
-        eq(sessions.tokenHash, tokenHash),
-        isNull(sessions.revokedAt),
-        gt(sessions.expiresAt, new Date())
-      ),
-      with: {
-        user: {
-          columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true, suspendedAt: true }
-        }
-      }
-    });
+    const session = await sessionRepository.findActiveSession(tokenHash);
 
     if (!session) return null;
     if (!session.user) return null;
@@ -124,18 +109,15 @@ export class SessionService {
     // continue using their session for non-admin operations.
 
     // Update last used (non-blocking)
-    db.update(sessions)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(sessions.tokenHash, tokenHash))
-      .catch(() => {});
+    sessionRepository.touchSession(tokenHash);
 
     return {
       sessionId: session.id,
       userId: session.userId,
-      userRole: session.user.role,
+      userRole: session.user.role as 'user' | 'admin',
       tokenVersion: session.tokenVersion,
       adminRoleVersion: session.adminRoleVersion,
-      type: session.type,
+      type: session.type as 'user' | 'service' | 'mcp' | 'device',
       scopes: session.scopes,
       expiresAt: session.expiresAt,
       resourceType: session.resourceType ?? undefined,
@@ -146,25 +128,15 @@ export class SessionService {
 
   async revokeSession(token: string, reason: string): Promise<void> {
     const tokenHash = hashToken(token);
-    await db.update(sessions)
-      .set({ revokedAt: new Date(), revokedReason: reason })
-      .where(eq(sessions.tokenHash, tokenHash));
+    await sessionRepository.revokeByHash(tokenHash, reason);
   }
 
   async revokeAllUserSessions(userId: string, reason: string): Promise<number> {
-    const result = await db.update(sessions)
-      .set({ revokedAt: new Date(), revokedReason: reason })
-      .where(and(
-        eq(sessions.userId, userId),
-        isNull(sessions.revokedAt)
-      ));
-    return result.rowCount ?? 0;
+    return sessionRepository.revokeAllForUser(userId, reason);
   }
 
   async cleanupExpiredSessions(): Promise<number> {
-    const result = await db.delete(sessions)
-      .where(lt(sessions.expiresAt, new Date(Date.now() - SESSION_CLEANUP_RETENTION_MS)));
-    return result.rowCount ?? 0;
+    return sessionRepository.deleteExpired(SESSION_CLEANUP_RETENTION_MS);
   }
 }
 

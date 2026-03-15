@@ -1,5 +1,5 @@
-import { db, users, pages, drives, storageEvents, eq, sql, and, isNull, inArray } from '@pagespace/db';
 import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
+import { storageRepository } from './storage-repository';
 
 export interface StorageQuota {
   userId: string;
@@ -64,14 +64,7 @@ export const STORAGE_TIERS = {
  * Computes quota from subscription tier for consistency
  */
 export async function getUserStorageQuota(userId: string): Promise<StorageQuota | null> {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: {
-      id: true,
-      storageUsedBytes: true,
-      subscriptionTier: true
-    }
-  });
+  const user = await storageRepository.findUserForStorage(userId);
 
   if (!user) return null;
 
@@ -154,13 +147,7 @@ export async function checkStorageQuota(
  * Check if user has available upload slots
  */
 export async function checkConcurrentUploads(userId: string): Promise<boolean> {
-  const user = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: {
-      activeUploads: true,
-      subscriptionTier: true
-    }
-  });
+  const user = await storageRepository.findUserForUploads(userId);
 
   if (!user) return false;
 
@@ -183,30 +170,20 @@ export async function updateStorageUsage(
     driveId?: string;
     eventType?: 'upload' | 'delete' | 'update' | 'reconcile';
   },
-  existingTx?: Parameters<Parameters<typeof db.transaction>[0]>[0]
+  existingTx?: Parameters<Parameters<typeof storageRepository.runTransaction>[0]>[0]
 ): Promise<void> {
-  const executeUpdate = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
-    // Lock user row and update storage
-    const [updatedUser] = await tx
-      .update(users)
-      .set({
-        storageUsedBytes: sql`GREATEST(0, COALESCE("storageUsedBytes", 0) + ${deltaBytes})`,
-        lastStorageCalculated: new Date()
-      })
-      .where(eq(users.id, userId))
-      .returning({
-        newUsage: users.storageUsedBytes
-      });
+  const executeUpdate = async (tx: Parameters<Parameters<typeof storageRepository.runTransaction>[0]>[0]) => {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
 
     // Log storage event for audit trail
     if (context) {
-      await tx.insert(storageEvents).values({
+      await storageRepository.insertStorageEvent(tx, {
         userId,
         pageId: context.pageId || null,
         eventType: context.eventType || 'update',
         sizeDelta: deltaBytes,
-        totalSizeAfter: updatedUser.newUsage || 0,
-        metadata: context.driveId ? { driveId: context.driveId } : null
+        totalSizeAfter: newUsage,
+        metadata: context.driveId ? { driveId: context.driveId } : null,
       });
     }
   };
@@ -215,7 +192,7 @@ export async function updateStorageUsage(
   if (existingTx) {
     await executeUpdate(existingTx);
   } else {
-    await db.transaction(async (tx) => {
+    await storageRepository.runTransaction(async (tx) => {
       await executeUpdate(tx);
     });
   }
@@ -228,12 +205,7 @@ export async function updateActiveUploads(
   userId: string,
   delta: number
 ): Promise<void> {
-  await db
-    .update(users)
-    .set({
-      activeUploads: sql`GREATEST(0, COALESCE("activeUploads", 0) + ${delta})`
-    })
-    .where(eq(users.id, userId));
+  await storageRepository.updateActiveUploads(userId, delta);
 }
 
 /**
@@ -241,57 +213,18 @@ export async function updateActiveUploads(
  * Used for reconciliation and verification
  */
 export async function calculateActualStorageUsage(userId: string): Promise<number> {
-  // Get all drives owned by user
-  const userDrives = await db.query.drives.findMany({
-    where: eq(drives.ownerId, userId),
-    columns: { id: true }
-  });
-
-  if (userDrives.length === 0) return 0;
-
-  const driveIds = userDrives.map(d => d.id);
-
-  // Calculate total file size across all user's drives
-  const result = await db
-    .select({
-      totalSize: sql<number>`COALESCE(SUM(CAST(${pages.fileSize} AS BIGINT)), 0)`
-    })
-    .from(pages)
-    .where(and(
-      inArray(pages.driveId, driveIds),
-      eq(pages.type, 'FILE'),
-      eq(pages.isTrashed, false)
-    ));
-
-  return Number(result[0]?.totalSize || 0);
+  const driveIds = await storageRepository.findUserDriveIds(userId);
+  if (driveIds.length === 0) return 0;
+  return storageRepository.sumFileSize(driveIds);
 }
 
 /**
  * Get count of user's files
  */
 export async function getUserFileCount(userId: string): Promise<number> {
-  // Get all drives owned by user
-  const userDrives = await db.query.drives.findMany({
-    where: eq(drives.ownerId, userId),
-    columns: { id: true }
-  });
-
-  if (userDrives.length === 0) return 0;
-
-  const driveIds = userDrives.map(d => d.id);
-
-  const result = await db
-    .select({
-      count: sql<number>`COUNT(*)`
-    })
-    .from(pages)
-    .where(and(
-      inArray(pages.driveId, driveIds),
-      eq(pages.type, 'FILE'),
-      eq(pages.isTrashed, false)
-    ));
-
-  return Number(result[0]?.count || 0);
+  const driveIds = await storageRepository.findUserDriveIds(userId);
+  if (driveIds.length === 0) return 0;
+  return storageRepository.countFiles(driveIds);
 }
 
 /**
@@ -314,25 +247,15 @@ export async function reconcileStorageUsage(userId: string): Promise<{
 
   // Update if there's a discrepancy
   if (Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
-    await db.transaction(async (tx) => {
-      await tx
-        .update(users)
-        .set({
-          storageUsedBytes: actualUsage,
-          lastStorageCalculated: new Date()
-        })
-        .where(eq(users.id, userId));
+    await storageRepository.runTransaction(async (tx) => {
+      await storageRepository.setUserStorageInTx(tx, userId, actualUsage);
 
-      await tx.insert(storageEvents).values({
+      await storageRepository.insertStorageEvent(tx, {
         userId,
         eventType: 'reconcile',
         sizeDelta: difference,
         totalSizeAfter: actualUsage,
-        metadata: {
-          previousUsage: quota.usedBytes,
-          actualUsage,
-          difference
-        }
+        metadata: { previousUsage: quota.usedBytes, actualUsage, difference },
       });
     });
   }
