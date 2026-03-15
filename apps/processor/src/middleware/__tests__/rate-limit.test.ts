@@ -126,6 +126,59 @@ describe('rateLimitUpload', () => {
 
     expect(status2).toHaveBeenCalledWith(429);
   });
+
+  it('increments bucket count and allows request when bucket exists and count < limit (lines 103-104)', async () => {
+    process.env.PROCESSOR_UPLOAD_RATE_LIMIT = '3';
+    process.env.PROCESSOR_UPLOAD_RATE_WINDOW = '3600';
+    const { rateLimitUpload } = await import('../rate-limit');
+
+    const req = createMockReq({ userId: 'user-increment-test' });
+
+    // First request - creates bucket with count=1
+    const { res: res1 } = createMockRes();
+    const next1 = createMockNext();
+    rateLimitUpload(req, res1, next1);
+    expect(next1).toHaveBeenCalled();
+
+    // Second request - bucket exists, count (1) < limit (3), so increments and allows
+    const { res: res2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitUpload(req, res2, next2);
+    expect(next2).toHaveBeenCalled();
+
+    // Third request - bucket exists, count (2) < limit (3), so increments and allows
+    const { res: res3 } = createMockRes();
+    const next3 = createMockNext();
+    rateLimitUpload(req, res3, next3);
+    expect(next3).toHaveBeenCalled();
+  });
+
+  it('cleanup interval removes expired buckets (lines 118-123)', async () => {
+    vi.useFakeTimers();
+    process.env.PROCESSOR_UPLOAD_RATE_LIMIT = '5';
+    process.env.PROCESSOR_UPLOAD_RATE_WINDOW = '0'; // 0 seconds - immediately expires
+    const { rateLimitUpload } = await import('../rate-limit');
+
+    // Add a bucket by making a request
+    const req = createMockReq({ userId: 'user-cleanup-test' });
+    const { res: res1 } = createMockRes();
+    const next1 = createMockNext();
+    rateLimitUpload(req, res1, next1);
+    expect(next1).toHaveBeenCalled();
+
+    // Advance time past the cleanup interval (60 seconds)
+    // The interval fires and should delete the already-expired bucket
+    vi.advanceTimersByTime(61_000);
+
+    // After cleanup, a new request should be allowed (bucket was deleted by interval,
+    // so this request creates a fresh bucket rather than incrementing stale one)
+    const { res: res2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitUpload(req, res2, next2);
+    expect(next2).toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
 });
 
 describe('rateLimitRead (createRateLimiter)', () => {
@@ -218,5 +271,50 @@ describe('rateLimitRead (createRateLimiter)', () => {
     rateLimitRead(req, res, next);
 
     expect(next).toHaveBeenCalled();
+  });
+
+  it('increments bucket count in createRateLimiter and allows when count < limit (lines 72-73)', async () => {
+    process.env.PROCESSOR_READ_RATE_LIMIT = '3';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    const { rateLimitRead } = await import('../rate-limit');
+
+    const req = createMockReq({ userId: 'user-incr-read' });
+
+    // First request - creates bucket with count=1
+    const { res: res1 } = createMockRes();
+    const next1 = createMockNext();
+    rateLimitRead(req, res1, next1);
+    expect(next1).toHaveBeenCalled();
+
+    // Second request - bucket exists, count (1) < limit (3), increments to 2, calls next (lines 72-73)
+    const { res: res2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(req, res2, next2);
+    expect(next2).toHaveBeenCalled();
+  });
+
+  it('cleanup interval removes expired buckets in createRateLimiter (lines 40-43)', async () => {
+    vi.useFakeTimers();
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '0'; // 0 seconds - immediately expires
+    const { rateLimitRead } = await import('../rate-limit');
+
+    // First request creates bucket
+    const req = createMockReq({ userId: 'user-cleanup-read' });
+    const { res: res1 } = createMockRes();
+    const next1 = createMockNext();
+    rateLimitRead(req, res1, next1);
+    expect(next1).toHaveBeenCalled();
+
+    // Advance time past the cleanup interval (60 seconds) to trigger setInterval callback
+    vi.advanceTimersByTime(61_000);
+
+    // After cleanup, the bucket is removed; a new request should be allowed
+    const { res: res2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(req, res2, next2);
+    expect(next2).toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });

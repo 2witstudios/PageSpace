@@ -385,7 +385,7 @@ describe('QueueManager', () => {
       (extractText as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
         text: 'Extracted document text',
-        textLength: 22,
+        textLength: 23,
         metadata: { title: 'Doc' },
       });
 
@@ -399,7 +399,7 @@ describe('QueueManager', () => {
 
       const result = await ingestWorker([job]);
       expect(setPageCompleted).toHaveBeenCalled();
-      expect(result).toEqual({ success: true, status: 'completed', textLength: 22 });
+      expect(result).toEqual({ success: true, status: 'completed', textLength: 23 });
     });
 
     it('handles document with no text (scanned PDF)', async () => {

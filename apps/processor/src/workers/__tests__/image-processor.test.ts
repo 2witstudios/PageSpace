@@ -224,6 +224,8 @@ describe('optimizeImageForAllPresets', () => {
 describe('prepareImageForAI', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // Restore the sharp mock factory after resetAllMocks wipes it
+    vi.mocked(sharp).mockReturnValue(sharpInstance as ReturnType<typeof sharp>);
     mockMetadata.mockResolvedValue({ width: 100, height: 100, format: 'jpeg' });
     mockToBuffer.mockResolvedValue(Buffer.from('processed'));
     mockGetCacheUrl.mockResolvedValue('/cache/hash/ai-chat');

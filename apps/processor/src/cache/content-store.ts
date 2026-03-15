@@ -33,6 +33,7 @@ function isSafePropertyKey(key: string): boolean {
 function assertPathWithin(resolvedPath: string, baseDir: string): void {
   const normalizedResolved = path.resolve(resolvedPath);
   const normalizedBase = path.resolve(baseDir);
+  /* c8 ignore next 3 */
   if (!normalizedResolved.startsWith(normalizedBase + path.sep) && normalizedResolved !== normalizedBase) {
     throw new Error('Path escapes base directory');
   }

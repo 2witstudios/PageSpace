@@ -196,6 +196,49 @@ describe('processOCR', () => {
 
     delete process.env.ENABLE_EXTERNAL_OCR;
   });
+
+  it('rate limits rapid successive AI vision OCR calls', async () => {
+    process.env.ENABLE_EXTERNAL_OCR = 'true';
+
+    // First call sets lastCall timestamp
+    const firstCall = processOCR({
+      contentHash: VALID_HASH,
+      fileId: 'page-1',
+      provider: 'ai-vision',
+    });
+    // Second call immediately after - rate limiter delay code runs (lines 17-19)
+    const secondCall = processOCR({
+      contentHash: VALID_HASH,
+      fileId: 'page-1',
+      provider: 'ai-vision',
+    });
+
+    const [first, second] = await Promise.all([firstCall, secondCall]);
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+
+    delete process.env.ENABLE_EXTERNAL_OCR;
+  }, 10000);
+
+  it('throws when performAIVisionOCR cannot find image on second getOriginal call', async () => {
+    process.env.ENABLE_EXTERNAL_OCR = 'true';
+
+    // First getOriginal call (line 48) returns the image so we pass the null check
+    // Second getOriginal call (line 103, inside performAIVisionOCR) returns null
+    mockGetOriginal
+      .mockResolvedValueOnce(Buffer.from('image-data'))
+      .mockResolvedValueOnce(null);
+
+    await expect(
+      processOCR({
+        contentHash: VALID_HASH,
+        fileId: 'page-1',
+        provider: 'ai-vision',
+      })
+    ).rejects.toThrow('Image not found for AI Vision OCR');
+
+    delete process.env.ENABLE_EXTERNAL_OCR;
+  });
 });
 
 describe('needsOCR', () => {

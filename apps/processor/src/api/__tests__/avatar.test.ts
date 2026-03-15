@@ -201,11 +201,9 @@ describe('POST /avatar/upload', () => {
     expect(mockFsUnlink).toHaveBeenCalledTimes(2);
   });
 
-  it('returns 400 when avatarsDir resolution fails', async () => {
-    // First call returns base path (for AVATAR_ROOT), second call fails for user dir
-    mockResolvePathWithin
-      .mockReturnValueOnce('/data/files/avatars')  // AVATAR_ROOT init
-      .mockReturnValue(null); // user dir fails
+  it('returns 400 when avatarsDir resolution fails (lines 77-82)', async () => {
+    // resolvePathWithin returns null for the userId directory
+    mockResolvePathWithin.mockReturnValue(null);
     const app = createApp({ userId: 'user-1' }, createMockFile());
     const response = await request(app)
       .post('/avatar/upload')
@@ -222,6 +220,35 @@ describe('POST /avatar/upload', () => {
       .send({ userId: 'user-1' });
     expect(response.status).toBe(500);
     expect(response.body.error).toContain('Failed to upload avatar');
+  });
+
+  it('returns 400 when filepath resolution fails after avatarsDir is set (lines 107-112)', async () => {
+    // avatarsDir resolves OK (first call), but filepath (second call for filename) returns null
+    let callCount = 0;
+    mockResolvePathWithin.mockImplementation((base: string, ...segs: string[]) => {
+      callCount++;
+      // First call: AVATAR_ROOT init at module load (already done)
+      // In handler: first call = avatarsDir, second call = filePath
+      if (callCount === 1) return `${base}/${segs.join('/')}`; // avatarsDir OK
+      return null; // filepath fails
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const response = await request(app)
+      .post('/avatar/upload')
+      .send({ userId: 'user-1' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid avatar path');
+  });
+
+  it('handles readdir error when deleting old avatars', async () => {
+    mockFsReaddir.mockRejectedValue(new Error('ENOENT'));
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const response = await request(app)
+      .post('/avatar/upload')
+      .send({ userId: 'user-1' });
+    // readdir error is caught silently, upload still succeeds
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
   });
 });
 
@@ -250,9 +277,9 @@ describe('DELETE /avatar/:userId', () => {
   it('returns 400 when userId is invalid', async () => {
     mockNormalizeIdentifier.mockReturnValue(null);
     const app = createApp({ userId: 'user-1' });
-    const response = await request(app).delete('/avatar/');
-    // Express may route this differently, but let's test with a known route
-    expect([400, 404]).toContain(response.status);
+    const response = await request(app).delete('/avatar/bad-user-id');
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid user ID format');
   });
 
   it('returns 403 when deleting another user avatar without scope', async () => {
@@ -297,5 +324,26 @@ describe('DELETE /avatar/:userId', () => {
     // The outer delete catches the inner errors, returns 200
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
+  });
+
+  it('returns 400 when avatarsDir resolution fails in delete handler (lines 158-162)', async () => {
+    // Make resolvePathWithin return null for the avatarsDir call inside the delete handler
+    mockResolvePathWithin.mockReturnValue(null);
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).delete('/avatar/user-1');
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid avatar path');
+  });
+
+  it('returns 500 when outer catch is triggered in delete handler (lines 188-193)', async () => {
+    // Make normalizeIdentifier throw synchronously to trigger the outer catch block
+    mockNormalizeIdentifier.mockImplementation(() => {
+      throw new Error('Unexpected identifier error');
+    });
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).delete('/avatar/user-1');
+    expect(response.status).toBe(500);
+    expect(response.body.error).toContain('Failed to delete avatar');
+    expect(response.body.details).toContain('Unexpected identifier error');
   });
 });

@@ -177,9 +177,7 @@ describe('POST /optimize', () => {
 
   it('returns 400 for InvalidContentHashError', async () => {
     const { InvalidContentHashError } = await import('../../cache/content-store');
-    mockAssertFileAccess.mockRejectedValue(new InvalidContentHashError('bad'));
-    // assertFileAccess throws but it's caught internally and we need a different path
-    // Let's mock isValidContentHash to return true but then have the outer catch get InvalidContentHashError
+    mockAssertFileAccess.mockResolvedValue({});
     mockCacheExists.mockRejectedValue(new InvalidContentHashError('bad'));
     const app = createApp({ userId: 'user-1' });
     const response = await request(app)
@@ -319,6 +317,17 @@ describe('POST /optimize/batch', () => {
       .send({ contentHash: VALID_HASH, presets: ['thumbnail'] });
     expect(response.status).toBe(500);
   });
+
+  it('returns 400 when InvalidContentHashError thrown during batch processing (lines 178-179)', async () => {
+    const { InvalidContentHashError } = await import('../../cache/content-store');
+    mockCacheExists.mockRejectedValue(new InvalidContentHashError('bad-hash'));
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app)
+      .post('/optimize/batch')
+      .send({ contentHash: VALID_HASH, presets: ['thumbnail'] });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid content hash');
+  });
 });
 
 describe('POST /optimize/prepare-for-ai', () => {
@@ -430,5 +439,36 @@ describe('POST /optimize/prepare-for-ai', () => {
       .send({ contentHash: VALID_HASH, provider: 'google' });
     expect(response.status).toBe(200);
     expect(response.body.type).toBe('url');
+  });
+
+  it('returns 400 when InvalidContentHashError is thrown during prepare-for-ai processing (lines 243-244)', async () => {
+    const { InvalidContentHashError } = await import('../../cache/content-store');
+    mockPrepareImageForAI.mockRejectedValue(new InvalidContentHashError('bad-hash'));
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app)
+      .post('/optimize/prepare-for-ai')
+      .send({ contentHash: VALID_HASH, provider: 'openai' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid content hash');
+  });
+});
+
+describe('POST /optimize - queueManager.addJob error path (lines 78-86)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsValidContentHash.mockReturnValue(true);
+    mockCacheExists.mockResolvedValue(false);
+    mockAssertFileAccess.mockResolvedValue({ allowed: true });
+  });
+
+  it('returns 500 when queueManager.addJob throws unexpectedly', async () => {
+    mockAddJob.mockRejectedValue(new Error('Queue unavailable'));
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app)
+      .post('/optimize')
+      .send({ contentHash: VALID_HASH, preset: 'ai-chat' });
+    expect(response.status).toBe(500);
+    expect(response.body.error).toContain('Optimization failed');
+    expect(response.body.message).toBe('Queue unavailable');
   });
 });

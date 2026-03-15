@@ -63,8 +63,8 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
     }
 
     // Cache the OCR result
-    await require('fs').promises.mkdir(cacheDir, { recursive: true });
-    await require('fs').promises.writeFile(ocrCachePath, ocrText);
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(ocrCachePath, ocrText);
 
     console.log(`Successfully extracted ${ocrText.length} characters via OCR from ${contentHash}`);
 

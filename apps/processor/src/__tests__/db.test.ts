@@ -163,3 +163,34 @@ describe('db module', () => {
     });
   });
 });
+
+describe('getPool throws when DATABASE_URL is not set (lines 21-22)', () => {
+  it('throws DATABASE_URL error when env var is missing at call time', async () => {
+    // The pool is a module-level singleton. Since we cannot reset it without vi.isolateModules,
+    // we test this path by verifying that the error message string is present in the source,
+    // and by testing it via a fresh module import with vi.resetModules.
+    // Note: this test runs AFTER the main test suite has already set up the pool singleton,
+    // so we verify the behavior by checking getPool() throws before pool is initialized.
+    // The throw at lines 21-22 reads: throw new Error('DATABASE_URL is not configured')
+    // We verify this by trying a fresh module in a way that doesn't break others.
+    const savedUrl = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+
+    vi.resetModules();
+    // Re-register pg mock so the fresh module load still has pg available
+    vi.doMock('pg', () => {
+      class MockPool {
+        connect() { return Promise.resolve({ query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }), release: vi.fn() }); }
+        end() { return Promise.resolve(); }
+      }
+      return { default: { Pool: MockPool }, Pool: MockPool };
+    });
+
+    const freshDb = await import('../db');
+    await expect(freshDb.setPageProcessing('page-1')).rejects.toThrow('DATABASE_URL is not configured');
+
+    // Restore
+    if (savedUrl !== undefined) process.env.DATABASE_URL = savedUrl;
+    vi.resetModules();
+  });
+});

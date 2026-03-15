@@ -220,26 +220,83 @@ describe('scripts/calculate-initial-storage.ts', () => {
     );
   });
 
+  it('defaults to free subscription when subscriptionTier is null (branch line 74)', async () => {
+    const user = { id: 'u-null-tier', email: 'nulltier@example.com', subscriptionTier: null };
+    selectFromQueue.push(() => Promise.resolve([user]));
+    findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
+    selectFromQueue.push(() => Promise.resolve([])); // from()
+    selectFromQueue.push(() => Promise.resolve([{ totalSize: 1024, fileCount: 1 }])); // where()
+    selectFromQueue.push(() => Promise.resolve([{
+      totalUsers: 1, totalStorage: 1024, avgStorage: 1024, normalUsers: 1, proUsers: 0,
+    }]));
+
+    await import('../../scripts/calculate-initial-storage');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(processExitSpy).toHaveBeenCalledWith(0);
+    const allLogMessages = consoleLogSpy.mock.calls.flat().join(' ');
+    expect(allLogMessages).toContain('free subscription');
+  });
+
   it('logs a warning when a free user exceeds the 500MB storage limit', async () => {
     const bigSize = 600 * 1024 * 1024; // 600MB > 500MB free limit
     const user = { id: 'u5', email: 'heavy@example.com', subscriptionTier: 'free' };
-    // allUsers
+    // allUsers - consumed by smartFrom's thenable
     selectFromQueue.push(() => Promise.resolve([user]));
     // drives
     findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
-    // file sizes
-    selectFromQueue.push(() => Promise.resolve([{ totalSize: bigSize, fileCount: 100 }]));
-    // summary
+    // file sizes query: smartFrom dequeues once (from()), then .where() dequeues again
+    selectFromQueue.push(() => Promise.resolve([])); // consumed by from() - unused
+    selectFromQueue.push(() => Promise.resolve([{ totalSize: bigSize, fileCount: 100 }])); // consumed by where()
+    // summary - consumed by smartFrom's thenable
     selectFromQueue.push(() => Promise.resolve([{
       totalUsers: 1, totalStorage: bigSize, avgStorage: bigSize, normalUsers: 1, proUsers: 0,
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
-    // The script should warn about the subscription limit
     const allLogMessages = consoleLogSpy.mock.calls.flat().join(' ');
     expect(allLogMessages).toContain('free subscription');
+  });
+
+  it('logs a warning when a pro user exceeds the 2GB storage limit', async () => {
+    const bigSize = 3 * 1024 * 1024 * 1024; // 3GB > 2GB pro limit
+    const user = { id: 'u6', email: 'probig@example.com', subscriptionTier: 'pro' };
+    // allUsers - consumed by smartFrom's thenable
+    selectFromQueue.push(() => Promise.resolve([user]));
+    // drives
+    findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
+    // file sizes query: smartFrom dequeues once (from()), then .where() dequeues again
+    selectFromQueue.push(() => Promise.resolve([])); // consumed by from() - unused
+    selectFromQueue.push(() => Promise.resolve([{ totalSize: bigSize, fileCount: 500 }])); // consumed by where()
+    // summary - consumed by smartFrom's thenable
+    selectFromQueue.push(() => Promise.resolve([{
+      totalUsers: 1, totalStorage: bigSize, avgStorage: bigSize, normalUsers: 0, proUsers: 1,
+    }]));
+
+    await import('../../scripts/calculate-initial-storage');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(processExitSpy).toHaveBeenCalledWith(0);
+    const allLogMessages = consoleLogSpy.mock.calls.flat().join(' ');
+    expect(allLogMessages).toContain('pro subscription');
+  });
+
+  it('calls process.exit(1) via outer .catch() when console.error throws (lines 161-164)', async () => {
+    // The internal try/catch calls console.error then process.exit(1).
+    // To reach the OUTER .catch() (lines 161-164), we need the function itself
+    // to throw an unhandled rejection. We achieve this by making console.error
+    // throw on first call (inside the catch block), which causes the function to reject.
+    selectFromQueue.push(() => Promise.reject(new Error('Fatal DB failure')));
+    consoleErrorSpy.mockImplementationOnce(() => { throw new Error('console.error broke'); });
+
+    await import('../../scripts/calculate-initial-storage');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The outer .catch() handler calls console.error('Unhandled error:', ...) and process.exit(1)
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith('Unhandled error:', expect.any(Error));
   });
 });

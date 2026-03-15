@@ -517,6 +517,34 @@ describe('atomicValidateOrCreateDeviceToken', () => {
     expect(result.deviceToken).toBe('ps_dev_newtoken12345');
   });
 
+  it('should regenerate token for existing active device record when ipAddress is absent', async () => {
+    // This exercises the `ipAddress || null` branch on line 385 where ipAddress is falsy.
+    // Lock user row
+    mockExecute.mockResolvedValueOnce({ rows: [{ id: 'user-1' }] });
+    // Find existing active token
+    mockExecute.mockResolvedValueOnce({
+      rows: [{
+        id: 'dt-existing-no-ip',
+        tokenHash: 'old-hash',
+      }],
+    });
+    // Update token hash (COALESCE(null, "lastIpAddress") keeps the existing IP)
+    mockExecute.mockResolvedValueOnce({ rows: [] });
+
+    const result = await atomicValidateOrCreateDeviceToken({
+      providedDeviceToken: null,
+      userId: 'user-1',
+      deviceId: 'existing-device-no-ip',
+      platform: 'web',
+      tokenVersion: 1,
+      // intentionally no ipAddress - exercises the falsy branch of `ipAddress || null`
+    }, utilities);
+
+    expect(result.isNew).toBe(false);
+    expect(result.deviceTokenRecordId).toBe('dt-existing-no-ip');
+    expect(result.deviceToken).toBe('ps_dev_newtoken12345');
+  });
+
   it('should fall through when DB record does not match expected claims', async () => {
     // Token lookup returns record with mismatched userId
     mockExecute.mockResolvedValueOnce({

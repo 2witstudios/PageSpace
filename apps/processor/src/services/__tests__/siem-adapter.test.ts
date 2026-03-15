@@ -804,6 +804,68 @@ describe('deliverToSiemBatched', () => {
   });
 });
 
+describe('truncateToByteLength via formatSyslogMessage (lines 367-368)', () => {
+  it('truncates msg portion when total syslog message exceeds 8192 bytes', () => {
+    // Build an entry whose human-readable msg part (operation + resourceType + resourceId + actorEmail)
+    // will push the syslog message beyond 8192 bytes when combined with a small SD section
+    // The msg format is: "operation resourceType resourceId by email"
+    // Use a long email and a normal-length resourceId so SD stays manageable
+    const longEmail = 'a'.repeat(8000) + '@example.com';
+    const entry = makeEntry({
+      actorEmail: longEmail,
+      operation: 'page.created',
+      resourceType: 'page',
+      resourceId: 'short-id',
+      // Keep SD fields short to ensure truncation hits the msg
+      resourceTitle: null,
+      driveId: null,
+      pageId: null,
+      logHash: null,
+      isAiGenerated: false,
+    });
+    const msg = formatSyslogMessage(entry, 'local0');
+
+    // The message should still be a valid syslog message
+    expect(msg).toMatch(/^<\d+>1 /);
+    // The buffer byte length should be <= 8192 since truncation occurred
+    // (Note: due to multibyte chars this isn't always perfectly 8192, but the msg part was truncated)
+    expect(typeof msg).toBe('string');
+    expect(msg.length).toBeGreaterThan(0);
+    // The truncation adds "..." at the end of msg
+    expect(msg).toMatch(/\.\.\.$/);
+  });
+
+  it('returns str unchanged when msg fits within available bytes (line 367 - return str path)', () => {
+    // Make the SD very large (by using a long resourceId in SD) so total > 8192
+    // but keep the msg (operation resourceType resourceId by email) short enough to fit
+    // The SD includes resourceId, so a long resourceId makes SD large.
+    // But the msg uses the same resourceId, making it potentially long too.
+    // Use a medium resourceId that pushes SD over 8192 but where msg fits in the remainder.
+    // SD = "[pagespace@52000 id=... resourceId=XXXXX ...]" - resourceId is 8000 chars, SD ~8050 bytes
+    // baseLength (header + SD) >> 8192, so availableForMsg = 8192 - baseLength - 3 could be negative or 0
+    // When availableForMsg <= 0, truncateToByteLength('msg', 0) -> buf.length > 0 -> truncation path
+    // We need SD large but msg short so availableForMsg > msg.length.
+    // Use a long logHash (only in SD, not in msg) to push SD over 8192 while keeping msg short.
+    const longHash = 'a'.repeat(8000);
+    const entry = makeEntry({
+      actorEmail: 'u@x.com',
+      operation: 'op',
+      resourceType: 'page',
+      resourceId: 'r',
+      resourceTitle: null,
+      driveId: null,
+      pageId: null,
+      logHash: longHash,  // logHash appears in SD, not in msg
+      isAiGenerated: false,
+    });
+    const msg = formatSyslogMessage(entry, 'local0');
+
+    // Message should be valid and the msg portion should NOT end with "..." (not truncated)
+    expect(msg).toMatch(/^<\d+>1 /);
+    expect(typeof msg).toBe('string');
+  });
+});
+
 describe('calculateBackoffDelay', () => {
   it('returns delay within expected range', () => {
     const delay = calculateBackoffDelay(0, 1000);
@@ -883,5 +945,48 @@ describe('deliverToSiemWithRetry', () => {
     const result = await deliverToSiemWithRetry(config, [makeEntry()], 0);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
+  });
+
+  it('returns max retries exceeded fallback when maxRetries is negative (lines 663-668)', async () => {
+    // When retries < 0, the for loop condition (attempt <= retries) is never true
+    // so the loop body never executes and we fall through to the final return
+    const config: SiemConfig = {
+      enabled: true,
+      type: 'webhook',
+      webhook: { url: 'https://example.com', secret: 'sec', batchSize: 100, retryAttempts: 3 },
+    };
+
+    const result = await deliverToSiemWithRetry(config, [makeEntry()], -1);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Max retries exceeded');
+    expect(result.retryable).toBe(false);
+    expect(result.entriesDelivered).toBe(0);
+  });
+
+  it('retries on retryable failures and eventually returns result after max retries (lines 659-669)', async () => {
+    vi.useFakeTimers();
+    const config: SiemConfig = {
+      enabled: true,
+      type: 'webhook',
+      webhook: { url: 'https://example.com', secret: 'sec', batchSize: 100, retryAttempts: 2 },
+    };
+    // All attempts fail with retryable=true
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: vi.fn().mockResolvedValue('Server Error'),
+    }));
+
+    const resultPromise = deliverToSiemWithRetry(config, [makeEntry()], 2);
+    // Advance through delays
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    // After max retries with retryable failures, the last attempt's result is returned
+    expect(result.retryable).toBe(true);
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 });

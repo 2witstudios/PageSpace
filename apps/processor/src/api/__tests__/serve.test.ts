@@ -198,6 +198,15 @@ describe('GET /files/:contentHash/original', () => {
     const response = await request(app).get(`/files/${VALID_HASH}/original`);
     expect(response.status).toBe(200);
   });
+
+  it('returns 400 when InvalidContentHashError is thrown during getOriginal (lines 163-165)', async () => {
+    const { InvalidContentHashError } = await import('../../cache/content-store');
+    mockGetOriginal.mockRejectedValue(new InvalidContentHashError('bad'));
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/original`);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid content hash');
+  });
 });
 
 describe('GET /files/:contentHash/:preset', () => {
@@ -294,6 +303,15 @@ describe('GET /files/:contentHash/:preset', () => {
     const response = await request(app).get(`/files/${VALID_HASH}/thumbnail`);
     expect(response.status).toBe(500);
   });
+
+  it('returns 400 when InvalidContentHashError is thrown during cache retrieval (lines 239-240)', async () => {
+    const { InvalidContentHashError } = await import('../../cache/content-store');
+    mockGetCache.mockRejectedValue(new InvalidContentHashError('bad'));
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/thumbnail`);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid content hash');
+  });
 });
 
 describe('GET /files/:contentHash/metadata', () => {
@@ -371,5 +389,14 @@ describe('GET /files/:contentHash/metadata', () => {
     const app = createApp({ userId: 'user-1' });
     const response = await request(app).get(`/files/${VALID_HASH}/metadata`);
     expect(response.status).toBe(500);
+  });
+
+  it('returns 400 when InvalidContentHashError thrown during getCacheMetadata (lines 57-58)', async () => {
+    const { InvalidContentHashError } = await import('../../cache/content-store');
+    mockGetCacheMetadata.mockRejectedValue(new InvalidContentHashError('bad-hash'));
+    const app = createApp({ userId: 'user-1' });
+    const response = await request(app).get(`/files/${VALID_HASH}/metadata`);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('Invalid content hash');
   });
 });

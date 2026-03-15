@@ -389,6 +389,95 @@ describe('authorizeFileAccess', () => {
       expect(decision.denial?.stage).toBe('binding');
     });
   });
+
+  describe('checkDrivePermissions returns false when drivePerms is null (lines 179-180)', () => {
+    it('denies view for orphan file when getUserDrivePermissions returns null', async () => {
+      mockGetLinksForFile.mockResolvedValue([]);
+      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      // drivePerms is null -> checkDrivePermissions returns false -> permission denied
+      mockGetUserDrivePermissions.mockResolvedValue(null);
+
+      const auth = createAuth();
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+    });
+
+    it('denies view for drive-bound orphan when getUserDrivePermissions returns null', async () => {
+      mockGetLinksForFile.mockResolvedValue([]);
+      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetUserDrivePermissions.mockResolvedValue(null);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'drive', id: 'drive-1' },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+    });
+  });
+
+  describe('scopedLinks is empty when file has links but none in scope (lines 284-296)', () => {
+    it('denies page-bound token when file has links but none match the bound page', async () => {
+      // File has links to page-2 and page-3, but token is bound to page-1
+      mockGetLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, pageId: 'page-2', driveId: 'drive-1' },
+        { fileId: VALID_HASH, pageId: 'page-3', driveId: 'drive-2' },
+      ]);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'page', id: 'page-1' },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      // binding type is 'page', links don't include page-1 so matchType='mismatch'
+      // mismatch is caught at step 3 (binding check), not step 5 (scoped links)
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('binding');
+    });
+
+    it('denies drive-bound token when file has links but none match the bound drive (scopedLinks empty)', async () => {
+      // File has links but to drive-2 only; token is bound to drive-1
+      // determineBindingMatchType for drive-binding checks links.some(l => l.driveId === 'drive-1')
+      // That returns false, so matchType = 'mismatch', caught at step 3
+      mockGetLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, pageId: 'page-2', driveId: 'drive-2' },
+      ]);
+
+      const auth = createAuth({
+        resourceBinding: { type: 'drive', id: 'drive-1' },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('binding');
+    });
+
+    it('denies file-bound token when scopedLinks exists but page permissions fail (covers scoped path with file binding)', async () => {
+      // File binding: getScopedLinks returns all links, then page permissions checked
+      // Here permissions fail so we reach the permission denial
+      mockGetLinksForFile.mockResolvedValue([
+        { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
+      ]);
+      mockGetUserAccessLevel.mockResolvedValue({
+        canView: false,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+      });
+
+      const auth = createAuth({
+        resourceBinding: { type: 'file', id: VALID_HASH },
+      });
+      const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.denial?.stage).toBe('permission');
+      expect(decision.binding.matchType).toBe('exact');
+    });
+  });
 });
 
 describe('assertFileAccess', () => {

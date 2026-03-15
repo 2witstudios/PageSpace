@@ -159,6 +159,164 @@ describe('hasAuthScope', () => {
   });
 });
 
+describe('authenticateService - catch block (lines 100-109)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.NODE_ENV = 'test';
+    delete process.env.PROCESSOR_AUTH_REQUIRED;
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('responds 401 when validateSession throws an error', async () => {
+    // Set up mocks before importing the module
+    vi.doMock('@pagespace/lib/auth', () => ({
+      sessionService: {
+        validateSession: vi.fn().mockRejectedValue(new Error('JWT parsing failed')),
+      },
+    }));
+    vi.doMock('@pagespace/lib/permissions', () => ({
+      EnforcedAuthContext: { fromSession: vi.fn() },
+    }));
+    vi.doMock('@pagespace/lib/logger-config', () => ({
+      loggers: { security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } },
+    }));
+
+    const { authenticateService } = await import('../auth');
+
+    const mockReq = {
+      headers: { authorization: 'Bearer validtoken12345678' },
+      path: '/upload',
+      method: 'POST',
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      auth: undefined,
+    } as unknown as Parameters<typeof authenticateService>[0];
+
+    const json = vi.fn();
+    const status = vi.fn().mockReturnValue({ json });
+    const mockRes = { status, json } as unknown as Parameters<typeof authenticateService>[1];
+    const mockNext = vi.fn() as unknown as Parameters<typeof authenticateService>[2];
+
+    await authenticateService(mockReq, mockRes, mockNext);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Invalid token' }));
+    expect(mockNext).not.toHaveBeenCalled();
+  });
+
+  it('responds 401 when validateSession throws a non-Error object', async () => {
+    vi.doMock('@pagespace/lib/auth', () => ({
+      sessionService: {
+        validateSession: vi.fn().mockRejectedValue('string error'),
+      },
+    }));
+    vi.doMock('@pagespace/lib/permissions', () => ({
+      EnforcedAuthContext: { fromSession: vi.fn() },
+    }));
+    vi.doMock('@pagespace/lib/logger-config', () => ({
+      loggers: { security: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } },
+    }));
+
+    const { authenticateService } = await import('../auth');
+
+    const mockReq = {
+      headers: { authorization: 'Bearer validtoken12345678' },
+      path: '/upload',
+      method: 'POST',
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      auth: undefined,
+    } as unknown as Parameters<typeof authenticateService>[0];
+
+    const json = vi.fn();
+    const status = vi.fn().mockReturnValue({ json });
+    const mockRes = { status, json } as unknown as Parameters<typeof authenticateService>[1];
+    const mockNext = vi.fn() as unknown as Parameters<typeof authenticateService>[2];
+
+    await authenticateService(mockReq, mockRes, mockNext);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(mockNext).not.toHaveBeenCalled();
+  });
+});
+
+describe('authenticateService when AUTH_REQUIRED is false (lines 37-39)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.NODE_ENV = 'development';
+    process.env.PROCESSOR_AUTH_REQUIRED = 'false';
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    delete process.env.PROCESSOR_AUTH_REQUIRED;
+  });
+
+  it('calls next immediately without validating token when AUTH_REQUIRED is false', async () => {
+    const { authenticateService } = await import('../auth');
+
+    const mockReq = {
+      headers: { authorization: 'Bearer sometoken' },
+      path: '/upload',
+      method: 'POST',
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      auth: undefined,
+    } as unknown as Parameters<typeof authenticateService>[0];
+
+    const mockRes = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as Parameters<typeof authenticateService>[1];
+    const mockNext = vi.fn() as unknown as Parameters<typeof authenticateService>[2];
+
+    await authenticateService(mockReq, mockRes, mockNext);
+
+    expect(mockNext).toHaveBeenCalled();
+    expect(mockRes.status).not.toHaveBeenCalled();
+  });
+});
+
+describe('requireScope when AUTH_REQUIRED is false (lines 115-117)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.NODE_ENV = 'development';
+    process.env.PROCESSOR_AUTH_REQUIRED = 'false';
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    delete process.env.PROCESSOR_AUTH_REQUIRED;
+  });
+
+  it('calls next immediately without checking scope when AUTH_REQUIRED is false', async () => {
+    const { requireScope } = await import('../auth');
+    const middleware = requireScope('files:write');
+
+    const mockReq = {
+      auth: undefined,
+      path: '/upload',
+      method: 'POST',
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+    } as unknown as Parameters<typeof middleware>[0];
+
+    const mockRes = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as Parameters<typeof middleware>[1];
+    const mockNext = vi.fn() as unknown as Parameters<typeof middleware>[2];
+
+    middleware(mockReq, mockRes, mockNext);
+
+    expect(mockNext).toHaveBeenCalled();
+    expect(mockRes.status).not.toHaveBeenCalled();
+  });
+});
+
 describe('getUserId', () => {
   beforeEach(() => {
     vi.resetModules();

@@ -639,6 +639,100 @@ describe('upload router - single upload success paths', () => {
 
     expect(response.status).toBe(200);
   });
+
+  it('handles cleanup failure when unlink fails after save (logs warning, still returns 200)', async () => {
+    mockOriginalExists.mockResolvedValue(false);
+    mockSaveOriginalFromFile.mockResolvedValue({
+      contentHash: 'a'.repeat(64),
+      path: '/storage/hash/original',
+    });
+    // Make unlink fail - cleanup error should be logged but not affect response
+    mockFsUnlink.mockRejectedValue(new Error('Cannot delete temp file'));
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    // Should still succeed even when cleanup fails
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+  });
+
+  it('handles cleanup failure during deduplication unlink (lines 178-183)', async () => {
+    mockOriginalExists.mockResolvedValue(true);
+    mockAppendUploadMetadata.mockResolvedValue(undefined);
+    mockFsUnlink.mockRejectedValue(new Error('Unlink failed'));
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    // Should still succeed even when cleanup fails in deduplication path
+    expect(response.status).toBe(200);
+    expect(response.body.deduplicated).toBe(true);
+  });
+
+  it('returns 403 when userId in body differs from auth userId and hasAuthScope returns false', async () => {
+    const { hasAuthScope } = await import('../../middleware/auth');
+    (hasAuthScope as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1', userId: 'other-user' });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toContain('Cannot upload on behalf of another user');
+  });
+
+  it('returns 500 and cleans up when error occurs and unlink also fails (lines 254-258)', async () => {
+    mockOriginalExists.mockResolvedValue(false);
+    mockSaveOriginalFromFile.mockRejectedValue(new Error('Storage error'));
+    // Make unlink fail during error cleanup so we hit lines 254-258
+    mockFsUnlink.mockRejectedValue(new Error('Cleanup also failed'));
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.file = createMockFile({ path: TEMP_PATH });
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/single')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    expect(response.status).toBe(500);
+    expect(response.body.error).toContain('Upload failed');
+    // Unlink was attempted (and failed) during error cleanup
+    expect(mockFsUnlink).toHaveBeenCalled();
+  });
 });
 
 describe('upload router - multiple upload success paths', () => {
@@ -730,5 +824,73 @@ describe('upload router - multiple upload success paths', () => {
     expect(response.status).toBe(200);
     expect(response.body.files[0].error).toBeDefined();
     expect(response.body.files[0].success).toBe(false);
+  });
+
+  it('returns 403 when userId differs and hasAuthScope is false in multiple upload (lines 298-302)', async () => {
+    const { hasAuthScope } = await import('../../middleware/auth');
+    (hasAuthScope as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.files = [createMockFile({ path: TEMP_PATH })] as Express.Multer.File[];
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/multiple')
+      .send({ driveId: 'drive-1', userId: 'other-user' });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toContain('Cannot upload on behalf of another user');
+  });
+
+  it('returns 403 when page binding mismatches in multiple upload (lines 312-313)', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = {
+        userId: 'user-1',
+        resourceBinding: { type: 'page', id: 'page-BOUND' },
+        driveId: 'drive-1',
+      } as unknown as typeof req.auth;
+      req.files = [createMockFile({ path: TEMP_PATH })] as Express.Multer.File[];
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/multiple')
+      .send({ driveId: 'drive-1', pageId: 'page-DIFFERENT' });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toContain('Token resource does not match requested page');
+  });
+
+  it('handles cleanup failure in multi-file success cleanup loop (lines 383-388)', async () => {
+    // Files process successfully but unlink fails during cleanup
+    mockOriginalExists.mockResolvedValue(false);
+    mockSaveOriginalFromFile.mockResolvedValue({ contentHash: 'a'.repeat(64), path: '/storage/hash/original' });
+    mockFsUnlink.mockRejectedValue(new Error('Cannot delete temp file'));
+
+    const app = express();
+    app.use(express.json());
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      req.auth = makeAuth() as unknown as typeof req.auth;
+      req.files = [createMockFile({ path: TEMP_PATH })] as Express.Multer.File[];
+      next();
+    });
+    app.use('/upload', uploadRouter);
+
+    const response = await request(app)
+      .post('/upload/multiple')
+      .send({ driveId: 'drive-1', pageId: 'page-1' });
+
+    // Should still succeed even if cleanup fails
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
   });
 });
