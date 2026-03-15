@@ -124,7 +124,7 @@ describe('Broadcast Authentication', () => {
 
       // Create header with old timestamp (6 minutes ago)
       const oldTimestamp = Math.floor(Date.now() / 1000) - 360;
-      const oldHeader = `t=${oldTimestamp},v1=fakesignature`;
+      const oldHeader = `t=${oldTimestamp},v1=${'0'.repeat(64)}`;
 
       const isValid = verifyBroadcastSignature(oldHeader, body);
 
