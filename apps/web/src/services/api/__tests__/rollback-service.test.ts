@@ -18,7 +18,8 @@ import {
   type ActivityLogForRollback,
 } from '../rollback-service';
 
-// Mock the database at the boundary
+// @scaffold — ORM chain mock: rollback-service has no repository seam yet.
+// Replace with a rollback-repository seam when one is introduced.
 vi.mock('@pagespace/db', () => {
   const mockDb = {
     select: vi.fn(),

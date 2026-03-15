@@ -3,7 +3,9 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-// Mock dependencies
+// @scaffold — ORM chain mock: drives-status route has no repository seam yet.
+// Replace with a drives-status-repository seam that exposes getOwnedDrives(),
+// getDriveMemberCount(), and getDriveAdmins() when one is introduced.
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
@@ -260,10 +262,10 @@ describe('GET /api/account/drives-status', () => {
 
     expect(response.status).toBe(500);
     expect(body.error).toBe('Failed to fetch drives status');
-    expect(loggers.auth.error).toHaveBeenCalledWith(
-      expect.stringContaining('Error fetching drives status'),
-      expect.objectContaining({ message: 'Database connection lost' })
-    );
+    const errorArgs = vi.mocked(loggers.auth.error).mock.calls[0];
+    expect(errorArgs[0]).toBe('Error fetching drives status:');
+    expect(errorArgs[1]).toBeInstanceOf(Error);
+    expect((errorArgs[1] as Error).message).toBe('Database connection lost');
   });
 
   it('should handle drive with 0 members (edge case)', async () => {

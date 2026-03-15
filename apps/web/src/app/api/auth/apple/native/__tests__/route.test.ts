@@ -197,7 +197,7 @@ describe('POST /api/auth/apple/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(429);
-      expect(body.error).toContain('Too many login attempts');
+      expect(body.error).toBe('Too many login attempts. Please try again later.');
       expect(body.retryAfter).toBe(600);
       expect(response.headers.get('Retry-After')).toBe('600');
     });
@@ -237,7 +237,7 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request');
-      expect(body.details).toBeDefined();
+      expect(body.details.idToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('returns 400 when platform is invalid', async () => {
@@ -311,7 +311,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Invalid signature');
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Invalid Apple ID token',
-        expect.objectContaining({ platform: 'ios' })
+        { platform: 'ios', error: 'Invalid signature' }
       );
     });
 
@@ -335,7 +335,8 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(true);
-      expect(body.user).toBeDefined();
+      expect(body.user.id).toBe(mockNewUser.id);
+      expect(body.user.email).toBe(mockNewUser.email);
       expect(body.sessionToken).toBe('ps_sess_mock_token');
       expect(body.csrfToken).toBe('mock-csrf-token');
       expect(body.deviceToken).toBe('mock-device-token');
@@ -398,9 +399,9 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(false);
-      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-user-id', expect.objectContaining({
-        appleId: 'apple-sub-123',
-      }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe('existing-user-id');
+      expect((updateArgs[1] as Record<string, unknown>).appleId).toBe('apple-sub-123');
     });
 
     it('updates existing user when name is missing', async () => {
@@ -411,9 +412,9 @@ describe('POST /api/auth/apple/native', () => {
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
-      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-user-id', expect.objectContaining({
-        appleId: 'apple-sub-123',
-      }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe('existing-user-id');
+      expect((updateArgs[1] as Record<string, unknown>).appleId).toBe('apple-sub-123');
     });
 
     it('does not update user when no update is needed', async () => {
@@ -442,9 +443,9 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-user-id', expect.objectContaining({
-        provider: 'both',
-      }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe('existing-user-id');
+      expect((updateArgs[1] as Record<string, unknown>).provider).toBe('both');
     });
 
     it('handles re-fetch returning null after update', async () => {
@@ -467,7 +468,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
       expect(loggers.auth.info).toHaveBeenCalledWith(
         'Revoked existing sessions on native Apple OAuth login',
-        expect.objectContaining({ count: 2 })
+        { userId: 'new-user-id', count: 2, platform: 'ios' }
       );
     });
 
@@ -498,14 +499,13 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-id',
-          type: 'user',
-          scopes: ['*'],
-          createdByIp: '192.168.1.1',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '192.168.1.1',
+      });
     });
 
     it('omits createdByIp when client IP is unknown', async () => {
@@ -513,11 +513,13 @@ describe('POST /api/auth/apple/native', () => {
 
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          createdByIp: undefined,
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: undefined,
+      });
     });
   });
 
@@ -525,14 +527,16 @@ describe('POST /api/auth/apple/native', () => {
     it('creates device token with correct parameters', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'new-user-id',
-          deviceId: 'device-123',
-          platform: 'ios',
-          deviceName: 'iPhone 15',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: 'new-user-id',
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15',
+        userAgent: 'TestApp/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('uses default device name for android', async () => {
@@ -542,11 +546,16 @@ describe('POST /api/auth/apple/native', () => {
         deviceName: undefined,
       }));
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'Android App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: 'new-user-id',
+        deviceId: 'device-123',
+        platform: 'android',
+        tokenVersion: 0,
+        deviceName: 'Android App',
+        userAgent: 'TestApp/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('uses default device name for ios when not provided', async () => {
@@ -555,11 +564,16 @@ describe('POST /api/auth/apple/native', () => {
         deviceName: undefined,
       }));
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'iOS App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: 'new-user-id',
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iOS App',
+        userAgent: 'TestApp/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
   });
 
@@ -580,7 +594,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed',
-        expect.objectContaining({ error: 'Redis down' })
+        { error: 'Redis down', ip: '127.0.0.1' }
       );
     });
 
@@ -592,7 +606,7 @@ describe('POST /api/auth/apple/native', () => {
       expect(response.status).toBe(200);
       expect(loggers.auth.warn).toHaveBeenCalledWith(
         'Rate limit reset failed',
-        expect.objectContaining({ error: 'string error' })
+        { error: 'string error', ip: '127.0.0.1' }
       );
     });
   });
@@ -611,10 +625,13 @@ describe('POST /api/auth/apple/native', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         'new-user-id',
         'login',
-        expect.objectContaining({
+        {
+          email: 'test@example.com',
+          ip: '127.0.0.1',
           provider: 'apple-native',
           platform: 'ios',
-        })
+          userAgent: 'TestApp/1.0',
+        }
       );
     });
 

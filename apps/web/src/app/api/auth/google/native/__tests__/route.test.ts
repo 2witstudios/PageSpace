@@ -286,30 +286,29 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(sessionService.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockNewUser.id,
-          type: 'user',
-          scopes: ['*'],
-          expiresInMs: 7 * 24 * 60 * 60 * 1000,
-          createdByIp: '127.0.0.1',
-        })
-      );
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: mockNewUser.id,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 7 * 24 * 60 * 60 * 1000,
+        createdByIp: '127.0.0.1',
+      });
     });
 
     it('should create device token with platform info', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: mockNewUser.id,
-          deviceId: 'device-123',
-          platform: 'ios',
-          deviceName: 'iPhone 15',
-          tokenVersion: 0,
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iPhone 15',
+        userAgent: 'PageSpace-iOS/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('given deviceName not provided, should use default name based on platform', async () => {
@@ -322,11 +321,16 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(payloadWithoutDeviceName);
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'iOS App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'ios',
+        tokenVersion: 0,
+        deviceName: 'iOS App',
+        userAgent: 'PageSpace-iOS/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('given android platform, should use Android default name', async () => {
@@ -339,11 +343,16 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(androidPayload);
       await POST(request);
 
-      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceName: 'Android App',
-        })
-      );
+      expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        providedDeviceToken: undefined,
+        userId: mockNewUser.id,
+        deviceId: 'device-123',
+        platform: 'android',
+        tokenVersion: 0,
+        deviceName: 'Android App',
+        userAgent: 'PageSpace-iOS/1.0',
+        ipAddress: '127.0.0.1',
+      });
     });
 
     it('should reset rate limit on successful auth', async () => {
@@ -368,10 +377,13 @@ describe('POST /api/auth/google/native', () => {
       expect(trackAuthEvent).toHaveBeenCalledWith(
         mockNewUser.id,
         'login',
-        expect.objectContaining({
+        {
+          email: 'test@example.com',
+          ip: '127.0.0.1',
           provider: 'google-native',
           platform: 'ios',
-        })
+          userAgent: 'PageSpace-iOS/1.0',
+        }
       );
     });
   });
@@ -387,7 +399,7 @@ describe('POST /api/auth/google/native', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toBe('Invalid request');
-      expect(body.details.idToken).toBeDefined();
+      expect(body.details.idToken).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('given empty idToken, should return 400', async () => {
@@ -410,7 +422,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.details.deviceId).toBeDefined();
+      expect(body.details.deviceId).toEqual(['Invalid input: expected string, received undefined']);
     });
 
     it('given empty deviceId, should return 400', async () => {
@@ -434,7 +446,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(400);
-      expect(body.details.platform).toBeDefined();
+      expect(body.details.platform).toEqual(['Invalid option: expected one of "ios"|"android"']);
     });
 
     it('given missing platform, should return 400', async () => {
@@ -466,7 +478,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(401);
-      expect(body.error).toContain('expired');
+      expect(body.error).toBe('Token expired. Please try again.');
     });
 
     it('given token without email, should return 401', async () => {
@@ -499,7 +511,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(429);
-      expect(body.error).toContain('Too many login attempts');
+      expect(body.error).toBe('Too many login attempts. Please try again later.');
       expect(body.retryAfter).toBe(900);
     });
 
@@ -559,7 +571,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toContain('not configured');
+      expect(body.error).toBe('Google sign-in not configured');
     });
 
     it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500', async () => {
@@ -570,7 +582,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(500);
-      expect(body.error).toContain('not configured');
+      expect(body.error).toBe('Google sign-in not configured');
     });
   });
 
@@ -596,7 +608,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.sessionToken).toBeDefined();
+      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
     });
 
     it('given rate limit reset fails, should still succeed', async () => {
@@ -607,7 +619,7 @@ describe('POST /api/auth/google/native', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.sessionToken).toBeDefined();
+      expect(body.sessionToken).toBe('ps_sess_mock_session_token');
     });
   });
 
@@ -620,7 +632,9 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutGoogleId.id, expect.objectContaining({ googleId: 'google-id-123' }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithoutGoogleId.id);
+      expect((updateArgs[1] as Record<string, unknown>).googleId).toBe('google-id-123');
     });
 
     it('given existing user without name, should set name from Google payload', async () => {
@@ -631,7 +645,9 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutName.id, expect.objectContaining({ name: 'Test User' }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithoutName.id);
+      expect((updateArgs[1] as Record<string, unknown>).name).toBe('Test User');
     });
 
     it('given existing user with different avatar, should update image', async () => {
@@ -643,7 +659,8 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithOldAvatar.id, expect.objectContaining({}));
+      expect(authRepository.updateUser).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(authRepository.updateUser).mock.calls[0][0]).toBe(userWithOldAvatar.id);
     });
 
     it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
@@ -686,7 +703,9 @@ describe('POST /api/auth/google/native', () => {
 
       expect(response.status).toBe(200);
       // updateUser should be called to set the resolved image
-      expect(authRepository.updateUser).toHaveBeenCalledWith(mockNewUser.id, expect.objectContaining({ image: '/processed-avatar.jpg' }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(mockNewUser.id);
+      expect((updateArgs[1] as Record<string, unknown>).image).toBe('/processed-avatar.jpg');
     });
 
     it('given existing user with password, should set provider to both', async () => {
@@ -697,7 +716,11 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithPassword.id, expect.objectContaining({ googleId: 'google-id-123', provider: 'both' }));
+      const updateArgs = vi.mocked(authRepository.updateUser).mock.calls[0];
+      expect(updateArgs[0]).toBe(userWithPassword.id);
+      const updateData = updateArgs[1] as Record<string, unknown>;
+      expect(updateData.googleId).toBe('google-id-123');
+      expect(updateData.provider).toBe('both');
     });
   });
 });
