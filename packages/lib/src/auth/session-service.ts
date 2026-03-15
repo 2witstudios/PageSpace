@@ -114,10 +114,10 @@ export class SessionService {
     return {
       sessionId: session.id,
       userId: session.userId,
-      userRole: session.user.role as 'user' | 'admin',
+      userRole: session.user.role,
       tokenVersion: session.tokenVersion,
       adminRoleVersion: session.adminRoleVersion,
-      type: session.type as 'user' | 'service' | 'mcp' | 'device',
+      type: session.type,
       scopes: session.scopes,
       expiresAt: session.expiresAt,
       resourceType: session.resourceType ?? undefined,

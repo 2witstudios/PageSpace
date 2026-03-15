@@ -8,7 +8,7 @@ import { db, sessions, users, eq, and, isNull, gt, lt } from '@pagespace/db';
 export interface SessionUserRecord {
   id: string;
   tokenVersion: number;
-  role: string;
+  role: 'user' | 'admin';
   adminRoleVersion: number;
 }
 
@@ -18,7 +18,7 @@ export interface SessionRecord {
   tokenHash: string;
   tokenVersion: number;
   adminRoleVersion: number;
-  type: string;
+  type: 'user' | 'service' | 'mcp' | 'device';
   scopes: string[];
   expiresAt: Date;
   lastUsedAt: Date | null;
@@ -28,7 +28,7 @@ export interface SessionRecord {
   user: {
     id: string;
     tokenVersion: number;
-    role: string;
+    role: 'user' | 'admin';
     adminRoleVersion: number;
     suspendedAt: Date | null;
   } | null;

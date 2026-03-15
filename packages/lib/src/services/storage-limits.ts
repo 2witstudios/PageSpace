@@ -1,5 +1,5 @@
 import { getStorageConfigFromSubscription, getStorageTierFromSubscription, type SubscriptionTier } from './subscription-utils';
-import { storageRepository } from './storage-repository';
+import { storageRepository, type DrizzleTx } from './storage-repository';
 
 export interface StorageQuota {
   userId: string;
@@ -170,9 +170,9 @@ export async function updateStorageUsage(
     driveId?: string;
     eventType?: 'upload' | 'delete' | 'update' | 'reconcile';
   },
-  existingTx?: Parameters<Parameters<typeof storageRepository.runTransaction>[0]>[0]
+  existingTx?: DrizzleTx
 ): Promise<void> {
-  const executeUpdate = async (tx: Parameters<Parameters<typeof storageRepository.runTransaction>[0]>[0]) => {
+  const executeUpdate = async (tx: DrizzleTx) => {
     const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
 
     // Log storage event for audit trail

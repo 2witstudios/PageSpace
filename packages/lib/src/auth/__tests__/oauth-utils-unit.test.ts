@@ -38,7 +38,7 @@ import { verifyGoogleIdToken, verifyAppleIdToken, verifyOAuthIdToken, createOrLi
 import { OAuthProvider } from '../oauth-types';
 import { OAuth2Client } from 'google-auth-library';
 import appleSignIn from 'apple-signin-auth';
-import { db } from '@pagespace/db';
+import { db, users } from '@pagespace/db';
 
 describe('oauth-utils @scaffold', () => {
   const origEnv = { ...process.env };
@@ -231,7 +231,7 @@ describe('oauth-utils @scaffold', () => {
       });
 
       expect(result).toBeDefined();
-      expect(db.update).toHaveBeenCalledWith(expect.anything());
+      expect(db.update).toHaveBeenCalledWith(users);
     });
 
     it('should create new user when not found', async () => {
