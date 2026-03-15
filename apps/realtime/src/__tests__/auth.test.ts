@@ -1,7 +1,21 @@
 /**
- * @boundary-contract - broadcast-auth lives in @pagespace/lib and may not resolve
+ * @scaffold - broadcast-auth lives in @pagespace/lib and may not resolve
  * in isolated realtime package tests. The mock re-implements HMAC signature
  * logic to characterize the authentication protocol contract.
+ *
+ * @REVIEW This test mocks @pagespace/lib/broadcast-auth and then tests the
+ * mock itself — it does NOT test production code. The mock reimplements the
+ * HMAC signing/verification logic. These tests characterize expected protocol
+ * behavior but cannot catch regressions in the actual broadcast-auth module.
+ *
+ * To fix: test the real broadcast-auth from @pagespace/lib directly (it has
+ * its own test suite at packages/lib/src/__tests__/broadcast-auth.test.ts).
+ * This file should instead test how the realtime server USES broadcast-auth
+ * (e.g., the requestListener that validates incoming broadcast requests).
+ *
+ * Suggested integration tests:
+ * - HTTP request to broadcast endpoint with valid signature → 200
+ * - HTTP request to broadcast endpoint with tampered signature → 401
  */
 
 import { describe, it, expect, vi } from 'vitest';

@@ -1,14 +1,22 @@
 /**
- * index.ts Tests
+ * @scaffold - index.ts Tests
  *
  * Tests the main realtime server module: validateSocketToken, normalizeOrigin,
  * getAllowedOrigins, isOriginAllowed, validateWebSocketOrigin,
  * validateAndLogWebSocketOrigin, requestListener, populateUserMetadata,
  * the Socket.IO middleware, and the connection handler.
  *
+ * @REVIEW ORM chain mock (db.select().from().where().limit()) is used for
+ * DM conversation and user profile queries. index.ts directly uses the ORM
+ * with no repository seam. To fix: extract DB queries into a repository module.
+ *
  * Strategy: mock all external dependencies at module level, then use
  * dynamic import so the module-level side-effects use mocked modules.
  * Captured callbacks are invoked directly for testing.
+ *
+ * Suggested integration tests:
+ * - Socket.IO client integration test: full auth flow with real token validation
+ * - Socket.IO client integration test: broadcast request with signature verification
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

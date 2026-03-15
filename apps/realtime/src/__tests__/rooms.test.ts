@@ -1,6 +1,21 @@
 /**
- * Room Management Tests
+ * @scaffold - Room Management Tests
  * Tests for Socket.IO room join/leave event handlers
+ *
+ * @REVIEW Room handlers are defined inline in index.ts and not exported.
+ * createRoomHandlers() below is a LOCAL REIMPLEMENTATION of the production
+ * logic, NOT a test of the actual production code. These tests characterize
+ * expected room-join behavior but do not prove the production handlers work.
+ *
+ * To fix: extract room handlers from index.ts into a separate rooms.ts module
+ * with exported functions, then import and test the real code.
+ *
+ * @REVIEW ORM chain mock (db.select().from().where().limit()) is used for the
+ * DM conversation lookup. This should be replaced with a repository seam.
+ *
+ * Suggested integration tests:
+ * - Socket.IO client integration test: connect, emit join_channel, verify room membership
+ * - Socket.IO client integration test: verify permission denial disconnects socket
  */
 
 import { describe, it, expect, beforeEach, vi, MockedFunction } from 'vitest';
@@ -160,6 +175,7 @@ const createRoomHandlers = (socket: ReturnType<typeof createMockSocket>) => {
   };
 };
 
+/** @scaffold */
 describe('Room Management', () => {
   beforeEach(() => {
     vi.clearAllMocks();

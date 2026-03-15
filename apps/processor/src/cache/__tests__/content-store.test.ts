@@ -357,9 +357,9 @@ describe('ContentStore', () => {
       expect(result).toBeNull();
     });
 
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
     it('rethrows non-InvalidContentHashError from normalizeContentHash in getOriginal', async () => {
       const store = createStore();
-      // Override normalizeContentHash to throw a non-InvalidContentHashError
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected getOriginal normalize error');
@@ -613,9 +613,9 @@ describe('ContentStore', () => {
       expect(result).toBeNull();
     });
 
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
     it('rethrows non-InvalidContentHashError from normalizeContentHash', async () => {
       const store = createStore();
-      // Override normalizeContentHash to throw a non-InvalidContentHashError
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected normalize error');
@@ -767,24 +767,9 @@ describe('ContentStore', () => {
       expect(result).toBe(false);
     });
 
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
     it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in originalExists', async () => {
-      // We need to make normalizeContentHash throw something other than InvalidContentHashError.
-      // ContentStore.normalizeContentHash calls isValidContentHash and throws InvalidContentHashError for bad hashes.
-      // To hit the rethrow path we need to make the method throw a different error.
-      // We can do this by providing a hash that passes the length check but causes an unexpected error
-      // by mocking the security module's path resolution to throw.
-      // Actually the safest approach: mock path.join via the store instance to throw.
-      // Since we can't easily do that, we test a hash that triggers the AssertPathWithin check.
-      // The simplest approach: corrupt the store's storagePath after construction so assertPathWithin throws.
       const store = createStore();
-      // Temporarily break storagePath to force assertPathWithin to throw a non-InvalidContentHashError
-      // assertPathWithin throws an Error when path is outside. We can trigger it by providing a valid hash
-      // but with a crafted store where storagePath ends up mismatching.
-      // Instead, directly test that a generic Error thrown by normalizeContentHash propagates.
-      // We mock the InvalidContentHashError import to simulate a different error class being thrown.
-      // The simplest unit test: verify that a valid hash doesn't throw in try/catch for invalid hash.
-      // For the non-InvalidContentHashError path, we need to override normalizeContentHash indirectly.
-      // Use prototype patching:
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected type error');
@@ -816,6 +801,7 @@ describe('ContentStore', () => {
       expect(result).toBe(false);
     });
 
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
     it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in cacheExists', async () => {
       const store = createStore();
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;

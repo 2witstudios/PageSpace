@@ -1,8 +1,17 @@
 /**
- * scripts/calculate-initial-storage.ts Tests
+ * @scaffold - characterizing calculate-initial-storage.ts with ORM chain mocking.
  *
- * This script calculates storage usage for all users and updates the database.
- * We mock all external dependencies to avoid real DB connections.
+ * scripts/calculate-initial-storage.ts is a standalone IIFE script that directly
+ * queries and updates the database via Drizzle ORM. No repository seam exists.
+ *
+ * @REVIEW Fake thenables (smartFrom with `then`/`catch`) simulate Drizzle's
+ * combined thenable+chainable select().from() pattern. This violates the rubric
+ * rule against simulating Promise internals, but cannot be eliminated without
+ * extracting a repository seam from the script.
+ *
+ * @REVIEW Order-dependent mock ladders (selectFromQueue/findManyQueue) encode
+ * internal query execution order. Tests break if the script's query order changes.
+ * This is accepted as temporary characterization until a service seam is introduced.
  *
  * Strategy: Use a shared mutable state object that the vi.mock factory always
  * references. The factory is hoisted but the state is mutable so tests can
@@ -11,6 +20,10 @@
  *
  * Because each test exercises different mock behavior, we run each path in
  * a single describe that only imports the script once, using queued responses.
+ *
+ * Suggested integration tests:
+ * - Real DB test: verify storage calculation with seeded user/drive/page data
+ * - Real DB test: verify summary statistics accuracy
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
@@ -98,6 +111,7 @@ vi.mock('../../src/schema/core', async () => {
   return { ...actual, storageEvents: {} };
 });
 
+/** @scaffold */
 describe('scripts/calculate-initial-storage.ts', () => {
   let processExitSpy: MockInstance;
   let consoleLogSpy: MockInstance;
@@ -129,7 +143,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -149,7 +163,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
@@ -168,7 +182,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -181,7 +195,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     selectFromQueue.push(() => Promise.reject(new Error('DB connection refused')));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -207,7 +221,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     // Error logged for failed users
@@ -218,7 +232,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     );
   });
 
-  it('defaults to free subscription when subscriptionTier is null (branch line 74)', async () => {
+  it('defaults to free subscription when subscriptionTier is null', async () => {
     const user = { id: 'u-null-tier', email: 'nulltier@example.com', subscriptionTier: null };
     selectFromQueue.push(() => Promise.resolve([user]));
     findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
@@ -229,7 +243,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     const allLogMessages = consoleLogSpy.mock.calls.flat().join(' ');
@@ -252,7 +266,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     const allLogMessages = consoleLogSpy.mock.calls.flat().join(' ');
@@ -275,7 +289,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     }]));
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     const allLogMessages = consoleLogSpy.mock.calls.flat().join(' ');
@@ -291,7 +305,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
     consoleErrorSpy.mockImplementationOnce(() => { throw new Error('console.error broke'); });
 
     await import('../../scripts/calculate-initial-storage');
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     // The outer .catch() handler calls console.error('Unhandled error:', ...) and process.exit(1)
     expect(processExitSpy).toHaveBeenCalledWith(1);

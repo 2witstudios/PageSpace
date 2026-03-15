@@ -1,17 +1,20 @@
 /**
- * promote-admin.ts Tests
+ * @scaffold - promote-admin.ts Tests
  *
  * promote-admin.ts is a CLI script that reads process.argv[2] for the email
- * and then queries/updates the database. We test all code paths:
- * - Missing email argument
- * - User not found
- * - User already admin
- * - Successful promotion
- * - Database error
+ * and then queries/updates the database. No repository seam exists.
+ *
+ * @REVIEW ORM chain mock (db.update().set().where()) encodes internal query
+ * composition. This is accepted as temporary characterization until a service
+ * seam is introduced in the script.
  *
  * Strategy: vi.mock() is hoisted and evaluated once. We use module-level mock
  * factories that expose their mocks so tests can configure them per-test.
  * We reset modules in afterEach and re-import for isolation.
+ *
+ * Suggested integration tests:
+ * - Real DB test: promote user and verify role change persisted
+ * - Real DB test: verify idempotent promotion of already-admin user
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
@@ -38,6 +41,7 @@ vi.mock('../index', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
 }));
 
+/** @scaffold */
 describe('promote-admin.ts', () => {
   let processExitSpy: MockInstance;
   let consoleLogSpy: MockInstance;

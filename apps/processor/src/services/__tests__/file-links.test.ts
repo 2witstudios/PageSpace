@@ -4,8 +4,6 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockTransaction = vi.fn();
-
 vi.mock('@pagespace/db', () => {
   const insert = vi.fn().mockReturnValue({
     values: vi.fn().mockReturnValue({
