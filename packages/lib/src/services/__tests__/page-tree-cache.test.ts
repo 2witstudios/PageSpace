@@ -134,7 +134,7 @@ describe('PageTreeCache', () => {
       // Create cache with small max
       await cache.shutdown();
       // @ts-expect-error -- accessing private static for test reset
-    PageTreeCache.instance = null;
+      PageTreeCache.instance = null;
       cache = PageTreeCache.getInstance({ enableRedis: false, maxMemoryEntries: 2 });
 
       await cache.setDriveTree('drive-1', 'T1', []);

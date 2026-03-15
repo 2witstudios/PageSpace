@@ -36,7 +36,7 @@ export const storageRepository = {
       where: eq(drives.ownerId, userId),
       columns: { id: true },
     });
-    return userDrives.map(d => d.id);
+    return userDrives.map((d: { id: string }) => d.id);
   },
 
   sumFileSize: async (driveIds: string[]): Promise<number> => {

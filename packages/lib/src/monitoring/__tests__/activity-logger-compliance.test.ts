@@ -67,7 +67,12 @@ import {
   type ActivityLogInput,
 } from '../activity-logger';
 
-const mockDb = vi.mocked(db);
+// @scaffold: typed mock surface for ORM chain mocks (vi.mocked can't resolve Drizzle's overloaded generics)
+type MockFn = ReturnType<typeof vi.fn>;
+const mockDb = db as unknown as {
+  query: { activityLogs: { findFirst: MockFn } };
+  insert: MockFn;
+};
 
 describe('activity logger compliance', () => {
   beforeEach(() => {

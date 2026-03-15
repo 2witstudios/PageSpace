@@ -106,8 +106,16 @@ import {
   validateOrCreateDeviceToken,
 } from '../device-auth-utils';
 
-// Type helpers to access mock functions
-const mockDb = vi.mocked(db);
+// @scaffold: typed mock surface for ORM chain mocks (vi.mocked can't resolve Drizzle's overloaded generics)
+type MockFn = ReturnType<typeof vi.fn>;
+const mockDb = db as unknown as {
+  query: {
+    deviceTokens: { findFirst: MockFn; findMany: MockFn };
+    users: { findFirst: MockFn };
+  };
+  insert: MockFn;
+  update: MockFn;
+};
 
 describe('device-auth-utils @scaffold', () => {
   beforeEach(() => {
