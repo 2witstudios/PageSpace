@@ -184,10 +184,9 @@ describe('ContentStore', () => {
       const writeCall = mockWriteFile.mock.calls.find(
         (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('metadata')
       );
-      if (writeCall) {
-        const written = JSON.parse(writeCall[1] as string);
-        expect(Object.hasOwn(written, '__proto__')).toBe(false);
-      }
+      expect(writeCall).toBeDefined();
+      const written = JSON.parse(writeCall![1] as string);
+      expect(Object.hasOwn(written, '__proto__')).toBe(false);
     });
   });
 
