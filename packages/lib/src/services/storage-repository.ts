@@ -50,7 +50,7 @@ export const storageRepository = {
         eq(pages.type, 'FILE'),
         eq(pages.isTrashed, false),
       ));
-    return Number(result[0]?.totalSize || 0);
+    return Number(result[0]?.totalSize ?? 0);
   },
 
   countFiles: async (driveIds: string[]): Promise<number> => {
@@ -62,7 +62,7 @@ export const storageRepository = {
         eq(pages.type, 'FILE'),
         eq(pages.isTrashed, false),
       ));
-    return Number(result[0]?.count || 0);
+    return Number(result[0]?.count ?? 0);
   },
 
   updateActiveUploads: async (userId: string, delta: number): Promise<void> => {
@@ -84,7 +84,7 @@ export const storageRepository = {
       })
       .where(eq(users.id, userId))
       .returning({ newUsage: users.storageUsedBytes });
-    return { newUsage: updatedUser.newUsage || 0 };
+    return { newUsage: updatedUser.newUsage ?? 0 };
   },
 
   insertStorageEvent: async (
