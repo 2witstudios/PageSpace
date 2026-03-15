@@ -15,7 +15,8 @@ vi.mock('@/stores/useLayoutStore', () => {
 import { useHasHydrated } from '../useHasHydrated';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 
-const mockedUseLayoutStore = vi.mocked(useLayoutStore);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockedUseLayoutStore = vi.mocked(useLayoutStore) as any;
 
 describe('useHasHydrated', () => {
   beforeEach(() => {

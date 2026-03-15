@@ -187,7 +187,7 @@ describe('useMonacoTheme', () => {
       const { result, rerender } = renderHook(
         ({ monaco }: { monaco: ReturnType<typeof createMockMonaco> | null }) =>
           useMonacoTheme(monaco as never),
-        { initialProps: { monaco: null } }
+        { initialProps: { monaco: null as ReturnType<typeof createMockMonaco> | null } }
       );
 
       expect(result.current).toBe('vs-dark');

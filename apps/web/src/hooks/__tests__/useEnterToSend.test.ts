@@ -18,7 +18,7 @@ const mockUseCapacitor = vi.hoisted(() =>
     isNative: false,
     isIPad: false,
     isReady: true,
-    platform: 'web' as const,
+    platform: 'web' as 'web' | 'ios' | 'android',
     isIOS: false,
     isAndroid: false,
   }))
@@ -72,7 +72,7 @@ describe('useEnterToSend', () => {
       isNative: false,
       isIPad: false,
       isReady: true,
-      platform: 'web' as const,
+      platform: 'web' as 'web' | 'ios' | 'android',
       isIOS: false,
       isAndroid: false,
     });
@@ -193,7 +193,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: true,
         isReady: true,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
       });
@@ -214,7 +214,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: true,
         isReady: true,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
       });
@@ -235,7 +235,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: true,
         isReady: true,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
       });
@@ -256,7 +256,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: true,
         isReady: true,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
       });
@@ -280,7 +280,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: false,
         isReady: true,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
       });
@@ -295,7 +295,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: false,
         isReady: true,
-        platform: 'android' as const,
+        platform: 'android',
         isIOS: false,
         isAndroid: true,
       });
@@ -312,7 +312,7 @@ describe('useEnterToSend', () => {
         isNative: false,
         isIPad: false,
         isReady: false,
-        platform: 'web' as const,
+        platform: 'web' as 'web' | 'ios' | 'android',
         isIOS: false,
         isAndroid: false,
       });
@@ -332,7 +332,7 @@ describe('useEnterToSend', () => {
         isNative: true,
         isIPad: false,
         isReady: false,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
       });
