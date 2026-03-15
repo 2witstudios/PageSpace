@@ -1,3 +1,7 @@
+/**
+ * @scaffold - ORM query mocks present (db.query.users.findFirst, db.insert).
+ * Pending notification-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {
@@ -48,7 +52,15 @@ import { db } from '@pagespace/db';
 import { sendEmail } from '../email-service';
 import { sendNotificationEmail } from '../notification-email-service';
 
-const mockDb = db as any;
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    users: { findFirst: MockFn };
+    emailNotificationPreferences: { findFirst: MockFn };
+  };
+  insert: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('notification-email-service', () => {
   beforeEach(() => {
@@ -87,7 +99,7 @@ describe('notification-email-service', () => {
   it('should skip for unsupported notification types', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
-      type: 'MENTION' as any,
+      type: 'MENTION' as never,
       metadata: {},
     });
 
@@ -254,7 +266,7 @@ describe('notification-email-service', () => {
   });
 
   it('should handle sendEmail errors gracefully without throwing', async () => {
-    (sendEmail as any).mockRejectedValueOnce(new Error('SMTP error'));
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error('SMTP error'));
 
     // Contract: sendNotificationEmail never throws, even on SMTP failure
     await expect(sendNotificationEmail({
@@ -274,6 +286,6 @@ describe('notification-email-service', () => {
       metadata: { driveName: 'Test' },
     });
 
-    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.com' }));
   });
 });

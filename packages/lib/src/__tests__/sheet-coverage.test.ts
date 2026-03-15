@@ -208,8 +208,7 @@ end = "B5"
 `;
 
     const parsed = parseSheetDocString(sheetDoc);
-    expect(parsed.sheets[0].ranges.highlight).toBeDefined();
-    expect(parsed.sheets[0].ranges.highlight.start).toBe('A1');
+    expect(parsed.sheets[0].ranges.highlight).toEqual({ start: 'A1', end: 'B5' });
   });
 
   it('serializes pageId in SheetDoc', () => {
@@ -517,16 +516,15 @@ describe('parser.ts error handling', () => {
   it('parses page reference with mentionType (colon in identifier)', () => {
     const tokens = tokenize('@[Sales](id1:sheet)');
     const pageToken = tokens.find(t => t.type === 'page');
-    expect(pageToken).toBeDefined();
-    const meta = pageToken!.meta!.page as { identifier?: string; mentionType?: string };
-    expect(meta.identifier).toBe('id1');
-    expect(meta.mentionType).toBe('sheet');
+    expect(pageToken).not.toBeUndefined();
+    expect((pageToken!.meta!.page as { identifier?: string; mentionType?: string }).identifier).toBe('id1');
+    expect((pageToken!.meta!.page as { identifier?: string; mentionType?: string }).mentionType).toBe('sheet');
   });
 
   it('parses page reference with empty identifier in parentheses', () => {
     const tokens = tokenize('@[Sales]()');
     const pageToken = tokens.find(t => t.type === 'page');
-    expect(pageToken).toBeDefined();
+    expect(pageToken).not.toBeUndefined();
   });
 
   it('handles grouping parentheses in formulas', () => {
@@ -831,63 +829,20 @@ describe('address.ts catch blocks', () => {
 // ============================================================
 // Task 8: barrel export test for index.ts
 // ============================================================
-describe('sheets barrel export (index.ts)', () => {
-  it('exports evaluateSheet', async () => {
+/** @scaffold — barrel export presence check */
+describe('sheets barrel export (index.ts) @scaffold', () => {
+  it('exports all expected public symbols', async () => {
     const sheets = await import('../sheets/index');
-    expect(sheets.evaluateSheet).toBeDefined();
-    expect(typeof sheets.evaluateSheet).toBe('function');
-  });
-
-  it('exports createEmptySheet', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.createEmptySheet).toBeDefined();
-    expect(typeof sheets.createEmptySheet).toBe('function');
-  });
-
-  it('exports parseSheetContent', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.parseSheetContent).toBeDefined();
-  });
-
-  it('exports serializeSheetContent', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.serializeSheetContent).toBeDefined();
-  });
-
-  it('exports collectExternalReferences', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.collectExternalReferences).toBeDefined();
-  });
-
-  it('exports encodeCellAddress', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.encodeCellAddress).toBeDefined();
-  });
-
-  it('exports decodeCellAddress', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.decodeCellAddress).toBeDefined();
-  });
-
-  it('exports adjustFormulaReferences', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.adjustFormulaReferences).toBeDefined();
-  });
-
-  it('exports tokenize and FormulaParser', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.tokenize).toBeDefined();
-    expect(sheets.FormulaParser).toBeDefined();
-  });
-
-  it('exports isSheetType and updateSheetCells', async () => {
-    const sheets = await import('../sheets/index');
-    expect(sheets.isSheetType).toBeDefined();
-    expect(sheets.updateSheetCells).toBeDefined();
-  });
-
-  it('exports constants', async () => {
-    const sheets = await import('../sheets/index');
+    const expectedFunctions = [
+      'evaluateSheet', 'createEmptySheet', 'parseSheetContent',
+      'serializeSheetContent', 'collectExternalReferences',
+      'encodeCellAddress', 'decodeCellAddress', 'adjustFormulaReferences',
+      'tokenize', 'FormulaParser', 'isSheetType', 'updateSheetCells',
+    ];
+    for (const name of expectedFunctions) {
+      expect(sheets).toHaveProperty(name);
+      expect(typeof (sheets as Record<string, unknown>)[name]).toBe('function');
+    }
     expect(sheets.SHEETDOC_MAGIC).toBe('#%PAGESPACE_SHEETDOC');
     expect(sheets.SHEETDOC_VERSION).toBe('v1');
     expect(sheets.SHEET_VERSION).toBe(1);
@@ -1007,7 +962,7 @@ custom_field = "not standard"
 
   it('parseSheetDocString handles header with no version', () => {
     const doc = parseSheetDocString(`${SHEETDOC_MAGIC}`);
-    expect(doc.sheets.length).toBeGreaterThanOrEqual(1);
+    expect(doc.sheets).toHaveLength(1);
   });
 
   it('handles SheetDoc with no sheets array creating default sheet', () => {
@@ -1146,7 +1101,7 @@ value = 10
     const parsed = parseSheetDocString(sheetDocSource);
     // INVALID_ADDRESS should be filtered out
     expect(parsed.sheets[0].cells['INVALID_ADDRESS']).toBeUndefined();
-    expect(parsed.sheets[0].cells.A1).toBeDefined();
+    expect(parsed.sheets[0].cells.A1.value).toBe(10);
   });
 
   it('formatPrimitiveForCell handles non-finite numbers', () => {
@@ -1297,7 +1252,7 @@ describe('evaluation.ts additional coverage', () => {
 
     const result = evaluateSheet(sheet);
     expect(getDisplay(result, 'A1')).toBe('#ERROR');
-    expect(getError(result, 'A1')).toBeDefined();
+    expect(getError(result, 'A1')).toBe('Empty formula');
   });
 
   it('evaluates ^ exponent operator', () => {
@@ -1349,15 +1304,16 @@ describe('evaluation.ts additional coverage', () => {
     expect(serialized).toContain('A1');
   });
 
-  it('formatDisplayValue handles very long numbers', () => {
+  it('given_repeatingDecimal_formatDisplayValueTruncatesToPrecision12', () => {
     const sheet = createEmptySheet(5, 5);
-    // A formula producing a very long number
     sheet.cells.A1 = '=1/3';
 
     const result = evaluateSheet(sheet);
     const display = getDisplay(result, 'A1');
-    // Should not exceed 12 significant digits
-    expect(display!.length).toBeLessThanOrEqual(14);
+    // Contract: numbers whose toString > 12 chars get toPrecision(12) with trailing zeros stripped
+    const num = 1 / 3;
+    const expected = num.toPrecision(12).replace(/0+$/g, '').replace(/\.$/, '');
+    expect(display).toBe(expected);
   });
 });
 

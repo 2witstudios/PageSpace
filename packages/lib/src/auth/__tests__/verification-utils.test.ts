@@ -1,7 +1,11 @@
+/**
+ * @scaffold - ORM chain mocks present (insert().values(), delete().where(),
+ * update().set().where(), select().from().where().limit()).
+ * Pending verification-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock @pagespace/db
-// @scaffold — ORM chain mocks for database operations
 vi.mock('@pagespace/db', () => ({
   db: {
     query: {
@@ -48,7 +52,7 @@ import {
   markEmailVerified,
   isEmailVerified,
 } from '../verification-utils';
-import { db } from '@pagespace/db';
+import { db, verificationTokens, users } from '@pagespace/db';
 
 describe('verification-utils', () => {
   beforeEach(() => {
@@ -70,8 +74,8 @@ describe('verification-utils', () => {
       expect(token).toBeDefined();
       expect(typeof token).toBe('string');
       expect(token.length).toBe(64); // 32 bytes hex
-      expect(db.delete).toHaveBeenCalledTimes(1);
-      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.delete).toHaveBeenCalledWith(verificationTokens);
+      expect(db.insert).toHaveBeenCalledWith(verificationTokens);
     });
 
     it('should use 60 minutes expiry for password_reset', async () => {
@@ -192,7 +196,7 @@ describe('verification-utils', () => {
 
       const result = await verifyToken('some-token', 'email_verification');
       expect(result).toBe('user-1');
-      expect(db.update).toHaveBeenCalledTimes(1);
+      expect(db.update).toHaveBeenCalledWith(verificationTokens);
     });
   });
 
@@ -203,8 +207,10 @@ describe('verification-utils', () => {
       vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
       await markEmailVerified('user-1');
-      expect(db.update).toHaveBeenCalledTimes(1);
-      expect(mockSet).toHaveBeenCalledWith({ emailVerified: expect.any(Date) });
+      expect(db.update).toHaveBeenCalledWith(users);
+      const setArg = (mockSet.mock.calls as unknown[][])[0][0] as { emailVerified: unknown };
+      expect(setArg.emailVerified).toBeInstanceOf(Date);
+      expect(Object.keys(setArg)).toEqual(['emailVerified']);
     });
   });
 

@@ -1,8 +1,10 @@
 /**
  * Session Lifecycle Abuse Vector Tests
  *
- * Tests for abuse scenarios in the session management system.
- * These verify that sessions cannot be exploited after user status changes.
+ * @scaffold - ORM mocks present via vi.hoisted (db.query.sessions.findFirst,
+ * db.update, db.insert, db.delete). Should be migrated to mock
+ * ../session-repository instead, since SessionService now uses the repository
+ * seam. The ORM mocks work transitively but are fragile.
  *
  * Security properties tested:
  * 1. Suspended users have sessions revoked on validation

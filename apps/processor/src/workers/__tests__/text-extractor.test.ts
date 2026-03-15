@@ -307,8 +307,14 @@ describe('extractText', () => {
       originalName: 'test.txt',
     });
 
-    expect(mockMkdir).toHaveBeenCalled();
-    expect(mockWriteFile).toHaveBeenCalled();
+    expect(mockMkdir).toHaveBeenCalledWith(
+      expect.stringContaining(VALID_HASH),
+      expect.objectContaining({ recursive: true })
+    );
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      expect.stringContaining('extracted-text.txt'),
+      'Hello world'
+    );
   });
 
   it('includes textLength in result', async () => {

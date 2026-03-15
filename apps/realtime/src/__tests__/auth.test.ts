@@ -1,20 +1,28 @@
 /**
- * Realtime Server Authentication Tests
- * Tests for Socket.IO authentication middleware components
+ * @scaffold - broadcast-auth lives in @pagespace/lib and may not resolve
+ * in isolated realtime package tests. The mock re-implements HMAC signature
+ * logic to characterize the authentication protocol contract.
  *
- * Note: JWT token tests were removed when the system migrated to
- * opaque session tokens (ps_sess_*). Socket authentication now uses
- * session tokens validated via sessionService.validateSession().
+ * @REVIEW This test mocks @pagespace/lib/broadcast-auth and then tests the
+ * mock itself — it does NOT test production code. The mock reimplements the
+ * HMAC signing/verification logic. These tests characterize expected protocol
+ * behavior but cannot catch regressions in the actual broadcast-auth module.
  *
- * broadcast-auth is a package from @pagespace/lib which may not resolve
- * in isolation, so we test the authentication logic through mocks.
+ * To fix: test the real broadcast-auth from @pagespace/lib directly (it has
+ * its own test suite at packages/lib/src/__tests__/broadcast-auth.test.ts).
+ * This file should instead test how the realtime server USES broadcast-auth
+ * (e.g., the requestListener that validates incoming broadcast requests).
+ *
+ * Suggested integration tests:
+ * - HTTP request to broadcast endpoint with valid signature → 200
+ * - HTTP request to broadcast endpoint with tampered signature → 401
  */
 
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock the broadcast-auth module since it lives in @pagespace/lib
-vi.mock('@pagespace/lib/broadcast-auth', () => {
-  const crypto = require('crypto');
+vi.mock('@pagespace/lib/broadcast-auth', async () => {
+  const crypto = await import('node:crypto');
 
   const SECRET = 'broadcast-secret-key-minimum-32-characters-long';
   const REPLAY_WINDOW_SECONDS = 5 * 60;
@@ -31,27 +39,31 @@ vi.mock('@pagespace/lib/broadcast-auth', () => {
   }
 
   function verifyBroadcastSignature(header: string, body: string): boolean {
+    if (!header || !body) return false;
+    if (typeof header !== 'string' || typeof body !== 'string') return false;
+
     try {
       const parts = header.split(',');
-      if (parts.length < 2) return false;
+      if (parts.length !== 2) return false;
 
-      const tPart = parts[0];
-      const vPart = parts[1];
-
-      if (!tPart.startsWith('t=') || !vPart.startsWith('v1=')) return false;
-
-      const timestamp = parseInt(tPart.slice(2), 10);
-      const providedSig = vPart.slice(3);
-
-      if (isNaN(timestamp)) return false;
+      let timestamp: number | undefined;
+      let providedSig: string | undefined;
+      for (const part of parts) {
+        const [key, value] = part.split('=');
+        if (key === 't') timestamp = parseInt(value, 10);
+        else if (key === 'v1') providedSig = value;
+      }
+      if (!timestamp || !providedSig) return false;
 
       const now = Math.floor(Date.now() / 1000);
       if (Math.abs(now - timestamp) > REPLAY_WINDOW_SECONDS) return false;
 
       const payload = `${timestamp}.${body}`;
       const expected = crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
-
-      return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(providedSig));
+      const expectedBuffer = Buffer.from(expected, 'hex');
+      const providedBuffer = Buffer.from(providedSig, 'hex');
+      if (expectedBuffer.length !== providedBuffer.length) return false;
+      return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
     } catch {
       return false;
     }
@@ -126,7 +138,7 @@ describe('Broadcast Authentication', () => {
 
       // Create header with old timestamp (6 minutes ago)
       const oldTimestamp = Math.floor(Date.now() / 1000) - 360;
-      const oldHeader = `t=${oldTimestamp},v1=fakesignature`;
+      const oldHeader = `t=${oldTimestamp},v1=${'0'.repeat(64)}`;
 
       const isValid = verifyBroadcastSignature(oldHeader, body);
 

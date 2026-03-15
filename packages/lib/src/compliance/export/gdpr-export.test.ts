@@ -1,6 +1,17 @@
+/**
+ * @scaffold — GDPR Export Tests
+ *
+ * These functions use module-level ORM queries with no injected seam.
+ * Chain mocks and order-dependent mock ladders (createChainDb callIndex)
+ * are structural necessities — assertions focus on the observable data
+ * contracts (return types, aggregation logic, deduplication).
+ *
+ * REVIEW: introduce a GdprExportRepository seam so these functions can
+ * be tested without reproducing the ORM chain shape. Once that seam
+ * exists, remove the chain mocks and promote these to contract tests.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock @pagespace/db
 vi.mock('@pagespace/db', () => {
   const mockTable = (name: string) => ({
     id: `${name}.id`,
@@ -61,8 +72,8 @@ vi.mock('@pagespace/db', () => {
 });
 
 vi.mock('drizzle-orm', () => ({
-  eq: vi.fn((col, val) => ({ operator: 'eq', column: col, value: val })),
-  inArray: vi.fn((col, vals) => ({ operator: 'inArray', column: col, values: vals })),
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
+  inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
 }));
 
 import {
@@ -77,8 +88,33 @@ import {
   collectAllUserData,
 } from './gdpr-export';
 
+/** Creates a chain-mock db that resolves .where() calls with queued results */
+function createChainDb(whereResults: unknown[][]) {
+  let callIndex = 0;
+  return {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn(() => {
+      const result = whereResults[callIndex] ?? [];
+      callIndex++;
+      return result;
+    }),
+    innerJoin: vi.fn().mockReturnThis(),
+  };
+}
+
+/** Creates a chain-mock db where the first where() returns a .limit() chain */
+function createLimitDb(limitResult: unknown[]) {
+  return {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn(() => ({ limit: vi.fn().mockReturnValue(limitResult) })),
+    innerJoin: vi.fn().mockReturnThis(),
+  };
+}
+
 describe('collectUserProfile', () => {
-  it('should return profile when user exists', async () => {
+  it('given_userExists_returnsProfile', async () => {
     const profile = {
       id: 'user-1',
       name: 'Test User',
@@ -88,73 +124,48 @@ describe('collectUserProfile', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(() => ({ limit: vi.fn().mockReturnValue([profile]) })),
-    };
+    const db = createLimitDb([profile]);
 
     const result = await collectUserProfile(db as never, 'user-1');
+
     expect(result).toEqual(profile);
   });
 
-  it('should return null when user does not exist', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(() => ({ limit: vi.fn().mockReturnValue([]) })),
-    };
+  it('given_userDoesNotExist_returnsNull', async () => {
+    const db = createLimitDb([]);
 
     const result = await collectUserProfile(db as never, 'nonexistent');
+
     expect(result).toBeNull();
   });
 });
 
 describe('collectUserDrives', () => {
-  it('should return owned and member drives, deduplicating', async () => {
+  it('given_ownedAndMemberDrives_returnsBothWithCorrectRoles', async () => {
     const ownedDrive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', createdAt: new Date() };
     const memberDrive = { id: 'drive-2', name: 'Shared Drive', slug: 'shared', role: 'MEMBER', createdAt: new Date() };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(),
-      innerJoin: vi.fn().mockReturnThis(),
-    };
-
-    // First call: owned drives
-    db.where.mockResolvedValueOnce([ownedDrive]);
-    // Second call: member drives (from innerJoin chain)
-    db.where.mockResolvedValueOnce([memberDrive]);
+    const db = createChainDb([[ownedDrive], [memberDrive]]);
 
     const result = await collectUserDrives(db as never, 'user-1');
+
     expect(result).toHaveLength(2);
     expect(result[0].role).toBe('OWNER');
     expect(result[1].role).toBe('MEMBER');
   });
 
-  it('should deduplicate when user is both owner and member', async () => {
+  it('given_userIsBothOwnerAndMember_deduplicatesKeepingOwnerRole', async () => {
     const drive = { id: 'drive-1', name: 'Drive', slug: 'drive', createdAt: new Date() };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(),
-      innerJoin: vi.fn().mockReturnThis(),
-    };
-
-    db.where.mockResolvedValueOnce([drive]);
-    db.where.mockResolvedValueOnce([{ ...drive, role: 'ADMIN' }]);
+    const db = createChainDb([[drive], [{ ...drive, role: 'ADMIN' }]]);
 
     const result = await collectUserDrives(db as never, 'user-1');
+
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('OWNER');
   });
 });
 
 describe('collectUserPages', () => {
-  it('should return pages from user drives', async () => {
+  it('given_driveIds_returnsPagesFromThoseDrives', async () => {
     const page = {
       id: 'page-1',
       title: 'Test Page',
@@ -164,196 +175,144 @@ describe('collectUserPages', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([page]),
-      innerJoin: vi.fn().mockReturnThis(),
-    };
+    const db = createChainDb([[page]]);
 
     const result = await collectUserPages(db as never, 'user-1', ['drive-1']);
+
     expect(result).toHaveLength(1);
     expect(result[0].title).toBe('Test Page');
   });
 
-  it('should return empty array when no driveIds provided', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([]),
-      innerJoin: vi.fn().mockReturnThis(),
-    };
+  it('given_emptyDriveIds_returnsEmptyArrayWithoutQuery', async () => {
+    const db = createChainDb([]);
 
     const result = await collectUserPages(db as never, 'user-1', []);
+
     expect(result).toEqual([]);
   });
 
-  it('should fetch drives when preloadedDriveIds not provided', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(),
-      innerJoin: vi.fn().mockReturnThis(),
-    };
-
-    // collectUserDrives calls: owned drives, member drives
-    db.where.mockResolvedValueOnce([]);  // owned drives
-    db.where.mockResolvedValueOnce([]);  // member drives
-    // no driveIds → empty result
+  it('given_noPreloadedDriveIds_fetchesDrivesFirst', async () => {
+    // owned drives → empty, member drives → empty → no pages
+    const db = createChainDb([[], []]);
 
     const result = await collectUserPages(db as never, 'user-1');
+
     expect(result).toEqual([]);
   });
 });
 
 describe('collectUserMessages', () => {
-  it('should collect messages from all sources', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(),
-    };
-
+  it('given_messagesInAllSources_aggregatesWithCorrectSourceLabels', async () => {
     const aiMsg = { id: 'm1', content: 'AI msg', role: 'user', pageId: 'p1', conversationId: 'c1', createdAt: new Date() };
     const channelMsg = { id: 'm2', content: 'Channel msg', pageId: 'p2', createdAt: new Date() };
     const convMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date() };
     const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
-
-    db.where
-      .mockResolvedValueOnce([aiMsg])
-      .mockResolvedValueOnce([channelMsg])
-      .mockResolvedValueOnce([convMsg])
-      .mockResolvedValueOnce([dmMsg]);
+    const db = createChainDb([[aiMsg], [channelMsg], [convMsg], [dmMsg]]);
 
     const result = await collectUserMessages(db as never, 'user-1');
+
     expect(result).toHaveLength(4);
-    expect(result[0].source).toBe('ai_chat');
-    expect(result[1].source).toBe('channel');
-    expect(result[2].source).toBe('conversation');
-    expect(result[3].source).toBe('direct_message');
+    expect(result.map(r => r.source)).toEqual([
+      'ai_chat', 'channel', 'conversation', 'direct_message',
+    ]);
+  });
+
+  it('given_noMessages_returnsEmptyArray', async () => {
+    const db = createChainDb([[], [], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toEqual([]);
   });
 });
 
 describe('collectUserFiles', () => {
-  it('should return files created by user', async () => {
+  it('given_filesExist_returnsFileMetadata', async () => {
     const file = {
       id: 'f1', driveId: 'd1', sizeBytes: 1024,
       mimeType: 'text/plain', storagePath: '/path', createdAt: new Date(),
     };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([file]),
-    };
+    const db = createChainDb([[file]]);
 
     const result = await collectUserFiles(db as never, 'user-1');
+
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe('f1');
+    expect(result[0]).toEqual(expect.objectContaining({ id: 'f1', sizeBytes: 1024 }));
   });
 });
 
 describe('collectUserActivity', () => {
-  it('should return activity logs for user', async () => {
+  it('given_activityExists_returnsLogs', async () => {
     const activity = {
       id: 'a1', operation: 'create', resourceType: 'page',
       resourceId: 'p1', timestamp: new Date(), metadata: null,
     };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([activity]),
-    };
+    const db = createChainDb([[activity]]);
 
     const result = await collectUserActivity(db as never, 'user-1');
+
     expect(result).toHaveLength(1);
     expect(result[0].operation).toBe('create');
   });
 });
 
 describe('collectUserAiUsage', () => {
-  it('should return AI usage logs for user', async () => {
+  it('given_usageExists_returnsLogs', async () => {
     const usage = {
       id: 'u1', provider: 'openai', model: 'gpt-4',
       inputTokens: 100, outputTokens: 50, cost: 0.01, timestamp: new Date(),
     };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([usage]),
-    };
+    const db = createChainDb([[usage]]);
 
     const result = await collectUserAiUsage(db as never, 'user-1');
+
     expect(result).toHaveLength(1);
-    expect(result[0].provider).toBe('openai');
+    expect(result[0]).toEqual(expect.objectContaining({ provider: 'openai', model: 'gpt-4' }));
   });
 });
 
 describe('collectUserTasks', () => {
-  it('should return task lists with items', async () => {
+  it('given_tasksExist_returnsListsWithItems', async () => {
     const list = { id: 'tl1', title: 'My Tasks' };
     const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListId: 'tl1', createdAt: new Date() };
-
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(),
-    };
-
-    db.where.mockResolvedValueOnce([list]);  // task lists
-    db.where.mockResolvedValueOnce([item]);  // task items
+    const db = createChainDb([[list], [item]]);
 
     const result = await collectUserTasks(db as never, 'user-1');
+
     expect(result).toHaveLength(1);
     expect(result[0].listTitle).toBe('My Tasks');
     expect(result[0].items).toHaveLength(1);
     expect(result[0].items[0].title).toBe('Task 1');
   });
 
-  it('should return empty array when user has no task lists', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([]),
-    };
+  it('given_noTaskLists_returnsEmptyArray', async () => {
+    const db = createChainDb([[]]);
 
     const result = await collectUserTasks(db as never, 'user-1');
+
     expect(result).toEqual([]);
   });
 
-  it('should handle lists with no items', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(),
-    };
-
-    db.where.mockResolvedValueOnce([{ id: 'tl1', title: 'Empty List' }]);
-    db.where.mockResolvedValueOnce([]);
+  it('given_listsWithNoItems_returnsListsWithEmptyItemsArray', async () => {
+    const db = createChainDb([[{ id: 'tl1', title: 'Empty List' }], []]);
 
     const result = await collectUserTasks(db as never, 'user-1');
+
     expect(result).toHaveLength(1);
     expect(result[0].items).toEqual([]);
   });
 });
 
 describe('collectAllUserData', () => {
-  it('should return null when user does not exist', async () => {
-    const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn(() => ({ limit: vi.fn().mockReturnValue([]) })),
-      innerJoin: vi.fn().mockReturnThis(),
-    };
+  it('given_userDoesNotExist_returnsNull', async () => {
+    const db = createLimitDb([]);
 
     const result = await collectAllUserData(db as never, 'nonexistent');
+
     expect(result).toBeNull();
   });
 
-  it('should aggregate all user data when user exists', async () => {
+  it('given_userExists_aggregatesAllDataCategories', async () => {
     const profile = {
       id: 'user-1', name: 'Test', email: 'test@test.com',
       image: null, timezone: 'UTC', createdAt: new Date(), updatedAt: new Date(),
@@ -366,18 +325,18 @@ describe('collectAllUserData', () => {
       where: vi.fn(() => {
         callCount++;
         if (callCount === 1) {
-          // collectUserProfile: returns chain with .limit()
           return { limit: vi.fn().mockReturnValue([profile]) };
         }
-        // All other calls return empty arrays
         return [];
       }),
       innerJoin: vi.fn().mockReturnThis(),
     };
 
     const result = await collectAllUserData(db as never, 'user-1');
+
     expect(result).not.toBeNull();
     expect(result!.profile.id).toBe('user-1');
+    expect(result!.profile.email).toBe('test@test.com');
     expect(Array.isArray(result!.drives)).toBe(true);
     expect(Array.isArray(result!.pages)).toBe(true);
     expect(Array.isArray(result!.messages)).toBe(true);

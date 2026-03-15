@@ -1,3 +1,8 @@
+/**
+ * @scaffold - ORM chain mocks present. Pending drive-role-repository seam
+ * extraction to replace select().from().where() and update/insert chains
+ * with a mockable repository interface.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {
@@ -52,7 +57,19 @@ import {
   validateRolePermissions,
 } from '../drive-role-service';
 
-const mockDb = db as any;
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    driveRoles: { findMany: MockFn; findFirst: MockFn };
+    driveMembers: { findFirst: MockFn };
+  };
+  select: MockFn;
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  transaction: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('drive-role-service', () => {
   beforeEach(() => {

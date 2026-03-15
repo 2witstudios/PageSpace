@@ -1,3 +1,7 @@
+/**
+ * @scaffold - ORM query mock present (db.query.mcpTokens.findFirst).
+ * Pending token-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => ({
@@ -57,7 +61,15 @@ describe('token-lookup', () => {
 
       const result = await findMCPTokenByValue('mcp_some-valid-token');
       expect(result).toEqual(mockRecord);
-      expect(db.query.mcpTokens.findFirst).toHaveBeenCalledTimes(1);
+      expect(db.query.mcpTokens.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          with: expect.objectContaining({
+            user: expect.objectContaining({
+              columns: { id: true, tokenVersion: true, role: true },
+            }),
+          }),
+        })
+      );
     });
 
     it('should return null when no matching token found', async () => {

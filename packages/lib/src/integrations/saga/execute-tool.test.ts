@@ -170,7 +170,14 @@ describe('executeToolSaga', () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual([{ name: 'repo1' }, { name: 'repo2' }]);
-    expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(mockLogAudit).toHaveBeenCalledTimes(1);
+    expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      connectionId: 'conn-123',
+      toolName: 'list_repos',
+      driveId: 'drive-1',
+      responseCode: 200,
+    }));
   });
 
   it('given provider default headers, should merge them into the executed request', async () => {
@@ -236,11 +243,15 @@ describe('executeToolSaga', () => {
     const result = await executeToolSaga(request, mockDeps);
 
     expect(result.success).toBe(false);
+    expect(result.errorType).toBe('validation');
     expect(result.error).toContain('not in allowed list');
     expect(executeHttpRequest).not.toHaveBeenCalled();
+    expect(mockLogAudit).toHaveBeenCalledTimes(1);
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
       errorType: 'TOOL_NOT_ALLOWED',
+      connectionId: 'conn-123',
+      toolName: 'delete_repo',
     }));
   });
 
@@ -261,6 +272,7 @@ describe('executeToolSaga', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('Rate limit exceeded');
+    expect(result.errorType).toBe('rate_limit');
     expect(result.retryAfter).toBe(30);
     expect(executeHttpRequest).not.toHaveBeenCalled();
   });
@@ -293,10 +305,14 @@ describe('executeToolSaga', () => {
     const result = await executeToolSaga(request, mockDeps);
 
     expect(result.success).toBe(false);
+    expect(result.errorType).toBe('http');
     expect(result.error).toContain('401');
+    expect(mockLogAudit).toHaveBeenCalledTimes(1);
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
       responseCode: 401,
+      connectionId: 'conn-123',
+      toolName: 'list_repos',
     }));
   });
 
@@ -357,7 +373,7 @@ describe('executeToolSaga', () => {
     }));
   });
 
-  it('given successful execution, should log audit entry', async () => {
+  it('given successful execution, should log audit entry with connection and tool details', async () => {
     mockLoadConnection.mockResolvedValue(createTestConnection());
 
     const request: ToolCallRequest = {
@@ -371,9 +387,13 @@ describe('executeToolSaga', () => {
 
     await executeToolSaga(request, mockDeps);
 
+    expect(mockLogAudit).toHaveBeenCalledTimes(1);
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
       responseCode: 200,
+      connectionId: 'conn-123',
+      toolName: 'list_repos',
+      driveId: 'drive-1',
     }));
   });
 
@@ -404,10 +424,14 @@ describe('executeToolSaga', () => {
 
     await executeToolSaga(request, mockDeps);
 
+    expect(mockLogAudit).toHaveBeenCalledTimes(1);
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
       errorMessage: 'Server error',
       responseCode: 500,
+      connectionId: 'conn-123',
+      toolName: 'list_repos',
+      driveId: 'drive-1',
     }));
   });
 
@@ -426,10 +450,15 @@ describe('executeToolSaga', () => {
     const result = await executeToolSaga(request, mockDeps);
 
     expect(result.success).toBe(false);
+    expect(result.errorType).toBe('validation');
     expect(result.error).toContain('expired');
+    expect(executeHttpRequest).not.toHaveBeenCalled();
+    expect(mockLogAudit).toHaveBeenCalledTimes(1);
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
       errorType: 'INTEGRATION_INACTIVE',
+      connectionId: 'conn-123',
+      toolName: 'list_repos',
     }));
   });
 

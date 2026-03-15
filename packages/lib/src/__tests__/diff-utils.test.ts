@@ -14,7 +14,7 @@ import {
 describe('diff-utils', () => {
   describe('diffContent', () => {
     describe('basic text diffing', () => {
-      it('detects no changes for identical content', () => {
+      it('given_identicalContent_returnsIsIdenticalWithSingleUnchangedChunk', () => {
         const result = diffContent('Hello World', 'Hello World');
 
         expect(result.isIdentical).toBe(true);
@@ -23,40 +23,42 @@ describe('diff-utils', () => {
         expect(result.changes[0].value).toBe('Hello World');
       });
 
-      it('detects additions', () => {
+      it('given_addedSuffix_reportsExactAdditionCount', () => {
         const result = diffContent('Hello', 'Hello World');
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.additions).toBeGreaterThan(0);
-        expect(result.changes.some((c) => c.type === 'add' && c.value.includes('World'))).toBe(true);
+        expect(result.stats.additions).toBe(6);
+        const addChange = result.changes.find((c) => c.type === 'add');
+        expect(addChange).toEqual(expect.objectContaining({ type: 'add' }));
+        expect(addChange!.value).toContain('World');
       });
 
-      it('detects deletions', () => {
+      it('given_removedSuffix_reportsExactDeletionCount', () => {
         const result = diffContent('Hello World', 'Hello');
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.deletions).toBeGreaterThan(0);
-        expect(result.changes.some((c) => c.type === 'remove' && c.value.includes('World'))).toBe(
-          true
-        );
+        expect(result.stats.deletions).toBe(6);
+        const removeChange = result.changes.find((c) => c.type === 'remove');
+        expect(removeChange).toEqual(expect.objectContaining({ type: 'remove' }));
+        expect(removeChange!.value).toContain('World');
       });
 
-      it('detects modifications', () => {
+      it('given_modifiedSuffix_reportsSymmetricAdditionsAndDeletions', () => {
         const result = diffContent('Hello World', 'Hello There');
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.additions).toBeGreaterThan(0);
-        expect(result.stats.deletions).toBeGreaterThan(0);
+        expect(result.stats.additions).toBe(5);
+        expect(result.stats.deletions).toBe(5);
       });
 
-      it('handles empty strings', () => {
+      it('given_emptyStrings_returnsIdenticalWithNoChanges', () => {
         const result = diffContent('', '');
 
         expect(result.isIdentical).toBe(true);
         expect(result.changes).toHaveLength(0);
       });
 
-      it('handles empty to non-empty', () => {
+      it('given_emptyToNonEmpty_reportsAllAsAdditions', () => {
         const result = diffContent('', 'Hello');
 
         expect(result.isIdentical).toBe(false);
@@ -64,7 +66,7 @@ describe('diff-utils', () => {
         expect(result.stats.deletions).toBe(0);
       });
 
-      it('handles non-empty to empty', () => {
+      it('given_nonEmptyToEmpty_reportsAllAsDeletions', () => {
         const result = diffContent('Hello', '');
 
         expect(result.isIdentical).toBe(false);
@@ -72,7 +74,7 @@ describe('diff-utils', () => {
         expect(result.stats.deletions).toBe(5);
       });
 
-      it('handles null/undefined inputs gracefully', () => {
+      it('given_nullUndefinedInputs_treatsAsEmptyStrings', () => {
         const result1 = diffContent(null as unknown as string, 'Hello');
         expect(result1.isIdentical).toBe(false);
         expect(result1.stats.additions).toBe(5);
@@ -87,13 +89,13 @@ describe('diff-utils', () => {
     });
 
     describe('format detection', () => {
-      it('detects text format', () => {
+      it('given_plainText_detectsTextFormat', () => {
         const result = diffContent('Plain text content', 'Plain text modified');
 
         expect(result.format).toBe('text');
       });
 
-      it('detects HTML format', () => {
+      it('given_htmlContent_detectsHtmlFormat', () => {
         const oldHtml = '<div><p>Hello</p></div>';
         const newHtml = '<div><p>World</p></div>';
         const result = diffContent(oldHtml, newHtml);
@@ -101,7 +103,7 @@ describe('diff-utils', () => {
         expect(result.format).toBe('html');
       });
 
-      it('detects JSON format', () => {
+      it('given_jsonContent_detectsJsonFormat', () => {
         const oldJson = '{"key": "value1"}';
         const newJson = '{"key": "value2"}';
         const result = diffContent(oldJson, newJson);
@@ -109,7 +111,7 @@ describe('diff-utils', () => {
         expect(result.format).toBe('json');
       });
 
-      it('detects tiptap format', () => {
+      it('given_tiptapContent_detectsTiptapFormat', () => {
         const oldTiptap = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] });
         const newTiptap = JSON.stringify({ type: 'doc', content: [{ type: 'heading' }] });
         const result = diffContent(oldTiptap, newTiptap);
@@ -117,7 +119,7 @@ describe('diff-utils', () => {
         expect(result.format).toBe('tiptap');
       });
 
-      it('respects explicit format option', () => {
+      it('given_explicitFormatOption_usesProvidedFormat', () => {
         const result = diffContent('Hello', 'World', { format: 'html' });
 
         expect(result.format).toBe('html');
@@ -125,7 +127,7 @@ describe('diff-utils', () => {
     });
 
     describe('HTML diffing', () => {
-      it('diffs HTML content correctly', () => {
+      it('given_htmlWithTextChange_detectsNonIdentical', () => {
         const oldHtml = '<div><p>Hello World</p></div>';
         const newHtml = '<div><p>Hello There</p></div>';
         const result = diffContent(oldHtml, newHtml);
@@ -134,16 +136,16 @@ describe('diff-utils', () => {
         expect(result.isIdentical).toBe(false);
       });
 
-      it('handles nested HTML changes', () => {
+      it('given_nestedHtmlChange_reportsExactAdditions', () => {
         const oldHtml = '<div><span>Text</span></div>';
         const newHtml = '<div><span><strong>Text</strong></span></div>';
         const result = diffContent(oldHtml, newHtml);
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.additions).toBeGreaterThan(0);
+        expect(result.stats.additions).toBe(21);
       });
 
-      it('handles attribute changes', () => {
+      it('given_attributeChange_detectsNonIdentical', () => {
         const oldHtml = '<div class="old">Content</div>';
         const newHtml = '<div class="new">Content</div>';
         const result = diffContent(oldHtml, newHtml);
@@ -153,7 +155,7 @@ describe('diff-utils', () => {
     });
 
     describe('JSON diffing', () => {
-      it('diffs JSON content correctly', () => {
+      it('given_jsonValueChange_detectsNonIdentical', () => {
         const oldJson = JSON.stringify({ name: 'John', age: 30 });
         const newJson = JSON.stringify({ name: 'John', age: 31 });
         const result = diffContent(oldJson, newJson);
@@ -162,7 +164,7 @@ describe('diff-utils', () => {
         expect(result.isIdentical).toBe(false);
       });
 
-      it('handles nested JSON changes', () => {
+      it('given_nestedJsonChange_detectsNonIdentical', () => {
         const oldJson = JSON.stringify({ user: { name: 'John' } });
         const newJson = JSON.stringify({ user: { name: 'Jane' } });
         const result = diffContent(oldJson, newJson);
@@ -170,7 +172,7 @@ describe('diff-utils', () => {
         expect(result.isIdentical).toBe(false);
       });
 
-      it('supports pretty-print option', () => {
+      it('given_prettyPrintOption_detectsNonIdentical', () => {
         const oldJson = '{"key":"value1"}';
         const newJson = '{"key":"value2"}';
         const result = diffContent(oldJson, newJson, { prettyPrint: true });
@@ -189,7 +191,7 @@ describe('diff-utils', () => {
           })),
         });
 
-      it('diffs tiptap documents correctly', () => {
+      it('given_tiptapTextChange_detectsNonIdentical', () => {
         const oldDoc = createTiptapDoc(['Hello', 'World']);
         const newDoc = createTiptapDoc(['Hello', 'There']);
         const result = diffContent(oldDoc, newDoc);
@@ -198,27 +200,29 @@ describe('diff-utils', () => {
         expect(result.isIdentical).toBe(false);
       });
 
-      it('detects paragraph additions', () => {
+      it('given_paragraphAddition_reportsExactAdditionCount', () => {
         const oldDoc = createTiptapDoc(['Hello']);
         const newDoc = createTiptapDoc(['Hello', 'World']);
         const result = diffContent(oldDoc, newDoc);
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.additions).toBeGreaterThan(0);
+        expect(result.stats.additions).toBe(64);
+        expect(result.stats.deletions).toBe(0);
       });
 
-      it('detects paragraph deletions', () => {
+      it('given_paragraphDeletion_reportsExactDeletionCount', () => {
         const oldDoc = createTiptapDoc(['Hello', 'World']);
         const newDoc = createTiptapDoc(['Hello']);
         const result = diffContent(oldDoc, newDoc);
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.deletions).toBeGreaterThan(0);
+        expect(result.stats.deletions).toBe(64);
+        expect(result.stats.additions).toBe(0);
       });
     });
 
     describe('line mode', () => {
-      it('diffs by lines when lineMode is true', () => {
+      it('given_lineModeDiff_detectsNonIdentical', () => {
         const oldText = 'Line 1\nLine 2\nLine 3';
         const newText = 'Line 1\nModified Line\nLine 3';
         const result = diffContent(oldText, newText, { lineMode: true });
@@ -226,115 +230,112 @@ describe('diff-utils', () => {
         expect(result.isIdentical).toBe(false);
       });
 
-      it('is more efficient for large texts', () => {
+      it('given_largeLineModeDiff_reportsExactStats', () => {
         const lines = Array.from({ length: 100 }, (_, i) => `Line ${i}`).join('\n');
         const modifiedLines = lines.replace('Line 50', 'Modified Line 50');
 
-        const start = Date.now();
         const result = diffContent(lines, modifiedLines, { lineMode: true });
-        const duration = Date.now() - start;
 
         expect(result.isIdentical).toBe(false);
-        expect(duration).toBeLessThan(1000); // Should complete quickly
+        expect(result.stats.additions).toBe(17);
+        expect(result.stats.deletions).toBe(8);
       });
     });
 
     describe('timeout handling', () => {
-      it('respects timeout option', () => {
-        // Create content that takes a while to diff
+      it('given_timeoutOption_returnsNonIdenticalResult', () => {
         const largeContent1 = 'a'.repeat(1000);
         const largeContent2 = 'b'.repeat(1000);
 
         const result = diffContent(largeContent1, largeContent2, { timeout: 100 });
 
-        // Should still return a result (may be approximate due to timeout)
-        expect(result).toBeDefined();
         expect(result.isIdentical).toBe(false);
       });
     });
 
     describe('position tracking', () => {
-      it('tracks original positions for deletions', () => {
+      it('given_deletion_tracksOriginalPositions', () => {
         const result = diffContent('Hello World', 'Hello');
 
         const deleteChange = result.changes.find((c) => c.type === 'remove');
-        expect(deleteChange).toBeDefined();
-        expect(deleteChange?.originalStart).toBeDefined();
-        expect(deleteChange?.originalEnd).toBeDefined();
+        expect(deleteChange).toEqual(expect.objectContaining({ type: 'remove' }));
+        expect(deleteChange!.originalStart).toBe(5);
+        expect(deleteChange!.originalEnd).toBe(11);
       });
 
-      it('tracks new positions for additions', () => {
+      it('given_addition_tracksNewPositions', () => {
         const result = diffContent('Hello', 'Hello World');
 
         const addChange = result.changes.find((c) => c.type === 'add');
-        expect(addChange).toBeDefined();
-        expect(addChange?.newStart).toBeDefined();
-        expect(addChange?.newEnd).toBeDefined();
+        expect(addChange).toEqual(expect.objectContaining({ type: 'add' }));
+        expect(addChange!.newStart).toBe(5);
+        expect(addChange!.newEnd).toBe(11);
       });
 
-      it('tracks both positions for unchanged content', () => {
+      it('given_modification_tracksUnchangedPositions', () => {
         const result = diffContent('Hello World', 'Hello There');
 
         const unchangedChange = result.changes.find((c) => c.type === 'unchanged');
-        expect(unchangedChange).toBeDefined();
-        expect(unchangedChange?.originalStart).toBeDefined();
-        expect(unchangedChange?.originalEnd).toBeDefined();
-        expect(unchangedChange?.newStart).toBeDefined();
-        expect(unchangedChange?.newEnd).toBeDefined();
+        expect(unchangedChange).toEqual(expect.objectContaining({ type: 'unchanged' }));
+        expect(unchangedChange!.originalStart).toBe(0);
+        expect(unchangedChange!.originalEnd).toBe(6);
+        expect(unchangedChange!.newStart).toBe(0);
+        expect(unchangedChange!.newEnd).toBe(6);
       });
     });
 
     describe('statistics', () => {
-      it('calculates correct statistics', () => {
+      it('given_modification_calculatesExactStats', () => {
         const result = diffContent('Hello World', 'Hello There');
 
-        expect(result.stats.additions).toBeGreaterThan(0);
-        expect(result.stats.deletions).toBeGreaterThan(0);
-        expect(result.stats.unchanged).toBeGreaterThan(0);
-        expect(result.stats.totalChanges).toBeGreaterThan(0);
+        expect(result.stats.additions).toBe(5);
+        expect(result.stats.deletions).toBe(5);
+        expect(result.stats.unchanged).toBe(6);
+        expect(result.stats.totalChanges).toBe(
+          result.changes.filter(c => c.type === 'add' || c.type === 'remove').length
+        );
       });
 
-      it('totalChanges counts add and remove operations', () => {
+      it('given_modification_totalChangesEquals2', () => {
         const result = diffContent('Hello World', 'Hello There');
 
-        // totalChanges should be at least 2 (one add, one remove)
-        expect(result.stats.totalChanges).toBeGreaterThanOrEqual(2);
+        expect(result.stats.totalChanges).toBe(2);
       });
     });
   });
 
   describe('generateUnifiedDiff', () => {
-    it('generates unified diff format', () => {
+    it('given_textChange_generatesUnifiedFormat', () => {
       const patch = generateUnifiedDiff('Hello World', 'Hello There');
 
       expect(patch).toContain('---');
       expect(patch).toContain('+++');
     });
 
-    it('uses custom labels', () => {
+    it('given_customLabels_includesLabelsInHeaders', () => {
       const patch = generateUnifiedDiff('Hello', 'World', 'version1.txt', 'version2.txt');
 
       expect(patch).toContain('--- version1.txt');
       expect(patch).toContain('+++ version2.txt');
     });
 
-    it('returns empty diff for identical content', () => {
+    it('given_identicalContent_generatesHeadersOnly', () => {
       const patch = generateUnifiedDiff('Hello', 'Hello');
 
-      // Should have headers but minimal content
       expect(patch).toContain('---');
       expect(patch).toContain('+++');
     });
 
-    it('handles null/undefined inputs', () => {
+    it('given_nullInput_returnsNonEmptyPatch', () => {
       const patch = generateUnifiedDiff(null as unknown as string, 'Hello');
 
-      expect(patch).toBeDefined();
+      expect(typeof patch).toBe('string');
+      expect(patch.length).toBe(49);
     });
   });
 
   describe('applyDiff', () => {
-    it('applies a patch to restore content', () => {
+    it('given_validPatch_restoresModifiedContent', () => {
       const original = 'Hello World';
       const modified = 'Hello There';
       const patch = generateUnifiedDiff(original, modified);
@@ -345,7 +346,7 @@ describe('diff-utils', () => {
       expect(result.content).toBe(modified);
     });
 
-    it('handles round-trip diffing', () => {
+    it('given_roundTripDiff_restoresExactContent', () => {
       const version1 = 'Line 1\nLine 2\nLine 3';
       const version2 = 'Line 1\nModified\nLine 3';
 
@@ -356,29 +357,30 @@ describe('diff-utils', () => {
       expect(result.content).toBe(version2);
     });
 
-    it('returns false success for invalid patch', () => {
+    it('given_invalidPatch_returnsFalseSuccess', () => {
       const result = applyDiff('Hello', 'not a valid patch');
 
       expect(result.success).toBe(false);
     });
 
-    it('handles null base content', () => {
+    it('given_nullBaseContent_returnsSuccessWithContent', () => {
       const patch = generateUnifiedDiff('', 'Hello');
       const result = applyDiff(null as unknown as string, patch);
 
-      expect(result).toBeDefined();
+      expect(result.success).toBe(true);
+      expect(result.content).toBe('Hello');
     });
   });
 
   describe('summarizeDiff', () => {
-    it('returns "No changes" for identical content', () => {
+    it('given_identicalContent_returnsNoChangesMessage', () => {
       const result = diffContent('Hello', 'Hello');
       const summary = summarizeDiff(result);
 
       expect(summary).toBe('No changes detected');
     });
 
-    it('shows additions and deletions', () => {
+    it('given_modification_showsAdditionsAndDeletions', () => {
       const result = diffContent('Hello World', 'Hello There');
       const summary = summarizeDiff(result);
 
@@ -387,7 +389,7 @@ describe('diff-utils', () => {
       expect(summary).toContain('characters');
     });
 
-    it('shows only additions when no deletions', () => {
+    it('given_additionOnly_showsOnlyAdditions', () => {
       const result = diffContent('Hello', 'Hello World');
       const summary = summarizeDiff(result);
 
@@ -395,7 +397,7 @@ describe('diff-utils', () => {
       expect(summary).toContain('characters');
     });
 
-    it('shows only deletions when no additions', () => {
+    it('given_deletionOnly_showsOnlyDeletions', () => {
       const result = diffContent('Hello World', 'Hello');
       const summary = summarizeDiff(result);
 
@@ -403,7 +405,7 @@ describe('diff-utils', () => {
       expect(summary).toContain('characters');
     });
 
-    it('includes percentages', () => {
+    it('given_changes_includesPercentages', () => {
       const result = diffContent('Hello', 'Hello World');
       const summary = summarizeDiff(result);
 
@@ -413,7 +415,7 @@ describe('diff-utils', () => {
 
   describe('extractSections', () => {
     describe('text content', () => {
-      it('extracts paragraphs from text', () => {
+      it('given_multiParagraphText_extractsEachParagraph', () => {
         const content = 'Paragraph 1\n\nParagraph 2\n\nParagraph 3';
         const sections = extractSections(content);
 
@@ -423,26 +425,26 @@ describe('diff-utils', () => {
         expect(sections[2].content).toBe('Paragraph 3');
       });
 
-      it('handles single paragraph', () => {
+      it('given_singleParagraph_returnsSingleSection', () => {
         const sections = extractSections('Just one paragraph');
 
         expect(sections).toHaveLength(1);
         expect(sections[0].content).toBe('Just one paragraph');
       });
 
-      it('handles empty content', () => {
+      it('given_emptyContent_returnsNoSections', () => {
         const sections = extractSections('');
 
         expect(sections).toHaveLength(0);
       });
 
-      it('handles whitespace-only content', () => {
+      it('given_whitespaceOnly_returnsNoSections', () => {
         const sections = extractSections('   \n\n   ');
 
         expect(sections).toHaveLength(0);
       });
 
-      it('assigns unique IDs to sections', () => {
+      it('given_multipleParagraphs_assignsUniqueIds', () => {
         const content = 'Para 1\n\nPara 2\n\nPara 3';
         const sections = extractSections(content);
 
@@ -452,7 +454,7 @@ describe('diff-utils', () => {
     });
 
     describe('tiptap content', () => {
-      it('extracts nodes from tiptap document', () => {
+      it('given_tiptapDoc_extractsNodesWithTypes', () => {
         const tiptapDoc = JSON.stringify({
           type: 'doc',
           content: [
@@ -468,30 +470,28 @@ describe('diff-utils', () => {
         expect(sections[1].type).toBe('heading');
       });
 
-      it('handles empty tiptap document', () => {
+      it('given_emptyTiptapDoc_returnsNoSections', () => {
         const tiptapDoc = JSON.stringify({ type: 'doc', content: [] });
         const sections = extractSections(tiptapDoc);
 
         expect(sections).toHaveLength(0);
       });
 
-      it('handles invalid JSON gracefully', () => {
+      it('given_invalidJson_fallsBackToTextExtraction', () => {
         const sections = extractSections('not valid json');
 
-        // Falls back to text extraction
         expect(sections).toHaveLength(1);
         expect(sections[0].type).toBe('paragraph');
       });
 
-      it('returns empty sections when tiptap doc has no content array', () => {
-        // This tests the extractTiptapSections branch where doc.content is not an array
-        const tiptapDoc = JSON.stringify({ type: 'doc' }); // No content property
+      it('given_tiptapDocWithoutContentArray_returnsNoSections', () => {
+        const tiptapDoc = JSON.stringify({ type: 'doc' });
         const sections = extractSections(tiptapDoc);
 
         expect(sections).toHaveLength(0);
       });
 
-      it('returns empty sections when tiptap doc content is not an array', () => {
+      it('given_tiptapDocWithNonArrayContent_returnsNoSections', () => {
         const tiptapDoc = JSON.stringify({ type: 'doc', content: 'not-an-array' });
         const sections = extractSections(tiptapDoc);
 
@@ -500,12 +500,11 @@ describe('diff-utils', () => {
     });
 
     describe('HTML content', () => {
-      it('treats HTML as text for section extraction', () => {
+      it('given_htmlWithDoubleNewlines_splitsByParagraphs', () => {
         const html = '<div>Para 1</div>\n\n<div>Para 2</div>';
         const sections = extractSections(html);
 
-        // Should split by double newlines
-        expect(sections.length).toBeGreaterThan(0);
+        expect(sections).toHaveLength(2);
       });
     });
   });
@@ -520,7 +519,7 @@ describe('diff-utils', () => {
         })),
       });
 
-    it('detects added nodes', () => {
+    it('given_addedNode_detectsAddWithCorrectNodeType', () => {
       const oldDoc = createDoc([{ type: 'paragraph', text: 'Hello' }]);
       const newDoc = createDoc([
         { type: 'paragraph', text: 'Hello' },
@@ -528,11 +527,12 @@ describe('diff-utils', () => {
       ]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
+      const addedChange = changes.find((c) => c.type === 'add');
 
-      expect(changes.some((c) => c.type === 'add')).toBe(true);
+      expect(addedChange).toEqual(expect.objectContaining({ type: 'add', nodeType: 'paragraph' }));
     });
 
-    it('detects removed nodes', () => {
+    it('given_removedNode_detectsRemoveWithCorrectNodeType', () => {
       const oldDoc = createDoc([
         { type: 'paragraph', text: 'Hello' },
         { type: 'paragraph', text: 'World' },
@@ -540,20 +540,22 @@ describe('diff-utils', () => {
       const newDoc = createDoc([{ type: 'paragraph', text: 'Hello' }]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
+      const removedChange = changes.find((c) => c.type === 'remove');
 
-      expect(changes.some((c) => c.type === 'remove')).toBe(true);
+      expect(removedChange).toEqual(expect.objectContaining({ type: 'remove', nodeType: 'paragraph' }));
     });
 
-    it('detects modified nodes', () => {
+    it('given_modifiedNode_detectsModifyWithCorrectNodeType', () => {
       const oldDoc = createDoc([{ type: 'paragraph', text: 'Hello' }]);
       const newDoc = createDoc([{ type: 'paragraph', text: 'World' }]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
+      const modifiedChange = changes.find((c) => c.type === 'modify');
 
-      expect(changes.some((c) => c.type === 'modify')).toBe(true);
+      expect(modifiedChange).toEqual(expect.objectContaining({ type: 'modify', nodeType: 'paragraph' }));
     });
 
-    it('detects unchanged nodes', () => {
+    it('given_identicalDocs_allChangesAreUnchanged', () => {
       const doc = createDoc([{ type: 'paragraph', text: 'Hello' }]);
 
       const changes = diffTiptapNodes(doc, doc);
@@ -561,16 +563,16 @@ describe('diff-utils', () => {
       expect(changes.every((c) => c.type === 'unchanged')).toBe(true);
     });
 
-    it('includes node type in changes', () => {
+    it('given_nodeTypeChange_reportsNewNodeType', () => {
       const oldDoc = createDoc([{ type: 'heading', text: 'Title' }]);
       const newDoc = createDoc([{ type: 'paragraph', text: 'Title' }]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
 
-      expect(changes[0].nodeType).toBeDefined();
+      expect(changes[0].nodeType).toBe('paragraph');
     });
 
-    it('includes path in changes', () => {
+    it('given_modification_includesContentPath', () => {
       const oldDoc = createDoc([{ type: 'paragraph', text: 'Hello' }]);
       const newDoc = createDoc([{ type: 'paragraph', text: 'World' }]);
 
@@ -579,41 +581,39 @@ describe('diff-utils', () => {
       expect(changes[0].path).toBe('content[0]');
     });
 
-    it('handles empty documents', () => {
+    it('given_emptyDocuments_returnsNoChanges', () => {
       const emptyDoc = JSON.stringify({ type: 'doc', content: [] });
       const changes = diffTiptapNodes(emptyDoc, emptyDoc);
 
       expect(changes).toHaveLength(0);
     });
 
-    it('handles null/undefined content', () => {
+    it('given_nullInput_returnsSingleModifyChange', () => {
       const changes = diffTiptapNodes(null as unknown as string, 'invalid');
 
-      expect(changes).toBeDefined();
-      expect(changes.length).toBeGreaterThan(0);
+      expect(changes).toHaveLength(1);
+      expect(changes[0].type).toBe('modify');
     });
 
-    it('handles invalid JSON gracefully', () => {
+    it('given_invalidJson_returnsSingleModifyChange', () => {
       const changes = diffTiptapNodes('not json', 'also not json');
 
-      expect(changes).toBeDefined();
-      expect(changes.length).toBe(1);
+      expect(changes).toHaveLength(1);
       expect(changes[0].type).toBe('modify');
     });
   });
 
   describe('edge cases', () => {
-    it('handles very long content', () => {
+    it('given_veryLongContent_detectsNonIdentical', () => {
       const longContent = 'a'.repeat(100000);
       const modifiedContent = longContent.substring(0, 50000) + 'X' + longContent.substring(50001);
 
       const result = diffContent(longContent, modifiedContent);
 
-      expect(result).toBeDefined();
       expect(result.isIdentical).toBe(false);
     });
 
-    it('handles special characters', () => {
+    it('given_specialCharacters_detectsNonIdentical', () => {
       const content1 = 'Hello\t\n\rWorld';
       const content2 = 'Hello\t\n\rThere';
 
@@ -622,18 +622,18 @@ describe('diff-utils', () => {
       expect(result.isIdentical).toBe(false);
     });
 
-    it('handles unicode characters', () => {
+    it('given_unicodeCharacters_reportsExactStats', () => {
       const content1 = '你好世界';
       const content2 = '你好宇宙';
 
       const result = diffContent(content1, content2);
 
       expect(result.isIdentical).toBe(false);
-      expect(result.stats.additions).toBeGreaterThan(0);
-      expect(result.stats.deletions).toBeGreaterThan(0);
+      expect(result.stats.additions).toBe(2);
+      expect(result.stats.deletions).toBe(2);
     });
 
-    it('handles emoji content', () => {
+    it('given_emojiContent_detectsNonIdentical', () => {
       const content1 = 'Hello 🌍 World';
       const content2 = 'Hello 🌎 World';
 
@@ -642,40 +642,35 @@ describe('diff-utils', () => {
       expect(result.isIdentical).toBe(false);
     });
 
-    it('handles mixed newline styles', () => {
+    it('given_mixedNewlineStyles_handlesGracefully', () => {
       const content1 = 'Line 1\nLine 2\r\nLine 3';
       const content2 = 'Line 1\r\nLine 2\nLine 3';
 
       const result = diffContent(content1, content2);
 
-      // Content differs due to newline differences
-      expect(result).toBeDefined();
+      expect(typeof result.isIdentical).toBe('boolean');
     });
   });
 
   describe('integration', () => {
-    it('full workflow: diff, patch, and verify', () => {
+    it('given_fullWorkflow_diffPatchAndVerifyRoundTrip', () => {
       const original = 'The quick brown fox\njumps over\nthe lazy dog';
       const modified = 'The quick red fox\nleaps over\nthe lazy cat';
 
-      // Generate diff
       const diffResult = diffContent(original, modified);
       expect(diffResult.isIdentical).toBe(false);
 
-      // Generate patch
       const patch = generateUnifiedDiff(original, modified);
 
-      // Apply patch
       const applied = applyDiff(original, patch);
       expect(applied.success).toBe(true);
       expect(applied.content).toBe(modified);
 
-      // Summarize
       const summary = summarizeDiff(diffResult);
       expect(summary).toContain('characters');
     });
 
-    it('selective rollback workflow with tiptap', () => {
+    it('given_tiptapSelectiveRollback_detectsExactModifiedAndUnchangedNodes', () => {
       const version1 = JSON.stringify({
         type: 'doc',
         content: [
@@ -694,29 +689,24 @@ describe('diff-utils', () => {
         ],
       });
 
-      // Extract sections
       const sections1 = extractSections(version1);
       const sections2 = extractSections(version2);
 
       expect(sections1).toHaveLength(3);
       expect(sections2).toHaveLength(3);
 
-      // Diff nodes
       const nodeChanges = diffTiptapNodes(version1, version2);
 
-      // Should identify modified nodes
       const modifiedNodes = nodeChanges.filter((c) => c.type === 'modify');
-      expect(modifiedNodes.length).toBe(2); // First and third paragraphs
+      expect(modifiedNodes).toHaveLength(2);
 
-      // Unchanged node
       const unchangedNodes = nodeChanges.filter((c) => c.type === 'unchanged');
-      expect(unchangedNodes.length).toBe(1); // Second paragraph
+      expect(unchangedNodes).toHaveLength(1);
     });
   });
 
   describe('summarizeDiff edge cases', () => {
-    it('should return "No significant changes" when additions and deletions are both zero', () => {
-      // Create a diff result with zero additions and zero deletions but not identical
+    it('given_zeroAdditionsAndDeletionsButNotIdentical_returnsNoSignificantChanges', () => {
       const result = summarizeDiff({
         format: 'text',
         changes: [],
@@ -729,21 +719,19 @@ describe('diff-utils', () => {
   });
 
   describe('extractSections edge cases', () => {
-    it('should fall back to text sections when JSON parsing fails', () => {
-      // Content that detects as JSON format (starts with {) but fails to parse
+    it('given_brokenJsonDetectedAsJson_fallsBackToTextSections', () => {
       const brokenJson = '{"type": "doc", invalid json here';
       const sections = extractSections(brokenJson);
-      // Should fall back to extractTextSections, returning at least one section
-      expect(sections.length).toBeGreaterThanOrEqual(1);
+      expect(sections).toHaveLength(1);
     });
 
-    it('should handle tiptap doc without content array', () => {
+    it('given_tiptapDocWithoutContent_returnsEmptySections', () => {
       const docWithoutContent = JSON.stringify({ type: 'doc' });
       const sections = extractSections(docWithoutContent);
       expect(sections).toEqual([]);
     });
 
-    it('should handle tiptap doc with non-array content', () => {
+    it('given_tiptapDocWithNonArrayContent_returnsEmptySections', () => {
       const docWithBadContent = JSON.stringify({ type: 'doc', content: 'not-an-array' });
       const sections = extractSections(docWithBadContent);
       expect(sections).toEqual([]);
@@ -751,16 +739,14 @@ describe('diff-utils', () => {
   });
 
   describe('diffContent prettyPrint fallback', () => {
-    it('should handle prettyPrint when JSON parsing fails', () => {
-      // Content that detects as JSON (starts with {) but second value is invalid
+    it('given_prettyPrintWithInvalidJson_fallsBackToRawDiff', () => {
       const oldContent = '{"valid": true}';
       const newContent = '{"valid": true, broken}';
 
       const result = diffContent(oldContent, newContent, { prettyPrint: true });
 
-      // Should still produce a diff, falling back to raw content
-      expect(result).toBeDefined();
-      expect(result.changes).toBeDefined();
+      expect(result.isIdentical).toBe(false);
+      expect(result.changes.length).toBe(3);
     });
   });
 });
