@@ -21,7 +21,8 @@ describe('PageTreeCache', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     // Reset singleton
-    (PageTreeCache as any).instance = null;
+    // @ts-expect-error -- accessing private static for test reset
+    PageTreeCache.instance = null;
     cache = PageTreeCache.getInstance({ enableRedis: false });
   });
 
@@ -113,7 +114,8 @@ describe('PageTreeCache', () => {
   describe('shutdown', () => {
     it('should clean up and reset singleton', async () => {
       await cache.shutdown();
-      expect((PageTreeCache as any).instance).toBeNull();
+      // @ts-expect-error -- accessing private static for test verification
+      expect(PageTreeCache.instance).toBeNull();
     });
   });
 
@@ -131,7 +133,8 @@ describe('PageTreeCache', () => {
     it('should enforce max entries', async () => {
       // Create cache with small max
       await cache.shutdown();
-      (PageTreeCache as any).instance = null;
+      // @ts-expect-error -- accessing private static for test reset
+      PageTreeCache.instance = null;
       cache = PageTreeCache.getInstance({ enableRedis: false, maxMemoryEntries: 2 });
 
       await cache.setDriveTree('drive-1', 'T1', []);

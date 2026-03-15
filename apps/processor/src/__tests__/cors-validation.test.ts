@@ -1,8 +1,5 @@
 /**
- * Processor Service CORS Validation Tests
- * Tests for HTTP CORS origin validation with fail-closed production behavior
- *
- * These tests verify the defense-in-depth CORS configuration that:
+ * Tests verify the defense-in-depth CORS configuration that:
  * - Allows configured origins (CORS_ORIGIN, WEB_APP_URL, ADDITIONAL_ALLOWED_ORIGINS)
  * - Allows non-browser clients (no Origin header)
  * - Fails closed in production when no origins configured
@@ -24,102 +21,11 @@ vi.mock('@pagespace/lib/logger-config', () => ({
 }));
 
 import { loggers } from '@pagespace/lib/logger-config';
-
-/**
- * Re-implement the origin validation functions from server.ts for testing.
- * These mirror the actual implementation to verify the logic without
- * needing to export internal functions from the main module.
- */
-
-/**
- * Normalizes an origin URL by extracting protocol, host, and port
- */
-function normalizeOrigin(origin: string): string {
-  try {
-    return new URL(origin).origin;
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Gets the list of allowed origins from environment configuration
- */
-function getAllowedOrigins(): string[] {
-  const origins: string[] = [];
-
-  const corsOrigin = process.env.CORS_ORIGIN;
-  const webAppUrl = process.env.WEB_APP_URL;
-
-  if (corsOrigin) {
-    const normalized = normalizeOrigin(corsOrigin);
-    if (normalized) origins.push(normalized);
-  } else if (webAppUrl) {
-    const normalized = normalizeOrigin(webAppUrl);
-    if (normalized) origins.push(normalized);
-  }
-
-  const additional = process.env.ADDITIONAL_ALLOWED_ORIGINS;
-  if (additional) {
-    origins.push(
-      ...additional
-        .split(',')
-        .map((o) => normalizeOrigin(o.trim()))
-        .filter((o) => o.length > 0)
-    );
-  }
-
-  return origins;
-}
-
-/**
- * Result of CORS origin callback
- */
-interface CorsCallbackResult {
-  error: Error | null;
-  allowed: boolean;
-}
-
-/**
- * Simulates the CORS origin callback behavior from server.ts
- * Returns the result that would be passed to the cors middleware callback
- */
-function validateCorsOrigin(origin: string | undefined): CorsCallbackResult {
-  // No origin = non-browser client (curl, MCP, mobile) - allow
-  if (!origin) {
-    return { error: null, allowed: true };
-  }
-
-  const allowedOrigins = getAllowedOrigins();
-
-  // No config in production = fail closed
-  if (allowedOrigins.length === 0) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction) {
-      loggers.processor.error('CORS rejected: no allowed origins configured', {
-        origin,
-        severity: 'security',
-      });
-      return { error: new Error('CORS not configured'), allowed: false };
-    }
-    loggers.processor.warn('CORS: no allowed origins configured (allowing in dev)', { origin });
-    return { error: null, allowed: true };
-  }
-
-  // Check origin against allowed list
-  const normalized = normalizeOrigin(origin);
-  if (allowedOrigins.includes(normalized)) {
-    return { error: null, allowed: true };
-  }
-
-  // Reject unknown origin
-  loggers.processor.warn('CORS rejected: origin not in allowed list', {
-    origin,
-    allowedOrigins,
-    severity: 'security',
-  });
-  return { error: new Error('Origin not allowed'), allowed: false };
-}
+import {
+  normalizeOrigin,
+  getAllowedOrigins,
+  validateCorsOrigin,
+} from '../utils/cors-validation';
 
 describe('Processor CORS Validation', () => {
   const originalEnv = { ...process.env };
@@ -355,9 +261,7 @@ describe('Processor CORS Validation', () => {
 
         expect(loggers.processor.warn).toHaveBeenCalledWith(
           'CORS: no allowed origins configured (allowing in dev)',
-          expect.objectContaining({
-            origin: 'https://any-origin.example.com',
-          })
+          { origin: 'https://any-origin.example.com' }
         );
       });
 
@@ -367,7 +271,10 @@ describe('Processor CORS Validation', () => {
 
         expect(result.error).toBeNull();
         expect(result.allowed).toBe(true);
-        expect(loggers.processor.warn).toHaveBeenCalled();
+        expect(loggers.processor.warn).toHaveBeenCalledWith(
+          'CORS: no allowed origins configured (allowing in dev)',
+          { origin: 'https://any-origin.example.com' }
+        );
       });
     });
 

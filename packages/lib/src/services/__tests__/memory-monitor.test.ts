@@ -95,8 +95,7 @@ describe('memory-monitor', () => {
 
     const { checkMemoryMiddleware } = await import('../memory-monitor');
     const result = await checkMemoryMiddleware();
-    // With 94% used, it might be critical or at least canAcceptUpload might be true since 1GB > 500MB
-    // The getWarningLevel returns 'critical' at 90%+
-    expect(typeof result.allowed).toBe('boolean');
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBeDefined();
   });
 });

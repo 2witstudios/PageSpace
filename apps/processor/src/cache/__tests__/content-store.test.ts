@@ -134,8 +134,8 @@ describe('ContentStore', () => {
       const buffer = Buffer.from('image-data');
       const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
-      expect(mockMkdir).toHaveBeenCalled();
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockMkdir).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), expect.objectContaining({ recursive: true }));
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), buffer);
       expect(entry.contentHash).toBe(VALID_HASH);
       expect(entry.preset).toBe('thumbnail');
       expect(entry.size).toBe(buffer.length);
@@ -158,12 +158,12 @@ describe('ContentStore', () => {
       const buffer = Buffer.from('new-cache');
       await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
     });
 
-    it('skips unsafe metadata keys', async () => {
+    it('skips unsafe metadata keys like __proto__', async () => {
       const maliciousMetadata = JSON.stringify({
-        __proto__: { preset: 'hack' },
+        ['__proto__']: { preset: 'hack' },
         thumbnail: {
           preset: 'thumbnail',
           size: 100,
@@ -178,6 +178,15 @@ describe('ContentStore', () => {
       const buffer = Buffer.from('data');
       const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
       expect(entry).toBeTruthy();
+      expect(entry.preset).toBe('thumbnail');
+
+      // Verify __proto__ is not written back as own property
+      const writeCall = mockWriteFile.mock.calls.find(
+        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('metadata')
+      );
+      expect(writeCall).toBeDefined();
+      const written = JSON.parse(writeCall![1] as string);
+      expect(Object.hasOwn(written, '__proto__')).toBe(false);
     });
   });
 
@@ -222,7 +231,7 @@ describe('ContentStore', () => {
 
       const store = createStore();
       await store.getCache(VALID_HASH, 'thumbnail');
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
     });
 
     it('propagates non-InvalidContentHashError from getCachePath', async () => {
@@ -245,7 +254,7 @@ describe('ContentStore', () => {
       });
 
       expect(result.contentHash).toHaveLength(64);
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('test.pdf'));
     });
   });
 
@@ -262,7 +271,7 @@ describe('ContentStore', () => {
       );
 
       expect(result.contentHash).toBe(VALID_HASH);
-      expect(mockCopyFile).toHaveBeenCalled();
+      expect(mockCopyFile).toHaveBeenCalledWith('/tmp/upload-file', expect.stringContaining(VALID_HASH));
     });
 
     it('computes hash when not provided', async () => {
@@ -336,7 +345,7 @@ describe('ContentStore', () => {
 
       const store = createStore();
       await store.getOriginal(VALID_HASH);
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining(VALID_HASH));
     });
 
     it('propagates non-InvalidContentHashError from getOriginalPath', async () => {
@@ -348,9 +357,9 @@ describe('ContentStore', () => {
       expect(result).toBeNull();
     });
 
-    it('rethrows non-InvalidContentHashError from normalizeContentHash in getOriginal (lines 454-458)', async () => {
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
+    it('rethrows non-InvalidContentHashError from normalizeContentHash in getOriginal', async () => {
       const store = createStore();
-      // Override normalizeContentHash to throw a non-InvalidContentHashError
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected getOriginal normalize error');
@@ -401,7 +410,7 @@ describe('ContentStore', () => {
 
     it('skips dangerous keys', async () => {
       const metadata = JSON.stringify({
-        __proto__: { path: '/bad', size: 0, mimeType: 'x', createdAt: '', lastAccessed: '' },
+        ['__proto__']: { path: '/bad', size: 0, mimeType: 'x', createdAt: '', lastAccessed: '' },
         thumbnail: {
           path: '/cache/hash/thumbnail.jpg',
           size: 100,
@@ -560,7 +569,7 @@ describe('ContentStore', () => {
       expect(result?.uploads).toHaveLength(2);
     });
 
-    it('falls back to new Date() when uploadedAt is not a string (line 163)', async () => {
+    it('falls back to new Date() when uploadedAt is not a string', async () => {
       const raw = JSON.stringify({
         originalName: 'test.pdf',
         contentHash: VALID_HASH,
@@ -604,9 +613,9 @@ describe('ContentStore', () => {
       expect(result).toBeNull();
     });
 
-    it('rethrows non-InvalidContentHashError from normalizeContentHash (lines 193-195)', async () => {
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
+    it('rethrows non-InvalidContentHashError from normalizeContentHash', async () => {
       const store = createStore();
-      // Override normalizeContentHash to throw a non-InvalidContentHashError
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected normalize error');
@@ -628,7 +637,7 @@ describe('ContentStore', () => {
         service: 'processor',
       });
 
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('tenant-1'));
     });
 
     it('appends to existing metadata', async () => {
@@ -645,7 +654,7 @@ describe('ContentStore', () => {
       const store = createStore();
       await store.appendUploadMetadata(VALID_HASH, { tenantId: 'new-tenant' });
 
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('new-tenant'));
     });
 
     it('handles undefined options', async () => {
@@ -653,7 +662,7 @@ describe('ContentStore', () => {
       const store = createStore();
 
       await store.appendUploadMetadata(VALID_HASH);
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining(VALID_HASH));
     });
   });
 
@@ -758,24 +767,9 @@ describe('ContentStore', () => {
       expect(result).toBe(false);
     });
 
-    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError (lines 526-527)', async () => {
-      // We need to make normalizeContentHash throw something other than InvalidContentHashError.
-      // ContentStore.normalizeContentHash calls isValidContentHash and throws InvalidContentHashError for bad hashes.
-      // To hit the rethrow path we need to make the method throw a different error.
-      // We can do this by providing a hash that passes the length check but causes an unexpected error
-      // by mocking the security module's path resolution to throw.
-      // Actually the safest approach: mock path.join via the store instance to throw.
-      // Since we can't easily do that, we test a hash that triggers the AssertPathWithin check.
-      // The simplest approach: corrupt the store's storagePath after construction so assertPathWithin throws.
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
+    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in originalExists', async () => {
       const store = createStore();
-      // Temporarily break storagePath to force assertPathWithin to throw a non-InvalidContentHashError
-      // assertPathWithin throws an Error when path is outside. We can trigger it by providing a valid hash
-      // but with a crafted store where storagePath ends up mismatching.
-      // Instead, directly test that a generic Error thrown by normalizeContentHash propagates.
-      // We mock the InvalidContentHashError import to simulate a different error class being thrown.
-      // The simplest unit test: verify that a valid hash doesn't throw in try/catch for invalid hash.
-      // For the non-InvalidContentHashError path, we need to override normalizeContentHash indirectly.
-      // Use prototype patching:
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
         throw new TypeError('Unexpected type error');
@@ -807,7 +801,8 @@ describe('ContentStore', () => {
       expect(result).toBe(false);
     });
 
-    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError (lines 547-548)', async () => {
+    /** @scaffold - tests error path by overriding private method; remove when error path is testable via public API */
+    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in cacheExists', async () => {
       const store = createStore();
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {
@@ -883,7 +878,7 @@ describe('ContentStore', () => {
       const count = await store.cleanupOldCache(7 * 24 * 60 * 60 * 1000);
       expect(count).toBe(0);
       // Should write updated metadata since entries remain
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
     });
 
     it('skips dirs without metadata', async () => {

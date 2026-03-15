@@ -251,7 +251,7 @@ describe('convertIntegrationToolsToAISDK', () => {
     expect(result).toEqual({ repos: [] });
   });
 
-  it('should throw on executor error', async () => {
+  it('should throw on executor error with error message from result', async () => {
     const mockExecutor = vi.fn().mockResolvedValue({
       success: false,
       error: 'Rate limit exceeded',
@@ -262,6 +262,7 @@ describe('convertIntegrationToolsToAISDK', () => {
     const firstTool = Object.values(tools)[0];
 
     await expect(firstTool.execute({})).rejects.toThrow('Rate limit exceeded');
+    expect(mockExecutor).toHaveBeenCalledTimes(1);
   });
 
   it('should skip grants with inactive connections', () => {
@@ -331,7 +332,10 @@ describe('convertIntegrationToolsToAISDK', () => {
     const tools = convertIntegrationToolsToAISDK([mockGrant], executorContext, mockExecutor);
     const firstTool = Object.values(tools)[0];
 
-    await expect(firstTool.execute({})).rejects.toThrow('Integration tool execution failed');
+    const error = await firstTool.execute({}).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Integration tool execution failed');
+    expect(mockExecutor).toHaveBeenCalledTimes(1);
   });
 
   it('should skip tools whose schema conversion throws', () => {
@@ -368,7 +372,11 @@ describe('convertIntegrationToolsToAISDK', () => {
     const tools = convertIntegrationToolsToAISDK([grantWithBadTool], executorContext, mockExecutor);
 
     // Bad tool should be skipped, but the two valid tools should be present
-    expect(Object.keys(tools)).toHaveLength(2);
+    const toolNames = Object.keys(tools);
+    expect(toolNames).toHaveLength(2);
+    expect(toolNames.every((name) => !name.includes('bad_tool'))).toBe(true);
+    expect(toolNames.some((name) => name.includes('list_repos'))).toBe(true);
+    expect(toolNames.some((name) => name.includes('create_issue'))).toBe(true);
   });
 });
 

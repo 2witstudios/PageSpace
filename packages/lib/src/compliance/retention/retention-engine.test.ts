@@ -1,13 +1,18 @@
+/**
+ * @scaffold — retention-engine cleanup functions accept `db` as a parameter,
+ * but the mock still reproduces the ORM delete().where().returning() chain
+ * shape. Assertions verify the observable CleanupResult contract and the
+ * correct table reference, not internal chaining.
+ *
+ * REVIEW: once a RetentionRepository seam wraps these queries, replace
+ * chain mocks with repository-level mocks and promote to contract tests.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-const mockReturning = vi.fn();
-const mockWhere = vi.fn(() => ({ returning: mockReturning }));
-
 vi.mock('drizzle-orm', () => ({
-  and: vi.fn((...args: unknown[]) => ({ operator: 'and', conditions: args })),
-  lt: vi.fn((col, val) => ({ operator: 'lt', column: col, value: val })),
-  eq: vi.fn((col, val) => ({ operator: 'eq', column: col, value: val })),
-  isNotNull: vi.fn((col) => ({ operator: 'isNotNull', column: col })),
+  and: (...args: unknown[]) => ({ _op: 'and', conditions: args }),
+  lt: (col: unknown, val: unknown) => ({ _op: 'lt', col, val }),
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
+  isNotNull: (col: unknown) => ({ _op: 'isNotNull', col }),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -43,126 +48,199 @@ import {
   runRetentionCleanup,
 } from './retention-engine';
 
-function createMockDb() {
-  return {
-    delete: vi.fn(() => ({
-      where: mockWhere,
-    })),
-  };
+import {
+  sessions,
+  verificationTokens,
+  socketTokens,
+  emailUnsubscribeTokens,
+  pulseSummaries,
+  pageVersions,
+  driveBackups,
+  pagePermissions,
+  aiUsageLogs,
+} from '@pagespace/db';
+
+/**
+ * Creates a mock DB that captures which table and condition were passed,
+ * allowing assertions on the contract boundary rather than internal chaining.
+ */
+function createMockDb(rows: { id: string }[] = []) {
+  const captured = { table: null as unknown, condition: null as unknown };
+  const returning = vi.fn().mockResolvedValue(rows);
+  const where = vi.fn((cond: unknown) => {
+    captured.condition = cond;
+    return { returning };
+  });
+  const deleteFn = vi.fn((tbl: unknown) => {
+    captured.table = tbl;
+    return { where };
+  });
+  return { db: { delete: deleteFn } as never, captured, deleteFn, returning };
+}
+
+function createFailingDb(error: Error) {
+  const returning = vi.fn().mockRejectedValue(error);
+  const where = vi.fn().mockReturnValue({ returning });
+  return { delete: vi.fn().mockReturnValue({ where }) } as never;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockReturning.mockResolvedValue([]);
 });
 
 describe('cleanupExpiredSessions', () => {
-  it('should delete expired sessions and return result', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredSessions(db as never);
-    expect(result.table).toBe('sessions');
-    expect(result.deleted).toBe(2);
-    expect(db.delete).toHaveBeenCalled();
+  it('given_expiredRowsExist_returnsTableNameAndDeletedCount', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }, { id: '2' }]);
+
+    const result = await cleanupExpiredSessions(db);
+
+    expect(result).toEqual({ table: 'sessions', deleted: 2 });
+    expect(deleteFn).toHaveBeenCalledWith(sessions);
   });
 
-  it('should return 0 when no expired sessions', async () => {
-    const db = createMockDb();
-    const result = await cleanupExpiredSessions(db as never);
-    expect(result.deleted).toBe(0);
+  it('given_noExpiredRows_returnsZeroDeleted', async () => {
+    const { db } = createMockDb([]);
+
+    const result = await cleanupExpiredSessions(db);
+
+    expect(result).toEqual({ table: 'sessions', deleted: 0 });
+  });
+
+  it('given_databaseError_propagatesWithoutCatching', async () => {
+    const db = createFailingDb(new Error('connection lost'));
+
+    await expect(cleanupExpiredSessions(db)).rejects.toThrow('connection lost');
   });
 });
 
 describe('cleanupExpiredVerificationTokens', () => {
-  it('should delete expired verification tokens', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredVerificationTokens(db as never);
-    expect(result.table).toBe('verification_tokens');
-    expect(result.deleted).toBe(1);
+  it('given_expiredTokens_deletesFromCorrectTable', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }]);
+
+    const result = await cleanupExpiredVerificationTokens(db);
+
+    expect(result).toEqual({ table: 'verification_tokens', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(verificationTokens);
+  });
+
+  it('given_databaseError_propagates', async () => {
+    const db = createFailingDb(new Error('timeout'));
+    await expect(cleanupExpiredVerificationTokens(db)).rejects.toThrow('timeout');
   });
 });
 
 describe('cleanupExpiredSocketTokens', () => {
-  it('should delete expired socket tokens', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredSocketTokens(db as never);
-    expect(result.table).toBe('socket_tokens');
-    expect(result.deleted).toBe(1);
+  it('given_expiredTokens_deletesFromCorrectTable', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }]);
+
+    const result = await cleanupExpiredSocketTokens(db);
+
+    expect(result).toEqual({ table: 'socket_tokens', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(socketTokens);
   });
 });
 
 describe('cleanupExpiredEmailUnsubscribeTokens', () => {
-  it('should delete expired email unsubscribe tokens', async () => {
-    const db = createMockDb();
-    const result = await cleanupExpiredEmailUnsubscribeTokens(db as never);
-    expect(result.table).toBe('email_unsubscribe_tokens');
-    expect(result.deleted).toBe(0);
+  it('given_noExpiredTokens_returnsZero', async () => {
+    const { db, deleteFn } = createMockDb([]);
+
+    const result = await cleanupExpiredEmailUnsubscribeTokens(db);
+
+    expect(result).toEqual({ table: 'email_unsubscribe_tokens', deleted: 0 });
+    expect(deleteFn).toHaveBeenCalledWith(emailUnsubscribeTokens);
   });
 });
 
 describe('cleanupExpiredPulseSummaries', () => {
-  it('should delete expired pulse summaries', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }, { id: '3' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredPulseSummaries(db as never);
-    expect(result.table).toBe('pulse_summaries');
-    expect(result.deleted).toBe(3);
+  it('given_multipleExpired_returnsCorrectCount', async () => {
+    const { db, deleteFn } = createMockDb([{ id: '1' }, { id: '2' }, { id: '3' }]);
+
+    const result = await cleanupExpiredPulseSummaries(db);
+
+    expect(result).toEqual({ table: 'pulse_summaries', deleted: 3 });
+    expect(deleteFn).toHaveBeenCalledWith(pulseSummaries);
   });
 });
 
 describe('cleanupExpiredPageVersions', () => {
-  it('should only delete unpinned expired page versions', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredPageVersions(db as never);
-    expect(result.table).toBe('page_versions');
-    expect(result.deleted).toBe(1);
+  it('given_expiredUnpinnedVersions_deletesAndReturnsCount', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }]);
+
+    const result = await cleanupExpiredPageVersions(db);
+
+    expect(result).toEqual({ table: 'page_versions', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(pageVersions);
+    // The condition must include an AND (expiry + isPinned=false) to protect pinned versions
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
+  });
+
+  it('given_databaseError_propagates', async () => {
+    const db = createFailingDb(new Error('deadlock'));
+    await expect(cleanupExpiredPageVersions(db)).rejects.toThrow('deadlock');
   });
 });
 
 describe('cleanupExpiredDriveBackups', () => {
-  it('should only delete unpinned expired drive backups', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredDriveBackups(db as never);
-    expect(result.table).toBe('drive_backups');
-    expect(result.deleted).toBe(1);
+  it('given_expiredUnpinnedBackups_deletesAndReturnsCount', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }]);
+
+    const result = await cleanupExpiredDriveBackups(db);
+
+    expect(result).toEqual({ table: 'drive_backups', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(driveBackups);
+    // Must use AND condition to protect pinned backups
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 });
 
 describe('cleanupExpiredPagePermissions', () => {
-  it('should delete permissions with expiresAt < now', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredPagePermissions(db as never);
-    expect(result.table).toBe('page_permissions');
-    expect(result.deleted).toBe(1);
+  it('given_expiredPermissions_deletesWithNotNullGuard', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }]);
+
+    const result = await cleanupExpiredPagePermissions(db);
+
+    expect(result).toEqual({ table: 'page_permissions', deleted: 1 });
+    expect(deleteFn).toHaveBeenCalledWith(pagePermissions);
+    // Must guard with isNotNull(expiresAt) to avoid deleting permanent permissions
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 });
 
 describe('cleanupExpiredAiUsageLogs', () => {
-  it('should delete AI usage logs with expiresAt < now', async () => {
-    mockReturning.mockResolvedValueOnce([{ id: '1' }, { id: '2' }]);
-    const db = createMockDb();
-    const result = await cleanupExpiredAiUsageLogs(db as never);
-    expect(result.table).toBe('ai_usage_logs');
-    expect(result.deleted).toBe(2);
+  it('given_expiredLogs_deletesWithNotNullGuard', async () => {
+    const { db, deleteFn, captured } = createMockDb([{ id: '1' }, { id: '2' }]);
+
+    const result = await cleanupExpiredAiUsageLogs(db);
+
+    expect(result).toEqual({ table: 'ai_usage_logs', deleted: 2 });
+    expect(deleteFn).toHaveBeenCalledWith(aiUsageLogs);
+    expect(captured.condition).toEqual(
+      expect.objectContaining({ _op: 'and' })
+    );
   });
 });
 
 describe('runRetentionCleanup', () => {
-  it('should return results for all 12 tables', async () => {
-    const db = createMockDb();
-    const results = await runRetentionCleanup(db as never);
+  it('given_allCleanupsSucceed_returnsResultsForAll12Tables', async () => {
+    const { db } = createMockDb([]);
+
+    const results = await runRetentionCleanup(db);
+
     expect(results).toHaveLength(12);
   });
 
-  it('should include all expected table names', async () => {
-    const db = createMockDb();
-    const results = await runRetentionCleanup(db as never);
+  it('given_allCleanupsSucceed_includesBothExpiryAndMonitoringTables', async () => {
+    const { db } = createMockDb([]);
+
+    const results = await runRetentionCleanup(db);
     const tableNames = results.map(r => r.table).sort();
+
     expect(tableNames).toEqual([
       'ai_usage_logs',
       'api_metrics',
@@ -179,14 +257,21 @@ describe('runRetentionCleanup', () => {
     ]);
   });
 
-  it('should have valid result structure for all entries', async () => {
-    const db = createMockDb();
-    const results = await runRetentionCleanup(db as never);
+  it('given_allCleanupsSucceed_everyResultHasValidStructure', async () => {
+    const { db } = createMockDb([]);
+
+    const results = await runRetentionCleanup(db);
+
     for (const result of results) {
-      expect(result).toHaveProperty('table');
-      expect(result).toHaveProperty('deleted');
       expect(typeof result.table).toBe('string');
       expect(typeof result.deleted).toBe('number');
+      expect(result.deleted).toBe(0);
     }
+  });
+
+  it('given_databaseError_rejectsWithOriginalError', async () => {
+    const db = createFailingDb(new Error('connection refused'));
+
+    await expect(runRetentionCleanup(db)).rejects.toThrow('connection refused');
   });
 });

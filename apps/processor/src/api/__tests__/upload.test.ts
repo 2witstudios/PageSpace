@@ -575,8 +575,16 @@ describe('upload router - single upload success paths', () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.deduplicated).toBe(false);
-    expect(mockSaveOriginalFromFile).toHaveBeenCalled();
-    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.any(Object));
+    expect(mockSaveOriginalFromFile).toHaveBeenCalledWith(
+      TEMP_PATH,
+      'test.jpg',
+      'a'.repeat(64),
+      expect.objectContaining({ driveId: 'drive-1', service: 'processor' })
+    );
+    expect(mockAddJob).toHaveBeenCalledWith('ingest-file', expect.objectContaining({
+      contentHash: 'a'.repeat(64),
+      mimeType: 'image/jpeg',
+    }));
     expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
   });
 
@@ -597,7 +605,10 @@ describe('upload router - single upload success paths', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.deduplicated).toBe(true);
-    expect(mockAppendUploadMetadata).toHaveBeenCalled();
+    expect(mockAppendUploadMetadata).toHaveBeenCalledWith(
+      'a'.repeat(64),
+      expect.objectContaining({ driveId: 'drive-1', service: 'processor' })
+    );
     expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
   });
 
@@ -666,7 +677,7 @@ describe('upload router - single upload success paths', () => {
     expect(response.body.success).toBe(true);
   });
 
-  it('handles cleanup failure during deduplication unlink (lines 178-183)', async () => {
+  it('handles cleanup failure during deduplication unlink', async () => {
     mockOriginalExists.mockResolvedValue(true);
     mockAppendUploadMetadata.mockResolvedValue(undefined);
     mockFsUnlink.mockRejectedValue(new Error('Unlink failed'));
@@ -709,7 +720,7 @@ describe('upload router - single upload success paths', () => {
     expect(response.body.error).toContain('Cannot upload on behalf of another user');
   });
 
-  it('returns 500 and cleans up when error occurs and unlink also fails (lines 254-258)', async () => {
+  it('returns 500 and cleans up when error occurs and unlink also fails', async () => {
     mockOriginalExists.mockResolvedValue(false);
     mockSaveOriginalFromFile.mockRejectedValue(new Error('Storage error'));
     // Make unlink fail during error cleanup so we hit lines 254-258
@@ -731,7 +742,7 @@ describe('upload router - single upload success paths', () => {
     expect(response.status).toBe(500);
     expect(response.body.error).toContain('Upload failed');
     // Unlink was attempted (and failed) during error cleanup
-    expect(mockFsUnlink).toHaveBeenCalled();
+    expect(mockFsUnlink).toHaveBeenCalledWith(TEMP_PATH);
   });
 });
 
@@ -802,7 +813,10 @@ describe('upload router - multiple upload success paths', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.files[0].deduplicated).toBe(true);
-    expect(mockAppendUploadMetadata).toHaveBeenCalled();
+    expect(mockAppendUploadMetadata).toHaveBeenCalledWith(
+      'a'.repeat(64),
+      expect.objectContaining({ driveId: 'drive-1', service: 'processor' })
+    );
     expect(mockSaveOriginalFromFile).not.toHaveBeenCalled();
   });
 
@@ -826,7 +840,7 @@ describe('upload router - multiple upload success paths', () => {
     expect(response.body.files[0].success).toBe(false);
   });
 
-  it('returns 403 when userId differs and hasAuthScope is false in multiple upload (lines 298-302)', async () => {
+  it('returns 403 when userId differs and hasAuthScope is false in multiple upload', async () => {
     const { hasAuthScope } = await import('../../middleware/auth');
     (hasAuthScope as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
@@ -847,7 +861,7 @@ describe('upload router - multiple upload success paths', () => {
     expect(response.body.error).toContain('Cannot upload on behalf of another user');
   });
 
-  it('returns 403 when page binding mismatches in multiple upload (lines 312-313)', async () => {
+  it('returns 403 when page binding mismatches in multiple upload', async () => {
     const app = express();
     app.use(express.json());
     app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -869,7 +883,7 @@ describe('upload router - multiple upload success paths', () => {
     expect(response.body.error).toContain('Token resource does not match requested page');
   });
 
-  it('handles cleanup failure in multi-file success cleanup loop (lines 383-388)', async () => {
+  it('handles cleanup failure in multi-file success cleanup loop', async () => {
     // Files process successfully but unlink fails during cleanup
     mockOriginalExists.mockResolvedValue(false);
     mockSaveOriginalFromFile.mockResolvedValue({ contentHash: 'a'.repeat(64), path: '/storage/hash/original' });

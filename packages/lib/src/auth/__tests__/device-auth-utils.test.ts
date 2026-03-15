@@ -1,3 +1,8 @@
+/**
+ * @scaffold - ORM chain mocks present (insert().values().returning(),
+ * update().set().where(), update().set().where().returning()).
+ * Pending device-token-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {
@@ -89,6 +94,7 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
 }));
 
 import { db } from '@pagespace/db';
+import { hashToken } from '../token-utils';
 import {
   TOKEN_LIFETIMES,
   generateDeviceToken,
@@ -106,8 +112,15 @@ import {
   validateOrCreateDeviceToken,
 } from '../device-auth-utils';
 
-// Type helpers to access mock functions
-const mockDb = db as any;
+type MockFn = ReturnType<typeof vi.fn>;
+const mockDb = db as unknown as {
+  query: {
+    deviceTokens: { findFirst: MockFn; findMany: MockFn };
+    users: { findFirst: MockFn };
+  };
+  insert: MockFn;
+  update: MockFn;
+};
 
 describe('device-auth-utils', () => {
   beforeEach(() => {
@@ -436,7 +449,7 @@ describe('device-auth-utils', () => {
       });
       expect(mockAtomicValidateOrCreate).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'user-1', deviceId: 'dev-1', platform: 'web' }),
-        expect.objectContaining({ hashToken: expect.any(Function), generateDeviceToken: expect.any(Function) }),
+        expect.objectContaining({ hashToken, generateDeviceToken }),
       );
     });
   });

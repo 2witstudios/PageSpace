@@ -1,9 +1,12 @@
 /**
- * migrate.ts Tests
+ * @scaffold - migrate.ts Tests
  *
  * migrate.ts is a script that runs drizzle migrations and calls process.exit.
  * We mock out the migrator and the db to avoid any real database connections,
  * then dynamically import the module to trigger its top-level IIFE.
+ *
+ * Suggested integration tests:
+ * - Real DB test: run migrate against test database, verify tables created
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
@@ -69,7 +72,7 @@ describe('migrate.ts', () => {
     // Allow all microtasks/promises to settle
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(migrate).toHaveBeenCalled();
+    expect(migrate).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
 

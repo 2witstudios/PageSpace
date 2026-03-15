@@ -88,9 +88,17 @@ describe('QueueManager', () => {
       const qm = new QueueManager();
       await qm.initialize();
 
-      expect(mockBossStart).toHaveBeenCalled();
-      expect(mockBossWork).toHaveBeenCalled();
-      expect(mockBossCreateQueue).toHaveBeenCalled();
+      expect(mockBossStart).toHaveBeenCalledTimes(1);
+      expect(mockBossWork).toHaveBeenCalledTimes(4);
+      expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
+      expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
+      expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
+      expect(mockBossWork.mock.calls[3][0]).toBe('ocr-process');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(4);
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('text-extract');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
     });
 
     it('handles queue creation errors gracefully', async () => {
@@ -104,7 +112,9 @@ describe('QueueManager', () => {
       const qm = new QueueManager();
       await qm.initialize();
 
-      expect(mockBossOn).toHaveBeenCalledWith('monitor-states', expect.any(Function));
+      expect(mockBossOn).toHaveBeenCalledTimes(1);
+      expect(mockBossOn.mock.calls[0][0]).toBe('monitor-states');
+      expect(typeof mockBossOn.mock.calls[0][1]).toBe('function');
     });
 
     it('updates cachedStates when monitor-states fires', async () => {
@@ -174,7 +184,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'image-optimize',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, preset: 'ai-chat' }),
         expect.objectContaining({ priority: 100 })
       );
     });
@@ -192,7 +202,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'text-extract',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'text/plain' }),
         expect.objectContaining({ priority: 50 })
       );
     });
@@ -209,7 +219,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'ingest-file',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, mimeType: 'application/pdf' }),
         expect.objectContaining({ priority: 60 })
       );
     });
@@ -222,7 +232,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'ocr-process',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1' }),
         expect.objectContaining({ priority: 10 })
       );
     });
@@ -328,7 +338,7 @@ describe('QueueManager', () => {
       await qm.initialize();
       await qm.shutdown();
 
-      expect(mockBossStop).toHaveBeenCalled();
+      expect(mockBossStop).toHaveBeenCalledTimes(1);
     });
 
     it('is safe to call when not initialized', async () => {
@@ -375,7 +385,11 @@ describe('QueueManager', () => {
       };
 
       await ingestWorker([job]);
-      expect(mockBossSend).toHaveBeenCalledWith('ocr-process', expect.any(Object), expect.any(Object));
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'ocr-process',
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1' }),
+        expect.objectContaining({ retryLimit: 3 })
+      );
 
       delete process.env.ENABLE_OCR;
     });
@@ -398,7 +412,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageCompleted).toHaveBeenCalled();
+      expect(setPageCompleted).toHaveBeenCalledWith('page-1', 'Extracted document text', { title: 'Doc' }, 'text');
       expect(result).toEqual({ success: true, status: 'completed', textLength: 23 });
     });
 
@@ -419,7 +433,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageVisual).toHaveBeenCalled();
+      expect(setPageVisual).toHaveBeenCalledWith('page-1');
       expect(result).toEqual({ success: true, status: 'visual' });
     });
 
@@ -437,7 +451,11 @@ describe('QueueManager', () => {
       };
 
       await ingestWorker([job]);
-      expect(mockBossSend).toHaveBeenCalledWith('ocr-process', expect.any(Object), expect.any(Object));
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'ocr-process',
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1' }),
+        expect.objectContaining({ retryLimit: 3 })
+      );
 
       delete process.env.ENABLE_OCR;
     });
@@ -454,7 +472,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageVisual).toHaveBeenCalled();
+      expect(setPageVisual).toHaveBeenCalledWith('page-1');
       expect(result).toEqual({ success: true, status: 'visual' });
     });
 

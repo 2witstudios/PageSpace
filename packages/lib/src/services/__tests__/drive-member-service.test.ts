@@ -1,3 +1,10 @@
+/**
+ * @scaffold - ORM chain mocks present. Pending drive-member-repository seam
+ * extraction to replace select().from().where() chains with a mockable interface.
+ *
+ * REVIEW: updateMemberPermissions test uses mockReturnValueOnce chains that
+ * encode internal query order (pages lookup, then existing permissions).
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {
@@ -58,7 +65,16 @@ import {
   listDriveMembers,
 } from '../drive-member-service';
 
-const mockDb = db as any;
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: { drives: { findFirst: MockFn } };
+  select: MockFn;
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  execute: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('drive-member-service', () => {
   beforeEach(() => {

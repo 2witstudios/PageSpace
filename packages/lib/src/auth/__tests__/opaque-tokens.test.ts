@@ -44,7 +44,7 @@ describe('Opaque Token Generation', () => {
     expect(isValidTokenFormat('ps_invalid_' + 'a'.repeat(43))).toBe(false);
     expect(isValidTokenFormat('ps_sess_' + 'a'.repeat(10))).toBe(false); // Too short
     expect(isValidTokenFormat('ps_sess_' + 'a'.repeat(200))).toBe(false); // Too long
-    expect(isValidTokenFormat(123 as any)).toBe(false); // Not a string
+    expect(isValidTokenFormat(123 as never)).toBe(false); // Not a string
   });
 
   it('extracts correct token type', () => {
