@@ -138,11 +138,12 @@ describe('BrowserSafeLogger shouldLog filtering', () => {
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   let consoleDebugSpy: ReturnType<typeof vi.spyOn>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -171,7 +172,13 @@ describe('BrowserSafeLogger shouldLog filtering', () => {
   it('SILENT level suppresses everything including fatal', () => {
     const bsl = new BrowserSafeLogger({ level: LogLevel.SILENT });
     bsl.fatal('nope');
+    bsl.error('nope');
+    bsl.warn('nope');
+    bsl.info('nope');
+    bsl.debug('nope');
+    bsl.trace('nope');
     expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(consoleWarnSpy).not.toHaveBeenCalled();
     expect(consoleLogSpy).not.toHaveBeenCalled();
     expect(consoleDebugSpy).not.toHaveBeenCalled();
   });

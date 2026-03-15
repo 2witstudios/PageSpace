@@ -83,8 +83,13 @@ import {
   type ActivityLogInput,
 } from '../activity-logger';
 
-// Flush fire-and-forget promises (single event loop tick)
-const flushMicrotasks = () => new Promise(resolve => process.nextTick(resolve));
+/**
+ * Wait for the fire-and-forget logActivity chain to settle.
+ * logActivity has multiple awaited steps (getLatestLogHash → db.insert().values()),
+ * so a single process.nextTick is insufficient. vi.waitFor polls until the final
+ * mock in the chain (mockInsertValues) has been called.
+ */
+const waitForInsert = () => vi.waitFor(() => { expect(mockInsertValues).toHaveBeenCalled(); });
 
 const baseHashData = {
   id: 'log-1',
@@ -471,8 +476,7 @@ describe('activity-logger', () => {
       const deferred = await logActivityWithTx(baseInput, mockTx);
       expect(typeof deferred).toBe('function');
       deferred!();
-      await flushMicrotasks();
-      expect(workflowHook).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => { expect(workflowHook).toHaveBeenCalledTimes(1); });
       expect(workflowHook.mock.calls[0][0].operation).toBe('update');
     });
 
@@ -534,25 +538,25 @@ describe('activity-logger', () => {
   describe('logPageActivity', () => {
     it('should call logActivity with page resource type', async () => {
       logPageActivity('u1', 'create', { id: 'p1', title: 'My Page', driveId: 'd1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('page');
     });
 
     it('should omit pageId for delete operation', async () => {
       logPageActivity('u1', 'delete', { id: 'p1', driveId: 'd1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.pageId).toBeUndefined();
     });
 
     it('should include pageId for non-delete operations', async () => {
       logPageActivity('u1', 'update', { id: 'p1', driveId: 'd1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.pageId).toBe('p1');
     });
 
     it('should default actorEmail to unknown@system', async () => {
       logPageActivity('u1', 'create', { id: 'p1', driveId: 'd1' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.actorEmail).toBe('unknown@system');
     });
 
@@ -566,7 +570,7 @@ describe('activity-logger', () => {
           streamId: 's1', streamSeq: 1, changeGroupId: 'cg1', changeGroupType: 'ai',
           stateHashBefore: 'before', stateHashAfter: 'after' }
       );
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.isAiGenerated).toBe(true);
       expect(capturedState.insertValues?.contentSnapshot).toBe('some content');
     });
@@ -576,26 +580,26 @@ describe('activity-logger', () => {
   describe('logPermissionActivity', () => {
     it('should log with permission resource type', async () => {
       logPermissionActivity('u1', 'permission_grant', { pageId: 'p1', driveId: 'd1', targetUserId: 'u2', permissions: { canView: true } }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('permission');
       expect(capturedState.insertValues?.operation).toBe('permission_grant');
     });
 
     it('should include targetUserId in metadata', async () => {
       logPermissionActivity('u1', 'permission_revoke', { pageId: 'p1', driveId: 'd1', targetUserId: 'u2' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.targetUserId).toBe('u2');
     });
 
     it('should include previousValues when provided', async () => {
       logPermissionActivity('u1', 'permission_update', { pageId: 'p1', driveId: 'd1', targetUserId: 'u2' }, { actorEmail: 'a@b.com', previousValues: { canView: true } });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toEqual({ canView: true });
     });
 
     it('should include reason in metadata when provided', async () => {
       logPermissionActivity('u1', 'permission_revoke', { pageId: 'p1', driveId: 'd1', targetUserId: 'u2' }, { actorEmail: 'a@b.com', reason: 'member_removal' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.reason).toBe('member_removal');
     });
   });
@@ -604,13 +608,13 @@ describe('activity-logger', () => {
   describe('logDriveActivity', () => {
     it('should log with drive resource type', async () => {
       logDriveActivity('u1', 'create', { id: 'd1', name: 'My Drive' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('drive');
     });
 
     it('should pass AI fields', async () => {
       logDriveActivity('u1', 'update', { id: 'd1' }, { actorEmail: 'a@b.com', isAiGenerated: true, aiProvider: 'openai', aiModel: 'gpt-4o', aiConversationId: 'c1' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.isAiGenerated).toBe(true);
     });
   });
@@ -619,14 +623,14 @@ describe('activity-logger', () => {
   describe('logAgentConfigActivity', () => {
     it('should log agent_config_update operation', async () => {
       logAgentConfigActivity('u1', { id: 'a1', name: 'Agent', driveId: 'd1' }, { updatedFields: ['prompt'] }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.operation).toBe('agent_config_update');
       expect(capturedState.insertValues?.resourceType).toBe('agent');
     });
 
     it('should use agent id as pageId', async () => {
       logAgentConfigActivity('u1', { id: 'a1', driveId: 'd1' }, {}, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.pageId).toBe('a1');
     });
   });
@@ -635,7 +639,7 @@ describe('activity-logger', () => {
   describe('logMemberActivity', () => {
     it('should log member_add operation', async () => {
       logMemberActivity('u1', 'member_add', { driveId: 'd1', targetUserId: 'u2', role: 'editor' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.operation).toBe('member_add');
     });
 
@@ -645,7 +649,7 @@ describe('activity-logger', () => {
         customRoleId: 'cr-1', previousCustomRoleId: null,
         invitedBy: 'u1', invitedAt: new Date('2024-01-01'), acceptedAt: new Date('2024-01-02'),
       }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       const prev = capturedState.insertValues?.previousValues as Record<string, unknown>;
       expect(prev?.role).toBe('viewer');
       expect(prev?.invitedBy).toBe('u1');
@@ -653,7 +657,7 @@ describe('activity-logger', () => {
 
     it('should build previousValues for member_role_change with previousRole', async () => {
       logMemberActivity('u1', 'member_role_change', { driveId: 'd1', targetUserId: 'u2', role: 'editor', previousRole: 'viewer', previousCustomRoleId: 'cr-old' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       const prev = capturedState.insertValues?.previousValues as Record<string, unknown>;
       expect(prev?.role).toBe('viewer');
       expect(prev?.customRoleId).toBe('cr-old');
@@ -661,7 +665,7 @@ describe('activity-logger', () => {
 
     it('should not set previousValues for member_add', async () => {
       logMemberActivity('u1', 'member_add', { driveId: 'd1', targetUserId: 'u2' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toBeUndefined();
     });
   });
@@ -670,33 +674,33 @@ describe('activity-logger', () => {
   describe('logRoleActivity', () => {
     it('should log role_reorder with order values', async () => {
       logRoleActivity('u1', 'role_reorder', { driveId: 'd1', previousOrder: ['r1', 'r2'], newOrder: ['r2', 'r1'] }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toEqual({ order: ['r1', 'r2'] });
       expect(capturedState.insertValues?.newValues).toEqual({ order: ['r2', 'r1'] });
     });
 
     it('should log role create with permissions', async () => {
       logRoleActivity('u1', 'create', { roleId: 'r1', driveId: 'd1', permissions: { canEdit: true }, previousPermissions: { canEdit: false } }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.newValues).toEqual({ permissions: { canEdit: true } });
       expect(capturedState.insertValues?.previousValues).toEqual({ permissions: { canEdit: false } });
     });
 
     it('should use driveId as resourceId for role_reorder', async () => {
       logRoleActivity('u1', 'role_reorder', { driveId: 'd1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceId).toBe('d1');
     });
 
     it('should not set metadata for non-reorder operations', async () => {
       logRoleActivity('u1', 'delete', { roleId: 'r1', driveId: 'd1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.metadata).toBeUndefined();
     });
 
     it('should set driveName in metadata for role_reorder', async () => {
       logRoleActivity('u1', 'role_reorder', { driveId: 'd1', driveName: 'My Drive' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.driveName).toBe('My Drive');
     });
   });
@@ -705,21 +709,21 @@ describe('activity-logger', () => {
   describe('logUserActivity', () => {
     it('should log with null driveId', async () => {
       logUserActivity('u1', 'login', { targetUserId: 'u1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('user');
       expect(capturedState.insertValues?.driveId).toBeNull();
     });
 
     it('should set previousValues when previousEmail provided', async () => {
       logUserActivity('u1', 'email_change', { targetUserId: 'u1', previousEmail: 'old@b.com', newEmail: 'new@b.com' }, { actorEmail: 'old@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toEqual({ email: 'old@b.com' });
       expect(capturedState.insertValues?.newValues).toEqual({ email: 'new@b.com' });
     });
 
     it('should not set previousValues when previousEmail is absent', async () => {
       logUserActivity('u1', 'profile_update', { targetUserId: 'u1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toBeUndefined();
     });
   });
@@ -728,19 +732,19 @@ describe('activity-logger', () => {
   describe('logTokenActivity', () => {
     it('should log token resource type for mcp tokens', async () => {
       logTokenActivity('u1', 'token_create', { tokenId: 't1', tokenType: 'mcp' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('token');
     });
 
     it('should log device resource type for device tokens', async () => {
       logTokenActivity('u1', 'token_create', { tokenId: 't1', tokenType: 'device' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('device');
     });
 
     it('should log token resource type for api tokens', async () => {
       logTokenActivity('u1', 'token_revoke', { tokenId: 't1', tokenType: 'api' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('token');
     });
   });
@@ -749,7 +753,7 @@ describe('activity-logger', () => {
   describe('logFileActivity', () => {
     it('should log file upload operation', async () => {
       logFileActivity('u1', 'upload', { fileId: 'f1', fileName: 'doc.pdf', fileType: 'pdf', fileSize: 1024, driveId: 'd1', pageId: 'p1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.resourceType).toBe('file');
       expect(capturedState.insertValues?.pageId).toBe('p1');
     });
@@ -759,20 +763,20 @@ describe('activity-logger', () => {
   describe('logMessageActivity', () => {
     it('should log message_update with content tracking', async () => {
       logMessageActivity('u1', 'message_update', { id: 'msg-1', pageId: 'p1', driveId: 'd1', conversationType: 'ai_chat' }, { actorEmail: 'a@b.com' }, { previousContent: 'old', newContent: 'new' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toEqual({ content: 'old' });
       expect(capturedState.insertValues?.newValues).toEqual({ content: 'new' });
     });
 
     it('should include conversationType in metadata', async () => {
       logMessageActivity('u1', 'message_delete', { id: 'msg-1', pageId: 'p1', driveId: null, conversationType: 'global' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.conversationType).toBe('global');
     });
 
     it('should not set previousValues when previousContent is absent', async () => {
       logMessageActivity('u1', 'create', { id: 'msg-1', pageId: 'p1', driveId: 'd1', conversationType: 'channel' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.previousValues).toBeUndefined();
     });
   });
@@ -781,7 +785,7 @@ describe('activity-logger', () => {
   describe('logRollbackActivity', () => {
     it('should log rollback operation', async () => {
       await logRollbackActivity('u1', 'src-act-1', { resourceType: 'page', resourceId: 'p1', driveId: 'd1' }, { actorEmail: 'a@b.com' });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.operation).toBe('rollback');
       expect(capturedState.insertValues?.rollbackFromActivityId).toBe('src-act-1');
     });
@@ -799,7 +803,7 @@ describe('activity-logger', () => {
 
     it('should map restoredValues to newValues and replacedValues to previousValues', async () => {
       await logRollbackActivity('u1', 'src', { resourceType: 'page', resourceId: 'p1', driveId: 'd1' }, { actorEmail: 'a@b.com' }, { restoredValues: { title: 'old' }, replacedValues: { title: 'current' } });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.newValues).toEqual({ title: 'old' });
       expect(capturedState.insertValues?.previousValues).toEqual({ title: 'current' });
     });
@@ -809,19 +813,19 @@ describe('activity-logger', () => {
   describe('logConversationUndo', () => {
     it('should log conversation_undo for messages_only mode', async () => {
       logConversationUndo('u1', 'conv-1', 'msg-1', { actorEmail: 'a@b.com' }, { mode: 'messages_only', messagesDeleted: 3, activitiesRolledBack: 0 });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.operation).toBe('conversation_undo');
     });
 
     it('should log conversation_undo_with_changes for messages_and_changes mode', async () => {
       logConversationUndo('u1', 'conv-1', 'msg-1', { actorEmail: 'a@b.com' }, { mode: 'messages_and_changes', messagesDeleted: 3, activitiesRolledBack: 2, rolledBackActivityIds: ['a1'] });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.operation).toBe('conversation_undo_with_changes');
     });
 
     it('should include undo metadata', async () => {
       logConversationUndo('u1', 'conv-1', 'msg-1', { actorEmail: 'a@b.com' }, { mode: 'messages_only', messagesDeleted: 5, activitiesRolledBack: 0, pageId: 'p1', driveId: 'd1' });
-      await flushMicrotasks();
+      await waitForInsert();
       const meta = capturedState.insertValues?.metadata as Record<string, unknown>;
       expect(meta?.messageId).toBe('msg-1');
       expect(meta?.messagesDeleted).toBe(5);
@@ -830,7 +834,7 @@ describe('activity-logger', () => {
 
     it('should default driveId to null when not provided', async () => {
       logConversationUndo('u1', 'conv-1', 'msg-1', { actorEmail: 'a@b.com' }, { mode: 'messages_only', messagesDeleted: 1, activitiesRolledBack: 0 });
-      await flushMicrotasks();
+      await waitForInsert();
       expect(capturedState.insertValues?.driveId).toBeNull();
     });
   });

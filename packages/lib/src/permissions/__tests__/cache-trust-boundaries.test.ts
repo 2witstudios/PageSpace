@@ -28,18 +28,24 @@ describe('Cache Trust Boundaries (Integration)', () => {
   });
 
   afterEach(async () => {
+    const cleanupErrors: unknown[] = [];
+    const safeCleanup = (op: Promise<unknown>) => op.catch((e) => { cleanupErrors.push(e); });
+
     // Always clear cache first to prevent stale entries from affecting next test
-    await PermissionCache.getInstance().clearAll().catch(() => {});
+    await safeCleanup(PermissionCache.getInstance().clearAll());
     // Clean up only our test data to avoid interfering with parallel tests
-    // Silent catch on each to ensure all cleanup runs even if one fails
-    if (testPage) await db.delete(pagePermissions).where(eq(pagePermissions.pageId, testPage.id)).catch(() => {});
+    if (testPage) await safeCleanup(db.delete(pagePermissions).where(eq(pagePermissions.pageId, testPage.id)));
     if (testDrive) {
-      await db.delete(pages).where(eq(pages.driveId, testDrive.id)).catch(() => {});
-      await db.delete(driveMembers).where(eq(driveMembers.driveId, testDrive.id)).catch(() => {});
-      await db.delete(drives).where(eq(drives.id, testDrive.id)).catch(() => {});
+      await safeCleanup(db.delete(pages).where(eq(pages.driveId, testDrive.id)));
+      await safeCleanup(db.delete(driveMembers).where(eq(driveMembers.driveId, testDrive.id)));
+      await safeCleanup(db.delete(drives).where(eq(drives.id, testDrive.id)));
     }
-    if (testUser) await db.delete(users).where(eq(users.id, testUser.id)).catch(() => {});
-    if (otherUser) await db.delete(users).where(eq(users.id, otherUser.id)).catch(() => {});
+    if (testUser) await safeCleanup(db.delete(users).where(eq(users.id, testUser.id)));
+    if (otherUser) await safeCleanup(db.delete(users).where(eq(users.id, otherUser.id)));
+
+    if (cleanupErrors.length > 0) {
+      console.warn(`afterEach cleanup had ${cleanupErrors.length} suppressed error(s)`);
+    }
   });
 
   describe('bypassCache enforcement', () => {
@@ -259,27 +265,32 @@ describe('Cache Trust Boundaries (Integration)', () => {
       expect(fresh).toBeNull();
     });
 
-    // REVIEW: Sleep-based timing test — relies on 700ms delay for expiration.
-    // Consider using fake timers or a configurable clock if this becomes flaky.
     it('given permission expired after caching, bypassCache returns null', async () => {
-      const expiresIn500ms = new Date(Date.now() + 500);
+      vi.useFakeTimers();
+      try {
+        const baseNow = new Date('2026-01-01T00:00:00.000Z');
+        vi.setSystemTime(baseNow);
+        const expiresIn500ms = new Date(Date.now() + 500);
 
-      await factories.createPagePermission(testPage.id, otherUser.id, {
-        canView: true,
-        canEdit: true,
-        canShare: false,
-        canDelete: false,
-        expiresAt: expiresIn500ms,
-        grantedBy: testUser.id,
-      });
+        await factories.createPagePermission(testPage.id, otherUser.id, {
+          canView: true,
+          canEdit: true,
+          canShare: false,
+          canDelete: false,
+          expiresAt: expiresIn500ms,
+          grantedBy: testUser.id,
+        });
 
-      const cached = await getUserAccessLevel(otherUser.id, testPage.id);
-      expect(cached?.canView).toBe(true);
+        const cached = await getUserAccessLevel(otherUser.id, testPage.id);
+        expect(cached?.canView).toBe(true);
 
-      await new Promise((resolve) => setTimeout(resolve, 700));
+        await vi.advanceTimersByTimeAsync(700);
 
-      const fresh = await getUserAccessLevel(otherUser.id, testPage.id, { bypassCache: true });
-      expect(fresh).toBeNull();
+        const fresh = await getUserAccessLevel(otherUser.id, testPage.id, { bypassCache: true });
+        expect(fresh).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

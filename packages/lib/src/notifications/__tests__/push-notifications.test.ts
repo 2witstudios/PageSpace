@@ -405,6 +405,7 @@ describe('APNs JWT token generation', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     delete process.env.APNS_TEAM_ID;
     delete process.env.APNS_KEY_ID;
     delete process.env.APNS_PRIVATE_KEY;

@@ -64,23 +64,29 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       expect(result).toBeNull();
     });
 
-    // REVIEW: Sleep-based timing test — relies on 50ms delay for NOW boundary expiration.
     it('given permission expiring at NOW boundary, should deny access', async () => {
-      const now = new Date();
+      vi.useFakeTimers();
+      try {
+        const baseNow = new Date('2026-01-01T00:00:00.000Z');
+        vi.setSystemTime(baseNow);
+        const now = new Date();
 
-      await factories.createPagePermission(testPage.id, otherUser.id, {
-        canView: true,
-        canEdit: true,
-        canShare: true,
-        canDelete: true,
-        expiresAt: now,
-        grantedBy: testUser.id,
-      });
+        await factories.createPagePermission(testPage.id, otherUser.id, {
+          canView: true,
+          canEdit: true,
+          canShare: true,
+          canDelete: true,
+          expiresAt: now,
+          grantedBy: testUser.id,
+        });
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+        await vi.advanceTimersByTimeAsync(50);
 
-      const result = await getUserAccessLevel(otherUser.id, testPage.id);
-      expect(result).toBeNull();
+        const result = await getUserAccessLevel(otherUser.id, testPage.id);
+        expect(result).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -456,27 +462,32 @@ describe('Zero-Trust Permission Boundaries (Integration)', () => {
       expect(afterRevoke).toBeNull();
     });
 
-    // REVIEW: Sleep-based timing test — relies on 700ms delay for expiration.
-    // Consider using fake timers or a configurable clock if this becomes flaky.
     it('given permission expired after initial grant, should deny access', async () => {
-      const expiresIn500ms = new Date(Date.now() + 500);
+      vi.useFakeTimers();
+      try {
+        const baseNow = new Date('2026-01-01T00:00:00.000Z');
+        vi.setSystemTime(baseNow);
+        const expiresIn500ms = new Date(Date.now() + 500);
 
-      await factories.createPagePermission(testPage.id, otherUser.id, {
-        canView: true,
-        canEdit: true,
-        canShare: false,
-        canDelete: false,
-        expiresAt: expiresIn500ms,
-        grantedBy: testUser.id,
-      });
+        await factories.createPagePermission(testPage.id, otherUser.id, {
+          canView: true,
+          canEdit: true,
+          canShare: false,
+          canDelete: false,
+          expiresAt: expiresIn500ms,
+          grantedBy: testUser.id,
+        });
 
-      const beforeExpiry = await getUserAccessLevel(otherUser.id, testPage.id);
-      expect(beforeExpiry?.canView).toBe(true);
+        const beforeExpiry = await getUserAccessLevel(otherUser.id, testPage.id);
+        expect(beforeExpiry?.canView).toBe(true);
 
-      await new Promise((resolve) => setTimeout(resolve, 700));
+        await vi.advanceTimersByTimeAsync(700);
 
-      const afterExpiry = await getUserAccessLevel(otherUser.id, testPage.id);
-      expect(afterExpiry).toBeNull();
+        const afterExpiry = await getUserAccessLevel(otherUser.id, testPage.id);
+        expect(afterExpiry).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
