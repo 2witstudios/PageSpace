@@ -259,7 +259,7 @@ describe('runRetentionCleanup', () => {
     for (const result of results) {
       expect(typeof result.table).toBe('string');
       expect(typeof result.deleted).toBe('number');
-      expect(result.deleted).toBeGreaterThanOrEqual(0);
+      expect(result.deleted).toBe(0);
     }
   });
 

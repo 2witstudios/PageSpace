@@ -71,7 +71,7 @@ describe('export-utils', () => {
       (HTMLtoDOCX as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('conversion failed'));
 
       await expect(generateDOCX('<p>bad</p>', 'Fail')).rejects.toThrow('Failed to generate DOCX');
-      expect(consoleSpy).toHaveBeenCalledWith('Error generating DOCX:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith('Error generating DOCX:', expect.objectContaining({ message: 'conversion failed' }));
       consoleSpy.mockRestore();
     });
   });
@@ -238,9 +238,7 @@ describe('export-utils', () => {
       // The function sets Props on the workbook object
       const bookNewMock = XLSX.utils.book_new as ReturnType<typeof vi.fn>;
       const workbook = bookNewMock.mock.results[0].value;
-      expect(workbook.Props).toBeDefined();
-      expect(workbook.Props.Title).toBe('My Workbook');
-      expect(workbook.Props.Author).toBe('PageSpace');
+      expect(workbook.Props).toMatchObject({ Title: 'My Workbook', Author: 'PageSpace' });
     });
 
     it('does not set workbook properties when title is not provided', () => {
@@ -260,7 +258,7 @@ describe('export-utils', () => {
       });
 
       expect(() => generateExcel([['A']])).toThrow('Failed to generate Excel file');
-      expect(consoleSpy).toHaveBeenCalledWith('Error generating Excel:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith('Error generating Excel:', expect.objectContaining({ message: 'write failed' }));
       consoleSpy.mockRestore();
     });
   });

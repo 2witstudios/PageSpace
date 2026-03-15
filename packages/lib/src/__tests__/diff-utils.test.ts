@@ -368,7 +368,7 @@ describe('diff-utils', () => {
       const result = applyDiff(null as unknown as string, patch);
 
       expect(result.success).toBe(true);
-      expect(result.content).toBeTruthy();
+      expect(result.content).toBe('Hello');
     });
   });
 
@@ -746,7 +746,7 @@ describe('diff-utils', () => {
       const result = diffContent(oldContent, newContent, { prettyPrint: true });
 
       expect(result.isIdentical).toBe(false);
-      expect(result.changes.length).toBeGreaterThanOrEqual(1);
+      expect(result.changes.length).toBe(3);
     });
   });
 });

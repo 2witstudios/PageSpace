@@ -111,8 +111,9 @@ describe('getRetentionCutoff', () => {
     const cutoff = getRetentionCutoff(0);
     const after = Date.now();
 
-    expect(cutoff.getTime()).toBeGreaterThanOrEqual(before);
-    expect(cutoff.getTime()).toBeLessThanOrEqual(after);
+    // 0 days retention → cutoff is approximately now (within 50ms test execution window)
+    expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - 1);
+    expect(cutoff.getTime()).toBeLessThanOrEqual(after + 1);
   });
 });
 

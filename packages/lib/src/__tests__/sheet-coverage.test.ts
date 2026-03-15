@@ -208,8 +208,7 @@ end = "B5"
 `;
 
     const parsed = parseSheetDocString(sheetDoc);
-    expect(parsed.sheets[0].ranges.highlight).toBeDefined();
-    expect(parsed.sheets[0].ranges.highlight.start).toBe('A1');
+    expect(parsed.sheets[0].ranges.highlight).toEqual({ start: 'A1', end: 'B5' });
   });
 
   it('serializes pageId in SheetDoc', () => {
@@ -517,16 +516,15 @@ describe('parser.ts error handling', () => {
   it('parses page reference with mentionType (colon in identifier)', () => {
     const tokens = tokenize('@[Sales](id1:sheet)');
     const pageToken = tokens.find(t => t.type === 'page');
-    expect(pageToken).toBeDefined();
-    const meta = pageToken!.meta!.page as { identifier?: string; mentionType?: string };
-    expect(meta.identifier).toBe('id1');
-    expect(meta.mentionType).toBe('sheet');
+    expect(pageToken).not.toBeUndefined();
+    expect((pageToken!.meta!.page as { identifier?: string; mentionType?: string }).identifier).toBe('id1');
+    expect((pageToken!.meta!.page as { identifier?: string; mentionType?: string }).mentionType).toBe('sheet');
   });
 
   it('parses page reference with empty identifier in parentheses', () => {
     const tokens = tokenize('@[Sales]()');
     const pageToken = tokens.find(t => t.type === 'page');
-    expect(pageToken).toBeDefined();
+    expect(pageToken).not.toBeUndefined();
   });
 
   it('handles grouping parentheses in formulas', () => {
