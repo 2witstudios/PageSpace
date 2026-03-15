@@ -1,5 +1,4 @@
 /**
- * @scaffold — barrel export presence check. Will be replaced by
  * behavioural tests once each module has its own dedicated suite.
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -16,7 +15,6 @@ vi.mock('@pagespace/db', () => ({
 
 import * as content from '../index';
 
-describe('content/index barrel export @scaffold', () => {
   const expectedExports = [
     // tree-utils
     'buildTree',
