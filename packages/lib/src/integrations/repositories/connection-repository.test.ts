@@ -176,7 +176,7 @@ describe('createConnection', () => {
     const result = await createConnection(mockDb, newConnection);
 
     expect(result).toEqual(expectedResult);
-    expect(mockDb.insert).toHaveBeenCalled();
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 
   it('given drive-scoped connection data, should create drive connection', async () => {
@@ -228,7 +228,7 @@ describe('getConnectionById', () => {
     const result = await getConnectionById(mockDb, 'conn-123');
 
     expect(result).toEqual(existingConnection);
-    expect(mockDb.query.integrationConnections.findFirst).toHaveBeenCalled();
+    expect(mockDb.query.integrationConnections.findFirst).toHaveBeenCalledTimes(1);
   });
 
   it('given non-existent connection ID, should return null', async () => {
@@ -369,7 +369,7 @@ describe('updateConnectionStatus', () => {
     const result = await updateConnectionStatus(mockDb, 'conn-123', 'error', 'Authentication expired');
 
     expect(result?.status).toBe('error');
-    expect(mockDb.update).toHaveBeenCalled();
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
 
   it('given non-existent connection, should return null', async () => {
@@ -411,7 +411,7 @@ describe('deleteConnection', () => {
     const result = await deleteConnection(mockDb, 'conn-123');
 
     expect(result).toEqual(deletedConnection);
-    expect(mockDb.delete).toHaveBeenCalled();
+    expect(mockDb.delete).toHaveBeenCalledTimes(1);
   });
 
   it('given non-existent connection, should return null', async () => {

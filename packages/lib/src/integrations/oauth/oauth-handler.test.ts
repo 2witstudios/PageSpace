@@ -40,7 +40,7 @@ describe('buildOAuthAuthorizationUrl', () => {
     });
 
     const parsed = new URL(url);
-    expect(parsed.searchParams.get('code_challenge')).toBeTruthy();
+    expect(typeof parsed.searchParams.get('code_challenge')).toBe('string');
     expect(parsed.searchParams.get('code_challenge_method')).toBe('S256');
   });
 
@@ -333,8 +333,10 @@ describe('generatePKCE', () => {
   it('should generate a code verifier and challenge', () => {
     const { codeVerifier, codeChallenge } = generatePKCE();
 
-    expect(codeVerifier).toBeTruthy();
-    expect(codeChallenge).toBeTruthy();
+    expect(typeof codeVerifier).toBe('string');
+    expect(codeVerifier.length).toBeGreaterThanOrEqual(43);
+    expect(typeof codeChallenge).toBe('string');
+    expect(codeChallenge.length).toBeGreaterThanOrEqual(43);
     expect(codeVerifier).not.toBe(codeChallenge);
   });
 

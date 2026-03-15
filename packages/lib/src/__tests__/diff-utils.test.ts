@@ -27,18 +27,20 @@ describe('diff-utils', () => {
         const result = diffContent('Hello', 'Hello World');
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.additions).toBeGreaterThan(0);
-        expect(result.changes.some((c) => c.type === 'add' && c.value.includes('World'))).toBe(true);
+        expect(result.stats.additions).toBe(6); // " World" = 6 chars
+        const addChange = result.changes.find((c) => c.type === 'add');
+        expect(addChange).toBeDefined();
+        expect(addChange!.value).toContain('World');
       });
 
       it('detects deletions', () => {
         const result = diffContent('Hello World', 'Hello');
 
         expect(result.isIdentical).toBe(false);
-        expect(result.stats.deletions).toBeGreaterThan(0);
-        expect(result.changes.some((c) => c.type === 'remove' && c.value.includes('World'))).toBe(
-          true
-        );
+        expect(result.stats.deletions).toBe(6); // " World" = 6 chars
+        const removeChange = result.changes.find((c) => c.type === 'remove');
+        expect(removeChange).toBeDefined();
+        expect(removeChange!.value).toContain('World');
       });
 
       it('detects modifications', () => {
@@ -226,16 +228,15 @@ describe('diff-utils', () => {
         expect(result.isIdentical).toBe(false);
       });
 
-      it('is more efficient for large texts', () => {
+      it('given_largeLineModeDiff_producesCorrectResult', () => {
         const lines = Array.from({ length: 100 }, (_, i) => `Line ${i}`).join('\n');
         const modifiedLines = lines.replace('Line 50', 'Modified Line 50');
 
-        const start = Date.now();
         const result = diffContent(lines, modifiedLines, { lineMode: true });
-        const duration = Date.now() - start;
 
         expect(result.isIdentical).toBe(false);
-        expect(duration).toBeLessThan(1000); // Should complete quickly
+        expect(result.stats.additions).toBeGreaterThan(0);
+        expect(result.stats.deletions).toBeGreaterThan(0);
       });
     });
 
@@ -291,7 +292,10 @@ describe('diff-utils', () => {
         expect(result.stats.additions).toBeGreaterThan(0);
         expect(result.stats.deletions).toBeGreaterThan(0);
         expect(result.stats.unchanged).toBeGreaterThan(0);
-        expect(result.stats.totalChanges).toBeGreaterThan(0);
+        // totalChanges = number of add + remove change entries
+        expect(result.stats.totalChanges).toBe(
+          result.changes.filter(c => c.type === 'add' || c.type === 'remove').length
+        );
       });
 
       it('totalChanges counts add and remove operations', () => {
@@ -528,8 +532,10 @@ describe('diff-utils', () => {
       ]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
+      const addedChange = changes.find((c) => c.type === 'add');
 
-      expect(changes.some((c) => c.type === 'add')).toBe(true);
+      expect(addedChange).toBeDefined();
+      expect(addedChange!.nodeType).toBe('paragraph');
     });
 
     it('detects removed nodes', () => {
@@ -540,8 +546,10 @@ describe('diff-utils', () => {
       const newDoc = createDoc([{ type: 'paragraph', text: 'Hello' }]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
+      const removedChange = changes.find((c) => c.type === 'remove');
 
-      expect(changes.some((c) => c.type === 'remove')).toBe(true);
+      expect(removedChange).toBeDefined();
+      expect(removedChange!.nodeType).toBe('paragraph');
     });
 
     it('detects modified nodes', () => {
@@ -549,8 +557,10 @@ describe('diff-utils', () => {
       const newDoc = createDoc([{ type: 'paragraph', text: 'World' }]);
 
       const changes = diffTiptapNodes(oldDoc, newDoc);
+      const modifiedChange = changes.find((c) => c.type === 'modify');
 
-      expect(changes.some((c) => c.type === 'modify')).toBe(true);
+      expect(modifiedChange).toBeDefined();
+      expect(modifiedChange!.nodeType).toBe('paragraph');
     });
 
     it('detects unchanged nodes', () => {

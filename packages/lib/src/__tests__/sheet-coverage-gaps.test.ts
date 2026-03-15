@@ -136,13 +136,12 @@ describe('formatDisplayValue edge cases', () => {
     expect(formatDisplayValue('hello')).toBe('hello');
   });
 
-  it('truncates very long numbers using toPrecision', () => {
-    // Numbers whose toString is longer than 12 chars get toPrecision(12)
-    const display = formatDisplayValue(1234567890123.456);
-    expect(display).toBeTruthy();
-    // The toPrecision(12) path was exercised; verify the result is a valid string
-    expect(typeof display).toBe('string');
-    expect(display.length).toBeGreaterThan(0);
+  it('given_longNumber_returnsTruncatedPrecision', () => {
+    const num = 1234567890123.456;
+    const display = formatDisplayValue(num);
+    // Contract: numbers whose toString > 12 chars get toPrecision(12) with trailing zeros stripped
+    const expected = num.toPrecision(12).replace(/0+$/g, '').replace(/\.$/, '');
+    expect(display).toBe(expected);
   });
 });
 
@@ -902,7 +901,7 @@ describe('update.ts - updateSheetCells catch block', () => {
     ]);
 
     expect(result.cells.ZZZ999).toBe('42');
-    expect(result.rowCount).toBeGreaterThanOrEqual(999);
+    expect(result.rowCount).toBe(999);
   });
 
   it('does not crash when decode might theoretically fail', () => {
@@ -923,7 +922,7 @@ describe('io.ts - parseSheetContent edge cases', () => {
 
     const parsed = parseSheetContent('   \n\t  ');
     expect(parsed.cells).toEqual({});
-    expect(parsed.rowCount).toBeGreaterThanOrEqual(1);
+    expect(parsed.rowCount).toBe(20); // SHEET_DEFAULT_ROWS
   });
 
   it('returns empty sheet when SheetDoc string fails to parse (line 56)', () => {
@@ -1464,10 +1463,10 @@ describe('evaluation.ts - normalizeDependencyReference edge cases (lines 534-536
     const sheet = createEmptySheet(5, 5);
     sheet.cells.A1 = '=@[Sheet2](page123:page):B5';
     const result = evaluateSheet(sheet);
-    // Without resolver, external reference returns empty string
-    expect(result.byAddress.A1).toBeDefined();
+    // Without resolver, external reference produces an error
+    expect(getDisplay(result, 'A1')).toBe('#ERROR');
     // The dependency should be tracked with normalized format
-    expect(result.byAddress.A1.dependsOn.length).toBeGreaterThanOrEqual(1);
+    expect(result.byAddress.A1.dependsOn).toHaveLength(1);
   });
 
   it('should exercise collectExternalReferences with valid external ref', () => {

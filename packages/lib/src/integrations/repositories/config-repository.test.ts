@@ -171,7 +171,7 @@ describe('getOrCreateConfig', () => {
     expect(result.enabledUserIntegrations).toBeNull();
     expect(result.driveOverrides).toEqual({});
     expect(result.inheritDriveIntegrations).toBe(true);
-    expect(mockDb.insert).toHaveBeenCalled();
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -213,7 +213,7 @@ describe('updateConfig', () => {
 
     expect(result.enabledUserIntegrations).toEqual(['conn-1', 'conn-2']);
     expect(result.inheritDriveIntegrations).toBe(false);
-    expect(mockDb.update).toHaveBeenCalled();
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
 
   it('given no existing config, should create with provided data', async () => {
@@ -241,7 +241,7 @@ describe('updateConfig', () => {
 
     expect(result.enabledUserIntegrations).toEqual(['conn-1']);
     expect(result.inheritDriveIntegrations).toBe(false);
-    expect(mockDb.insert).toHaveBeenCalled();
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 
   it('given partial update data with no existing config, should apply defaults for missing fields', async () => {

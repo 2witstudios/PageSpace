@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('drizzle-orm', () => ({
-  eq: vi.fn((col, val) => ({ operator: 'eq', column: col, value: val })),
+  eq: vi.fn((col: unknown, val: unknown) => ({ _op: 'eq', col, val })),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
-  inArray: vi.fn((col, vals) => ({ operator: 'inArray', column: col, values: vals })),
+  inArray: vi.fn((col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals })),
 }));
 
 vi.mock('@pagespace/db', () => ({
@@ -15,9 +15,10 @@ import {
   isFileOrphaned,
   deleteFileRecords,
 } from './orphan-detector';
+import { files } from '@pagespace/db';
 
 describe('findOrphanedFileRecords', () => {
-  it('should return orphaned files from query results', async () => {
+  it('given_orphanedFilesExist_returnsAllWithParsedSizeBytes', async () => {
     const db = {
       execute: vi.fn().mockResolvedValue({
         rows: [
@@ -28,21 +29,23 @@ describe('findOrphanedFileRecords', () => {
     };
 
     const result = await findOrphanedFileRecords(db as never);
+
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({ id: 'f1', storagePath: '/path/f1', driveId: 'd1', sizeBytes: 1024 });
-    expect(result[1].sizeBytes).toBe(2048); // string converted to number
+    expect(result[1].sizeBytes).toBe(2048);
   });
 
-  it('should return empty array when no orphans found', async () => {
+  it('given_noOrphans_returnsEmptyArray', async () => {
     const db = {
       execute: vi.fn().mockResolvedValue({ rows: [] }),
     };
 
     const result = await findOrphanedFileRecords(db as never);
+
     expect(result).toEqual([]);
   });
 
-  it('should handle numeric sizeBytes as-is', async () => {
+  it('given_numericSizeBytes_preservesAsIs', async () => {
     const db = {
       execute: vi.fn().mockResolvedValue({
         rows: [{ id: 'f1', storagePath: '/p', driveId: 'd1', sizeBytes: 512 }],
@@ -50,51 +53,85 @@ describe('findOrphanedFileRecords', () => {
     };
 
     const result = await findOrphanedFileRecords(db as never);
+
     expect(result[0].sizeBytes).toBe(512);
+  });
+
+  it('given_databaseError_propagates', async () => {
+    const db = {
+      execute: vi.fn().mockRejectedValue(new Error('connection refused')),
+    };
+
+    await expect(findOrphanedFileRecords(db as never)).rejects.toThrow('connection refused');
   });
 });
 
 describe('isFileOrphaned', () => {
-  it('should return true when file has no references', async () => {
+  it('given_fileHasNoReferences_returnsTrue', async () => {
     const db = {
       execute: vi.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }),
     };
 
-    const result = await isFileOrphaned(db as never, 'file-1');
-    expect(result).toBe(true);
+    expect(await isFileOrphaned(db as never, 'file-1')).toBe(true);
   });
 
-  it('should return false when file has references', async () => {
+  it('given_fileHasReferences_returnsFalse', async () => {
     const db = {
       execute: vi.fn().mockResolvedValue({ rows: [] }),
     };
 
-    const result = await isFileOrphaned(db as never, 'file-1');
-    expect(result).toBe(false);
+    expect(await isFileOrphaned(db as never, 'file-1')).toBe(false);
+  });
+
+  it('given_databaseError_propagates', async () => {
+    const db = {
+      execute: vi.fn().mockRejectedValue(new Error('timeout')),
+    };
+
+    await expect(isFileOrphaned(db as never, 'file-1')).rejects.toThrow('timeout');
   });
 });
 
 describe('deleteFileRecords', () => {
-  it('should return count of deleted records', async () => {
+  it('given_fileIds_deletesFromFilesTableAndReturnsCount', async () => {
+    const mockDeleteFn = vi.fn();
     const db = {
-      delete: vi.fn(() => ({
-        where: vi.fn(() => ({
-          returning: vi.fn().mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]),
-        })),
-      })),
+      delete: (table: unknown) => {
+        mockDeleteFn(table);
+        return {
+          where: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]),
+          })),
+        };
+      },
     };
 
     const result = await deleteFileRecords(db as never, ['f1', 'f2']);
+
     expect(result).toBe(2);
+    expect(mockDeleteFn).toHaveBeenCalledWith(files);
   });
 
-  it('should return 0 for empty array without calling DB', async () => {
+  it('given_emptyArray_returnsZeroWithoutCallingDB', async () => {
     const db = {
       delete: vi.fn(),
     };
 
     const result = await deleteFileRecords(db as never, []);
+
     expect(result).toBe(0);
     expect(db.delete).not.toHaveBeenCalled();
+  });
+
+  it('given_databaseError_propagates', async () => {
+    const db = {
+      delete: () => ({
+        where: () => ({
+          returning: vi.fn().mockRejectedValue(new Error('disk full')),
+        }),
+      }),
+    };
+
+    await expect(deleteFileRecords(db as never, ['f1'])).rejects.toThrow('disk full');
   });
 });
