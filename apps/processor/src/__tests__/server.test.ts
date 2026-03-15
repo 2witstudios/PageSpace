@@ -15,7 +15,7 @@
  *
  * Strategy
  * --------
- * server.ts calls start() as a top-level side-effect (line 231).
+ * server.ts calls start() as a top-level side-effect.
  * To prevent that side-effect from running real I/O we mock every
  * external import BEFORE the module is loaded with vi.mock(). Because
  * vi.mock() factories are hoisted to the top of the compiled output by

@@ -159,7 +159,7 @@ describe('hasAuthScope', () => {
   });
 });
 
-describe('authenticateService - catch block (lines 100-109)', () => {
+describe('authenticateService - catch block', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.NODE_ENV = 'test';
@@ -243,7 +243,7 @@ describe('authenticateService - catch block (lines 100-109)', () => {
   });
 });
 
-describe('authenticateService when AUTH_REQUIRED is false (lines 37-39)', () => {
+describe('authenticateService when AUTH_REQUIRED is false', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.NODE_ENV = 'development';
@@ -280,7 +280,7 @@ describe('authenticateService when AUTH_REQUIRED is false (lines 37-39)', () => 
   });
 });
 
-describe('requireScope when AUTH_REQUIRED is false (lines 115-117)', () => {
+describe('requireScope when AUTH_REQUIRED is false', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.NODE_ENV = 'development';

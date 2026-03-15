@@ -358,7 +358,7 @@ describe('ContentStore', () => {
       expect(result).toBeNull();
     });
 
-    it('rethrows non-InvalidContentHashError from normalizeContentHash in getOriginal (lines 454-458)', async () => {
+    it('rethrows non-InvalidContentHashError from normalizeContentHash in getOriginal', async () => {
       const store = createStore();
       // Override normalizeContentHash to throw a non-InvalidContentHashError
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
@@ -411,7 +411,7 @@ describe('ContentStore', () => {
 
     it('skips dangerous keys', async () => {
       const metadata = JSON.stringify({
-        __proto__: { path: '/bad', size: 0, mimeType: 'x', createdAt: '', lastAccessed: '' },
+        ['__proto__']: { path: '/bad', size: 0, mimeType: 'x', createdAt: '', lastAccessed: '' },
         thumbnail: {
           path: '/cache/hash/thumbnail.jpg',
           size: 100,
@@ -570,7 +570,7 @@ describe('ContentStore', () => {
       expect(result?.uploads).toHaveLength(2);
     });
 
-    it('falls back to new Date() when uploadedAt is not a string (line 163)', async () => {
+    it('falls back to new Date() when uploadedAt is not a string', async () => {
       const raw = JSON.stringify({
         originalName: 'test.pdf',
         contentHash: VALID_HASH,
@@ -614,7 +614,7 @@ describe('ContentStore', () => {
       expect(result).toBeNull();
     });
 
-    it('rethrows non-InvalidContentHashError from normalizeContentHash (lines 193-195)', async () => {
+    it('rethrows non-InvalidContentHashError from normalizeContentHash', async () => {
       const store = createStore();
       // Override normalizeContentHash to throw a non-InvalidContentHashError
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
@@ -768,7 +768,7 @@ describe('ContentStore', () => {
       expect(result).toBe(false);
     });
 
-    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError (lines 526-527)', async () => {
+    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in originalExists', async () => {
       // We need to make normalizeContentHash throw something other than InvalidContentHashError.
       // ContentStore.normalizeContentHash calls isValidContentHash and throws InvalidContentHashError for bad hashes.
       // To hit the rethrow path we need to make the method throw a different error.
@@ -817,7 +817,7 @@ describe('ContentStore', () => {
       expect(result).toBe(false);
     });
 
-    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError (lines 547-548)', async () => {
+    it('rethrows when normalizeContentHash throws a non-InvalidContentHashError in cacheExists', async () => {
       const store = createStore();
       const originalNormalize = (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash;
       (store as unknown as { normalizeContentHash: (h: string) => string }).normalizeContentHash = () => {

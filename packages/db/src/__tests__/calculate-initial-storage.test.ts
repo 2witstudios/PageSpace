@@ -282,9 +282,9 @@ describe('scripts/calculate-initial-storage.ts', () => {
     expect(allLogMessages).toContain('pro subscription');
   });
 
-  it('calls process.exit(1) via outer .catch() when console.error throws (lines 161-164)', async () => {
+  it('calls process.exit(1) via outer .catch() when console.error throws', async () => {
     // The internal try/catch calls console.error then process.exit(1).
-    // To reach the OUTER .catch() (lines 161-164), we need the function itself
+    // To reach the outer .catch(), we need the function itself
     // to throw an unhandled rejection. We achieve this by making console.error
     // throw on first call (inside the catch block), which causes the function to reject.
     selectFromQueue.push(() => Promise.reject(new Error('Fatal DB failure')));

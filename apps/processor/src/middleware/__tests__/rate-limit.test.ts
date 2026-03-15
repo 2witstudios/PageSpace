@@ -127,7 +127,7 @@ describe('rateLimitUpload', () => {
     expect(status2).toHaveBeenCalledWith(429);
   });
 
-  it('increments bucket count and allows request when bucket exists and count < limit (lines 103-104)', async () => {
+  it('increments bucket count and allows request when bucket exists and count < limit', async () => {
     process.env.PROCESSOR_UPLOAD_RATE_LIMIT = '3';
     process.env.PROCESSOR_UPLOAD_RATE_WINDOW = '3600';
     const { rateLimitUpload } = await import('../rate-limit');
@@ -153,7 +153,7 @@ describe('rateLimitUpload', () => {
     expect(next3).toHaveBeenCalledTimes(1);
   });
 
-  it('cleanup interval removes expired buckets (lines 118-123)', async () => {
+  it('cleanup interval removes expired buckets', async () => {
     vi.useFakeTimers();
     process.env.PROCESSOR_UPLOAD_RATE_LIMIT = '5';
     process.env.PROCESSOR_UPLOAD_RATE_WINDOW = '0'; // 0 seconds - immediately expires
@@ -273,7 +273,7 @@ describe('rateLimitRead (createRateLimiter)', () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  it('increments bucket count in createRateLimiter and allows when count < limit (lines 72-73)', async () => {
+  it('increments bucket count in createRateLimiter and allows when count < limit', async () => {
     process.env.PROCESSOR_READ_RATE_LIMIT = '3';
     process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
     const { rateLimitRead } = await import('../rate-limit');
@@ -286,14 +286,14 @@ describe('rateLimitRead (createRateLimiter)', () => {
     rateLimitRead(req, res1, next1);
     expect(next1).toHaveBeenCalledTimes(1);
 
-    // Second request - bucket exists, count (1) < limit (3), increments to 2, calls next (lines 72-73)
+    // Second request - bucket exists, count (1) < limit (3), increments to 2, calls next
     const { res: res2 } = createMockRes();
     const next2 = createMockNext();
     rateLimitRead(req, res2, next2);
     expect(next2).toHaveBeenCalledTimes(1);
   });
 
-  it('cleanup interval removes expired buckets in createRateLimiter (lines 40-43)', async () => {
+  it('cleanup interval removes expired buckets in createRateLimiter', async () => {
     vi.useFakeTimers();
     process.env.PROCESSOR_READ_RATE_LIMIT = '1';
     process.env.PROCESSOR_READ_RATE_WINDOW = '0'; // 0 seconds - immediately expires
