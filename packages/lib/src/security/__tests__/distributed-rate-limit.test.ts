@@ -474,17 +474,22 @@ describe('distributed-rate-limit', () => {
     });
 
     it('resets window after expiry', async () => {
-      const config: RateLimitConfig = { maxAttempts: 1, windowMs: 50 };
+      vi.useFakeTimers();
+      try {
+        const config: RateLimitConfig = { maxAttempts: 1, windowMs: 50 };
 
-      await checkDistributedRateLimit('expiry-test', config);
-      const blocked = await checkDistributedRateLimit('expiry-test', config);
-      expect(blocked.allowed).toBe(false);
+        await checkDistributedRateLimit('expiry-test', config);
+        const blocked = await checkDistributedRateLimit('expiry-test', config);
+        expect(blocked.allowed).toBe(false);
 
-      // Wait for window to expire
-      await new Promise(resolve => setTimeout(resolve, 100));
+        // Advance past the 50ms window
+        await vi.advanceTimersByTimeAsync(100);
 
-      const afterExpiry = await checkDistributedRateLimit('expiry-test', config);
-      expect(afterExpiry.allowed).toBe(true);
+        const afterExpiry = await checkDistributedRateLimit('expiry-test', config);
+        expect(afterExpiry.allowed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

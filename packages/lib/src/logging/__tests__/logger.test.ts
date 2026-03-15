@@ -785,8 +785,8 @@ describe('Logger internal error handlers (catch callbacks)', () => {
     });
     anyLogger.config.destination = 'console';
     logger.info('trigger console catch');
-    // Give the micro-task queue a chance to run the .catch()
-    await new Promise(r => setTimeout(r, 0));
+    // Flush the .catch() microtask from the rejected promise
+    await new Promise(r => process.nextTick(r));
     expect(consoleSpy).toHaveBeenCalledWith(
       '[Logger] Console write error:',
       formatError
@@ -803,7 +803,7 @@ describe('Logger internal error handlers (catch callbacks)', () => {
     // Make flush reject
     vi.spyOn(anyLogger, 'flush').mockRejectedValueOnce(flushError);
     logger.info('trigger flush catch');
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => process.nextTick(r));
     expect(consoleSpy).toHaveBeenCalledWith(
       '[Logger] Flush error:',
       flushError
