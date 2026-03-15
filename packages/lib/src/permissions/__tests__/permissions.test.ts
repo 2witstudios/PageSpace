@@ -318,6 +318,67 @@ describe('getUserAccessLevel', () => {
     expect(result).toBeNull();
   });
 
+  it('logs no-permissions message when silent=false and no explicit permissions', async () => {
+    mockValidators(true, true);
+    const page = [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner' }];
+
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
+          }),
+        }),
+      } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
+    expect(result).toBeNull();
+    expect(loggers.api.debug).toHaveBeenCalledWith(
+      expect.stringContaining('No explicit permissions found')
+    );
+  });
+
+  it('logs found-permissions message when silent=false and has explicit permissions', async () => {
+    mockValidators(true, true);
+    const page = [{ id: VALID_PAGE, driveId: VALID_DRIVE, driveOwnerId: 'other-owner' }];
+    const explicitPerm = [{ canView: true, canEdit: false, canShare: false, canDelete: false }];
+
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
+          }),
+        }),
+      } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(explicitPerm) }),
+        }),
+      } as ReturnType<typeof db.select>);
+
+    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(loggers.api.debug).toHaveBeenCalledWith(
+      expect.stringContaining('Found explicit permissions')
+    );
+  });
+
   it('returns null and logs error when DB throws', async () => {
     mockValidators(true, true);
 
@@ -835,6 +896,40 @@ describe('getUserDriveAccess', () => {
     expect(loggers.api.error).toHaveBeenCalled();
   });
 
+  it('logs owner grant message when silent=false and user is owner', async () => {
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: VALID_USER }]) }),
+      }),
+    } as ReturnType<typeof db.select>);
+
+    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    expect(result).toBe(true);
+    expect(loggers.api.debug).toHaveBeenCalledWith(
+      expect.stringContaining('User is drive owner')
+    );
+  });
+
+  it('logs membership message when silent=false and user is a drive member', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
+        }),
+      } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
+        }),
+      } as ReturnType<typeof db.select>);
+
+    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    expect(result).toBe(true);
+    expect(loggers.api.debug).toHaveBeenCalledWith(
+      expect.stringContaining('User is a drive member')
+    );
+  });
+
   it('logs debug messages when silent=false', async () => {
     vi.mocked(db.select).mockReturnValueOnce({
       from: vi.fn().mockReturnValue({
@@ -844,5 +939,38 @@ describe('getUserDriveAccess', () => {
 
     await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
+  });
+
+  it('logs page access check messages when silent=false and user is not a member', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
+        }),
+      } as ReturnType<typeof db.select>)
+      // membership check: not member
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+        }),
+      } as ReturnType<typeof db.select>)
+      // page access check: has access
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          leftJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'perm-row' }]) }),
+          }),
+        }),
+      } as ReturnType<typeof db.select>);
+
+    const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
+    expect(result).toBe(true);
+    // Should have logged "not a drive member - checking page permissions" and "Page access check result"
+    expect(loggers.api.debug).toHaveBeenCalledWith(
+      expect.stringContaining('not a drive member')
+    );
+    expect(loggers.api.debug).toHaveBeenCalledWith(
+      expect.stringContaining('Page access check result')
+    );
   });
 });

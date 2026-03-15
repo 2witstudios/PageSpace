@@ -176,6 +176,16 @@ describe('rollback-permissions', () => {
       expect(isActivityEligibleForRollback(activity)).toBe(false);
     });
 
+    it('returns true for create operations even without previousValues', () => {
+      const activity = {
+        operation: 'create',
+        previousValues: null,
+        contentSnapshot: null,
+      };
+
+      expect(isActivityEligibleForRollback(activity)).toBe(true);
+    });
+
     it('returns true for rollback operations (can undo a rollback)', () => {
       const activity = {
         operation: 'rollback',

@@ -140,6 +140,36 @@ describe('createNotification', () => {
     expect(result).toEqual(mockNotification);
   });
 
+  it('handles broadcast failure gracefully', async () => {
+    setupInsertChain(mockNotification);
+    global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+    const result = await createNotification({
+      userId: 'user-1',
+      type: 'PAGE_SHARED',
+      title: 'Test',
+      message: 'Test message',
+    });
+
+    expect(result).toEqual(mockNotification);
+  });
+
+  it('handles push notification failure gracefully', async () => {
+    setupInsertChain(mockNotification);
+    vi.mocked(sendPushNotification).mockRejectedValue(new Error('Push failed'));
+
+    const result = await createNotification({
+      userId: 'user-1',
+      type: 'PAGE_SHARED',
+      title: 'Test',
+      message: 'Test message',
+    });
+
+    expect(result).toEqual(mockNotification);
+    // Give the fire-and-forget catch handler time to execute
+    await new Promise(resolve => setTimeout(resolve, 10));
+  });
+
   it('broadcasts notification to realtime service', async () => {
     setupInsertChain(mockNotification);
     await createNotification({
