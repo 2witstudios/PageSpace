@@ -317,20 +317,24 @@ describe('writeApiMetrics', () => {
     expect(inserted.timestamp).toBe(ts);
   });
 
-  // REVIEW: Timestamp precision test — uses Date.now() before/after boundaries.
-  // On a very slow CI, the spread could be larger than expected.
   it('defaults timestamp to now when not provided', async () => {
-    const before = Date.now();
-    await writeApiMetrics({
-      endpoint: '/api/y',
-      method: 'DELETE',
-      statusCode: 204,
-      duration: 20,
-    });
-    const after = Date.now();
-    const inserted = mockValues.mock.calls[0][0] as { timestamp: Date };
-    expect(inserted.timestamp.getTime()).toBeGreaterThanOrEqual(before);
-    expect(inserted.timestamp.getTime()).toBeLessThanOrEqual(after);
+    vi.useFakeTimers();
+    try {
+      const now = new Date('2026-01-15T12:00:00.000Z');
+      vi.setSystemTime(now);
+
+      await writeApiMetrics({
+        endpoint: '/api/y',
+        method: 'DELETE',
+        statusCode: 204,
+        duration: 20,
+      });
+
+      const inserted = mockValues.mock.calls[0][0] as { timestamp: Date };
+      expect(inserted.timestamp.getTime()).toBe(now.getTime());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('handles optional fields', async () => {

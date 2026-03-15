@@ -439,9 +439,7 @@ describe('getUserAccessLevel', () => {
 // canUserViewPage / canUserEditPage / canUserSharePage / canUserDeletePage
 // ---------------------------------------------------------------------------
 
-/**
- * REVIEW: This helper uses deep chain mocks; consider replacing with a repository abstraction
- */
+/** @scaffold — ORM chain mock: sets up getUserAccessLevel return via inline chain mocks */
 function setupAccessLevel(perms: { canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean } | null) {
   mockValidators(true, true);
   if (perms === null) {

@@ -600,8 +600,8 @@ describe('Logger buffer / database destination', () => {
     // Invoke the captured interval callback
     intervalCallback!();
 
-    // REVIEW: setTimeout(0) flushes the .catch() microtask — consider process.nextTick if flaky on CI
-    await new Promise(r => setTimeout(r, 0));
+    // Flush the .catch() microtask from the rejected flush promise
+    await new Promise(r => process.nextTick(r));
 
     expect(consoleSpy).toHaveBeenCalledWith('[Logger] Flush error:', flushError);
 
