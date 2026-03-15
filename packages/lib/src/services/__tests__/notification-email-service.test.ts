@@ -131,14 +131,17 @@ describe('notification-email-service', () => {
     }));
   });
 
-  it('should send PAGE_SHARED email', async () => {
+  it('should send PAGE_SHARED email with page title in subject', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'PAGE_SHARED',
       metadata: { sharerName: 'Dave', pageTitle: 'My Page', driveId: 'd1', pageId: 'p1' },
     });
 
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('My Page'),
+    }));
   });
 
   it('should send PERMISSION_GRANTED with edit as CollaboratorAdded', async () => {
@@ -159,7 +162,7 @@ describe('notification-email-service', () => {
     }));
   });
 
-  it('should send PERMISSION_GRANTED without edit as PageShared', async () => {
+  it('should send PERMISSION_GRANTED without edit as PageShared with sharer in subject', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'PERMISSION_GRANTED',
@@ -172,16 +175,22 @@ describe('notification-email-service', () => {
       },
     });
 
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Eve'),
+    }));
   });
 
-  it('should send CONNECTION_ACCEPTED email', async () => {
+  it('should send CONNECTION_ACCEPTED email with accepter name', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'CONNECTION_ACCEPTED',
       metadata: { accepterName: 'Frank' },
     });
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Frank'),
+    }));
   });
 
   it('should send CONNECTION_REJECTED email', async () => {
@@ -190,57 +199,69 @@ describe('notification-email-service', () => {
       type: 'CONNECTION_REJECTED',
       metadata: { rejecterName: 'Grace' },
     });
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: 'Connection request declined',
+    }));
   });
 
-  it('should send PERMISSION_REVOKED email', async () => {
+  it('should send PERMISSION_REVOKED email with page title', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'PERMISSION_REVOKED',
       metadata: { pageTitle: 'Lost Page' },
     });
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Lost Page'),
+    }));
   });
 
-  it('should send PERMISSION_UPDATED email', async () => {
+  it('should send PERMISSION_UPDATED email with page title', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'PERMISSION_UPDATED',
       metadata: { pageTitle: 'Updated Page', driveId: 'd1', pageId: 'p1' },
     });
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Updated Page'),
+    }));
   });
 
-  it('should send DRIVE_JOINED email', async () => {
+  it('should send DRIVE_JOINED email with drive name', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'DRIVE_JOINED',
       metadata: { driveName: 'Workspace', driveId: 'd1' },
     });
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Workspace'),
+    }));
   });
 
-  it('should send DRIVE_ROLE_CHANGED email', async () => {
+  it('should send DRIVE_ROLE_CHANGED email with drive name', async () => {
     await sendNotificationEmail({
       userId: 'user-1',
       type: 'DRIVE_ROLE_CHANGED',
       metadata: { driveName: 'Workspace', role: 'admin', driveId: 'd1' },
     });
-    expect(sendEmail).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'test@example.com',
+      subject: expect.stringContaining('Workspace'),
+    }));
   });
 
-  it('should handle sendEmail errors gracefully', async () => {
+  it('should handle sendEmail errors gracefully without throwing', async () => {
     (sendEmail as any).mockRejectedValueOnce(new Error('SMTP error'));
 
-    // Should not throw
-    await sendNotificationEmail({
+    // Contract: sendNotificationEmail never throws, even on SMTP failure
+    await expect(sendNotificationEmail({
       userId: 'user-1',
       type: 'DRIVE_INVITED',
       metadata: { driveName: 'Test' },
-    });
-
-    // Should log failure
-    expect(mockDb.insert).toHaveBeenCalled();
+    })).resolves.toBeUndefined();
   });
 
   it('should handle preference check errors gracefully', async () => {

@@ -218,8 +218,8 @@ describe('upload-semaphore', () => {
       await uploadSemaphore.acquireUploadSlot('user-1', 'pro', 1024);
 
       const status = uploadSemaphore.getStatus();
-      // Critical memory: max(1, floor(3 * 0.3)) = 1
-      expect(status.configuredLimit).toBeLessThanOrEqual(3);
+      // Critical memory should reduce limit below the base of 3
+      expect(status.configuredLimit).toBeLessThan(3);
     });
   });
 });

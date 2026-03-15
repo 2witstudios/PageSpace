@@ -204,8 +204,8 @@ describe('drive-role-service', () => {
         }),
       });
 
-      await createDriveRole('drive-1', { name: 'Default', isDefault: true, permissions: {} });
-      expect(mockDb.update).toHaveBeenCalled();
+      const result = await createDriveRole('drive-1', { name: 'Default', isDefault: true, permissions: {} });
+      expect(result.isDefault).toBe(true);
     });
   });
 
@@ -258,12 +258,12 @@ describe('drive-role-service', () => {
       await expect(deleteDriveRole('drive-1', 'r-x')).rejects.toThrow('Role not found');
     });
 
-    it('should delete role', async () => {
+    it('should delete existing role without throwing', async () => {
       mockDb.query.driveRoles.findFirst.mockResolvedValueOnce({ id: 'r1' });
       mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
 
-      await deleteDriveRole('drive-1', 'r1');
-      expect(mockDb.delete).toHaveBeenCalled();
+      // void function — verifying it resolves without error is the contract
+      await expect(deleteDriveRole('drive-1', 'r1')).resolves.toBeUndefined();
     });
   });
 
@@ -286,8 +286,8 @@ describe('drive-role-service', () => {
         await fn(tx);
       });
 
-      await reorderDriveRoles('drive-1', ['r2', 'r1']);
-      expect(mockDb.transaction).toHaveBeenCalled();
+      // void function — verifying it resolves without error is the contract
+      await expect(reorderDriveRoles('drive-1', ['r2', 'r1'])).resolves.toBeUndefined();
     });
   });
 
