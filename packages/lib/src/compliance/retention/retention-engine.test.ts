@@ -1,7 +1,13 @@
+/**
+ * @scaffold — retention-engine cleanup functions accept `db` as a parameter,
+ * but the mock still reproduces the ORM delete().where().returning() chain
+ * shape. Assertions verify the observable CleanupResult contract and the
+ * correct table reference, not internal chaining.
+ *
+ * REVIEW: once a RetentionRepository seam wraps these queries, replace
+ * chain mocks with repository-level mocks and promote to contract tests.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// Lightweight stubs for drizzle operators — these are pure helpers, not spied.
-// We test through observable output (CleanupResult), not internal call tracking.
 vi.mock('drizzle-orm', () => ({
   and: (...args: unknown[]) => ({ _op: 'and', conditions: args }),
   lt: (col: unknown, val: unknown) => ({ _op: 'lt', col, val }),

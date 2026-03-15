@@ -1,9 +1,14 @@
 /**
- * GDPR Export Tests
+ * @scaffold — GDPR Export Tests
  *
  * These functions use module-level ORM queries with no injected seam.
- * Chain mocks are structural necessities — assertions focus on the
- * observable data contracts (return types, aggregation logic, deduplication).
+ * Chain mocks and order-dependent mock ladders (createChainDb callIndex)
+ * are structural necessities — assertions focus on the observable data
+ * contracts (return types, aggregation logic, deduplication).
+ *
+ * REVIEW: introduce a GdprExportRepository seam so these functions can
+ * be tested without reproducing the ORM chain shape. Once that seam
+ * exists, remove the chain mocks and promote these to contract tests.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -67,8 +72,8 @@ vi.mock('@pagespace/db', () => {
 });
 
 vi.mock('drizzle-orm', () => ({
-  eq: vi.fn((col: unknown, val: unknown) => ({ _op: 'eq', col, val })),
-  inArray: vi.fn((col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals })),
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
+  inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
 }));
 
 import {

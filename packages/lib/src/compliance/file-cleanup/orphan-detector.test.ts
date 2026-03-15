@@ -1,9 +1,18 @@
+/**
+ * @scaffold — orphan-detector accepts `db` as a parameter but the mock
+ * reproduces the ORM delete().where().returning() chain shape.
+ * findOrphanedFileRecords and isFileOrphaned use raw SQL (db.execute),
+ * which is a clean boundary mock.
+ *
+ * REVIEW: wrap deleteFileRecords in a repository seam to eliminate
+ * the ORM chain mock for that function.
+ */
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('drizzle-orm', () => ({
-  eq: vi.fn((col: unknown, val: unknown) => ({ _op: 'eq', col, val })),
+  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
-  inArray: vi.fn((col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals })),
+  inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
 }));
 
 vi.mock('@pagespace/db', () => ({

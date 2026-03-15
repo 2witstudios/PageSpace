@@ -1,8 +1,12 @@
 /**
- * version-resolver uses a module-level `db` import from @pagespace/db with
- * no injected seam. Chain mocks are unavoidable here — the db mock captures
- * the select chain that the module calls internally. Assertions focus on
- * observable return values, not call tracking.
+ * @scaffold — version-resolver uses a module-level `db` import from
+ * @pagespace/db with no injected seam. Chain mocks are unavoidable here —
+ * the db mock captures the select chain that the module calls internally.
+ * Assertions focus on observable return values, not call tracking.
+ *
+ * REVIEW: introduce a VersionRepository seam (accepting db as a parameter
+ * or using dependency injection) so these tests can mock at the repository
+ * boundary instead of reproducing the ORM chain shape.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 

@@ -1,10 +1,11 @@
 /**
+ * @scaffold — barrel export presence check. Will be replaced by
  * behavioural tests once each module has its own dedicated suite.
  */
 import { describe, it, expect } from 'vitest';
 import * as integrations from './index';
 
-describe('integrations barrel export', () => {
+describe('integrations barrel export @scaffold', () => {
   const expectedFunctions = [
     // auth
     'applyAuth',

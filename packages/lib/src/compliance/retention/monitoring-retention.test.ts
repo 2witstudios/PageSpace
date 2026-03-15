@@ -1,3 +1,12 @@
+/**
+ * @scaffold — monitoring-retention uses a module-level `db` import with
+ * no injected seam. The ORM delete chain mock and mockReturnValueOnce
+ * ladders are structural necessities. Assertions verify the observable
+ * return contract (table name + deleted count).
+ *
+ * REVIEW: refactor cleanup functions to accept `db` as a parameter so
+ * tests can mock at the injection boundary without reproducing the chain.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('drizzle-orm', () => ({
