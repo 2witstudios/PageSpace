@@ -36,13 +36,19 @@ describe('integrations barrel export', () => {
     'generatePKCE', 'createSignedState', 'verifySignedState',
     // repositories — providers
     'getProviderById', 'getProviderBySlug', 'listEnabledProviders',
-    'createProvider', 'updateProvider', 'deleteProvider',
+    'listProvidersForDrive', 'createProvider', 'updateProvider',
+    'deleteProvider', 'countProviderConnections', 'seedBuiltinProviders',
     // repositories — config
     'getOrCreateConfig', 'getConfig', 'updateConfig',
     // repositories — connections
-    'createConnection', 'getConnectionById', 'deleteConnection',
+    'createConnection', 'getConnectionById', 'getConnectionWithProvider',
+    'findUserConnection', 'findDriveConnection', 'updateConnectionStatus',
+    'updateConnectionCredentials', 'updateConnectionLastUsed',
+    'deleteConnection', 'listUserConnections', 'listDriveConnections',
     // repositories — grants
-    'createGrant', 'getGrantById', 'deleteGrant',
+    'createGrant', 'getGrantById', 'findGrant',
+    'listGrantsByAgent', 'listGrantsByConnection', 'updateGrant',
+    'deleteGrant', 'deleteGrantsByConnection', 'deleteGrantsByAgent',
     // repositories — audit
     'logAuditEntry', 'getAuditLogsByDrive', 'getAuditLogsByConnection',
     'getAuditLogsByDateRange', 'getAuditLogsBySuccess',

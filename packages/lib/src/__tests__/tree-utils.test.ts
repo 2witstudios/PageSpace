@@ -204,7 +204,7 @@ describe('tree-utils', () => {
       expect(tree[0].title).toBe('Root Second')
     })
 
-    it('handles large dataset efficiently', () => {
+    it('builds large dataset without dropping nodes', () => {
       const nodes = []
       for (let i = 0; i < 1000; i++) {
         nodes.push({
@@ -216,9 +216,13 @@ describe('tree-utils', () => {
 
       const tree = buildTree(nodes)
 
+      const countAll = (items: { children?: unknown[] }[]): number =>
+        items.reduce((sum, n) => sum + 1 + countAll((n.children ?? []) as { children?: unknown[] }[]), 0)
+
       // 1000 nodes with binary-tree parentage: root is node-0
       expect(tree).toHaveLength(1)
       expect(tree[0].id).toBe('node-0')
+      expect(countAll(tree)).toBe(1000)
     })
 
     it('handles all nodes being roots', () => {

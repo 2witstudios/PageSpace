@@ -37,18 +37,17 @@ describe('version-resolver', () => {
   });
 
   /**
-   * Wire db.select to resolve with `rows` at the end of the chain.
-   * Single-item queries use .limit(); batch queries do not.
+   * Wire db.select to resolve with `rows` at the end of the
+   * `.limit()` chain. Only the single-item path uses this helper;
+   * the batch path has its own `setupBatchSelectMock`.
    */
   function setupSelectMock(rows: unknown[]) {
-    const tail = vi.fn().mockResolvedValue(rows);
+    const limit = vi.fn().mockResolvedValue(rows);
     const mockSelect = vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
           orderBy: vi.fn().mockReturnValue({
-            limit: tail,
-            then: tail, // batch path resolves the orderBy promise directly
-            [Symbol.iterator]: undefined,
+            limit,
           }),
         }),
       }),
