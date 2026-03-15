@@ -223,10 +223,13 @@ describe('optimizeImageForAllPresets', () => {
 
 describe('prepareImageForAI', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockMetadata.mockResolvedValue({ width: 100, height: 100, format: 'jpeg' });
     mockToBuffer.mockResolvedValue(Buffer.from('processed'));
     mockGetCacheUrl.mockResolvedValue('/cache/hash/ai-chat');
+    mockGetOriginal.mockResolvedValue(Buffer.from('original-image'));
+    mockCacheExists.mockResolvedValue(false);
+    mockSaveCache.mockResolvedValue({});
 
     mockResize.mockReturnValue(sharpInstance);
     mockJpeg.mockReturnValue(sharpInstance);

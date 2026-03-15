@@ -403,7 +403,7 @@ describe('ContentStore', () => {
 
       const store = createStore();
       const result = await store.getCacheMetadata(VALID_HASH);
-      expect(result['__proto__']).toBeUndefined();
+      expect(Object.hasOwn(result, '__proto__')).toBe(false);
       expect(result.thumbnail).toBeTruthy();
     });
 
