@@ -203,7 +203,7 @@ describe('verification-utils', () => {
 
       await markEmailVerified('user-1');
       expect(db.update).toHaveBeenCalledWith(users);
-      const setArg = mockSet.mock.calls[0][0] as unknown as { emailVerified: unknown };
+      const setArg = (mockSet.mock.calls as unknown[][])[0][0] as { emailVerified: unknown };
       expect(setArg.emailVerified).toBeInstanceOf(Date);
       expect(Object.keys(setArg)).toEqual(['emailVerified']);
     });
