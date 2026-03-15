@@ -30,7 +30,7 @@ vi.mock('@pagespace/db', () => {
     select,
     query: {
       files: {
-        findFirst: vi.fn<[], Promise<{ driveId: string } | undefined>>(),
+        findFirst: vi.fn(),
       },
     },
   };
@@ -134,7 +134,8 @@ describe('getFileDriveId', () => {
   });
 
   it('returns driveId when file record exists', async () => {
-    vi.mocked(db.query.files.findFirst).mockResolvedValue({ driveId: 'drive-1' });
+    // Column-select query returns partial record; cast satisfies full-record mock type
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
 
     const result = await getFileDriveId('hash1');
     expect(result).toBe('drive-1');
