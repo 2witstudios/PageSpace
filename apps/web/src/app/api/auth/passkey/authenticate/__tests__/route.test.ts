@@ -200,27 +200,25 @@ describe('POST /api/auth/passkey/authenticate', () => {
     });
 
     it('does not include Secure flag in non-production', async () => {
-      const originalEnv = process.env.NODE_ENV;
-      (process.env as any).NODE_ENV = 'test';
+      vi.stubEnv('NODE_ENV', 'test');
 
       const response = await POST(createRequest());
       const cookies = response.headers.getSetCookie();
       const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
       expect(csrfCookie).not.toContain('; Secure');
 
-      (process.env as any).NODE_ENV = originalEnv;
+      vi.unstubAllEnvs();
     });
 
     it('includes Secure flag in production', async () => {
-      const originalEnv = process.env.NODE_ENV;
-      (process.env as any).NODE_ENV = 'production';
+      vi.stubEnv('NODE_ENV', 'production');
 
       const response = await POST(createRequest());
       const cookies = response.headers.getSetCookie();
       const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
       expect(csrfCookie).toContain('; Secure');
 
-      (process.env as any).NODE_ENV = originalEnv;
+      vi.unstubAllEnvs();
     });
   });
 

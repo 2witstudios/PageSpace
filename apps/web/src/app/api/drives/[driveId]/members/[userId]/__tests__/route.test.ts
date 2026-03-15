@@ -120,7 +120,7 @@ import {
 } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { trackDriveOperation } from '@pagespace/lib/activity-tracker';
-import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getActorInfo, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db';
 
 // ============================================================================

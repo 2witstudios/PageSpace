@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NextResponse } from 'next/server';
 
 // ============================================================================
 // Contract Tests for /api/users/search
@@ -30,7 +29,7 @@ const mockFrom = vi.fn();
 const mockSelect = vi.fn();
 
 // Reset chains before each call
-function setupSelectChain(result: unknown[]) {
+function _setupSelectChain(result: unknown[]) {
   mockLimit.mockResolvedValue(result);
   mockWhere.mockReturnValue({ limit: mockLimit });
   mockLeftJoin.mockReturnValue({ where: mockWhere });
@@ -117,14 +116,14 @@ function setupDbChains(
   profileLookupChain.where.mockReturnValue({ limit: profileLookupChain.limit });
   profileLookupChain.from.mockReturnValue({ where: profileLookupChain.where });
 
-  vi.mocked(db.select).mockImplementation((...args: unknown[]) => {
+  vi.mocked(db.select).mockImplementation((..._args: unknown[]) => {
     selectCallCount++;
     if (selectCallCount === 1) {
-      return { from: profileSelectChain.from } as any;
+      return { from: profileSelectChain.from } as never;
     } else if (selectCallCount === 2) {
-      return { from: emailSelectChain.from } as any;
+      return { from: emailSelectChain.from } as never;
     } else {
-      return { from: profileLookupChain.from } as any;
+      return { from: profileLookupChain.from } as never;
     }
   });
 }

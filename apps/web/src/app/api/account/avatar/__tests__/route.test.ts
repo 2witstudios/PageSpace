@@ -73,7 +73,7 @@ const createMockFile = (type = 'image/png', size = 1024, name = 'avatar.png') =>
  * jsdom's Request.formData() can hang, so we mock it directly.
  */
 const createUploadRequest = (file?: { type: string; size: number; name: string }) => {
-  const formData = new FormData();
+  const _formData = new FormData();
   // We don't actually append the file to FormData; we mock formData() to return it
   const mockFormData = {
     get: vi.fn((key: string) => {

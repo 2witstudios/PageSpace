@@ -77,7 +77,7 @@ vi.mock('@/lib/onboarding/getting-started-drive', () => ({
 }));
 
 import { GET } from '../route';
-import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService } from '@pagespace/lib/auth';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/verification-utils';
 import { loggers, logAuthEvent } from '@pagespace/lib/server';
@@ -98,15 +98,10 @@ const createVerifyRequest = (token?: string) => {
 };
 
 describe('GET /api/auth/magic-link/verify', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env = {
-      ...originalEnv,
-      WEB_APP_URL: 'https://example.com',
-      NODE_ENV: 'test',
-    };
+    vi.stubEnv('WEB_APP_URL', 'https://example.com');
+    vi.stubEnv('NODE_ENV', 'test');
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(verifyMagicLinkToken).mockResolvedValue({
       ok: true,
@@ -126,7 +121,7 @@ describe('GET /api/auth/magic-link/verify', () => {
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    vi.unstubAllEnvs();
   });
 
   describe('token validation', () => {
@@ -422,7 +417,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
 
     it('sets CSRF token cookie without Secure flag in non-production', async () => {
-      (process.env as any).NODE_ENV = 'test';
+      vi.stubEnv('NODE_ENV', 'test');
 
       const response = await GET(createVerifyRequest('valid-token'));
 
@@ -436,7 +431,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
 
     it('sets CSRF token cookie with Secure flag in production', async () => {
-      (process.env as any).NODE_ENV = 'production';
+      vi.stubEnv('NODE_ENV', 'production');
 
       const response = await GET(createVerifyRequest('valid-token'));
 

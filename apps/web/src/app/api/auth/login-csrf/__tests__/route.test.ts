@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
  * Contract tests for GET /api/auth/login-csrf
@@ -31,24 +31,18 @@ import { serialize } from 'cookie';
 import { GET } from '../route';
 
 describe('/api/auth/login-csrf', () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    vi.stubEnv('NODE_ENV', 'test');
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    vi.unstubAllEnvs();
   });
 
   describe('successful token generation', () => {
     it('GET_returns200WithCSRFToken', async () => {
       // Arrange
-      const request = new Request('http://localhost/api/auth/login-csrf', {
-        method: 'GET',
-      });
-
       // Act
       const response = await GET();
       const body = await response.json();
@@ -90,7 +84,7 @@ describe('/api/auth/login-csrf', () => {
   describe('cookie serialization in non-production', () => {
     it('GET_inNonProduction_serializesWithoutSecureFlag', async () => {
       // Arrange
-      (process.env as any).NODE_ENV = 'test';
+      vi.stubEnv('NODE_ENV', 'test');
 
       // Act
       await GET();
@@ -111,7 +105,7 @@ describe('/api/auth/login-csrf', () => {
 
     it('GET_inNonProduction_doesNotIncludeDomain', async () => {
       // Arrange
-      (process.env as any).NODE_ENV = 'test';
+      vi.stubEnv('NODE_ENV', 'test');
       process.env.COOKIE_DOMAIN = '.example.com';
 
       // Act
@@ -126,7 +120,7 @@ describe('/api/auth/login-csrf', () => {
   describe('cookie serialization in production', () => {
     it('GET_inProduction_serializesWithSecureFlag', async () => {
       // Arrange
-      (process.env as any).NODE_ENV = 'production';
+      vi.stubEnv('NODE_ENV', 'production');
 
       // Act
       await GET();
@@ -147,7 +141,7 @@ describe('/api/auth/login-csrf', () => {
 
     it('GET_inProductionWithCookieDomain_includesDomain', async () => {
       // Arrange
-      (process.env as any).NODE_ENV = 'production';
+      vi.stubEnv('NODE_ENV', 'production');
       process.env.COOKIE_DOMAIN = '.example.com';
 
       // Act
@@ -165,7 +159,7 @@ describe('/api/auth/login-csrf', () => {
 
     it('GET_inProductionWithoutCookieDomain_doesNotIncludeDomain', async () => {
       // Arrange
-      (process.env as any).NODE_ENV = 'production';
+      vi.stubEnv('NODE_ENV', 'production');
       delete process.env.COOKIE_DOMAIN;
 
       // Act

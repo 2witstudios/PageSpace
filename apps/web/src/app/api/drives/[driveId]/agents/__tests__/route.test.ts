@@ -80,7 +80,7 @@ const createContext = (driveId: string) => ({
 const MOCK_USER_ID = 'user_123';
 const MOCK_DRIVE_ID = 'drive_abc';
 
-function setupDbSelectChain(results: unknown[]) {
+function _setupDbSelectChain(results: unknown[]) {
   const mockOrderBy = vi.fn().mockResolvedValue(results);
   const mockWhere = vi.fn(() => ({ orderBy: mockOrderBy }));
   const mockFrom = vi.fn(() => ({ where: mockWhere }));

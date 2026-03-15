@@ -128,7 +128,7 @@ vi.mock('@pagespace/lib/security', () => ({
 
 import { POST } from '../route';
 import { db } from '@pagespace/db';
-import { sessionService, verifyAppleIdToken, generateCSRFToken } from '@pagespace/lib/auth';
+import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { getClientIP } from '@/lib/auth';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
@@ -266,8 +266,6 @@ describe('POST /api/auth/apple/native', () => {
         idToken: 'token',
         platform: 'ios',
       }));
-      const body = await response.json();
-
       expect(response.status).toBe(400);
     });
 

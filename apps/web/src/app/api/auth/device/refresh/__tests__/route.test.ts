@@ -98,7 +98,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { db, deviceTokens } from '@pagespace/db';
+import { db } from '@pagespace/db';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { validateDeviceToken, updateDeviceTokenActivity, generateCSRFToken, loggers } from '@pagespace/lib/server';
 import { sessionService } from '@pagespace/lib/auth';

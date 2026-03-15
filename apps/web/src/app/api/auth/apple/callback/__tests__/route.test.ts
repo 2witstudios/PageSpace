@@ -132,7 +132,7 @@ vi.mock('@pagespace/lib/security', () => ({
 
 import { POST } from '../route';
 import { db } from '@pagespace/db';
-import { sessionService, verifyAppleIdToken, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
+import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { loggers, logAuthEvent, validateOrCreateDeviceToken } from '@pagespace/lib/server';
