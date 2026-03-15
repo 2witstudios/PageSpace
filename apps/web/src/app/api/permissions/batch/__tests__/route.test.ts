@@ -83,14 +83,14 @@ describe('POST /api/permissions/batch', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createPostRequest({ pageIds: ['page_1'] });
-      const response = await POST(request);
+      const response = await POST(request as never);
 
       expect(response.status).toBe(401);
     });
 
     it('should require CSRF for write operations', async () => {
       const request = createPostRequest({ pageIds: [] });
-      await POST(request);
+      await POST(request as never);
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
@@ -102,7 +102,7 @@ describe('POST /api/permissions/batch', () => {
   describe('validation', () => {
     it('should return 400 when pageIds is not an array', async () => {
       const request = createPostRequest({ pageIds: 'not-an-array' });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -111,7 +111,7 @@ describe('POST /api/permissions/batch', () => {
 
     it('should return 400 when pageIds is missing', async () => {
       const request = createPostRequest({});
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -120,7 +120,7 @@ describe('POST /api/permissions/batch', () => {
 
     it('should return empty permissions for empty pageIds array', async () => {
       const request = createPostRequest({ pageIds: [] });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(200);
@@ -133,7 +133,7 @@ describe('POST /api/permissions/batch', () => {
     it('should return 400 when pageIds exceeds 100', async () => {
       const pageIds = Array.from({ length: 101 }, (_, i) => `page_${i}`);
       const request = createPostRequest({ pageIds });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -142,7 +142,7 @@ describe('POST /api/permissions/batch', () => {
 
     it('should return 400 when pageIds contains non-string values', async () => {
       const request = createPostRequest({ pageIds: [123, 'page_1'] });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -151,7 +151,7 @@ describe('POST /api/permissions/batch', () => {
 
     it('should return 400 when pageIds contains empty strings', async () => {
       const request = createPostRequest({ pageIds: ['page_1', ''] });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(400);
@@ -163,7 +163,7 @@ describe('POST /api/permissions/batch', () => {
     it('should call getBatchPagePermissions with userId and pageIds', async () => {
       const pageIds = ['page_1', 'page_2'];
       const request = createPostRequest({ pageIds });
-      await POST(request);
+      await POST(request as never);
 
       expect(mockGetBatchPagePermissions).toHaveBeenCalledWith(mockUserId, pageIds);
     });
@@ -178,7 +178,7 @@ describe('POST /api/permissions/batch', () => {
       mockGetBatchPagePermissions.mockResolvedValue(permissionsMap);
 
       const request = createPostRequest({ pageIds: ['page_1', 'page_2', 'page_3'] });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(200);
@@ -197,7 +197,7 @@ describe('POST /api/permissions/batch', () => {
       mockGetBatchPagePermissions.mockResolvedValue(new Map());
 
       const request = createPostRequest({ pageIds: ['page_1'] });
-      await POST(request);
+      await POST(request as never);
 
       expect(loggers.api.debug).toHaveBeenCalledWith(
         'Batch permission check completed',
@@ -221,7 +221,7 @@ describe('POST /api/permissions/batch', () => {
       });
 
       const request = createPostRequest({ pageIds: ['page_1'] });
-      await POST(request);
+      await POST(request as never);
 
       expect(loggers.api.warn).toHaveBeenCalledWith(
         'Slow batch permission check',
@@ -238,7 +238,7 @@ describe('POST /api/permissions/batch', () => {
       mockGetBatchPagePermissions.mockRejectedValue(new Error('Database failure'));
 
       const request = createPostRequest({ pageIds: ['page_1'] });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(500);
@@ -250,7 +250,7 @@ describe('POST /api/permissions/batch', () => {
       mockGetBatchPagePermissions.mockRejectedValue('string-error');
 
       const request = createPostRequest({ pageIds: ['page_1'] });
-      const response = await POST(request);
+      const response = await POST(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(500);
@@ -263,7 +263,7 @@ describe('POST /api/permissions/batch', () => {
       mockGetBatchPagePermissions.mockRejectedValue(error);
 
       const request = createPostRequest({ pageIds: ['page_1'] });
-      await POST(request);
+      await POST(request as never);
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error in batch permission check', error);
     });
@@ -294,14 +294,14 @@ describe('GET /api/permissions/batch', () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
 
       const request = createGetRequest();
-      const response = await GET(request);
+      const response = await GET(request as never);
 
       expect(response.status).toBe(401);
     });
 
     it('should use read auth options without CSRF requirement', async () => {
       const request = createGetRequest();
-      await GET(request);
+      await GET(request as never);
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
@@ -316,7 +316,7 @@ describe('GET /api/permissions/batch', () => {
       mockGetPermissionCacheStats.mockReturnValue(cacheStats);
 
       const request = createGetRequest();
-      const response = await GET(request);
+      const response = await GET(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(200);
@@ -333,7 +333,7 @@ describe('GET /api/permissions/batch', () => {
       });
 
       const request = createGetRequest();
-      const response = await GET(request);
+      const response = await GET(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(500);
@@ -347,7 +347,7 @@ describe('GET /api/permissions/batch', () => {
       });
 
       const request = createGetRequest();
-      const response = await GET(request);
+      const response = await GET(request as never);
       const body = await response.json();
 
       expect(response.status).toBe(500);
@@ -362,7 +362,7 @@ describe('GET /api/permissions/batch', () => {
       });
 
       const request = createGetRequest();
-      await GET(request);
+      await GET(request as never);
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error getting permission cache stats', error);
     });

@@ -70,6 +70,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: (...args: unknown[]) => mockBroadcastPageEvent(...args),
+  // @ts-expect-error - test mock spread
   createPageEventPayload: (...args: unknown[]) => mockCreatePageEventPayload(...args),
 }));
 
@@ -134,6 +135,7 @@ const mockMCPAuth = (userId: string): MCPAuthResult => ({
   tokenType: 'mcp',
   tokenVersion: 0,
   tokenId: 'mcp-token-id',
+  // @ts-expect-error - test mock with extra properties
   scopes: ['page:write'],
   driveIds: [mockDriveId],
   pageIds: [mockPageId],

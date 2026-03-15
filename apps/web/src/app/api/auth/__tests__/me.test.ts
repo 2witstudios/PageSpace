@@ -219,7 +219,7 @@ describe('GET /api/auth/me', () => {
     it('logs user profile in development mode with DEBUG_AUTH enabled', async () => {
       const originalNodeEnv = process.env.NODE_ENV;
       const originalDebugAuth = process.env.DEBUG_AUTH;
-      process.env.NODE_ENV = 'development';
+      (process.env as any).NODE_ENV = 'development';
       process.env.DEBUG_AUTH = 'true';
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -232,7 +232,7 @@ describe('GET /api/auth/me', () => {
       );
 
       consoleSpy.mockRestore();
-      process.env.NODE_ENV = originalNodeEnv;
+      (process.env as any).NODE_ENV = originalNodeEnv;
       process.env.DEBUG_AUTH = originalDebugAuth;
     });
   });

@@ -123,6 +123,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
     });
 
     it('should return 404 when connection belongs to different drive', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getConnectionWithProvider).mockResolvedValue({
         id: MOCK_CONNECTION_ID,
         driveId: 'different-drive',
@@ -178,6 +179,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
           slug: 'github',
           name: 'GitHub',
           description: 'GitHub integration',
+          // @ts-expect-error - test mock with extra properties
           enabled: true,
           config: {},
           driveId: null,
@@ -209,6 +211,7 @@ describe('GET /api/drives/[driveId]/integrations/[connectionId]', () => {
     });
 
     it('should handle connection with null provider', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getConnectionWithProvider).mockResolvedValue({
         id: MOCK_CONNECTION_ID,
         driveId: MOCK_DRIVE_ID,
@@ -298,6 +301,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
+      // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
         id: MOCK_CONNECTION_ID, driveId: MOCK_DRIVE_ID, name: 'Test',
         providerId: 'p', status: 'active', credentials: {},
@@ -317,6 +321,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
       });
+      // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
         id: MOCK_CONNECTION_ID, driveId: MOCK_DRIVE_ID, name: 'Test',
         providerId: 'p', status: 'active', credentials: {},
@@ -352,6 +357,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
     });
 
     it('should return 404 when connection belongs to different drive', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
         id: MOCK_CONNECTION_ID, driveId: 'other-drive', name: 'Test',
         providerId: 'p', status: 'active', credentials: {},
@@ -374,6 +380,7 @@ describe('DELETE /api/drives/[driveId]/integrations/[connectionId]', () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
+      // @ts-expect-error - partial mock data
       vi.mocked(getConnectionById).mockResolvedValue({
         id: MOCK_CONNECTION_ID, driveId: MOCK_DRIVE_ID, name: 'My Connection',
         providerId: 'p', status: 'active', credentials: {},

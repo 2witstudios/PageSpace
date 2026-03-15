@@ -120,6 +120,7 @@ describe('PATCH /api/pages/reorder', () => {
     vi.mocked(pageReorderService.reorderPage).mockResolvedValue(successResult);
     // Re-set up cache and websocket mocks
     vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
+    // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));

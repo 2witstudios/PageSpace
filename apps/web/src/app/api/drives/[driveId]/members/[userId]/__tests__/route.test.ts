@@ -963,6 +963,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
     } as never);
 
     // Re-set up db.transaction after resetAllMocks - default: empty drive (no pages)
+    // @ts-expect-error - partial mock data
     vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
       const mockTx = createMockTx();
       return callback(mockTx);
@@ -1188,6 +1189,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
         { pageId: 'page_2', canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: mockCurrentUserId, note: null },
       ];
 
+      // @ts-expect-error - partial mock data
       vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         const mockTx = createMockTx(drivePages, existingPermissions);
         return callback(mockTx);
@@ -1211,6 +1213,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
 
     it('should delete drive membership even when drive has no pages', async () => {
       // Explicitly set empty drivePages
+      // @ts-expect-error - partial mock data
       vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         const mockTx = createMockTx([], []);
         return callback(mockTx);
@@ -1227,6 +1230,7 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       // No existing permissions for this user
       const existingPermissions: Record<string, unknown>[] = [];
 
+      // @ts-expect-error - partial mock data
       vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         const mockTx = createMockTx(drivePages, existingPermissions);
         return callback(mockTx);

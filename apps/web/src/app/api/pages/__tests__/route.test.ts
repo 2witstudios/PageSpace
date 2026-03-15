@@ -135,6 +135,7 @@ describe('POST /api/pages', () => {
     vi.mocked(pageService.createPage).mockResolvedValue(successResult);
     vi.mocked(agentAwarenessCache.invalidateDriveAgents).mockResolvedValue(undefined);
     vi.mocked(pageTreeCache.invalidateDriveTree).mockResolvedValue(undefined);
+    // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));

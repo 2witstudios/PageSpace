@@ -113,6 +113,7 @@ describe('GET /api/auth/magic-link/verify', () => {
       data: { userId: 'test-user-id', isNewUser: false },
     });
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
       userId: 'test-user-id',
@@ -152,6 +153,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('redirects with magic_link_expired for TOKEN_EXPIRED', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'TOKEN_EXPIRED', message: 'Token expired' },
       });
 
@@ -169,6 +171,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('redirects with magic_link_used for TOKEN_ALREADY_USED', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'TOKEN_ALREADY_USED', message: 'Already used' },
       });
 
@@ -181,6 +184,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('redirects with invalid_token for TOKEN_NOT_FOUND', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'TOKEN_NOT_FOUND', message: 'Not found' },
       });
 
@@ -193,6 +197,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('redirects with account_suspended for USER_SUSPENDED', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'USER_SUSPENDED', message: 'Suspended' },
       });
 
@@ -217,6 +222,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     it('redirects with invalid_token for unknown error codes', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'UNKNOWN_ERROR', message: 'Unknown' },
       });
 
@@ -416,7 +422,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
 
     it('sets CSRF token cookie without Secure flag in non-production', async () => {
-      process.env.NODE_ENV = 'test';
+      (process.env as any).NODE_ENV = 'test';
 
       const response = await GET(createVerifyRequest('valid-token'));
 
@@ -430,7 +436,7 @@ describe('GET /api/auth/magic-link/verify', () => {
     });
 
     it('sets CSRF token cookie with Secure flag in production', async () => {
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
 
       const response = await GET(createVerifyRequest('valid-token'));
 

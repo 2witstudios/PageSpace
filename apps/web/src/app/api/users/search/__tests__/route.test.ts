@@ -138,6 +138,7 @@ describe('GET /api/users/search', () => {
     vi.clearAllMocks();
     vi.mocked(verifyAuth).mockResolvedValue({
       id: 'user_123',
+      // @ts-expect-error - test mock with extra properties
       hasSessionBearerToken: false,
     });
     setupDbChains();

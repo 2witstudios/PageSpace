@@ -419,6 +419,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     it('returns 400 for VALIDATION_FAILED error', async () => {
       vi.mocked(grantPagePermission).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'VALIDATION_FAILED', issues: [{ message: 'Invalid data' }] },
       });
 
@@ -461,6 +462,7 @@ describe('POST /api/pages/[pageId]/permissions', () => {
     it('returns 403 for INSUFFICIENT_PERMISSION error', async () => {
       vi.mocked(grantPagePermission).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'INSUFFICIENT_PERMISSION' },
       });
 
@@ -666,6 +668,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     it('returns 400 for VALIDATION_FAILED error', async () => {
       vi.mocked(revokePagePermission).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'VALIDATION_FAILED', issues: [{ message: 'Missing userId' }] },
       });
 
@@ -694,6 +697,7 @@ describe('DELETE /api/pages/[pageId]/permissions', () => {
     it('returns 403 for INSUFFICIENT_PERMISSION error', async () => {
       vi.mocked(revokePagePermission).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'INSUFFICIENT_PERMISSION' },
       });
 

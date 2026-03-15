@@ -108,6 +108,7 @@ describe('POST /api/auth/magic-link/send', () => {
     });
     vi.mocked(createMagicLinkToken).mockResolvedValue({
       ok: true,
+      // @ts-expect-error - partial mock data
       data: { token: 'mock-magic-token', isNewUser: false },
     });
   });
@@ -307,6 +308,7 @@ describe('POST /api/auth/magic-link/send', () => {
     it('returns success without sending email for suspended users', async () => {
       vi.mocked(createMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'USER_SUSPENDED', message: 'Account suspended' },
       });
 
@@ -340,6 +342,7 @@ describe('POST /api/auth/magic-link/send', () => {
     it('returns generic success for other service errors', async () => {
       vi.mocked(createMagicLinkToken).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'DATABASE_ERROR', message: 'Connection failed' },
       });
 

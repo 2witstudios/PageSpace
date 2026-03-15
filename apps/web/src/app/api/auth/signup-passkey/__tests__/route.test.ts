@@ -229,7 +229,7 @@ describe('POST /api/auth/signup-passkey', () => {
     });
 
     it('redirects to /dashboard when drive provisioning returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null);
+      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -239,26 +239,26 @@ describe('POST /api/auth/signup-passkey', () => {
 
     it('does not include Secure flag on CSRF cookie in non-production', async () => {
       const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'test';
+      (process.env as any).NODE_ENV = 'test';
 
       const response = await POST(createRequest());
       const cookies = response.headers.getSetCookie();
       const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
       expect(csrfCookie).not.toContain('; Secure');
 
-      process.env.NODE_ENV = originalEnv;
+      (process.env as any).NODE_ENV = originalEnv;
     });
 
     it('includes Secure flag on CSRF cookie in production', async () => {
       const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
 
       const response = await POST(createRequest());
       const cookies = response.headers.getSetCookie();
       const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
       expect(csrfCookie).toContain('; Secure');
 
-      process.env.NODE_ENV = originalEnv;
+      (process.env as any).NODE_ENV = originalEnv;
     });
   });
 
@@ -428,6 +428,7 @@ describe('POST /api/auth/signup-passkey', () => {
       it(`returns ${status} for ${code}`, async () => {
         vi.mocked(verifySignupRegistration).mockResolvedValue({
           ok: false,
+          // @ts-expect-error - partial mock data
           error: { code, message: 'Error' },
         });
 
@@ -443,6 +444,7 @@ describe('POST /api/auth/signup-passkey', () => {
     it('returns 500 for unknown error code', async () => {
       vi.mocked(verifySignupRegistration).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'UNKNOWN_ERROR', message: 'Something' },
       });
 

@@ -80,7 +80,9 @@ describe('GET /api/pages/[pageId]/children', () => {
 
     // Default: return children
     vi.mocked(db.query.pages.findMany).mockResolvedValue([
+      // @ts-expect-error - partial mock data
       { id: 'child_1', title: 'Child 1', parentId: mockPageId, isTrashed: false, position: 0 },
+      // @ts-expect-error - partial mock data
       { id: 'child_2', title: 'Child 2', parentId: mockPageId, isTrashed: false, position: 1 },
     ]);
 

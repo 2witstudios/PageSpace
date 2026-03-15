@@ -206,7 +206,7 @@ function setupTransaction(returnedTask: Record<string, unknown> = baseTask) {
         })),
       })),
     };
-    return callback(tx);
+    return callback(tx as never);
   });
 }
 
@@ -676,7 +676,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
         insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
         select: vi.fn(() => ({ from: txSelectFrom })),
       };
-      return callback(tx);
+      return callback(tx as never);
     });
 
     vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);

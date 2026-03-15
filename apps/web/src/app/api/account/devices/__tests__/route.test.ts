@@ -168,7 +168,7 @@ describe('GET /api/account/devices', () => {
     });
 
     it('returns formatted device list', async () => {
-      vi.mocked(getUserDeviceTokens).mockResolvedValue([mockDeviceToken()]);
+      vi.mocked(getUserDeviceTokens).mockResolvedValue([mockDeviceToken()] as never);
       vi.mocked(secureCompare).mockReturnValue(false);
 
       const response = await GET(createGetRequest());
@@ -192,6 +192,7 @@ describe('GET /api/account/devices', () => {
 
     it('uses createdAt as fallback when lastUsedAt is null', async () => {
       vi.mocked(getUserDeviceTokens).mockResolvedValue([
+        // @ts-expect-error - partial mock data
         mockDeviceToken({ lastUsedAt: null }),
       ]);
       vi.mocked(secureCompare).mockReturnValue(false);
@@ -204,6 +205,7 @@ describe('GET /api/account/devices', () => {
 
     it('marks current device with isCurrent=true', async () => {
       vi.mocked(getUserDeviceTokens).mockResolvedValue([
+        // @ts-expect-error - partial mock data
         mockDeviceToken({ tokenHash: 'hashed_my-device-token' }),
       ]);
       vi.mocked(secureCompare).mockReturnValue(true);
@@ -218,7 +220,7 @@ describe('GET /api/account/devices', () => {
     });
 
     it('sets isCurrent=false when no x-device-token header', async () => {
-      vi.mocked(getUserDeviceTokens).mockResolvedValue([mockDeviceToken()]);
+      vi.mocked(getUserDeviceTokens).mockResolvedValue([mockDeviceToken()] as never);
 
       const response = await GET(createGetRequest());
       const body = await response.json();
@@ -228,6 +230,7 @@ describe('GET /api/account/devices', () => {
 
     it('sets isCurrent=false when device has no tokenHash', async () => {
       vi.mocked(getUserDeviceTokens).mockResolvedValue([
+        // @ts-expect-error - partial mock data
         mockDeviceToken({ tokenHash: null }),
       ]);
 
@@ -275,6 +278,7 @@ describe('DELETE /api/account/devices', () => {
     });
 
     it('uses session-only auth with CSRF for writes', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 0,
@@ -306,6 +310,7 @@ describe('DELETE /api/account/devices', () => {
 
   describe('revoke without current device token', () => {
     it('revokes all device tokens and bumps tokenVersion', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 3,
@@ -325,12 +330,14 @@ describe('DELETE /api/account/devices', () => {
 
   describe('revoke with current device token (valid format)', () => {
     beforeEach(() => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 3,
       });
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
       vi.mocked(getTokenType).mockReturnValue('dev');
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue({
         deviceId: 'dev-abc',
         platform: 'desktop',
@@ -339,9 +346,10 @@ describe('DELETE /api/account/devices', () => {
       vi.mocked(createDeviceTokenRecord).mockResolvedValue({
         token: 'new_device_token_xyz',
         id: 'new-token-id',
+        // @ts-expect-error - test mock with extra properties
         tokenHash: 'hashed_new_device_token_xyz',
       });
-      vi.mocked(revokeExpiredDeviceTokens).mockResolvedValue(undefined);
+      vi.mocked(revokeExpiredDeviceTokens).mockResolvedValue(undefined as never);
       mockUpdateChain();
     });
 
@@ -443,6 +451,7 @@ describe('DELETE /api/account/devices', () => {
 
   describe('revoke with invalid token format', () => {
     it('does not look up device record for invalid token format', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 3,
@@ -460,6 +469,7 @@ describe('DELETE /api/account/devices', () => {
 
   describe('revoke with valid format but wrong token type', () => {
     it('does not look up device record for non-dev token type', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 3,
@@ -478,6 +488,7 @@ describe('DELETE /api/account/devices', () => {
 
   describe('revoke with valid token but no device record found', () => {
     it('does not create new token when device record not found', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 3,
@@ -500,12 +511,14 @@ describe('DELETE /api/account/devices', () => {
 
   describe('revoke with deviceName null', () => {
     it('passes undefined for deviceName when null', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         tokenVersion: 3,
       });
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
       vi.mocked(getTokenType).mockReturnValue('dev');
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue({
         deviceId: 'dev-abc',
         platform: 'desktop',
@@ -514,9 +527,10 @@ describe('DELETE /api/account/devices', () => {
       vi.mocked(createDeviceTokenRecord).mockResolvedValue({
         token: 'new_token',
         id: 'new-id',
+        // @ts-expect-error - test mock with extra properties
         tokenHash: 'hashed_new_token',
       });
-      vi.mocked(revokeExpiredDeviceTokens).mockResolvedValue(undefined);
+      vi.mocked(revokeExpiredDeviceTokens).mockResolvedValue(undefined as never);
       mockUpdateChain();
 
       await DELETE(

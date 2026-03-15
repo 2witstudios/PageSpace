@@ -111,7 +111,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
     });
 
     it('uses session-only auth with CSRF', async () => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice());
+      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice() as never);
       vi.mocked(secureCompare).mockReturnValue(false);
       vi.mocked(revokeDeviceToken).mockResolvedValue(undefined);
 
@@ -127,7 +127,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
   describe('params handling', () => {
     it('awaits params Promise to get deviceId', async () => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice({ id: 'custom-device-id' }));
+      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice({ id: 'custom-device-id' }) as never);
       vi.mocked(secureCompare).mockReturnValue(false);
       vi.mocked(revokeDeviceToken).mockResolvedValue(undefined);
 
@@ -152,6 +152,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
   describe('authorization', () => {
     it('returns 403 when device belongs to another user', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(
+        // @ts-expect-error - partial mock data
         mockDevice({ userId: 'other-user' })
       );
 
@@ -166,6 +167,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
   describe('current device detection', () => {
     it('returns requiresLogout=true when revoking current device', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(
+        // @ts-expect-error - partial mock data
         mockDevice({ tokenHash: 'hashed_my-current-token' })
       );
       vi.mocked(secureCompare).mockReturnValue(true);
@@ -184,6 +186,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
     it('returns requiresLogout=false when revoking other device', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(
+        // @ts-expect-error - partial mock data
         mockDevice({ tokenHash: 'hashed_other-device-token' })
       );
       vi.mocked(secureCompare).mockReturnValue(false);
@@ -200,7 +203,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
     });
 
     it('returns requiresLogout=false when no x-device-token header', async () => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice());
+      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice() as never);
       vi.mocked(revokeDeviceToken).mockResolvedValue(undefined);
 
       const response = await DELETE(createRequest(), createContext('device-1'));
@@ -212,6 +215,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
     it('returns requiresLogout=false when device has no tokenHash', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(
+        // @ts-expect-error - partial mock data
         mockDevice({ tokenHash: null })
       );
       vi.mocked(revokeDeviceToken).mockResolvedValue(undefined);
@@ -229,7 +233,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
   describe('successful revocation', () => {
     beforeEach(() => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice());
+      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice() as never);
       vi.mocked(secureCompare).mockReturnValue(false);
       vi.mocked(revokeDeviceToken).mockResolvedValue(undefined);
     });
@@ -267,6 +271,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
     it('uses undefined for tokenName when deviceName is null', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(
+        // @ts-expect-error - partial mock data
         mockDevice({ deviceName: null })
       );
 
@@ -285,6 +290,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
 
     it('uses Unknown for platform when platform is null', async () => {
       vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(
+        // @ts-expect-error - partial mock data
         mockDevice({ platform: null })
       );
 
@@ -315,7 +321,7 @@ describe('DELETE /api/account/devices/[deviceId]', () => {
     });
 
     it('returns 500 when revokeDeviceToken throws', async () => {
-      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice());
+      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue(mockDevice() as never);
       vi.mocked(secureCompare).mockReturnValue(false);
       vi.mocked(revokeDeviceToken).mockRejectedValue(new Error('Revocation failed'));
 

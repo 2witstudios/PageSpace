@@ -81,6 +81,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
     it('passes email to generateAuthenticationOptions when provided', async () => {
       vi.mocked(generateAuthenticationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {}, challengeId: 'ch-1' },
       });
 
@@ -92,6 +93,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
     it('passes undefined email when not provided', async () => {
       vi.mocked(generateAuthenticationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {}, challengeId: 'ch-1' },
       });
 
@@ -103,6 +105,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
     it('logs options generation with hasEmail flag', async () => {
       vi.mocked(generateAuthenticationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {}, challengeId: 'ch-1' },
       });
 
@@ -212,6 +215,7 @@ describe('POST /api/auth/passkey/authenticate/options', () => {
     it('returns 500 when generateAuthenticationOptions fails', async () => {
       vi.mocked(generateAuthenticationOptions).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'DB_ERROR', message: 'Database error' },
       });
 

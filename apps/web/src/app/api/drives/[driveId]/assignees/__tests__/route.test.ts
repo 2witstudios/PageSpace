@@ -124,7 +124,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
   describe('authorization', () => {
     it('should return 403 when user has no drive access', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: MOCK_OWNER_ID });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: MOCK_OWNER_ID } as never);
       vi.mocked(getUserDriveAccess).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/drives/d/assignees');
@@ -138,7 +138,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
   describe('response contract', () => {
     beforeEach(() => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: MOCK_OWNER_ID });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: MOCK_OWNER_ID } as never);
       vi.mocked(getUserDriveAccess).mockResolvedValue(true);
     });
 
@@ -231,7 +231,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
     it('should not add owner twice when owner is in members list', async () => {
       let selectCallCount = 0;
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-owner' });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-owner' } as never);
       vi.mocked(db.select).mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {
@@ -332,7 +332,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
     it('should use displayName > name > email for member name', async () => {
       let selectCallCount = 0;
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' } as never);
       vi.mocked(db.select).mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {
@@ -367,7 +367,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
     it('should fall back to email when name is null', async () => {
       let selectCallCount = 0;
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' } as never);
       vi.mocked(db.select).mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {
@@ -402,7 +402,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
     it('should filter agents by view permission', async () => {
       let selectCallCount = 0;
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' } as never);
       vi.mocked(db.select).mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {
@@ -446,7 +446,7 @@ describe('GET /api/drives/[driveId]/assignees', () => {
 
     it('should use "Unnamed Agent" for agents with null title', async () => {
       let selectCallCount = 0;
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' });
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ ownerId: 'member-1' } as never);
       vi.mocked(db.select).mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {

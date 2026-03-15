@@ -58,6 +58,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: (...args: unknown[]) => mockBroadcastPageEvent(...args),
+  // @ts-expect-error - test mock spread
   createPageEventPayload: (...args: unknown[]) => mockCreatePageEventPayload(...args),
 }));
 

@@ -137,6 +137,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
             slug: 'github',
             name: 'GitHub',
             description: 'GitHub integration',
+            // @ts-expect-error - test mock with extra properties
             enabled: true,
             config: {},
             driveId: null,
@@ -173,6 +174,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
       vi.mocked(listDriveConnections).mockResolvedValue([
+        // @ts-expect-error - partial mock data
         {
           id: 'conn-2',
           providerId: 'prov-x',
@@ -277,6 +279,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
       });
+      // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
         id: 'prov-1', slug: 'test', name: 'Test', enabled: true, driveId: null,
         config: { authMethod: { type: 'api_key', config: {} }, baseUrl: 'http://test', tools: [] },
@@ -284,6 +287,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       });
       vi.mocked(findDriveConnection).mockResolvedValue(null);
       vi.mocked(encryptCredentials).mockResolvedValue({ key: 'encrypted' });
+      // @ts-expect-error - partial mock data
       vi.mocked(createConnection).mockResolvedValue({
         id: 'conn-new', providerId: 'prov-1', name: 'Test', status: 'active',
         createdAt: new Date(), driveId: MOCK_DRIVE_ID, credentials: {},
@@ -354,6 +358,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
     });
 
     it('should return 404 when provider is disabled', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
         id: 'prov-1', slug: 'test', name: 'Test', enabled: false, driveId: null,
         config: {}, createdAt: new Date(), updatedAt: new Date(),
@@ -371,6 +376,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
     });
 
     it('should return 404 when provider belongs to different drive', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
         id: 'prov-1', slug: 'test', name: 'Test', enabled: true, driveId: 'other-drive',
         config: {}, createdAt: new Date(), updatedAt: new Date(),
@@ -388,6 +394,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
     });
 
     it('should allow provider scoped to same drive', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
         id: 'prov-1', slug: 'test', name: 'Test', enabled: true, driveId: MOCK_DRIVE_ID,
         config: { authMethod: { type: 'api_key', config: {} }, baseUrl: 'http://test', tools: [] },
@@ -395,6 +402,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       });
       vi.mocked(findDriveConnection).mockResolvedValue(null);
       vi.mocked(encryptCredentials).mockResolvedValue({ key: 'enc' });
+      // @ts-expect-error - partial mock data
       vi.mocked(createConnection).mockResolvedValue({
         id: 'conn-1', providerId: 'prov-1', name: 'Test', status: 'active',
         createdAt: new Date(), driveId: MOCK_DRIVE_ID, credentials: {},
@@ -412,6 +420,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
     });
 
     it('should return 409 when connection already exists', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
         id: 'prov-1', slug: 'test', name: 'Test', enabled: true, driveId: null,
         config: {}, createdAt: new Date(), updatedAt: new Date(),
@@ -454,7 +463,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
-      vi.mocked(getProviderById).mockResolvedValue(oauthProvider);
+      vi.mocked(getProviderById).mockResolvedValue(oauthProvider as never);
       vi.mocked(findDriveConnection).mockResolvedValue(null);
     });
 
@@ -603,6 +612,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
       });
+      // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
         id: 'prov-api', slug: 'linear', name: 'Linear', enabled: true, driveId: null,
         config: {
@@ -641,6 +651,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
     it('should create connection with encrypted credentials', async () => {
       vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc_xyz' });
+      // @ts-expect-error - partial mock data
       vi.mocked(createConnection).mockResolvedValue({
         id: 'conn-new', providerId: 'prov-api', name: 'Linear', status: 'active',
         createdAt: new Date('2024-06-01'), driveId: MOCK_DRIVE_ID, credentials: {},
@@ -681,6 +692,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
     it('should pass null baseUrlOverride when not provided', async () => {
       vi.mocked(encryptCredentials).mockResolvedValue({ key: 'enc' });
+      // @ts-expect-error - partial mock data
       vi.mocked(createConnection).mockResolvedValue({
         id: 'conn-x', providerId: 'prov-api', name: 'Test', status: 'active',
         createdAt: new Date(), driveId: MOCK_DRIVE_ID, credentials: {},

@@ -132,6 +132,7 @@ describe('Task API Routes', () => {
       })),
     } as never);
     // Re-set up db.transaction
+    // @ts-expect-error - partial mock data
     vi.mocked(db.transaction).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
       let insertCallCount = 0;
       const tx = {

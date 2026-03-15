@@ -96,6 +96,7 @@ import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds,
 import { broadcastPageEvent } from '@/lib/websocket';
 import { pageTreeCache, canUserViewPage } from '@pagespace/lib/server';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+// @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';
 import { createId } from '@paralleldrive/cuid2';
 

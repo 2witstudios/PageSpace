@@ -92,7 +92,7 @@ describe('GET /api/pages/[pageId]/processing-status', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(createPageServiceToken).mockResolvedValue({ token: 'service-token-123' });
+    vi.mocked(createPageServiceToken).mockResolvedValue({ token: 'service-token-123' } as never);
 
     // Default: completed page
     mockDbSelectResult([{

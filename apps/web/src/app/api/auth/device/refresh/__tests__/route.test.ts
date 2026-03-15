@@ -463,7 +463,9 @@ describe('POST /api/auth/device/refresh', () => {
 
       vi.mocked(atomicDeviceTokenRotation).mockResolvedValue({
         success: true,
+        // @ts-expect-error - partial mock data
         newToken: null,
+        // @ts-expect-error - partial mock data
         deviceTokenId: null,
       });
 

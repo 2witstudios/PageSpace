@@ -311,6 +311,7 @@ describe('POST /api/auth/passkey/register', () => {
       it(`returns ${status} for ${code}`, async () => {
         vi.mocked(verifyRegistration).mockResolvedValue({
           ok: false,
+          // @ts-expect-error - partial mock data
           error: { code, message: 'Error' },
         });
 
@@ -326,6 +327,7 @@ describe('POST /api/auth/passkey/register', () => {
     it('returns 500 for unknown error code', async () => {
       vi.mocked(verifyRegistration).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'UNKNOWN_ERROR', message: 'Something' },
       });
 

@@ -216,9 +216,9 @@ describe('GET /api/drives/[driveId]/trash', () => {
       const trashedPages = [
         { id: 'page_1', name: 'Trashed Page', parentId: null, driveId: mockDriveId, isTrashed: true, children: [] },
       ];
-      vi.mocked(db.query.pages.findMany).mockResolvedValue(trashedPages);
+      vi.mocked(db.query.pages.findMany).mockResolvedValue(trashedPages as never);
       const tree = [{ id: 'page_1', name: 'Trashed Page', children: [] }];
-      vi.mocked(buildTree).mockReturnValue(tree);
+      vi.mocked(buildTree).mockReturnValue(tree as never);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/trash`);
       const response = await GET(request, createContext(mockDriveId));

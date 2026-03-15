@@ -106,6 +106,7 @@ describe('POST /api/account/password', () => {
     });
 
     it('calls authenticateRequestWithOptions with session-only and CSRF', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         password: '$2a$12$hash',
@@ -184,6 +185,7 @@ describe('POST /api/account/password', () => {
     });
 
     it('returns 401 when tokenVersion does not match', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         password: '$2a$12$hash',
@@ -201,6 +203,7 @@ describe('POST /api/account/password', () => {
     });
 
     it('returns 400 when user has no password set', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         password: null,
@@ -220,6 +223,7 @@ describe('POST /api/account/password', () => {
 
   describe('password verification', () => {
     it('returns 400 when current password is incorrect', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         password: '$2a$12$hash',
@@ -240,6 +244,7 @@ describe('POST /api/account/password', () => {
 
   describe('successful password change', () => {
     beforeEach(() => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.users.findFirst).mockResolvedValue({
         id: 'user-1',
         password: '$2a$12$oldhash',

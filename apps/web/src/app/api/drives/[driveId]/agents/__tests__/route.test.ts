@@ -148,7 +148,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
       vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
 
       // First call returns empty (drive not found)
-      mockWhere.mockReturnValueOnce(Promise.resolve([]));
+      mockWhere.mockReturnValueOnce(Promise.resolve([]) as never);
 
       const request = new Request('https://example.com/api/drives/d/agents');
       const response = await GET(request, createContext(MOCK_DRIVE_ID));

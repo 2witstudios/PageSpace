@@ -82,6 +82,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       const mockOptions = { challenge: 'xyz', rp: { name: 'PageSpace' } };
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: mockOptions },
       });
 
@@ -96,6 +97,7 @@ describe('POST /api/auth/passkey/register/options', () => {
     it('calls generateRegistrationOptions with userId', async () => {
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {} },
       });
 
@@ -107,6 +109,7 @@ describe('POST /api/auth/passkey/register/options', () => {
     it('logs options generation', async () => {
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {} },
       });
 
@@ -165,6 +168,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       vi.mocked(validateCSRFToken).mockReturnValue(false);
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {} },
       });
 
@@ -179,6 +183,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       vi.mocked(isSessionAuthResult).mockReturnValue(false);
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {} },
       });
 
@@ -227,6 +232,7 @@ describe('POST /api/auth/passkey/register/options', () => {
       it(`returns ${status} for ${code}`, async () => {
         vi.mocked(generateRegistrationOptions).mockResolvedValue({
           ok: false,
+          // @ts-expect-error - partial mock data
           error: { code, message: 'Error' },
         });
 
@@ -242,6 +248,7 @@ describe('POST /api/auth/passkey/register/options', () => {
     it('returns 500 for unknown error code', async () => {
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'UNKNOWN_ERROR', message: 'Something' },
       });
 
@@ -256,6 +263,7 @@ describe('POST /api/auth/passkey/register/options', () => {
     it('logs service failures', async () => {
       vi.mocked(generateRegistrationOptions).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'DB_ERROR', message: 'Database error' },
       });
 

@@ -80,14 +80,16 @@ describe('POST /api/pages/tree', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    // @ts-expect-error - partial mock data
     vi.mocked(db.query.drives.findFirst).mockResolvedValue({
       id: mockDriveId,
       ownerId: mockUserId,
     });
     vi.mocked(db.query.pages.findMany).mockResolvedValue([
+      // @ts-expect-error - partial mock data
       { id: 'page_1', parentId: null, position: 0 },
     ]);
-    vi.mocked(buildTree).mockReturnValue([{ id: 'page_1', children: [] }]);
+    vi.mocked(buildTree).mockReturnValue([{ id: 'page_1', children: [] }] as never);
   });
 
   describe('authentication', () => {
@@ -142,6 +144,7 @@ describe('POST /api/pages/tree', () => {
     });
 
     it('allows access when user is drive owner', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({
         id: mockDriveId,
         ownerId: mockUserId,
@@ -155,10 +158,12 @@ describe('POST /api/pages/tree', () => {
     });
 
     it('allows access when user is drive member (not owner)', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({
         id: mockDriveId,
         ownerId: 'other_user',
       });
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
         driveId: mockDriveId,
         userId: mockUserId,
@@ -170,6 +175,7 @@ describe('POST /api/pages/tree', () => {
     });
 
     it('returns 403 when user is neither owner nor member', async () => {
+      // @ts-expect-error - partial mock data
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({
         id: mockDriveId,
         ownerId: 'other_user',
@@ -190,8 +196,9 @@ describe('POST /api/pages/tree', () => {
         { id: 'page_1', parentId: null, position: 0 },
         { id: 'page_2', parentId: 'page_1', position: 0 },
       ];
-      vi.mocked(db.query.pages.findMany).mockResolvedValue(mockPages);
+      vi.mocked(db.query.pages.findMany).mockResolvedValue(mockPages as never);
       vi.mocked(buildTree).mockReturnValue([
+        // @ts-expect-error - partial mock data
         { id: 'page_1', children: [{ id: 'page_2', children: [] }] },
       ]);
 

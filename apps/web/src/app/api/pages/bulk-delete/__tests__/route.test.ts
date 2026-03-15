@@ -87,6 +87,7 @@ import { authenticateRequestWithOptions, getAllowedDriveIds, isMCPAuthResult } f
 import { broadcastPageEvent } from '@/lib/websocket';
 import { pageTreeCache, agentAwarenessCache, canUserDeletePage } from '@pagespace/lib/server';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+// @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';
 
 const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {

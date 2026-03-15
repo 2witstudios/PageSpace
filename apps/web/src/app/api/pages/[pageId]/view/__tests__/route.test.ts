@@ -87,6 +87,7 @@ describe('POST /api/pages/[pageId]/view', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(canUserViewPage).mockResolvedValue(true);
+    // @ts-expect-error - partial mock data
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({
       id: mockPageId,
       driveId: 'drive_123',

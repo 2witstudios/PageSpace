@@ -67,6 +67,7 @@ describe('GET /api/auth/passkey', () => {
       ];
       vi.mocked(listUserPasskeys).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { passkeys: mockPasskeys },
       });
 
@@ -110,6 +111,7 @@ describe('GET /api/auth/passkey', () => {
     it('returns 500 when listUserPasskeys fails', async () => {
       vi.mocked(listUserPasskeys).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'DB_ERROR', message: 'Database error' },
       });
 

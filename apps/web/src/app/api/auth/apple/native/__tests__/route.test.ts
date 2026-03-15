@@ -170,6 +170,7 @@ describe('POST /api/auth/apple/native', () => {
     });
     vi.mocked(verifyAppleIdToken).mockResolvedValue({
       success: true,
+      // @ts-expect-error - partial mock data
       userInfo: {
         providerId: 'apple-sub-123',
         email: 'test@example.com',
@@ -177,6 +178,7 @@ describe('POST /api/auth/apple/native', () => {
       },
     });
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
       userId: 'new-user-id',

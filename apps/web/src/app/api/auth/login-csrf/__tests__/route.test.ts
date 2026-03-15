@@ -90,7 +90,7 @@ describe('/api/auth/login-csrf', () => {
   describe('cookie serialization in non-production', () => {
     it('GET_inNonProduction_serializesWithoutSecureFlag', async () => {
       // Arrange
-      process.env.NODE_ENV = 'test';
+      (process.env as any).NODE_ENV = 'test';
 
       // Act
       await GET();
@@ -111,7 +111,7 @@ describe('/api/auth/login-csrf', () => {
 
     it('GET_inNonProduction_doesNotIncludeDomain', async () => {
       // Arrange
-      process.env.NODE_ENV = 'test';
+      (process.env as any).NODE_ENV = 'test';
       process.env.COOKIE_DOMAIN = '.example.com';
 
       // Act
@@ -126,7 +126,7 @@ describe('/api/auth/login-csrf', () => {
   describe('cookie serialization in production', () => {
     it('GET_inProduction_serializesWithSecureFlag', async () => {
       // Arrange
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
 
       // Act
       await GET();
@@ -147,7 +147,7 @@ describe('/api/auth/login-csrf', () => {
 
     it('GET_inProductionWithCookieDomain_includesDomain', async () => {
       // Arrange
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
       process.env.COOKIE_DOMAIN = '.example.com';
 
       // Act
@@ -165,7 +165,7 @@ describe('/api/auth/login-csrf', () => {
 
     it('GET_inProductionWithoutCookieDomain_doesNotIncludeDomain', async () => {
       // Arrange
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
       delete process.env.COOKIE_DOMAIN;
 
       // Act

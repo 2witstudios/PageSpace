@@ -98,6 +98,7 @@ import { broadcastPageEvent } from '@/lib/websocket';
 import { pageTreeCache, canUserEditPage } from '@pagespace/lib/server';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+// @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db';
 
 const { txUpdate, txUpdateSet, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {

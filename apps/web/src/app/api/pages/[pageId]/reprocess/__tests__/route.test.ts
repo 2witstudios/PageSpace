@@ -109,8 +109,8 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
     });
-    vi.mocked(applyPageMutation).mockResolvedValue(undefined);
-    vi.mocked(createPageServiceToken).mockResolvedValue({ token: 'service-token-123' });
+    vi.mocked(applyPageMutation).mockResolvedValue(undefined as never);
+    vi.mocked(createPageServiceToken).mockResolvedValue({ token: 'service-token-123' } as never);
 
     // Default: page exists with revision
     mockDbSelectResult([{ revision: 5 }]);

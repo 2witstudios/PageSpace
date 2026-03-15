@@ -72,6 +72,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
       const mockOptions = { challenge: 'abc', rp: { name: 'PageSpace' } };
       vi.mocked(generateRegistrationOptionsForSignup).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: mockOptions, challengeId: 'ch-1' },
       });
 
@@ -87,6 +88,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
     it('normalizes email to lowercase before calling service', async () => {
       vi.mocked(generateRegistrationOptionsForSignup).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {}, challengeId: 'ch-1' },
       });
 
@@ -101,6 +103,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
     it('logs options generation with masked email', async () => {
       vi.mocked(generateRegistrationOptionsForSignup).mockResolvedValue({
         ok: true,
+        // @ts-expect-error - partial mock data
         data: { options: {}, challengeId: 'ch-1' },
       });
 
@@ -220,6 +223,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
     it('returns 409 when email already exists', async () => {
       vi.mocked(generateRegistrationOptionsForSignup).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'EMAIL_EXISTS', message: 'Email exists' },
       });
 
@@ -251,6 +255,7 @@ describe('POST /api/auth/signup-passkey/options', () => {
     it('returns 500 for unknown error code', async () => {
       vi.mocked(generateRegistrationOptionsForSignup).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'UNKNOWN_ERROR', message: 'Something' },
       });
 

@@ -88,7 +88,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
   describe('successful deletion', () => {
     it('returns success on valid delete', async () => {
-      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
 
       const response = await DELETE(createDeleteRequest(), createContext());
       const body = await response.json();
@@ -98,7 +98,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
     });
 
     it('calls deletePasskey with userId and passkeyId', async () => {
-      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
 
       await DELETE(createDeleteRequest(), createContext('pk-123'));
 
@@ -106,7 +106,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
     });
 
     it('tracks passkey deletion event', async () => {
-      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
 
       await DELETE(createDeleteRequest(), createContext());
 
@@ -166,7 +166,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
     it('skips CSRF validation for Bearer token auth', async () => {
       vi.mocked(isSessionAuthResult).mockReturnValue(true);
       vi.mocked(validateCSRFToken).mockReturnValue(false);
-      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
 
       const request = new Request('http://localhost/api/auth/passkey/test-passkey-id', {
         method: 'DELETE',
@@ -182,7 +182,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
 
     it('skips CSRF validation when sessionId is null (non-session auth)', async () => {
       vi.mocked(isSessionAuthResult).mockReturnValue(false);
-      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(deletePasskey).mockResolvedValue({ ok: true, data: {} } as never);
 
       const request = new Request('http://localhost/api/auth/passkey/test-passkey-id', {
         method: 'DELETE',
@@ -200,6 +200,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
     it('returns 404 when passkey not found', async () => {
       vi.mocked(deletePasskey).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'PASSKEY_NOT_FOUND', message: 'Not found' },
       });
 
@@ -213,6 +214,7 @@ describe('DELETE /api/auth/passkey/[passkeyId]', () => {
     it('returns 500 on generic service error', async () => {
       vi.mocked(deletePasskey).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'DB_ERROR', message: 'Database error' },
       });
 
@@ -261,7 +263,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
   describe('successful update', () => {
     it('returns success on valid name update', async () => {
-      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} } as never);
 
       const response = await PATCH(
         createPatchRequest({ name: 'New Name' }),
@@ -274,7 +276,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
     });
 
     it('calls updatePasskeyName with correct params', async () => {
-      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} } as never);
 
       await PATCH(createPatchRequest({ name: 'Updated' }), createContext('pk-456'));
 
@@ -286,7 +288,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
     });
 
     it('logs passkey renamed event', async () => {
-      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} } as never);
 
       await PATCH(createPatchRequest({ name: 'Updated' }), createContext());
 
@@ -347,7 +349,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
     it('skips CSRF validation for Bearer token auth', async () => {
       vi.mocked(isSessionAuthResult).mockReturnValue(true);
       vi.mocked(validateCSRFToken).mockReturnValue(false);
-      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} } as never);
 
       const request = new Request('http://localhost/api/auth/passkey/test-passkey-id', {
         method: 'PATCH',
@@ -367,7 +369,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
 
     it('skips CSRF validation when sessionId is null', async () => {
       vi.mocked(isSessionAuthResult).mockReturnValue(false);
-      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} });
+      vi.mocked(updatePasskeyName).mockResolvedValue({ ok: true, data: {} } as never);
 
       const request = new Request('http://localhost/api/auth/passkey/test-passkey-id', {
         method: 'PATCH',
@@ -414,6 +416,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
     it('returns 404 when passkey not found', async () => {
       vi.mocked(updatePasskeyName).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - test mock with extra properties
         error: { code: 'PASSKEY_NOT_FOUND', message: 'Not found' },
       });
 
@@ -440,6 +443,7 @@ describe('PATCH /api/auth/passkey/[passkeyId]', () => {
     it('returns 500 on generic service error', async () => {
       vi.mocked(updatePasskeyName).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'DB_ERROR', message: 'Database error' },
       });
 

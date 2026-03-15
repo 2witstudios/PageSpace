@@ -184,6 +184,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
     vi.mocked(verifyAppleIdToken).mockResolvedValue({
       success: true,
+      // @ts-expect-error - partial mock data
       userInfo: {
         providerId: 'apple-sub-123',
         email: 'test@example.com',
@@ -191,6 +192,7 @@ describe('POST /api/auth/apple/callback', () => {
       },
     });
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
       userId: 'new-user-id',
@@ -451,6 +453,7 @@ describe('POST /api/auth/apple/callback', () => {
     it('redirects with oauth_error when email is missing from token', async () => {
       vi.mocked(verifyAppleIdToken).mockResolvedValue({
         success: true,
+        // @ts-expect-error - partial mock data
         userInfo: {
           providerId: 'apple-sub-123',
           email: '',

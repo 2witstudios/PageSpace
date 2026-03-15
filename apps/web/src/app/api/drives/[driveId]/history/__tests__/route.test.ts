@@ -242,6 +242,7 @@ describe('GET /api/drives/[driveId]/history', () => {
       await GET(request, createContext(mockDriveId));
 
       const call = vi.mocked(getDriveVersionHistory).mock.calls[0];
+      // @ts-expect-error - test assumes value exists
       const passedStartDate = call[2].startDate as Date;
       expect(passedStartDate).toBeInstanceOf(Date);
       // Should be approximately 30 days ago
@@ -263,6 +264,7 @@ describe('GET /api/drives/[driveId]/history', () => {
       await GET(request, createContext(mockDriveId));
 
       const call = vi.mocked(getDriveVersionHistory).mock.calls[0];
+      // @ts-expect-error - test assumes value exists
       const passedStartDate = call[2].startDate as Date;
       // Should be retention cutoff (30 days ago), not the 90-day-ago value
       const thirtyDaysAgo = new Date();
@@ -283,6 +285,7 @@ describe('GET /api/drives/[driveId]/history', () => {
       await GET(request, createContext(mockDriveId));
 
       const call = vi.mocked(getDriveVersionHistory).mock.calls[0];
+      // @ts-expect-error - test assumes value exists
       const passedStartDate = call[2].startDate as Date;
       // Should preserve the 5-day-ago start date since it's more recent than cutoff
       expect(Math.abs(passedStartDate.getTime() - fiveDaysAgo.getTime())).toBeLessThan(5000);
@@ -295,7 +298,7 @@ describe('GET /api/drives/[driveId]/history', () => {
         { id: 'act_1', operation: 'create', resourceType: 'page' },
         { id: 'act_2', operation: 'update', resourceType: 'page' },
       ];
-      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 2 });
+      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 2 } as never);
       vi.mocked(isActivityEligibleForRollback)
         .mockReturnValueOnce(true)
         .mockReturnValueOnce(false);
@@ -314,7 +317,7 @@ describe('GET /api/drives/[driveId]/history', () => {
       const activities = [
         { id: 'act_1', operation: 'create', resourceType: 'page' },
       ];
-      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 100 });
+      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 100 } as never);
 
       const request = new Request(
         `https://example.com/api/drives/${mockDriveId}/history?limit=10&offset=5`
@@ -334,7 +337,7 @@ describe('GET /api/drives/[driveId]/history', () => {
       const activities = [
         { id: 'act_1', operation: 'create', resourceType: 'page' },
       ];
-      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 1 });
+      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 1 } as never);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/history`);
       const response = await GET(request, createContext(mockDriveId));

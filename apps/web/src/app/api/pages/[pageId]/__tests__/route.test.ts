@@ -143,6 +143,7 @@ describe('GET /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.getPage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));
@@ -255,6 +256,7 @@ describe('PATCH /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.updatePage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));
@@ -657,6 +659,7 @@ describe('DELETE /api/pages/[pageId]', () => {
     vi.mocked(isMCPAuthResult).mockReturnValue(false);
     vi.mocked(pageService.trashPage).mockResolvedValue(successResult);
     vi.mocked(jsonResponse).mockImplementation((data: unknown) => NextResponse.json(data));
+    // @ts-expect-error - partial mock data
     vi.mocked(createPageEventPayload).mockImplementation((driveId: string, pageId: string, type: string, data: Record<string, unknown>) => ({
       driveId, pageId, type, ...data,
     }));

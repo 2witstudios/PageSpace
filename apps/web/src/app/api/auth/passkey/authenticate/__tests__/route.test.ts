@@ -97,6 +97,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     vi.mocked(validateLoginCSRFToken).mockReturnValue(true);
     vi.mocked(verifyAuthentication).mockResolvedValue({
       ok: true,
+      // @ts-expect-error - partial mock data
       data: { userId: 'user-1' },
     });
   });
@@ -200,26 +201,26 @@ describe('POST /api/auth/passkey/authenticate', () => {
 
     it('does not include Secure flag in non-production', async () => {
       const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'test';
+      (process.env as any).NODE_ENV = 'test';
 
       const response = await POST(createRequest());
       const cookies = response.headers.getSetCookie();
       const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
       expect(csrfCookie).not.toContain('; Secure');
 
-      process.env.NODE_ENV = originalEnv;
+      (process.env as any).NODE_ENV = originalEnv;
     });
 
     it('includes Secure flag in production', async () => {
       const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
 
       const response = await POST(createRequest());
       const cookies = response.headers.getSetCookie();
       const csrfCookie = cookies.find(c => c.startsWith('csrf_token='));
       expect(csrfCookie).toContain('; Secure');
 
-      process.env.NODE_ENV = originalEnv;
+      (process.env as any).NODE_ENV = originalEnv;
     });
   });
 
@@ -307,6 +308,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
       it(`returns ${status} for ${code}`, async () => {
         vi.mocked(verifyAuthentication).mockResolvedValue({
           ok: false,
+          // @ts-expect-error - partial mock data
           error: { code, message: 'Error' },
         });
 
@@ -322,6 +324,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('returns 500 for unknown error code', async () => {
       vi.mocked(verifyAuthentication).mockResolvedValue({
         ok: false,
+        // @ts-expect-error - partial mock data
         error: { code: 'UNKNOWN_ERROR', message: 'Something' },
       });
 

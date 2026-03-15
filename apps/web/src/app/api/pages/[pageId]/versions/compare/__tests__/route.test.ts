@@ -69,6 +69,7 @@ vi.mock('@pagespace/lib/content', () => ({
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
+  // @ts-expect-error - test mock spread
   maskIdentifier: (...args: unknown[]) => mockMaskIdentifier(...args),
 }));
 
