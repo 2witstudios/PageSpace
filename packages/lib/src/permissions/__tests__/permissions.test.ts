@@ -94,7 +94,7 @@ function makeSelectChain(rows: unknown[]) {
   const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
   const innerJoinFn = vi.fn().mockReturnValue({ where: whereFn });
   const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn, innerJoin: innerJoinFn, where: whereFn });
-  vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   return { limitFn, whereFn, fromFn };
 }
 
@@ -112,15 +112,15 @@ describe('getDriveIdsForUser', () => {
     const pageDrive = [{ driveId: 'drive-page-perm' }];
 
     vi.mocked(db.select)
-      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(ownedDrive) }) } as ReturnType<typeof db.select>)
-      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(memberDrive) }) } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(ownedDrive) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(memberDrive) }) } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
             where: vi.fn().mockResolvedValue(pageDrive),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getDriveIdsForUser('user-1');
 
@@ -134,15 +134,15 @@ describe('getDriveIdsForUser', () => {
     const sameId = 'drive-same';
 
     vi.mocked(db.select)
-      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ id: sameId }]) }) } as ReturnType<typeof db.select>)
-      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ driveId: sameId }]) }) } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ id: sameId }]) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ driveId: sameId }]) }) } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
             where: vi.fn().mockResolvedValue([{ driveId: sameId }]),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getDriveIdsForUser('user-1');
     expect(result).toHaveLength(1);
@@ -151,15 +151,15 @@ describe('getDriveIdsForUser', () => {
 
   it('skips null driveId from page permissions', async () => {
     vi.mocked(db.select)
-      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as ReturnType<typeof db.select>)
-      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
             where: vi.fn().mockResolvedValue([{ driveId: null }]),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getDriveIdsForUser('user-1');
     expect(result).toHaveLength(0);
@@ -204,7 +204,7 @@ describe('getUserAccessLevel', () => {
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
     const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
@@ -216,7 +216,7 @@ describe('getUserAccessLevel', () => {
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
     const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
@@ -229,7 +229,7 @@ describe('getUserAccessLevel', () => {
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
     const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
@@ -248,13 +248,13 @@ describe('getUserAccessLevel', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // Second call: admin check
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(adminMembership) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
@@ -273,19 +273,19 @@ describe('getUserAccessLevel', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // admin check (no admin)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // explicit permissions
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(explicitPerm) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -302,17 +302,17 @@ describe('getUserAccessLevel', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
@@ -329,17 +329,17 @@ describe('getUserAccessLevel', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
     expect(result).toBeNull();
@@ -360,17 +360,17 @@ describe('getUserAccessLevel', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(explicitPerm) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
@@ -388,7 +388,7 @@ describe('getUserAccessLevel', () => {
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockRejectedValue(new Error('DB error')) }),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
@@ -406,13 +406,13 @@ describe('getUserAccessLevel', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(page) }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // explicit permissions - empty
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
     expect(result).toBeNull();
@@ -425,7 +425,7 @@ describe('getUserAccessLevel', () => {
     const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
     const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn });
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     await getUserAccessLevel(VALID_USER, VALID_PAGE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
@@ -445,7 +445,7 @@ function setupAccessLevel(perms: { canView: boolean; canEdit: boolean; canShare:
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
   } else {
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -455,7 +455,7 @@ function setupAccessLevel(perms: { canView: boolean; canEdit: boolean; canShare:
           }),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
   }
 }
 
@@ -535,7 +535,7 @@ describe('isDriveOwnerOrAdmin', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: VALID_USER }]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -547,12 +547,12 @@ describe('isDriveOwnerOrAdmin', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-id' }]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -564,12 +564,12 @@ describe('isDriveOwnerOrAdmin', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
@@ -581,12 +581,12 @@ describe('isDriveOwnerOrAdmin', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await isDriveOwnerOrAdmin(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
@@ -604,7 +604,7 @@ describe('isUserDriveMember', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: VALID_USER }]) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await isUserDriveMember(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -616,12 +616,12 @@ describe('isUserDriveMember', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await isUserDriveMember(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -633,12 +633,12 @@ describe('isUserDriveMember', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await isUserDriveMember(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
@@ -659,11 +659,11 @@ describe('getUserAccessiblePagesInDrive', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: VALID_USER }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // all pages
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(allPageIds) }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
     expect(result).toEqual(['page-1', 'page-2']);
@@ -677,17 +677,17 @@ describe('getUserAccessiblePagesInDrive', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // admin check
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'admin-member' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // all pages
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(allPageIds) }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
     expect(result).toEqual(['page-1']);
@@ -701,19 +701,19 @@ describe('getUserAccessiblePagesInDrive', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // admin check (not admin)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // explicit permissions
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(permPages) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
     expect(result).toEqual(['page-with-perm']);
@@ -731,7 +731,7 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
     expect(result).toEqual([]);
@@ -746,12 +746,12 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: VALID_USER }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue(allPages),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
     expect(result).toHaveLength(1);
@@ -769,19 +769,19 @@ describe('getUserAccessiblePagesInDriveWithDetails', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // admin check
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // pages with permissions join
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(permPages) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
     expect(result).toHaveLength(1);
@@ -800,7 +800,7 @@ describe('getUserDriveAccess', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
@@ -811,7 +811,7 @@ describe('getUserDriveAccess', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: VALID_USER }]) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -823,12 +823,12 @@ describe('getUserDriveAccess', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -840,13 +840,13 @@ describe('getUserDriveAccess', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // membership check: not member
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // page access check
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -854,7 +854,7 @@ describe('getUserDriveAccess', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'perm-row' }]) }),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(true);
@@ -866,19 +866,19 @@ describe('getUserDriveAccess', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           leftJoin: vi.fn().mockReturnValue({
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
@@ -889,7 +889,7 @@ describe('getUserDriveAccess', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockRejectedValue(new Error('DB failure')) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE);
     expect(result).toBe(false);
@@ -901,7 +901,7 @@ describe('getUserDriveAccess', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: VALID_USER }]) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
     expect(result).toBe(true);
@@ -916,12 +916,12 @@ describe('getUserDriveAccess', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'member-row' }]) }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
     expect(result).toBe(true);
@@ -935,7 +935,7 @@ describe('getUserDriveAccess', () => {
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
     expect(loggers.api.debug).toHaveBeenCalled();
@@ -947,13 +947,13 @@ describe('getUserDriveAccess', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: VALID_DRIVE, ownerId: 'other-user' }]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // membership check: not member
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // page access check: has access
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -961,7 +961,7 @@ describe('getUserDriveAccess', () => {
             where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ id: 'perm-row' }]) }),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUserDriveAccess(VALID_USER, VALID_DRIVE, { silent: false });
     expect(result).toBe(true);

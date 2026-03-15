@@ -541,6 +541,7 @@ describe('BrowserSafeLogger environment detection', () => {
     const bsl = new BrowserSafeLogger() as AnyLogger;
     vi.spyOn(bsl, 'isNode').mockReturnValue(true);
     const originalMemUsage = process.memoryUsage;
+    // @ts-expect-error intentional override — real memoryUsage has .rss() attached
     process.memoryUsage = () => { throw new Error('mem fail'); };
     const result = bsl.getMemoryUsage();
     expect(result).toBeUndefined();

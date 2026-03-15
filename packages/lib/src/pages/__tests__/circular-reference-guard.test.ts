@@ -31,10 +31,8 @@ import { db } from '@pagespace/db';
 // Helpers
 // ---------------------------------------------------------------------------
 
-type PageRow = { parentId: string | null } | undefined;
-
 function setupPageTree(tree: Record<string, string | null>) {
-  vi.mocked(db.query.pages.findFirst).mockImplementation(async (args: unknown) => {
+  vi.mocked(db.query.pages.findFirst).mockImplementation((async (args: unknown) => {
     const opts = args as { where: unknown; columns: unknown };
     // Extract the pageId from the eq call - we need to trace which id was queried.
     // Since eq is mocked as a no-op string, we use call arguments
@@ -45,8 +43,8 @@ function setupPageTree(tree: Record<string, string | null>) {
     const queriedId = lastCall[1] as string;
     const parentId = tree[queriedId];
     if (parentId === undefined) return undefined;
-    return { parentId } as PageRow;
-  });
+    return { parentId };
+  }) as any);
 }
 
 // ---------------------------------------------------------------------------
@@ -73,8 +71,8 @@ describe('wouldCreateCircularReference', () => {
   it('returns false when newParentId is not a descendant of pageId', async () => {
     // newParentId=page-2, ancestry: page-2 -> page-3 -> null
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'page-3' } as PageRow)
-      .mockResolvedValueOnce({ parentId: null } as PageRow);
+      .mockResolvedValueOnce({ parentId: 'page-3' } as never)
+      .mockResolvedValueOnce({ parentId: null } as never);
 
     const result = await wouldCreateCircularReference('page-1', 'page-2');
     expect(result).toBe(false);
@@ -85,7 +83,7 @@ describe('wouldCreateCircularReference', () => {
     // So if we ask: would setting page-1's parent to page-2 create a circle?
     // isDescendant(page-2, page-1) -> page-2's parent is page-1 -> true
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'page-1' } as PageRow);
+      .mockResolvedValueOnce({ parentId: 'page-1' } as never);
 
     const result = await wouldCreateCircularReference('page-1', 'page-2');
     expect(result).toBe(true);
@@ -103,7 +101,7 @@ describe('isDescendant', () => {
 
   it('returns true when potentialDescendant directly has ancestorId as parent', async () => {
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'ancestor-id' } as PageRow);
+      .mockResolvedValueOnce({ parentId: 'ancestor-id' } as never);
 
     const result = await isDescendant('child-id', 'ancestor-id');
     expect(result).toBe(true);
@@ -112,8 +110,8 @@ describe('isDescendant', () => {
   it('returns true when ancestor is multiple levels up', async () => {
     // child -> middle -> ancestor
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'middle-id' } as PageRow)   // child's parent
-      .mockResolvedValueOnce({ parentId: 'ancestor-id' } as PageRow); // middle's parent
+      .mockResolvedValueOnce({ parentId: 'middle-id' } as never)   // child's parent
+      .mockResolvedValueOnce({ parentId: 'ancestor-id' } as never); // middle's parent
 
     const result = await isDescendant('child-id', 'ancestor-id');
     expect(result).toBe(true);
@@ -122,8 +120,8 @@ describe('isDescendant', () => {
   it('returns false when page is not a descendant (reaches root)', async () => {
     // child -> other-parent -> null (root)
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'other-parent' } as PageRow)
-      .mockResolvedValueOnce({ parentId: null } as PageRow);
+      .mockResolvedValueOnce({ parentId: 'other-parent' } as never)
+      .mockResolvedValueOnce({ parentId: null } as never);
 
     const result = await isDescendant('child-id', 'ancestor-id');
     expect(result).toBe(false);
@@ -131,7 +129,7 @@ describe('isDescendant', () => {
 
   it('returns false when page not found in DB', async () => {
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce(undefined as PageRow);
+      .mockResolvedValueOnce(undefined as never);
 
     const result = await isDescendant('nonexistent-id', 'ancestor-id');
     expect(result).toBe(false);
@@ -144,11 +142,11 @@ describe('isDescendant', () => {
     // before the depth limit in the actual implementation, we test that an error
     // is thrown in general for a deep/cyclic tree.
     let counter = 0;
-    vi.mocked(db.query.pages.findFirst).mockImplementation(async () => {
+    vi.mocked(db.query.pages.findFirst).mockImplementation((async () => {
       counter++;
       // After 100 calls the depth check fires; we return a unique id each time
-      return { parentId: `unique-parent-${counter}` } as PageRow;
-    });
+      return { parentId: `unique-parent-${counter}` };
+    }) as any);
 
     await expect(isDescendant('start-id', 'ancestor-id')).rejects.toThrow(
       /Page tree depth exceeded/
@@ -158,8 +156,8 @@ describe('isDescendant', () => {
   it('throws when a cycle is detected in existing page tree', async () => {
     // A -> B -> A (cycle): start at A, find B, find A (already visited) -> throw
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'page-B' } as PageRow)    // A -> B
-      .mockResolvedValueOnce({ parentId: 'page-A' } as PageRow);   // B -> A
+      .mockResolvedValueOnce({ parentId: 'page-B' } as never)    // A -> B
+      .mockResolvedValueOnce({ parentId: 'page-A' } as never);   // B -> A
 
     await expect(isDescendant('page-A', 'nonexistent-ancestor')).rejects.toThrow(
       /Circular reference detected/
@@ -191,7 +189,7 @@ describe('validatePageMove', () => {
 
   it('returns invalid when circular reference would be created', async () => {
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'page-1' } as PageRow);
+      .mockResolvedValueOnce({ parentId: 'page-1' } as never);
 
     const result = await validatePageMove('page-1', 'page-2');
     expect(result).toEqual({
@@ -202,8 +200,8 @@ describe('validatePageMove', () => {
 
   it('returns valid when move is safe', async () => {
     vi.mocked(db.query.pages.findFirst)
-      .mockResolvedValueOnce({ parentId: 'page-3' } as PageRow)
-      .mockResolvedValueOnce({ parentId: null } as PageRow);
+      .mockResolvedValueOnce({ parentId: 'page-3' } as never)
+      .mockResolvedValueOnce({ parentId: null } as never);
 
     const result = await validatePageMove('page-1', 'page-2');
     expect(result).toEqual({ valid: true });
@@ -211,10 +209,10 @@ describe('validatePageMove', () => {
 
   it('returns invalid with error message when isDescendant throws (depth exceeded)', async () => {
     let counter = 0;
-    vi.mocked(db.query.pages.findFirst).mockImplementation(async () => {
+    vi.mocked(db.query.pages.findFirst).mockImplementation((async () => {
       counter++;
-      return { parentId: `unique-parent-${counter}` } as PageRow;
-    });
+      return { parentId: `unique-parent-${counter}` };
+    }) as any);
 
     const result = await validatePageMove('page-1', 'page-2');
     expect(result.valid).toBe(false);

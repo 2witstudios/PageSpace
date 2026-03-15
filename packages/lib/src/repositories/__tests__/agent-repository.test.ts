@@ -63,7 +63,7 @@ function setupSelectChain(rows: unknown[]) {
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
   return { setFn, whereFn };
 }
 

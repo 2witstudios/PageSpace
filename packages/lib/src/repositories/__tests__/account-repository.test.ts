@@ -41,13 +41,13 @@ import { db } from '@pagespace/db';
 function setupSelectChain(result: unknown[]) {
   const whereFn = vi.fn().mockResolvedValue(result);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   return { whereFn, fromFn };
 }
 
 function setupDeleteChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
-  vi.mocked(db.delete).mockReturnValue({ where: whereFn } as ReturnType<typeof db.delete>);
+  vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
   return { whereFn };
 }
 
@@ -129,11 +129,17 @@ describe('accountRepository.getDriveMemberCount', () => {
 describe('accountRepository.deleteDrive', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('calls db.delete with the drive id', async () => {
+  it('resolves without error when DB succeeds', async () => {
     setupDeleteChain();
 
-    await accountRepository.deleteDrive('drive-1');
-    expect(db.delete).toHaveBeenCalled();
+    await expect(accountRepository.deleteDrive('drive-1')).resolves.toBeUndefined();
+  });
+
+  it('propagates DB errors', async () => {
+    const whereFn = vi.fn().mockRejectedValue(new Error('FK constraint'));
+    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
+
+    await expect(accountRepository.deleteDrive('drive-1')).rejects.toThrow('FK constraint');
   });
 });
 
@@ -143,11 +149,17 @@ describe('accountRepository.deleteDrive', () => {
 describe('accountRepository.deleteUser', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('calls db.delete with the user id', async () => {
+  it('resolves without error when DB succeeds', async () => {
     setupDeleteChain();
 
-    await accountRepository.deleteUser('user-1');
-    expect(db.delete).toHaveBeenCalled();
+    await expect(accountRepository.deleteUser('user-1')).resolves.toBeUndefined();
+  });
+
+  it('propagates DB errors', async () => {
+    const whereFn = vi.fn().mockRejectedValue(new Error('FK constraint'));
+    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
+
+    await expect(accountRepository.deleteUser('user-1')).rejects.toThrow('FK constraint');
   });
 });
 

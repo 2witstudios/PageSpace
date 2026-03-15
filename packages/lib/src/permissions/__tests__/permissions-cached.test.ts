@@ -112,7 +112,7 @@ function mockSelectChain(rowSets: unknown[][]) {
     leftJoinFn.mockReturnValue({ where: whereFn, leftJoin: leftJoinFn });
     const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
 
-    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   }
 }
 
@@ -123,7 +123,7 @@ function mockSelectThrow(error: Error) {
   const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn().mockReturnValue({ where: whereFn, leftJoin: undefined as ReturnType<typeof vi.fn> | undefined });
   leftJoinFn.mockReturnValue({ where: whereFn, leftJoin: leftJoinFn });
   const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
-  vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +422,7 @@ describe('getUserAccessLevel', () => {
       const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
       const leftJoinFn = vi.fn().mockReturnValue({ where: whereFn, leftJoin: vi.fn() });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getUserAccessLevel(USER_ID, PAGE_ID);
 
@@ -665,7 +665,7 @@ describe('getUserDriveAccess', () => {
       const limitFn = vi.fn().mockRejectedValue(42);
       const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: vi.fn().mockReturnValue({ where: whereFn }), where: whereFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getUserDriveAccess(USER_ID, DRIVE_ID);
 
@@ -912,7 +912,7 @@ describe('getUserDrivePermissions', () => {
       const limitFn = vi.fn().mockRejectedValue('unexpected');
       const whereFn = vi.fn().mockReturnValue({ limit: limitFn });
       const fromFn = vi.fn().mockReturnValue({ where: whereFn, leftJoin: vi.fn().mockReturnValue({ where: whereFn }) });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getUserDrivePermissions(USER_ID, DRIVE_ID);
 
@@ -987,7 +987,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       // Mock the where to resolve to the db rows
       whereFn.mockResolvedValue([
@@ -1026,7 +1026,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getBatchPagePermissions(USER_ID, ['page-1']);
 
@@ -1057,7 +1057,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getBatchPagePermissions(USER_ID, ['page-1']);
 
@@ -1088,7 +1088,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getBatchPagePermissions(USER_ID, ['page-1']);
 
@@ -1113,7 +1113,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getBatchPagePermissions(USER_ID, ['page-1', 'page-2']);
 
@@ -1137,7 +1137,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getBatchPagePermissions(USER_ID, ['page-1']);
 
@@ -1167,7 +1167,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       const result = await getBatchPagePermissions(USER_ID, ['page-1']);
 
@@ -1193,7 +1193,7 @@ describe('getBatchPagePermissions', () => {
       const leftJoinFn: ReturnType<typeof vi.fn> = vi.fn();
       leftJoinFn.mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
       const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn });
-      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as ReturnType<typeof db.select>);
+      vi.mocked(db.select).mockReturnValueOnce({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
       await getBatchPagePermissions(USER_ID, ['page-1']);
 

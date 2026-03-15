@@ -57,14 +57,14 @@ function setupSelectChain(rows: unknown[]) {
   const limitFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn, limit: limitFn });
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   return { whereFn, orderByFn, limitFn };
 }
 
 function setupInsertChain(row: unknown) {
   const returningFn = vi.fn().mockResolvedValue([row]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
-  vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as ReturnType<typeof db.insert>);
+  vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as unknown as ReturnType<typeof db.insert>);
   return { valuesFn, returningFn };
 }
 
@@ -72,7 +72,7 @@ function setupUpdateChain(rows: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(rows);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
   return { setFn, whereFn, returningFn };
 }
 
@@ -104,12 +104,12 @@ describe('pageRepository.findById', () => {
     expect(result?.isTrashed).toBe(true);
   });
 
-  it('excludes trashed filter when includeTrashed=false', async () => {
+  it('returns non-trashed page when includeTrashed=false', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow as never);
 
-    await pageRepository.findById('page-1', { includeTrashed: false });
-    // Should have called with isTrashed=false condition
-    expect(db.query.pages.findFirst).toHaveBeenCalled();
+    const result = await pageRepository.findById('page-1', { includeTrashed: false });
+    expect(result).toEqual(pageRow);
+    expect(result?.isTrashed).toBe(false);
   });
 });
 
@@ -188,7 +188,7 @@ describe('pageRepository.getNextPosition', () => {
     const orderByFn = vi.fn().mockResolvedValue([]);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getNextPosition('drive-1', null);
     expect(result).toBe(1);
@@ -199,7 +199,7 @@ describe('pageRepository.getNextPosition', () => {
     const orderByFn = vi.fn().mockResolvedValue(siblings);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getNextPosition('drive-1', null);
     expect(result).toBe(6);
@@ -209,7 +209,7 @@ describe('pageRepository.getNextPosition', () => {
     const orderByFn = vi.fn().mockResolvedValue([{ position: 2 }]);
     const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getNextPosition('drive-1', 'parent-1');
     expect(result).toBe(3);
@@ -292,7 +292,7 @@ describe('pageRepository.trash', () => {
 
   it('calls update with isTrashed=true', async () => {
     const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-    vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await pageRepository.trash('page-1');
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isTrashed: true }));
@@ -307,7 +307,7 @@ describe('pageRepository.trashMany', () => {
 
   it('calls update with isTrashed=true for multiple pages', async () => {
     const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-    vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await pageRepository.trashMany('drive-1', ['page-1', 'page-2', 'page-3']);
     expect(db.update).toHaveBeenCalled();
@@ -349,7 +349,7 @@ describe('pageRepository.getChildIds', () => {
   it('returns empty array when no children', async () => {
     const whereFn = vi.fn().mockResolvedValue([]);
     const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getChildIds('drive-1', 'page-1');
     expect(result).toEqual([]);
@@ -362,15 +362,15 @@ describe('pageRepository.getChildIds', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ id: 'child-1' }, { id: 'child-2' }]),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as unknown as ReturnType<typeof db.select>)
       // child-1 has no children
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as unknown as ReturnType<typeof db.select>)
       // child-2 has no children
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getChildIds('drive-1', 'page-1');
     expect(result).toEqual(['child-1', 'child-2']);
@@ -384,17 +384,17 @@ describe('pageRepository.getChildIds', () => {
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ id: 'child-1' }]),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as unknown as ReturnType<typeof db.select>)
       // child-1's children
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockResolvedValue([{ id: 'grandchild-1' }]),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as unknown as ReturnType<typeof db.select>)
       // grandchild-1's children (none)
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as unknown as ReturnType<typeof db.select>);
 
     const result = await pageRepository.getChildIds('drive-1', 'page-1');
     expect(result).toContain('child-1');

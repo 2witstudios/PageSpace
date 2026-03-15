@@ -33,7 +33,7 @@ function setupLinkedPages(pages: Array<{ pageId: string }>) {
   const fromFn = vi.fn().mockReturnValue({
     where: vi.fn().mockResolvedValue(pages),
   });
-  vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 }
 
 // ---------------------------------------------------------------------------

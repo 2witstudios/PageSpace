@@ -566,7 +566,8 @@ describe('createRequestLogger', () => {
 
 describe('withLogging', () => {
   let timerStop: ReturnType<typeof vi.fn>;
-  let startTimerSpy: ReturnType<typeof vi.spyOn>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let startTimerSpy: any;
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -649,10 +650,10 @@ describe('setupErrorHandlers', () => {
 
   it('uncaughtException handler calls loggers.system.fatal and process.exit', () => {
     const handlers: Record<string, Function> = {};
-    vi.spyOn(process, 'on').mockImplementation((event: string, handler: Function) => {
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
       handlers[event] = handler;
       return process;
-    });
+    }) as any);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const systemFatalSpy = vi.spyOn(loggers.system, 'fatal').mockImplementation(() => {});
 
@@ -670,10 +671,10 @@ describe('setupErrorHandlers', () => {
 
   it('unhandledRejection handler calls loggers.system.error', () => {
     const handlers: Record<string, Function> = {};
-    vi.spyOn(process, 'on').mockImplementation((event: string, handler: Function) => {
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
       handlers[event] = handler;
       return process;
-    });
+    }) as any);
     const systemErrorSpy = vi.spyOn(loggers.system, 'error').mockImplementation(() => {});
 
     setupErrorHandlers();

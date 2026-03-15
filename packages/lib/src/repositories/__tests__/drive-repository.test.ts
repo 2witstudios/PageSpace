@@ -42,7 +42,7 @@ function setupSelectChain(rows: unknown[]) {
   // So the .where() must resolve directly to the rows array (no .limit())
   const whereFn = vi.fn().mockResolvedValue(rows);
   const fromFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
   return { whereFn };
 }
 
@@ -50,7 +50,7 @@ function setupUpdateChain(returnValue: unknown[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
   return { setFn, whereFn, returningFn };
 }
 
@@ -125,26 +125,15 @@ describe('driveRepository.findByIdAndOwner', () => {
 describe('driveRepository.trash', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('calls update with isTrashed=true and trashedAt', async () => {
-    const { setFn } = setupUpdateChain([]);
-    // Override to not return (void operation)
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
-    } as ReturnType<typeof db.update>);
+  it('sets isTrashed to true and trashedAt to a Date', async () => {
+    const setFn = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await driveRepository.trash('drive-1');
-    expect(db.update).toHaveBeenCalled();
-  });
 
-  it('sets isTrashed to true', async () => {
-    const { setFn } = setupUpdateChain([]);
-    vi.mocked(db.update).mockReturnValue({
-      set: setFn,
-    } as ReturnType<typeof db.update>);
-    setFn.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-
-    await driveRepository.trash('drive-1');
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isTrashed: true }));
+    const payload = setFn.mock.calls[0][0] as { trashedAt: Date };
+    expect(payload.trashedAt).toBeInstanceOf(Date);
   });
 });
 

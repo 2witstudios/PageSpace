@@ -116,7 +116,7 @@ function mockPageAsOwner() {
           }),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 }
 
 // Mock page not accessible
@@ -128,7 +128,7 @@ function mockPageNotFound() {
           where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 }
 
 // Mock target user exists
@@ -140,7 +140,7 @@ function mockUserExists(exists = true) {
           limit: vi.fn().mockResolvedValue(exists ? [{ id: TARGET_ID }] : []),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 }
 
 // Mock transaction for grant
@@ -367,7 +367,7 @@ describe('grantPagePermission', () => {
             }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // Admin membership check returns match
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -375,7 +375,7 @@ describe('grantPagePermission', () => {
             limit: vi.fn().mockResolvedValue([{ id: 'admin-membership-id' }]),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     mockUserExists(true);
     mockTransactionInsert('admin-granted-perm');
@@ -403,7 +403,7 @@ describe('grantPagePermission', () => {
             }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // Admin membership check - NOT admin
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -411,7 +411,7 @@ describe('grantPagePermission', () => {
             limit: vi.fn().mockResolvedValue([]),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // Share permission check - has canShare
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -419,7 +419,7 @@ describe('grantPagePermission', () => {
             limit: vi.fn().mockResolvedValue([{ canShare: true }]),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     mockUserExists(true);
     mockTransactionInsert('share-perm-granted');
@@ -447,7 +447,7 @@ describe('grantPagePermission', () => {
             }),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // Admin membership check - NOT admin
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -455,7 +455,7 @@ describe('grantPagePermission', () => {
             limit: vi.fn().mockResolvedValue([]),
           }),
         }),
-      } as ReturnType<typeof db.select>)
+      } as unknown as ReturnType<typeof db.select>)
       // Share permission check - no canShare
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
@@ -463,7 +463,7 @@ describe('grantPagePermission', () => {
             limit: vi.fn().mockResolvedValue([{ canShare: false }]),
           }),
         }),
-      } as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>);
 
     const result = await grantPagePermission(ctx, {
       pageId: PAGE_ID,
@@ -532,7 +532,7 @@ describe('revokePagePermission', () => {
           limit: vi.fn().mockResolvedValue([]),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     const result = await revokePagePermission(ctx, validRevokeInput());
 
@@ -561,11 +561,11 @@ describe('revokePagePermission', () => {
           }]),
         }),
       }),
-    } as ReturnType<typeof db.select>);
+    } as unknown as ReturnType<typeof db.select>);
 
     // Mock delete
     const whereFn = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as ReturnType<typeof db.delete>);
+    vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
 
     const result = await revokePagePermission(ctx, validRevokeInput());
 

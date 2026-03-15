@@ -66,13 +66,13 @@ import * as crypto from 'crypto';
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
   return { setFn, whereFn };
 }
 
 function setupInsertChain() {
   const valuesFn = vi.fn().mockResolvedValue(undefined);
-  vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as ReturnType<typeof db.insert>);
+  vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as unknown as ReturnType<typeof db.insert>);
   return { valuesFn };
 }
 

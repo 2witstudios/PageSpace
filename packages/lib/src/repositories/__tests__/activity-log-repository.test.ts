@@ -26,7 +26,7 @@ import { db } from '@pagespace/db';
 function setupUpdateChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
   return { setFn, whereFn };
 }
 
@@ -60,7 +60,7 @@ describe('activityLogRepository.anonymizeForUser', () => {
   it('returns success=false with error message on DB error', async () => {
     const whereFn = vi.fn().mockRejectedValue(new Error('DB connection failed'));
     const setFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     const result = await activityLogRepository.anonymizeForUser('user-1', 'anon@anonymized.invalid');
 
@@ -71,7 +71,7 @@ describe('activityLogRepository.anonymizeForUser', () => {
   it('returns success=false with "Unknown error" for non-Error throws', async () => {
     const whereFn = vi.fn().mockRejectedValue('string error');
     const setFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     const result = await activityLogRepository.anonymizeForUser('user-1', 'anon@anonymized.invalid');
 

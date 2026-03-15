@@ -87,7 +87,7 @@ const mockNotification = {
 function setupInsertChain(returnValue: object) {
   const returningFn = vi.fn().mockResolvedValue([returnValue]);
   const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
-  vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as ReturnType<typeof db.insert>);
+  vi.mocked(db.insert).mockReturnValue({ values: valuesFn } as unknown as ReturnType<typeof db.insert>);
   return { returningFn, valuesFn };
 }
 
@@ -98,7 +98,7 @@ function setupSelectChain(returnValue: unknown[]) {
   const leftJoinFn = vi.fn().mockReturnValue({ leftJoin: vi.fn().mockReturnValue({ where: whereFn }), where: whereFn });
   const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoinFn, where: whereFn });
   const selectFn = vi.fn().mockReturnValue({ from: fromFn });
-  vi.mocked(db.select).mockReturnValue(selectFn() as ReturnType<typeof db.select>);
+  vi.mocked(db.select).mockReturnValue(selectFn() as unknown as ReturnType<typeof db.select>);
   return { selectFn, fromFn, whereFn, orderByFn, limitFn };
 }
 
@@ -106,13 +106,13 @@ function setupUpdateChain(returnValue: object[]) {
   const returningFn = vi.fn().mockResolvedValue(returnValue);
   const whereFn = vi.fn().mockReturnValue({ returning: returningFn });
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
-  vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+  vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
   return { setFn, whereFn, returningFn };
 }
 
 function setupDeleteChain() {
   const whereFn = vi.fn().mockResolvedValue(undefined);
-  vi.mocked(db.delete).mockReturnValue({ where: whereFn } as ReturnType<typeof db.delete>);
+  vi.mocked(db.delete).mockReturnValue({ where: whereFn } as unknown as ReturnType<typeof db.delete>);
   return { whereFn };
 }
 
@@ -166,8 +166,6 @@ describe('createNotification', () => {
     });
 
     expect(result).toEqual(mockNotification);
-    // Give the fire-and-forget catch handler time to execute
-    await new Promise(resolve => setTimeout(resolve, 10));
   });
 
   it('broadcasts notification to realtime service', async () => {
@@ -266,7 +264,7 @@ describe('getUnreadNotificationCount', () => {
     const fromFn = vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue([{ count: '0' }]),
     });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUnreadNotificationCount('user-1');
     expect(result).toBe(0);
@@ -276,7 +274,7 @@ describe('getUnreadNotificationCount', () => {
     const fromFn = vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue([]),
     });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUnreadNotificationCount('user-1');
     expect(result).toBe(0);
@@ -288,7 +286,7 @@ describe('getUnreadCount', () => {
     const fromFn = vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue([{ count: '3' }]),
     });
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     const result = await getUnreadCount('user-1');
     expect(typeof result).toBe('number');
@@ -316,7 +314,7 @@ describe('markAllNotificationsAsRead', () => {
   it('calls update on DB', async () => {
     const whereFn = vi.fn().mockResolvedValue(undefined);
     const setFn = vi.fn().mockReturnValue({ where: whereFn });
-    vi.mocked(db.update).mockReturnValue({ set: setFn } as ReturnType<typeof db.update>);
+    vi.mocked(db.update).mockReturnValue({ set: setFn } as unknown as ReturnType<typeof db.update>);
 
     await markAllNotificationsAsRead('user-1');
     expect(db.update).toHaveBeenCalled();
@@ -469,7 +467,7 @@ describe('createOrUpdateMessageNotification', () => {
   });
 
   it('updates existing unread notification for same conversation', async () => {
-    const existingNotif = { id: 'existing-notif-id', ...mockNotification };
+    const existingNotif = { ...mockNotification, id: 'existing-notif-id' };
     vi.mocked(db.query.notifications.findFirst).mockResolvedValue(existingNotif as never);
 
     setupUpdateChain([existingNotif]);
@@ -586,7 +584,7 @@ describe('broadcastTosPrivacyUpdate', () => {
     const allUsers = [{ id: 'user-1' }, { id: 'user-2' }];
 
     const fromFn = vi.fn().mockResolvedValue(allUsers);
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
     setupInsertChain(mockNotification);
 
     const result = await broadcastTosPrivacyUpdate('tos');
@@ -599,7 +597,7 @@ describe('broadcastTosPrivacyUpdate', () => {
     const allUsers = [{ id: 'user-1' }];
 
     const fromFn = vi.fn().mockResolvedValue(allUsers);
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
     setupInsertChain(mockNotification);
 
     const result = await broadcastTosPrivacyUpdate('privacy');
@@ -610,7 +608,7 @@ describe('broadcastTosPrivacyUpdate', () => {
 
   it('throws and re-throws on error', async () => {
     const fromFn = vi.fn().mockRejectedValue(new Error('DB error'));
-    vi.mocked(db.select).mockReturnValue({ from: fromFn } as ReturnType<typeof db.select>);
+    vi.mocked(db.select).mockReturnValue({ from: fromFn } as unknown as ReturnType<typeof db.select>);
 
     await expect(broadcastTosPrivacyUpdate('tos')).rejects.toThrow('DB error');
   });

@@ -52,7 +52,6 @@ describe('environment', () => {
       const doc = {} as Document;
       // @ts-expect-error intentional override for test
       global.window = win;
-      // @ts-expect-error intentional override for test
       global.document = doc;
       expect(isBrowserEnvironment()).toBe(true);
       // @ts-expect-error cleanup
@@ -79,7 +78,6 @@ describe('environment', () => {
     it('should return false when both window and document are present (browser-like)', () => {
       // @ts-expect-error intentional override for test
       global.window = {} as Window;
-      // @ts-expect-error intentional override for test
       global.document = {} as Document;
       expect(isSSREnvironment()).toBe(false);
       // @ts-expect-error cleanup
@@ -121,6 +119,7 @@ describe('environment', () => {
 
     it('should return undefined fields when process.memoryUsage throws', () => {
       const originalMemoryUsage = process.memoryUsage;
+      // @ts-expect-error intentional override — real memoryUsage has .rss() attached
       process.memoryUsage = () => { throw new Error('not available'); };
       const info = getNodeProcessInfo();
       expect(info.pid).toBeUndefined();
@@ -197,7 +196,6 @@ describe('environment', () => {
     it('should return "browser" when both window and document exist', () => {
       // @ts-expect-error intentional override for test
       global.window = {} as Window;
-      // @ts-expect-error intentional override for test
       global.document = {} as Document;
       expect(getEnvironmentType()).toBe('browser');
       // @ts-expect-error cleanup
