@@ -48,6 +48,7 @@ import {
   LOCKOUT_CONFIG,
 } from '../account-lockout';
 
+describe('account-lockout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

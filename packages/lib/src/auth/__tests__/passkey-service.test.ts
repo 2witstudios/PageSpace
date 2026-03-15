@@ -96,6 +96,7 @@ type MockDb = {
 };
 const mockDb = db as unknown as MockDb;
 
+describe('passkey-service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
