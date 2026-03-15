@@ -36,19 +36,13 @@ vi.mock('google-auth-library', () => ({
 
 import { POST } from '../route';
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -122,7 +116,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
-import { db, users } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, logAuthEvent } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
@@ -177,7 +171,6 @@ const createNativeRequest = (
   });
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/auth/google/native', () => {
   const originalEnv = {
     GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -235,26 +228,10 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() => Promise.resolve([mockNewUser])),
-          })),
-        } as never;
-      }
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -276,7 +253,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given valid idToken for existing user, should return tokens without creating user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -286,7 +263,7 @@ describe('POST /api/auth/google/native', () => {
       expect(body.sessionToken).toBe('ps_sess_mock_session_token');
       expect(body.deviceToken).toBe('mock-device-token');
       expect(body.isNewUser).toBe(false);
-      expect(db.insert).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
     it('given new user, should provision Getting Started drive', async () => {
@@ -297,7 +274,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given existing user, should not provision Getting Started drive', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -599,7 +576,7 @@ describe('POST /api/auth/google/native', () => {
 
   describe('error handling', () => {
     it('given unexpected error, should return 500', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -637,54 +614,50 @@ describe('POST /api/auth/google/native', () => {
   describe('user update scenarios', () => {
     it('given existing user without googleId, should update with googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutGoogleId as never)
-        .mockResolvedValueOnce(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutGoogleId.id, expect.objectContaining({ googleId: 'google-id-123' }));
     });
 
     it('given existing user without name, should set name from Google payload', async () => {
       const userWithoutName = { ...mockExistingUser, googleId: null, name: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutName as never)
-        .mockResolvedValueOnce({ ...userWithoutName, name: 'Test User', googleId: 'google-id-123' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutName.id, expect.objectContaining({ name: 'Test User' }));
     });
 
     it('given existing user with different avatar, should update image', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithOldAvatar as never)
-        .mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithOldAvatar.id, expect.objectContaining({}));
     });
 
     it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userUnverified as never)
-        .mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userUnverified.id, expect.objectContaining({ emailVerified: expect.any(Date) }));
     });
 
-    it('given existing user where no updates needed, should NOT call db.update', async () => {
+    it('given existing user where no updates needed, should NOT call updateUser', async () => {
       // User has all fields set correctly
       const fullyUpdatedUser = {
         ...mockExistingUser,
@@ -693,12 +666,12 @@ describe('POST /api/auth/google/native', () => {
         image: null, // resolveGoogleAvatarImage returns null by default
         emailVerified: new Date(),
       };
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
     it('given new user where resolvedImage differs from initial null, should update avatar', async () => {
@@ -708,20 +681,19 @@ describe('POST /api/auth/google/native', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      // db.update should be called to set the resolved image
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      // updateUser should be called to set the resolved image
+      expect(authRepository.updateUser).toHaveBeenCalledWith(mockNewUser.id, expect.objectContaining({ image: '/processed-avatar.jpg' }));
     });
 
     it('given existing user with password, should set provider to both', async () => {
       const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword as never)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithPassword.id, expect.objectContaining({ googleId: 'google-id-123', provider: 'both' }));
     });
   });
 });

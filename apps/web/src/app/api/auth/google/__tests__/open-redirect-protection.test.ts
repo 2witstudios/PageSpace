@@ -67,35 +67,31 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'user-123',
-          name: 'Test User',
-          email: 'test@example.com',
-          googleId: 'google-id-123',
-          tokenVersion: 1,
-          role: 'user',
-          provider: 'google',
-          password: null,
-        }),
-      },
-    },
-    insert: vi.fn().mockImplementation(() => ({
-      values: vi.fn().mockResolvedValue(undefined),
-    })),
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn().mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'google',
+      password: null,
     }),
+    findUserById: vi.fn().mockResolvedValue({
+      id: 'user-123',
+      name: 'Test User',
+      email: 'test@example.com',
+      googleId: 'google-id-123',
+      tokenVersion: 1,
+      role: 'user',
+      provider: 'google',
+      password: null,
+    }),
+    createUser: vi.fn(),
+    updateUser: vi.fn().mockResolvedValue(undefined),
   },
-  eq: vi.fn(),
-  or: vi.fn(),
-  and: vi.fn(),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -174,7 +170,6 @@ const createSignedState = (data: Record<string, unknown>) => {
 
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('Open Redirect Protection', () => {
   const originalEnv = { ...process.env };
 

@@ -39,22 +39,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-// REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.update().set().where())
-// are used here because the route directly calls Drizzle ORM with no service layer.
-// The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -128,7 +119,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 }));
 
 import { POST } from '../route';
-import { db, users } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, logAuthEvent, loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
@@ -184,7 +175,6 @@ const validOneTapPayload = {
   platform: 'web',
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/auth/google/one-tap', () => {
   const originalEnv = {
     GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -232,26 +222,10 @@ describe('POST /api/auth/google/one-tap', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() => Promise.resolve([mockNewUser])),
-          })),
-        } as never;
-      }
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -390,7 +364,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('returns success for existing user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -398,7 +372,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(false);
-      expect(db.insert).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
     it('sets session cookie for web platform', async () => {
@@ -549,27 +523,25 @@ describe('POST /api/auth/google/one-tap', () => {
   describe('user update scenarios', () => {
     it('updates existing user without googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutGoogleId as never)
-        .mockResolvedValueOnce(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutGoogleId.id, expect.objectContaining({ googleId: 'google-id-123' }));
     });
 
     it('updates existing user with different avatar', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithOldAvatar as never)
-        .mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithOldAvatar.id, expect.objectContaining({}));
     });
 
     it('does not update complete existing user', async () => {
@@ -580,12 +552,12 @@ describe('POST /api/auth/google/one-tap', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
     it('updates new user avatar when resolvedImage differs from null', async () => {
@@ -595,19 +567,18 @@ describe('POST /api/auth/google/one-tap', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(mockNewUser.id, expect.objectContaining({ image: '/processed-avatar.jpg' }));
     });
 
     it('sets provider to both when existing user has password', async () => {
       const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword as never)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithPassword.id, expect.objectContaining({ googleId: 'google-id-123', provider: 'both' }));
     });
   });
 
@@ -689,7 +660,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('tracks login event for existing users', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
@@ -706,7 +677,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected exception', async () => {
-      vi.mocked(db.query.users.findFirst).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);

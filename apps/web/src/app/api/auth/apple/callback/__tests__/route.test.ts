@@ -23,36 +23,13 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import crypto from 'crypto';
 
 // Mock dependencies BEFORE imports
-vi.mock('@pagespace/db', () => ({
-  users: { appleId: 'appleId', email: 'email', id: 'id' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{
-          id: 'new-user-id',
-          name: 'Test User',
-          email: 'test@example.com',
-          image: null,
-          emailVerified: new Date(),
-          tokenVersion: 0,
-          password: null,
-          appleId: 'apple-sub-123',
-        }]),
-      }),
-    }),
-    update: vi.fn().mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByAppleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn(),
-  or: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -131,7 +108,7 @@ vi.mock('@pagespace/lib/security', () => ({
 }));
 
 import { POST } from '../route';
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, verifyAppleIdToken } from '@pagespace/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
@@ -163,7 +140,17 @@ function createCallbackRequest(fields: Record<string, string> = {}): Request {
   });
 }
 
-/** @scaffold - ORM chain mocks until repository seam exists */
+const mockNewUser = {
+  id: 'new-user-id',
+  name: 'Test User',
+  email: 'test@example.com',
+  image: null,
+  emailVerified: new Date(),
+  tokenVersion: 0,
+  password: null,
+  appleId: 'apple-sub-123',
+};
+
 describe('POST /api/auth/apple/callback', () => {
   const originalEnv = process.env;
 
@@ -177,7 +164,10 @@ describe('POST /api/auth/apple/callback', () => {
     };
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(isSafeReturnUrl).mockReturnValue(true);
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
+    vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({
       allowed: true,
       attemptsRemaining: 4,
@@ -493,7 +483,7 @@ describe('POST /api/auth/apple/callback', () => {
       await POST(request);
 
       // User should be created with the parsed name
-      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('handles malformed user JSON gracefully', async () => {
@@ -539,7 +529,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       await POST(request);
 
-      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('updates existing user missing appleId', async () => {
@@ -554,9 +544,8 @@ describe('POST /api/auth/apple/callback', () => {
         appleId: null,
       };
 
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -566,8 +555,10 @@ describe('POST /api/auth/apple/callback', () => {
 
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
-      expect(db.insert).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-id', expect.objectContaining({
+        appleId: 'apple-sub-123',
+      }));
+      expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
     it('updates existing user missing name', async () => {
@@ -582,9 +573,8 @@ describe('POST /api/auth/apple/callback', () => {
         appleId: 'apple-sub-123',
       };
 
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce({ ...existingUser, name: 'test' } as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -594,7 +584,9 @@ describe('POST /api/auth/apple/callback', () => {
 
       await POST(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith('existing-id', expect.objectContaining({
+        name: 'test',
+      }));
     });
 
     it('does not update complete existing user', async () => {
@@ -609,7 +601,7 @@ describe('POST /api/auth/apple/callback', () => {
         appleId: 'apple-sub-123',
       };
 
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(existingUser as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -619,8 +611,8 @@ describe('POST /api/auth/apple/callback', () => {
 
       await POST(request);
 
-      expect(db.update).not.toHaveBeenCalled();
-      expect(db.insert).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
     it('handles re-fetch returning null after update', async () => {
@@ -635,9 +627,8 @@ describe('POST /api/auth/apple/callback', () => {
         appleId: null,
       };
 
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce(null as never);
+      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({

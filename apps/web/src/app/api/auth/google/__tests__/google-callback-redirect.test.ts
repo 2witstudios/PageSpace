@@ -28,20 +28,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
-  and: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 // Mock session service from @pagespace/lib/auth
@@ -141,7 +134,7 @@ vi.mock('crypto', async () => {
   };
 });
 
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security';
@@ -177,7 +170,6 @@ const createSignedState = (data: Record<string, unknown>) => {
   return Buffer.from(JSON.stringify(stateData)).toString('base64');
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/auth/google/callback', () => {
   const originalEnv = { ...process.env };
 
@@ -196,19 +188,10 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
     // Default to existing user
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(mockExistingUser as never);
-
-    vi.mocked(db.insert).mockImplementation(() => ({
-      values: vi.fn(() => ({
-        returning: vi.fn(() => Promise.resolve([mockExistingUser])),
-      })),
-    } as never));
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockExistingUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {

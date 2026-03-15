@@ -4,9 +4,9 @@ import { createVerificationToken } from '@pagespace/lib';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 import { loggers } from '@pagespace/lib/server';
-import { db, users, eq } from '@pagespace/db';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security';
 import React from 'react';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -18,11 +18,7 @@ export async function POST(request: Request) {
     }
 
     // Fetch user details from database
-    const [user] = await db
-      .select({ id: users.id, email: users.email, name: users.name, emailVerified: users.emailVerified })
-      .from(users)
-      .where(eq(users.id, auth.userId))
-      .limit(1);
+    const user = await authRepository.findUserById(auth.userId);
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });

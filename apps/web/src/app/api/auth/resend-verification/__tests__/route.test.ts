@@ -23,24 +23,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn().mockReturnValue(false),
 }));
 
-// @scaffold - ORM chain mocks (db.select().from().where().limit())
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', email: 'email', name: 'name', emailVerified: 'emailVerified' },
-  db: {
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([{
-            id: 'test-user-id',
-            email: 'test@example.com',
-            name: 'Test User',
-            emailVerified: null,
-          }]),
-        }),
-      }),
-    }),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserById: vi.fn(),
   },
-  eq: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib', () => ({
@@ -85,7 +71,7 @@ vi.mock('react', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { createVerificationToken } from '@pagespace/lib';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { loggers } from '@pagespace/lib/server';
@@ -121,17 +107,11 @@ describe('POST /api/auth/resend-verification', () => {
     } as never);
 
     // Default: user found with unverified email
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([{
-            id: 'test-user-id',
-            email: 'test@example.com',
-            name: 'Test User',
-            emailVerified: null,
-          }]),
-        }),
-      }),
+    vi.mocked(authRepository.findUserById).mockResolvedValue({
+      id: 'test-user-id',
+      email: 'test@example.com',
+      name: 'Test User',
+      emailVerified: null,
     } as never);
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({
@@ -170,13 +150,7 @@ describe('POST /api/auth/resend-verification', () => {
 
   describe('user lookup', () => {
     it('returns 404 when user not found', async () => {
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      } as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValue(null);
 
       const response = await POST(createResendRequest());
       const body = await response.json();
@@ -230,17 +204,11 @@ describe('POST /api/auth/resend-verification', () => {
 
   describe('already verified', () => {
     it('returns 400 when email is already verified', async () => {
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{
-              id: 'test-user-id',
-              email: 'test@example.com',
-              name: 'Test User',
-              emailVerified: new Date(),
-            }]),
-          }),
-        }),
+      vi.mocked(authRepository.findUserById).mockResolvedValue({
+        id: 'test-user-id',
+        email: 'test@example.com',
+        name: 'Test User',
+        emailVerified: new Date(),
       } as never);
 
       const response = await POST(createResendRequest());
@@ -337,9 +305,7 @@ describe('POST /api/auth/resend-verification', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected errors', async () => {
-      vi.mocked(db.select).mockImplementation(() => {
-        throw new Error('Database down');
-      });
+      vi.mocked(authRepository.findUserById).mockRejectedValueOnce(new Error('Database down'));
 
       const response = await POST(createResendRequest());
       const body = await response.json();

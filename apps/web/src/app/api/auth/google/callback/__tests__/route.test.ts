@@ -51,22 +51,13 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-// REVIEW: Deep ORM chain mocks (db.insert().values().returning(), db.update().set().where())
-// are used here because the route directly calls Drizzle ORM with no service layer.
-// The ORM IS the system boundary for this route. Extracting a service seam is a production refactor.
-vi.mock('@pagespace/db', () => ({
-  users: { id: 'id', googleId: 'googleId', email: 'email' },
-  db: {
-    query: {
-      users: {
-        findFirst: vi.fn(),
-      },
-    },
-    insert: vi.fn(),
-    update: vi.fn(),
+vi.mock('@/lib/repositories/auth-repository', () => ({
+  authRepository: {
+    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserById: vi.fn(),
+    createUser: vi.fn(),
+    updateUser: vi.fn(),
   },
-  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  or: vi.fn((...conditions: unknown[]) => conditions),
 }));
 
 vi.mock('@pagespace/lib/auth', () => ({
@@ -142,7 +133,7 @@ vi.mock('@/lib/auth/google-avatar', () => ({
 }));
 
 import { GET } from '../route';
-import { db, users } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService, generateCSRFToken, createExchangeCode } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, logAuthEvent, loggers } from '@pagespace/lib/server';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security';
@@ -204,7 +195,6 @@ const createCallbackRequest = (
   });
 };
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('GET /api/auth/google/callback', () => {
   const originalEnv = {
     GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -277,26 +267,10 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
-
-    vi.mocked(db.insert).mockImplementation((table: unknown) => {
-      if (table === users) {
-        return {
-          values: vi.fn(() => ({
-            returning: vi.fn(() => Promise.resolve([mockNewUser])),
-          })),
-        } as never;
-      }
-      return {
-        values: vi.fn(() => Promise.resolve(undefined)),
-      } as never;
-    });
-
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(undefined),
-      }),
-    } as never);
+    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserById).mockResolvedValue(null);
+    vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
+    vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -542,7 +516,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('uses email prefix as name when Google name is not provided', async () => {
@@ -559,7 +533,7 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.insert).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.createUser).toHaveBeenCalledTimes(1);
     });
 
     it('updates new user avatar when resolvedImage differs from null', async () => {
@@ -569,7 +543,7 @@ describe('GET /api/auth/google/callback', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(307);
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(mockNewUser.id, expect.objectContaining({ image: '/processed-avatar.jpg' }));
     });
 
     it('does not update new user avatar when resolvedImage matches initial null', async () => {
@@ -578,59 +552,55 @@ describe('GET /api/auth/google/callback', () => {
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      // db.update should NOT be called since resolvedImage is null and user.image is null
-      expect(db.update).not.toHaveBeenCalled();
+      // updateUser should NOT be called since resolvedImage is null and user.image is null
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
   });
 
   describe('user update scenarios', () => {
     it('updates existing user without googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutGoogleId as never)
-        .mockResolvedValueOnce(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutGoogleId.id, expect.objectContaining({ googleId: 'google-id-123' }));
     });
 
     it('updates existing user without name', async () => {
       const userWithoutName = { ...mockExistingUser, name: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithoutName as never)
-        .mockResolvedValueOnce({ ...userWithoutName, name: 'Test User' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithoutName.id, expect.objectContaining({ name: 'Test User' }));
     });
 
     it('updates existing user with different avatar', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithOldAvatar as never)
-        .mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithOldAvatar.id, expect.objectContaining({}));
     });
 
     it('updates existing user with unverified email when email_verified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userUnverified as never)
-        .mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userUnverified.id, expect.objectContaining({ emailVerified: expect.any(Date) }));
     });
 
     it('does not update complete existing user', async () => {
@@ -641,31 +611,29 @@ describe('GET /api/auth/google/callback', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).not.toHaveBeenCalled();
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
     it('sets provider to both when existing user has password', async () => {
       const userWithPassword = { ...mockExistingUser, googleId: null, password: 'hashed-pw' };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(userWithPassword as never)
-        .mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithPassword as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithPassword, provider: 'both', googleId: 'google-id-123' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
 
-      expect(db.update).toHaveBeenCalledWith(expect.any(Object));
+      expect(authRepository.updateUser).toHaveBeenCalledWith(userWithPassword.id, expect.objectContaining({ googleId: 'google-id-123', provider: 'both' }));
     });
 
     it('handles re-fetch returning null after update (falls back to original user)', async () => {
       const existingUser = { ...mockExistingUser, googleId: null };
-      vi.mocked(db.query.users.findFirst)
-        .mockResolvedValueOnce(existingUser as never)
-        .mockResolvedValueOnce(null as never);
+      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);

@@ -1,4 +1,5 @@
-import { users, userAiSettings, db, eq } from '@pagespace/db';
+import { userAiSettings, db } from '@pagespace/db';
+import { authRepository } from '@/lib/repositories/auth-repository';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod/v4';
 import { sessionService, SESSION_DURATION_MS, BCRYPT_COST } from '@pagespace/lib/auth';
@@ -155,9 +156,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const existingUser = await db.query.users.findFirst({
-      where: eq(users.email, email),
-    });
+    const existingUser = await authRepository.findUserByEmail(email);
 
     if (existingUser) {
       logAuthEvent('failed', undefined, email, clientIP, 'Email already exists');
@@ -166,7 +165,7 @@ export async function POST(req: Request) {
 
     const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
 
-    const user = await db.insert(users).values({
+    const user = await authRepository.createUser({
       id: createId(),
       name,
       email,
@@ -174,7 +173,7 @@ export async function POST(req: Request) {
       storageUsedBytes: 0,
       subscriptionTier: 'free',
       tosAcceptedAt: new Date(),
-    }).returning().then(res => res[0]);
+    });
 
     let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
     try {

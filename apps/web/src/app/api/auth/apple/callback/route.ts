@@ -1,4 +1,3 @@
-import { users, db, eq, or } from '@pagespace/db';
 import { z } from 'zod/v4';
 import { sessionService, generateCSRFToken, createExchangeCode, SESSION_DURATION_MS, verifyAppleIdToken } from '@pagespace/lib/auth';
 import {
@@ -14,6 +13,7 @@ import crypto from 'crypto';
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { authRepository } from '@/lib/repositories/auth-repository';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -169,35 +169,26 @@ export async function POST(req: Request) {
     const userName = name || email.split('@')[0] || 'User';
 
     // Find or create user
-    let user = await db.query.users.findFirst({
-      where: or(
-        eq(users.appleId, appleId),
-        eq(users.email, email)
-      ),
-    });
+    let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
 
     if (user) {
       // Update existing user if needed
       if (!user.appleId || !user.name) {
         loggers.auth.info('Updating existing user via Apple OAuth', { email });
-        await db.update(users)
-          .set({
-            appleId: appleId || user.appleId,
-            provider: user.password ? 'both' : 'apple',
-            name: user.name || userName,
-            emailVerified: emailVerified ? new Date() : user.emailVerified,
-          })
-          .where(eq(users.id, user.id));
+        await authRepository.updateUser(user.id, {
+          appleId: appleId || user.appleId,
+          provider: user.password ? 'both' : 'apple',
+          name: user.name || userName,
+          emailVerified: emailVerified ? new Date() : user.emailVerified,
+        });
 
-        user = await db.query.users.findFirst({
-          where: eq(users.id, user.id),
-        }) || user;
+        user = await authRepository.findUserById(user.id) || user;
         loggers.auth.info('User updated via Apple OAuth', { userId: user.id, name: user.name });
       }
     } else {
       // Create new user
       loggers.auth.info('Creating new user via Apple OAuth', { email });
-      const [newUser] = await db.insert(users).values({
+      user = await authRepository.createUser({
         id: createId(),
         name: userName,
         email,
@@ -209,9 +200,7 @@ export async function POST(req: Request) {
         role: 'user',
         storageUsedBytes: 0,
         subscriptionTier: 'free',
-      }).returning();
-
-      user = newUser;
+      });
       loggers.auth.info('New user created via Apple OAuth', { userId: user.id, name: user.name });
     }
 
