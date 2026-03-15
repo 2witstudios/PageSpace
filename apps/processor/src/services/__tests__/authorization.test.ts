@@ -3,12 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const VALID_HASH = 'a'.repeat(64);
 
 const mockGetLinksForFile = vi.fn();
+const mockGetFileDriveId = vi.fn();
 const mockGetUserAccessLevel = vi.fn();
 const mockGetUserDrivePermissions = vi.fn();
-const mockFilesFindFirst = vi.fn();
 
 vi.mock('../file-links', () => ({
   getLinksForFile: (...args: unknown[]) => mockGetLinksForFile(...args),
+  getFileDriveId: (...args: unknown[]) => mockGetFileDriveId(...args),
 }));
 
 vi.mock('@pagespace/lib/permissions-cached', () => ({
@@ -24,18 +25,6 @@ vi.mock('@pagespace/lib/logger-config', () => ({
       error: vi.fn(),
     },
   },
-}));
-
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      files: {
-        findFirst: (...args: unknown[]) => mockFilesFindFirst(...args),
-      },
-    },
-  },
-  files: { id: 'files.id' },
-  eq: vi.fn((field: string, value: string) => ({ field, value, op: 'eq' })),
 }));
 
 import type { EnforcedAuthContext } from '../../middleware/auth';
@@ -59,7 +48,7 @@ describe('authorizeFileAccess', () => {
     vi.clearAllMocks();
 
     mockGetLinksForFile.mockResolvedValue([]);
-    mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    mockGetFileDriveId.mockResolvedValue('drive-1');
     mockGetUserAccessLevel.mockResolvedValue(null);
     mockGetUserDrivePermissions.mockResolvedValue(null);
   });
@@ -253,7 +242,7 @@ describe('authorizeFileAccess', () => {
 
     it('allows drive-bound token for orphan file in bound drive', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: false,
@@ -275,7 +264,7 @@ describe('authorizeFileAccess', () => {
   describe('orphan files', () => {
     it('allows view for orphan file when user has drive membership', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: false,
@@ -292,7 +281,7 @@ describe('authorizeFileAccess', () => {
 
     it('allows edit for orphan file when user is drive owner/admin', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: true,
@@ -309,7 +298,7 @@ describe('authorizeFileAccess', () => {
 
     it('denies edit for orphan file when user is only member', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue({
         hasAccess: true,
         isOwner: false,
@@ -326,7 +315,7 @@ describe('authorizeFileAccess', () => {
 
     it('denies orphan file with no drive association', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue(undefined);
+      mockGetFileDriveId.mockResolvedValue(undefined);
 
       const auth = createAuth();
       const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
@@ -393,7 +382,7 @@ describe('authorizeFileAccess', () => {
   describe('checkDrivePermissions returns false when drivePerms is null (lines 179-180)', () => {
     it('denies view for orphan file when getUserDrivePermissions returns null', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       // drivePerms is null -> checkDrivePermissions returns false -> permission denied
       mockGetUserDrivePermissions.mockResolvedValue(null);
 
@@ -406,7 +395,7 @@ describe('authorizeFileAccess', () => {
 
     it('denies view for drive-bound orphan when getUserDrivePermissions returns null', async () => {
       mockGetLinksForFile.mockResolvedValue([]);
-      mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+      mockGetFileDriveId.mockResolvedValue('drive-1');
       mockGetUserDrivePermissions.mockResolvedValue(null);
 
       const auth = createAuth({
@@ -487,7 +476,7 @@ describe('assertFileAccess', () => {
     mockGetLinksForFile.mockResolvedValue([
       { fileId: VALID_HASH, pageId: 'page-1', driveId: 'drive-1' },
     ]);
-    mockFilesFindFirst.mockResolvedValue({ driveId: 'drive-1' });
+    mockGetFileDriveId.mockResolvedValue('drive-1');
     mockGetUserAccessLevel.mockResolvedValue({
       canView: true,
       canEdit: true,

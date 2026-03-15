@@ -143,14 +143,20 @@ describe('processOCR', () => {
   it('terminates worker after OCR', async () => {
     await processOCR({ contentHash: VALID_HASH, fileId: 'page-1' });
 
-    expect(mockWorkerTerminate).toHaveBeenCalled();
+    expect(mockWorkerTerminate).toHaveBeenCalledTimes(1);
   });
 
   it('writes OCR result to cache', async () => {
     await processOCR({ contentHash: VALID_HASH, fileId: 'page-1' });
 
-    expect(mockMkdir).toHaveBeenCalled();
-    expect(mockWriteFile).toHaveBeenCalled();
+    expect(mockMkdir).toHaveBeenCalledWith(
+      expect.stringContaining(VALID_HASH),
+      { recursive: true }
+    );
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      expect.stringContaining('ocr-text.txt'),
+      'OCR text result'
+    );
   });
 
   it('includes textLength in result', async () => {
@@ -177,7 +183,7 @@ describe('processOCR', () => {
 
     // ai-vision falls back to tesseract since it's not implemented
     expect(result.success).toBe(true);
-    expect(mockCreateWorker).toHaveBeenCalled();
+    expect(mockCreateWorker).toHaveBeenCalledWith('eng');
 
     delete process.env.ENABLE_EXTERNAL_OCR;
   });
@@ -192,7 +198,7 @@ describe('processOCR', () => {
     });
 
     expect(result.provider).toBe('tesseract');
-    expect(mockCreateWorker).toHaveBeenCalled();
+    expect(mockCreateWorker).toHaveBeenCalledWith('eng');
 
     delete process.env.ENABLE_EXTERNAL_OCR;
   });

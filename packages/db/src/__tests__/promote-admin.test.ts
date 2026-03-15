@@ -120,7 +120,7 @@ describe('promote-admin.ts', () => {
     await import('../promote-admin');
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(mockUpdate).toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining('Successfully promoted')
     );

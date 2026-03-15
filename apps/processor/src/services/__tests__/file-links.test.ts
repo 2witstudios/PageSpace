@@ -1,8 +1,11 @@
+/**
+ * @scaffold - Repository layer: ORM chain mocking is necessary because file-links IS
+ * the lowest persistence seam. These tests characterize query composition behavior.
+ * Suggested: add integration tests for join/query correctness.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockTransaction = vi.fn();
-const mockInsert = vi.fn();
-const mockSelect = vi.fn();
 
 vi.mock('@pagespace/db', () => {
   const insert = vi.fn().mockReturnValue({
@@ -26,6 +29,11 @@ vi.mock('@pagespace/db', () => {
       await fn(tx);
     }),
     select,
+    query: {
+      files: {
+        findFirst: vi.fn(),
+      },
+    },
   };
 
   return {
@@ -40,15 +48,16 @@ vi.mock('@pagespace/db', () => {
   };
 });
 
-import { db, filePages, pages, eq } from '@pagespace/db';
-import { ensureFileLinked, getLinksForFile, getLinkForPage } from '../file-links';
+import { db } from '@pagespace/db';
+import { ensureFileLinked, getLinksForFile, getFileDriveId, getLinkForPage } from '../file-links';
 
+/** @scaffold */
 describe('ensureFileLinked', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('calls db.transaction', async () => {
+  it('executes within a transaction', async () => {
     await ensureFileLinked({
       fileId: 'file-hash',
       pageId: 'page-1',
@@ -56,9 +65,10 @@ describe('ensureFileLinked', () => {
     });
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.transaction).toHaveBeenCalledWith(expect.any(Function));
   });
 
-  it('calls insert for files and filePages within transaction', async () => {
+  it('passes optional fields through transaction', async () => {
     await ensureFileLinked({
       fileId: 'file-hash',
       pageId: 'page-1',
@@ -71,23 +81,22 @@ describe('ensureFileLinked', () => {
     expect(db.transaction).toHaveBeenCalledTimes(1);
   });
 
-  it('handles undefined optional fields', async () => {
-    await ensureFileLinked({
+  it('handles undefined optional fields without error', async () => {
+    await expect(ensureFileLinked({
       fileId: 'file-hash',
       pageId: 'page-1',
       driveId: 'drive-1',
-    });
-
-    expect(db.transaction).toHaveBeenCalledTimes(1);
+    })).resolves.toBeUndefined();
   });
 });
 
+/** @scaffold */
 describe('getLinksForFile', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('returns results from db.select', async () => {
+  it('returns FileLink array from query result', async () => {
     const mockRows = [
       { fileId: 'hash1', pageId: 'page-1', driveId: 'drive-1' },
     ];
@@ -102,10 +111,12 @@ describe('getLinksForFile', () => {
     const result = await getLinksForFile('hash1');
 
     expect(result).toEqual(mockRows);
-    expect(db.select).toHaveBeenCalled();
+    expect(result[0]).toEqual(
+      expect.objectContaining({ fileId: 'hash1', pageId: 'page-1', driveId: 'drive-1' })
+    );
   });
 
-  it('returns empty array when no links', async () => {
+  it('returns empty array when no links exist', async () => {
     const selectChain = {
       from: vi.fn().mockReturnThis(),
       innerJoin: vi.fn().mockReturnThis(),
@@ -118,6 +129,30 @@ describe('getLinksForFile', () => {
   });
 });
 
+describe('getFileDriveId', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns driveId when file record exists', async () => {
+    vi.mocked(db.query.files.findFirst).mockResolvedValue({ driveId: 'drive-1' });
+
+    const result = await getFileDriveId('hash1');
+    expect(result).toBe('drive-1');
+    expect(db.query.files.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ columns: { driveId: true } })
+    );
+  });
+
+  it('returns undefined when file record not found', async () => {
+    vi.mocked(db.query.files.findFirst).mockResolvedValue(undefined);
+
+    const result = await getFileDriveId('nonexistent');
+    expect(result).toBeUndefined();
+  });
+});
+
+/** @scaffold */
 describe('getLinkForPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -134,8 +134,8 @@ describe('ContentStore', () => {
       const buffer = Buffer.from('image-data');
       const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
-      expect(mockMkdir).toHaveBeenCalled();
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockMkdir).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), expect.objectContaining({ recursive: true }));
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), expect.anything());
       expect(entry.contentHash).toBe(VALID_HASH);
       expect(entry.preset).toBe('thumbnail');
       expect(entry.size).toBe(buffer.length);
@@ -158,10 +158,10 @@ describe('ContentStore', () => {
       const buffer = Buffer.from('new-cache');
       await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
     });
 
-    it('skips unsafe metadata keys', async () => {
+    it('skips unsafe metadata keys like __proto__', async () => {
       const maliciousMetadata = JSON.stringify({
         __proto__: { preset: 'hack' },
         thumbnail: {
@@ -178,6 +178,16 @@ describe('ContentStore', () => {
       const buffer = Buffer.from('data');
       const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
       expect(entry).toBeTruthy();
+      expect(entry.preset).toBe('thumbnail');
+
+      // Verify __proto__ is not written back as own property
+      const writeCall = mockWriteFile.mock.calls.find(
+        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('metadata')
+      );
+      if (writeCall) {
+        const written = JSON.parse(writeCall[1] as string);
+        expect(Object.hasOwn(written, '__proto__')).toBe(false);
+      }
     });
   });
 
@@ -222,7 +232,7 @@ describe('ContentStore', () => {
 
       const store = createStore();
       await store.getCache(VALID_HASH, 'thumbnail');
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
     });
 
     it('propagates non-InvalidContentHashError from getCachePath', async () => {
@@ -245,7 +255,7 @@ describe('ContentStore', () => {
       });
 
       expect(result.contentHash).toHaveLength(64);
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.any(String));
     });
   });
 
@@ -262,7 +272,7 @@ describe('ContentStore', () => {
       );
 
       expect(result.contentHash).toBe(VALID_HASH);
-      expect(mockCopyFile).toHaveBeenCalled();
+      expect(mockCopyFile).toHaveBeenCalledWith('/tmp/upload-file', expect.stringContaining(VALID_HASH));
     });
 
     it('computes hash when not provided', async () => {
@@ -336,7 +346,7 @@ describe('ContentStore', () => {
 
       const store = createStore();
       await store.getOriginal(VALID_HASH);
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining(VALID_HASH));
     });
 
     it('propagates non-InvalidContentHashError from getOriginalPath', async () => {
@@ -628,7 +638,7 @@ describe('ContentStore', () => {
         service: 'processor',
       });
 
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('tenant-1'));
     });
 
     it('appends to existing metadata', async () => {
@@ -645,7 +655,7 @@ describe('ContentStore', () => {
       const store = createStore();
       await store.appendUploadMetadata(VALID_HASH, { tenantId: 'new-tenant' });
 
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('new-tenant'));
     });
 
     it('handles undefined options', async () => {
@@ -653,7 +663,7 @@ describe('ContentStore', () => {
       const store = createStore();
 
       await store.appendUploadMetadata(VALID_HASH);
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining(VALID_HASH));
     });
   });
 
@@ -883,7 +893,7 @@ describe('ContentStore', () => {
       const count = await store.cleanupOldCache(7 * 24 * 60 * 60 * 1000);
       expect(count).toBe(0);
       // Should write updated metadata since entries remain
-      expect(mockWriteFile).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.stringContaining('thumbnail'));
     });
 
     it('skips dirs without metadata', async () => {

@@ -1,8 +1,9 @@
 /**
- * Processor Service CORS Validation Tests
- * Tests for HTTP CORS origin validation with fail-closed production behavior
+ * @scaffold - CORS validation is inline in server.ts and not exported.
+ * Functions are re-implemented here to characterize the validation logic.
+ * Suggested: extract and export validation functions for direct unit testing.
  *
- * These tests verify the defense-in-depth CORS configuration that:
+ * Tests verify the defense-in-depth CORS configuration that:
  * - Allows configured origins (CORS_ORIGIN, WEB_APP_URL, ADDITIONAL_ALLOWED_ORIGINS)
  * - Allows non-browser clients (no Origin header)
  * - Fails closed in production when no origins configured
@@ -367,7 +368,10 @@ describe('Processor CORS Validation', () => {
 
         expect(result.error).toBeNull();
         expect(result.allowed).toBe(true);
-        expect(loggers.processor.warn).toHaveBeenCalled();
+        expect(loggers.processor.warn).toHaveBeenCalledWith(
+          expect.stringContaining('CORS'),
+          expect.any(Object)
+        );
       });
     });
 

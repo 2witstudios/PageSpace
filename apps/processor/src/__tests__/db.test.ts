@@ -1,11 +1,9 @@
+/**
+ * @scaffold - Database layer: pg Pool mocking is necessary because db.ts IS
+ * the lowest persistence seam (raw SQL over pg Pool). These tests characterize
+ * query composition and connection lifecycle (acquire → query → release).
+ */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-
-// Since db.ts uses require('pg') which is hard to mock in vitest,
-// we test the module's exported functions by mocking the module itself
-// in consumer tests. Here we verify the module structure and type safety.
-
-// For coverage on db.ts, we mock at the pg level using vi.hoisted + vi.mock
-// with the factory returning a constructor function.
 
 const mockQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
 const mockRelease = vi.fn();
@@ -55,13 +53,13 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         ['processing', 'page-1'],
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageProcessing('page-1')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -72,7 +70,7 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         expect.arrayContaining(['extracted', 'completed']),
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should use default extraction method (text)', async () => {
@@ -102,7 +100,7 @@ describe('db module', () => {
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageCompleted('p', 'text', null)).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -113,13 +111,13 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         ['visual', 'visual', 'page-1'],
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageVisual('page-1')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -130,13 +128,13 @@ describe('db module', () => {
         expect.stringContaining('processingStatus'),
         ['failed', 'Processing failed', 'page-1'],
       );
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageFailed('page-1', 'err')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -146,20 +144,20 @@ describe('db module', () => {
       mockQuery.mockResolvedValueOnce({ rows: [row], rowCount: 1 });
       const result = await getPageForIngestion('p1');
       expect(result).toEqual(row);
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should return null when no rows', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       const result = await getPageForIngestion('missing');
       expect(result).toBeNull();
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(getPageForIngestion('p1')).rejects.toThrow('DB error');
-      expect(mockRelease).toHaveBeenCalled();
+      expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });
 });

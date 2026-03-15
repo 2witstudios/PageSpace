@@ -88,9 +88,12 @@ describe('QueueManager', () => {
       const qm = new QueueManager();
       await qm.initialize();
 
-      expect(mockBossStart).toHaveBeenCalled();
-      expect(mockBossWork).toHaveBeenCalled();
-      expect(mockBossCreateQueue).toHaveBeenCalled();
+      expect(mockBossStart).toHaveBeenCalledTimes(1);
+      expect(mockBossWork).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Function)
+      );
+      expect(mockBossCreateQueue).toHaveBeenCalledWith(expect.any(String));
     });
 
     it('handles queue creation errors gracefully', async () => {
@@ -328,7 +331,7 @@ describe('QueueManager', () => {
       await qm.initialize();
       await qm.shutdown();
 
-      expect(mockBossStop).toHaveBeenCalled();
+      expect(mockBossStop).toHaveBeenCalledTimes(1);
     });
 
     it('is safe to call when not initialized', async () => {
@@ -398,7 +401,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageCompleted).toHaveBeenCalled();
+      expect(setPageCompleted).toHaveBeenCalledWith('page-1', expect.any(String), expect.any(Object), 'text');
       expect(result).toEqual({ success: true, status: 'completed', textLength: 23 });
     });
 
@@ -419,7 +422,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageVisual).toHaveBeenCalled();
+      expect(setPageVisual).toHaveBeenCalledWith('page-1');
       expect(result).toEqual({ success: true, status: 'visual' });
     });
 
@@ -454,7 +457,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageVisual).toHaveBeenCalled();
+      expect(setPageVisual).toHaveBeenCalledWith('page-1');
       expect(result).toEqual({ success: true, status: 'visual' });
     });
 

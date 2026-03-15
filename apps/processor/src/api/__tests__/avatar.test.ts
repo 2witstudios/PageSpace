@@ -187,7 +187,10 @@ describe('POST /avatar/upload', () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.filename).toBe('avatar.jpg');
-    expect(mockFsWriteFile).toHaveBeenCalled();
+    expect(mockFsWriteFile).toHaveBeenCalledWith(
+      expect.stringContaining('user-1'),
+      expect.any(Buffer)
+    );
   });
 
   it('deletes old avatar files before saving new one', async () => {
@@ -303,7 +306,7 @@ describe('DELETE /avatar/:userId', () => {
     const response = await request(app).delete('/avatar/user-1');
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
-    expect(mockFsUnlink).toHaveBeenCalled();
+    expect(mockFsUnlink).toHaveBeenCalledWith(expect.stringContaining('avatar'));
   });
 
   it('returns success even when directory does not exist', async () => {

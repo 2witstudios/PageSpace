@@ -215,7 +215,7 @@ describe('Room Management', () => {
       await handlers.joinChannel(pageId);
 
       expect(socket.hasJoinedRoom(pageId)).toBe(false);
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('given permission check throws error, should disconnect socket', async () => {
@@ -229,7 +229,7 @@ describe('Room Management', () => {
       await handlers.joinChannel(pageId);
 
       expect(socket.hasJoinedRoom(pageId)).toBe(false);
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledTimes(1);
     });
 
     it('given no user in socket.data, should return early', async () => {

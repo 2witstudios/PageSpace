@@ -69,7 +69,7 @@ describe('migrate.ts', () => {
     // Allow all microtasks/promises to settle
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(migrate).toHaveBeenCalled();
+    expect(migrate).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
 

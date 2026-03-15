@@ -1,13 +1,8 @@
 /**
- * Realtime Server Authentication Tests
- * Tests for Socket.IO authentication middleware components
- *
- * Note: JWT token tests were removed when the system migrated to
- * opaque session tokens (ps_sess_*). Socket authentication now uses
- * session tokens validated via sessionService.validateSession().
- *
- * broadcast-auth is a package from @pagespace/lib which may not resolve
- * in isolation, so we test the authentication logic through mocks.
+ * @scaffold - broadcast-auth lives in @pagespace/lib and may not resolve
+ * in isolated realtime package tests. The mock re-implements HMAC signature
+ * logic to characterize the authentication protocol contract.
+ * Suggested: add integration tests that import the real broadcast-auth module.
  */
 
 import { describe, it, expect, vi } from 'vitest';
