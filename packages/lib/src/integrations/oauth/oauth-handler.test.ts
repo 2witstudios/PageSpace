@@ -103,13 +103,10 @@ describe('exchangeOAuthCode', () => {
     expect(result.expiresIn).toBe(3600);
     expect(result.tokenType).toBe('Bearer');
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      'https://auth.example.com/token',
-      expect.objectContaining({
-        method: 'POST',
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    const fetchCallArgs = mockFetch.mock.calls[0];
+    expect(fetchCallArgs[0]).toBe('https://auth.example.com/token');
+    expect(fetchCallArgs[1].method).toBe('POST');
+    expect(fetchCallArgs[1].signal).toBeInstanceOf(AbortSignal);
   });
 
   it('given PKCE code verifier, should include it in request body', async () => {

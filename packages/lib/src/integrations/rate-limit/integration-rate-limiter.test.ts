@@ -152,11 +152,21 @@ describe('checkIntegrationRateLimit', () => {
     expect(mockCheckDistributedRateLimit).toHaveBeenCalledTimes(2);
     expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-1:agent-1:tool-a',
-      expect.any(Object)
+      {
+        maxAttempts: 30,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
     expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-2:agent-2:tool-b',
-      expect.any(Object)
+      {
+        maxAttempts: 30,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
   });
 });
@@ -223,7 +233,12 @@ describe('checkConnectionRateLimit', () => {
 
     expect(mockCheckDistributedRateLimit).toHaveBeenCalledWith(
       'integration:conn-github:global:provider',
-      expect.any(Object)
+      {
+        maxAttempts: 100,
+        windowMs: 60000,
+        blockDurationMs: 60000,
+        progressiveDelay: false,
+      }
     );
   });
 });

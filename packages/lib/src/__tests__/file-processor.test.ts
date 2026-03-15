@@ -71,12 +71,9 @@ describe('file-processor', () => {
 
       await processor.processFile(page.id)
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/cache/abc123hash/original'),
-        expect.objectContaining({
-          signal: expect.any(AbortSignal)
-        })
-      )
+      const fetchCallArgs = (global.fetch as any).mock.calls[0]
+      expect(fetchCallArgs[0]).toContain('/cache/abc123hash/original')
+      expect(fetchCallArgs[1].signal).toBeInstanceOf(AbortSignal)
     })
 
     it('handles HTTP fetch timeout', async () => {
@@ -304,10 +301,9 @@ describe('file-processor', () => {
 
       await processor.processFile(page.id)
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('http://custom-processor:3003'),
-        expect.anything()
-      )
+      const fetchCallArgs = (global.fetch as any).mock.calls[0]
+      expect(fetchCallArgs[0]).toContain('http://custom-processor:3003')
+      expect(fetchCallArgs[1].signal).toBeInstanceOf(AbortSignal)
 
       process.env.PROCESSOR_URL = originalUrl
     })
@@ -330,10 +326,9 @@ describe('file-processor', () => {
 
       await processor.processFile(page.id)
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('http://processor:3003'),
-        expect.anything()
-      )
+      const fetchCallArgs = (global.fetch as any).mock.calls[0]
+      expect(fetchCallArgs[0]).toContain('http://processor:3003')
+      expect(fetchCallArgs[1].signal).toBeInstanceOf(AbortSignal)
 
       process.env.PROCESSOR_URL = originalUrl
     })
