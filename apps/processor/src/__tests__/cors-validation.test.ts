@@ -369,8 +369,8 @@ describe('Processor CORS Validation', () => {
         expect(result.error).toBeNull();
         expect(result.allowed).toBe(true);
         expect(loggers.processor.warn).toHaveBeenCalledWith(
-          expect.stringContaining('CORS'),
-          expect.any(Object)
+          'CORS: no allowed origins configured (allowing in dev)',
+          { origin: 'https://any-origin.example.com' }
         );
       });
     });

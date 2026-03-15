@@ -135,7 +135,7 @@ describe('ContentStore', () => {
       const entry = await store.saveCache(VALID_HASH, 'thumbnail', buffer, 'image/webp');
 
       expect(mockMkdir).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), expect.objectContaining({ recursive: true }));
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), expect.anything());
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining(VALID_HASH), buffer);
       expect(entry.contentHash).toBe(VALID_HASH);
       expect(entry.preset).toBe('thumbnail');
       expect(entry.size).toBe(buffer.length);

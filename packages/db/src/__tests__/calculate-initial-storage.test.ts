@@ -211,7 +211,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     // Error logged for failed users
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error'), expect.anything());
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error'), expect.any(Error));
     // Complete banner still shown
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining('Storage calculation complete')

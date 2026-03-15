@@ -177,7 +177,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'image-optimize',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, preset: 'ai-chat' }),
         expect.objectContaining({ priority: 100 })
       );
     });
@@ -195,7 +195,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'text-extract',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1', mimeType: 'text/plain' }),
         expect.objectContaining({ priority: 50 })
       );
     });
@@ -212,7 +212,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'ingest-file',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, mimeType: 'application/pdf' }),
         expect.objectContaining({ priority: 60 })
       );
     });
@@ -225,7 +225,7 @@ describe('QueueManager', () => {
 
       expect(mockBossSend).toHaveBeenCalledWith(
         'ocr-process',
-        expect.any(Object),
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1' }),
         expect.objectContaining({ priority: 10 })
       );
     });
@@ -378,7 +378,11 @@ describe('QueueManager', () => {
       };
 
       await ingestWorker([job]);
-      expect(mockBossSend).toHaveBeenCalledWith('ocr-process', expect.any(Object), expect.any(Object));
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'ocr-process',
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1' }),
+        expect.objectContaining({ retryLimit: expect.any(Number) })
+      );
 
       delete process.env.ENABLE_OCR;
     });
@@ -401,7 +405,7 @@ describe('QueueManager', () => {
       };
 
       const result = await ingestWorker([job]);
-      expect(setPageCompleted).toHaveBeenCalledWith('page-1', expect.any(String), expect.any(Object), 'text');
+      expect(setPageCompleted).toHaveBeenCalledWith('page-1', 'Extracted document text', { title: 'Doc' }, 'text');
       expect(result).toEqual({ success: true, status: 'completed', textLength: 23 });
     });
 
@@ -440,7 +444,11 @@ describe('QueueManager', () => {
       };
 
       await ingestWorker([job]);
-      expect(mockBossSend).toHaveBeenCalledWith('ocr-process', expect.any(Object), expect.any(Object));
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'ocr-process',
+        expect.objectContaining({ contentHash: VALID_HASH, fileId: 'page-1' }),
+        expect.objectContaining({ retryLimit: expect.any(Number) })
+      );
 
       delete process.env.ENABLE_OCR;
     });

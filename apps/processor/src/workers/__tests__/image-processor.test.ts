@@ -82,7 +82,7 @@ describe('processImage', () => {
     expect(mockSaveCache).toHaveBeenCalledWith(
       VALID_HASH,
       'ai-chat',
-      expect.any(Buffer),
+      Buffer.from('processed'),
       'image/jpeg'
     );
   });
@@ -94,7 +94,7 @@ describe('processImage', () => {
     expect(mockSaveCache).toHaveBeenCalledWith(
       VALID_HASH,
       'thumbnail',
-      expect.any(Buffer),
+      Buffer.from('processed'),
       'image/webp'
     );
   });
@@ -109,7 +109,7 @@ describe('processImage', () => {
 
     const result = await processImage({ contentHash: VALID_HASH, preset: 'preview' });
     expect(result.success).toBe(true);
-    expect(mockSaveCache).toHaveBeenCalledWith(VALID_HASH, 'preview', expect.anything(), 'image/jpeg');
+    expect(mockSaveCache).toHaveBeenCalledWith(VALID_HASH, 'preview', Buffer.from('processed'), 'image/jpeg');
   });
 
   it('skips resize when image smaller than maxWidth', async () => {
