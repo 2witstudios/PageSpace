@@ -5,139 +5,25 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // ============================================================================
 // Contract Tests for POST /api/drives/[driveId]/members/invite
 //
-// The route has no service-seam abstraction, so we mock at the DB layer
-// and the auth/utility boundaries.
+// Mocks the driveInviteRepository seam — no ORM chain mocks.
 // ============================================================================
-
-// ---------- hoisted mocks ----------
-
-const {
-  DRIVES_TABLE,
-  DRIVE_MEMBERS_TABLE,
-  PAGE_PERMISSIONS_TABLE,
-  PAGES_TABLE,
-  USERS_TABLE,
-  mockDriveResults,
-  mockAdminResults,
-  mockExistingMemberResults,
-  mockInsertReturning,
-  mockUpdateReturning,
-  mockUpdateSet,
-  mockValidPagesResults,
-  mockExistingPermResults,
-  mockPermInsertReturning,
-  mockPermUpdateReturning,
-  mockUsersFindFirst,
-} = vi.hoisted(() => ({
-  DRIVES_TABLE: Symbol('drives'),
-  DRIVE_MEMBERS_TABLE: Symbol('driveMembers'),
-  PAGE_PERMISSIONS_TABLE: Symbol('pagePermissions'),
-  PAGES_TABLE: Symbol('pages'),
-  USERS_TABLE: Symbol('users'),
-  mockDriveResults: { value: [] as Record<string, unknown>[] },
-  mockAdminResults: { value: [] as Record<string, unknown>[] },
-  mockExistingMemberResults: { value: [] as Record<string, unknown>[] },
-  mockInsertReturning: vi.fn(),
-  mockUpdateReturning: vi.fn(),
-  mockUpdateSet: vi.fn(),
-  mockValidPagesResults: { value: [] as Record<string, unknown>[] },
-  mockExistingPermResults: { value: [] as Record<string, unknown>[] },
-  mockPermInsertReturning: vi.fn(),
-  mockPermUpdateReturning: vi.fn(),
-  mockUsersFindFirst: vi.fn(),
-}));
 
 // ---------- vi.mock declarations ----------
 
-vi.mock('@pagespace/db', () => {
-  const eq = vi.fn((_col: unknown, _val: unknown) => ({ type: 'eq' }));
-  const and = vi.fn((..._args: unknown[]) => ({ type: 'and' }));
-
-  const createSelectChain = (resolveRef: { value: Record<string, unknown>[] }) => {
-    const chain: Record<string, ReturnType<typeof vi.fn>> = {};
-    chain.from = vi.fn().mockReturnValue(chain);
-    chain.where = vi.fn().mockReturnValue(chain);
-    chain.limit = vi.fn().mockImplementation(() => Promise.resolve(resolveRef.value));
-    Object.defineProperty(chain, 'then', {
-      value: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-        Promise.resolve(resolveRef.value).then(resolve, reject),
-      writable: true,
-      configurable: true,
-    });
-    return chain;
-  };
-
-  // Track which table insert is called on
-  let currentInsertTable: unknown = null;
-  // Track which table update is called on
-  let currentUpdateTable: unknown = null;
-
-  return {
-    db: {
-      select: vi.fn().mockImplementation(() => {
-        const outerChain: Record<string, unknown> = {};
-        outerChain.from = vi.fn().mockImplementation((table: unknown) => {
-          if (table === DRIVES_TABLE) return createSelectChain(mockDriveResults);
-          if (table === DRIVE_MEMBERS_TABLE) {
-            // This could be admin check or existing member check
-            // We'll use call order within each test to distinguish
-            return createSelectChain(mockAdminResults);
-          }
-          if (table === PAGES_TABLE) return createSelectChain(mockValidPagesResults);
-          if (table === PAGE_PERMISSIONS_TABLE) return createSelectChain(mockExistingPermResults);
-          return createSelectChain({ value: [] });
-        });
-        return outerChain;
-      }),
-      insert: vi.fn().mockImplementation((table: unknown) => {
-        currentInsertTable = table;
-        return {
-          values: vi.fn().mockReturnValue({
-            returning: vi.fn().mockImplementation(() => {
-              if (currentInsertTable === DRIVE_MEMBERS_TABLE) {
-                return Promise.resolve(mockInsertReturning());
-              }
-              if (currentInsertTable === PAGE_PERMISSIONS_TABLE) {
-                return Promise.resolve(mockPermInsertReturning());
-              }
-              return Promise.resolve([]);
-            }),
-          }),
-        };
-      }),
-      update: vi.fn().mockImplementation((table: unknown) => {
-        currentUpdateTable = table;
-        return {
-          set: vi.fn().mockImplementation((..._args: unknown[]) => {
-            mockUpdateSet(..._args);
-            return {
-              where: vi.fn().mockReturnValue({
-                returning: vi.fn().mockImplementation(() => {
-                  if (currentUpdateTable === PAGE_PERMISSIONS_TABLE) {
-                    return Promise.resolve(mockPermUpdateReturning());
-                  }
-                  return Promise.resolve(mockUpdateReturning());
-                }),
-                then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-                  Promise.resolve(undefined).then(resolve, reject),
-              }),
-            };
-          }),
-        };
-      }),
-      query: {
-        users: { findFirst: mockUsersFindFirst },
-      },
-    },
-    drives: DRIVES_TABLE,
-    driveMembers: DRIVE_MEMBERS_TABLE,
-    pagePermissions: PAGE_PERMISSIONS_TABLE,
-    pages: PAGES_TABLE,
-    users: USERS_TABLE,
-    eq,
-    and,
-  };
-});
+vi.mock('@/lib/repositories/drive-invite-repository', () => ({
+  driveInviteRepository: {
+    findDriveById: vi.fn(),
+    findAdminMembership: vi.fn(),
+    findExistingMember: vi.fn(),
+    createDriveMember: vi.fn(),
+    updateDriveMemberRole: vi.fn(),
+    getValidPageIds: vi.fn(),
+    findPagePermission: vi.fn(),
+    createPagePermission: vi.fn(),
+    updatePagePermission: vi.fn(),
+    findUserEmail: vi.fn(),
+  },
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -159,7 +45,14 @@ vi.mock('@pagespace/lib/server', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveMemberEvent: vi.fn().mockResolvedValue(undefined),
-  createDriveMemberEventPayload: vi.fn((_driveId: string, _userId: string, _event: string, _data: unknown) => ({})),
+  createDriveMemberEventPayload: vi.fn(
+    (driveId: string, userId: string, event: string, data: unknown) => ({
+      driveId,
+      userId,
+      event,
+      ...(data as Record<string, unknown>),
+    })
+  ),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -174,6 +67,7 @@ vi.mock('@pagespace/lib/activity-tracker', () => ({
 // ---------- imports (after mocks) ----------
 
 import { POST } from '../route';
+import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification, isEmailVerified } from '@pagespace/lib';
 import { loggers, invalidateUserPermissions, invalidateDrivePermissions } from '@pagespace/lib/server';
@@ -210,65 +104,48 @@ const createInviteRequest = (
     body: JSON.stringify(body),
   });
 
+// ---------- fixtures ----------
+
+const mockUserId = 'user_123';
+const mockDriveId = 'drive_abc';
+const mockInvitedUserId = 'user_456';
+const mockDrive = {
+  id: mockDriveId,
+  name: 'Test Drive',
+  slug: 'test-drive',
+  ownerId: mockUserId,
+};
+
+const defaultBody = {
+  userId: mockInvitedUserId,
+  role: 'MEMBER',
+  permissions: [
+    { pageId: 'page_1', canView: true, canEdit: false, canShare: false },
+  ],
+};
+
 // ============================================================================
 // Tests
 // ============================================================================
 
-/** @scaffold - ORM chain mocks until repository seam exists */
 describe('POST /api/drives/[driveId]/members/invite', () => {
-  const mockUserId = 'user_123';
-  const mockDriveId = 'drive_abc';
-  const mockInvitedUserId = 'user_456';
-  const mockDrive = {
-    id: mockDriveId,
-    name: 'Test Drive',
-    slug: 'test-drive',
-    ownerId: mockUserId,
-  };
-
-  const defaultBody = {
-    userId: mockInvitedUserId,
-    role: 'MEMBER',
-    permissions: [
-      { pageId: 'page_1', canView: true, canEdit: false, canShare: false },
-    ],
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isEmailVerified).mockResolvedValue(true);
 
-    // Default: drive found, user is owner
-    mockDriveResults.value = [mockDrive];
-
-    // Default: no admin membership
-    mockAdminResults.value = [];
-
-    // Default: no existing member
-    mockExistingMemberResults.value = [];
-
-    // Default: new member insert returns
-    mockInsertReturning.mockReturnValue([{ id: 'mem_new' }]);
-
-    // Default: valid pages
-    mockValidPagesResults.value = [{ id: 'page_1' }];
-
-    // Default: no existing permissions
-    mockExistingPermResults.value = [];
-
-    // Default: permission insert returns
-    mockPermInsertReturning.mockReturnValue([{ id: 'perm_1' }]);
-
-    // Default: permission update returns
-    mockPermUpdateReturning.mockReturnValue([{ id: 'perm_1' }]);
-
-    // Default: update returning
-    mockUpdateReturning.mockReturnValue([]);
-
-    // Default: user lookup
-    mockUsersFindFirst.mockResolvedValue({ email: 'invited@example.com' });
+    // Repository defaults
+    vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
+    vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null);
+    vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null);
+    vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({ id: 'mem_new' } as never);
+    vi.mocked(driveInviteRepository.updateDriveMemberRole).mockResolvedValue(undefined);
+    vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
+    vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null);
+    vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({ id: 'perm_1' } as never);
+    vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({ id: 'perm_1' } as never);
+    vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
   });
 
   // ---------- Authentication ----------
@@ -330,7 +207,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('drive lookup', () => {
     it('should return 404 when drive not found', async () => {
-      mockDriveResults.value = [];
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(null);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -341,14 +218,26 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(response.status).toBe(404);
       expect(body.error).toBe('Drive not found');
     });
+
+    it('should query drive by driveId from params', async () => {
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.findDriveById).toHaveBeenCalledWith(mockDriveId);
+    });
   });
 
   // ---------- Authorization ----------
 
   describe('authorization', () => {
     it('should return 403 when user is not owner and not admin', async () => {
-      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
-      mockAdminResults.value = [];
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
+        ...mockDrive,
+        ownerId: 'other_user',
+      } as never);
+      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue(null);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -361,8 +250,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
 
     it('should allow access when user is owner', async () => {
-      mockDriveResults.value = [mockDrive];
-
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
         createContext(mockDriveId)
@@ -372,8 +259,13 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
 
     it('should allow access when user is admin (not owner)', async () => {
-      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
-      mockAdminResults.value = [{ id: 'admin_membership' }];
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
+        ...mockDrive,
+        ownerId: 'other_user',
+      } as never);
+      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue({
+        id: 'admin_membership',
+      } as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -382,17 +274,45 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
     });
+
+    it('should skip admin check when user is owner', async () => {
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.findAdminMembership).not.toHaveBeenCalled();
+    });
+
+    it('should check admin membership when user is not owner', async () => {
+      vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue({
+        ...mockDrive,
+        ownerId: 'other_user',
+      } as never);
+      vi.mocked(driveInviteRepository.findAdminMembership).mockResolvedValue({
+        id: 'admin_mem',
+      } as never);
+
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.findAdminMembership).toHaveBeenCalledWith(
+        mockDriveId,
+        mockUserId
+      );
+    });
   });
 
   // ---------- New member creation ----------
 
   describe('new member creation', () => {
     it('should insert new member when not existing', async () => {
-      // The select().from(driveMembers) for existing member check
-      // returns empty (no existing member)
-      mockAdminResults.value = [];
-
-      mockInsertReturning.mockReturnValue([{ id: 'mem_new' }]);
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
+        id: 'mem_new',
+      } as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -402,6 +322,16 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.memberId).toBe('mem_new');
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveId: mockDriveId,
+          userId: mockInvitedUserId,
+          role: 'MEMBER',
+          customRoleId: null,
+          invitedBy: mockUserId,
+          acceptedAt: expect.any(Date),
+        })
+      );
     });
 
     it('should use default MEMBER role when not specified', async () => {
@@ -410,12 +340,14 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         permissions: [],
       };
 
-      const response = await POST(
+      await POST(
         createInviteRequest(mockDriveId, bodyWithoutRole),
         createContext(mockDriveId)
       );
 
-      expect(response.status).toBe(200);
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'MEMBER' })
+      );
     });
 
     it('should support ADMIN role', async () => {
@@ -425,12 +357,32 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         permissions: [],
       };
 
-      const response = await POST(
+      await POST(
         createInviteRequest(mockDriveId, adminBody),
         createContext(mockDriveId)
       );
 
-      expect(response.status).toBe(200);
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'ADMIN' })
+      );
+    });
+
+    it('should pass customRoleId when provided', async () => {
+      const bodyWithCustomRole = {
+        userId: mockInvitedUserId,
+        role: 'MEMBER',
+        customRoleId: 'custom_role_123',
+        permissions: [],
+      };
+
+      await POST(
+        createInviteRequest(mockDriveId, bodyWithCustomRole),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.createDriveMember).toHaveBeenCalledWith(
+        expect.objectContaining({ customRoleId: 'custom_role_123' })
+      );
     });
   });
 
@@ -438,15 +390,10 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('existing member update', () => {
     it('should update role when member already exists', async () => {
-      // The driveMembers select is used for both admin check and existing member check.
-      // For this test, user IS owner so admin check is skipped.
-      // The existing member check happens via the second db.select().from(driveMembers).
-      // We need the existing member results to return a record.
-      // Both admin check and existing member check use driveMembers table,
-      // so they share the same mock. For this test the user is the owner
-      // (first check is drives table), and we need the driveMembers results
-      // to return an existing member.
-      mockAdminResults.value = [{ id: 'existing_mem', userId: mockInvitedUserId }];
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'existing_mem',
+        userId: mockInvitedUserId,
+      } as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, { ...defaultBody, role: 'ADMIN' }),
@@ -456,7 +403,24 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.memberId).toBe('existing_mem');
-      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ role: 'ADMIN' }));
+      expect(driveInviteRepository.updateDriveMemberRole).toHaveBeenCalledWith(
+        'existing_mem',
+        'ADMIN',
+        null
+      );
+    });
+
+    it('should not create new member when one already exists', async () => {
+      vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue({
+        id: 'existing_mem',
+      } as never);
+
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
     });
   });
 
@@ -464,9 +428,11 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('page permissions', () => {
     it('should create new permissions for valid pages', async () => {
-      mockValidPagesResults.value = [{ id: 'page_1' }];
-      mockExistingPermResults.value = [];
-      mockPermInsertReturning.mockReturnValue([{ id: 'perm_new' }]);
+      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
+      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null);
+      vi.mocked(driveInviteRepository.createPagePermission).mockResolvedValue({
+        id: 'perm_new',
+      } as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -476,13 +442,27 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.permissionsGranted).toBe(1);
-      expect(body.message).toBe('User added with 1 page permissions');
+      expect(driveInviteRepository.createPagePermission).toHaveBeenCalledWith({
+        pageId: 'page_1',
+        userId: mockInvitedUserId,
+        canView: true,
+        canEdit: false,
+        canShare: false,
+        canDelete: false,
+        grantedBy: mockUserId,
+      });
     });
 
     it('should update existing permissions', async () => {
-      mockValidPagesResults.value = [{ id: 'page_1' }];
-      mockExistingPermResults.value = [{ id: 'perm_existing', pageId: 'page_1', userId: mockInvitedUserId }];
-      mockPermUpdateReturning.mockReturnValue([{ id: 'perm_existing' }]);
+      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
+      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue({
+        id: 'perm_existing',
+        pageId: 'page_1',
+        userId: mockInvitedUserId,
+      } as never);
+      vi.mocked(driveInviteRepository.updatePagePermission).mockResolvedValue({
+        id: 'perm_existing',
+      } as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -492,10 +472,20 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       expect(response.status).toBe(200);
       expect(body.permissionsGranted).toBe(1);
+      expect(driveInviteRepository.updatePagePermission).toHaveBeenCalledWith(
+        'perm_existing',
+        expect.objectContaining({
+          canView: true,
+          canEdit: false,
+          canShare: false,
+          grantedBy: mockUserId,
+          grantedAt: expect.any(Date),
+        })
+      );
     });
 
     it('should skip invalid page IDs and log warning', async () => {
-      mockValidPagesResults.value = [{ id: 'page_1' }]; // only page_1 is valid
+      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
 
       const bodyWithInvalidPage = {
         userId: mockInvitedUserId,
@@ -512,7 +502,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.permissionsGranted).toBe(1); // Only page_1 was valid
+      expect(body.permissionsGranted).toBe(1);
       expect(loggers.api.warn).toHaveBeenCalledWith(
         `Invalid page ID invalid_page for drive ${mockDriveId}`
       );
@@ -534,12 +524,26 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(body.permissionsGranted).toBe(0);
       expect(body.message).toBe('User added with 0 page permissions');
     });
+
+    it('should never grant canDelete via invite', async () => {
+      vi.mocked(driveInviteRepository.getValidPageIds).mockResolvedValue(['page_1']);
+      vi.mocked(driveInviteRepository.findPagePermission).mockResolvedValue(null);
+
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.createPagePermission).toHaveBeenCalledWith(
+        expect.objectContaining({ canDelete: false })
+      );
+    });
   });
 
   // ---------- Boundary obligations ----------
 
   describe('boundary obligations', () => {
-    it('should broadcast drive member event', async () => {
+    it('should broadcast drive member event with correct payload', async () => {
       await POST(
         createInviteRequest(mockDriveId, defaultBody),
         createContext(mockDriveId)
@@ -551,10 +555,10 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
         'member_added',
         { role: 'MEMBER', driveName: 'Test Drive' }
       );
-      expect(broadcastDriveMemberEvent).toHaveBeenCalledWith(expect.any(Object));
+      expect(broadcastDriveMemberEvent).toHaveBeenCalledTimes(1);
     });
 
-    it('should invalidate permission caches', async () => {
+    it('should invalidate permission caches for invited user and drive', async () => {
       await POST(
         createInviteRequest(mockDriveId, defaultBody),
         createContext(mockDriveId)
@@ -598,7 +602,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
 
     it('should log member activity for audit trail', async () => {
-      mockUsersFindFirst.mockResolvedValue({ email: 'invited@example.com' });
+      vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue('invited@example.com');
 
       await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -621,7 +625,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     });
 
     it('should handle undefined invited user email', async () => {
-      mockUsersFindFirst.mockResolvedValue(undefined);
+      vi.mocked(driveInviteRepository.findUserEmail).mockResolvedValue(undefined);
 
       await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -643,7 +647,9 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
   describe('response contract', () => {
     it('should return memberId, permissionsGranted, and message', async () => {
-      mockInsertReturning.mockReturnValue([{ id: 'mem_999' }]);
+      vi.mocked(driveInviteRepository.createDriveMember).mockResolvedValue({
+        id: 'mem_999',
+      } as never);
 
       const response = await POST(
         createInviteRequest(mockDriveId, defaultBody),
@@ -655,22 +661,6 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       expect(body.memberId).toBe('mem_999');
       expect(body.permissionsGranted).toBe(1);
       expect(body.message).toBe('User added with 1 page permissions');
-    });
-
-    it('should support customRoleId', async () => {
-      const bodyWithCustomRole = {
-        userId: mockInvitedUserId,
-        role: 'MEMBER',
-        customRoleId: 'custom_role_123',
-        permissions: [],
-      };
-
-      const response = await POST(
-        createInviteRequest(mockDriveId, bodyWithCustomRole),
-        createContext(mockDriveId)
-      );
-
-      expect(response.status).toBe(200);
     });
   });
 
@@ -700,6 +690,20 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
       );
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error adding member:', error);
+    });
+
+    it('should not create member or permissions on auth failure', async () => {
+      vi.mocked(isAuthError).mockReturnValue(true);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthErrorResponse(401));
+
+      await POST(
+        createInviteRequest(mockDriveId, defaultBody),
+        createContext(mockDriveId)
+      );
+
+      expect(driveInviteRepository.createDriveMember).not.toHaveBeenCalled();
+      expect(driveInviteRepository.createPagePermission).not.toHaveBeenCalled();
+      expect(broadcastDriveMemberEvent).not.toHaveBeenCalled();
     });
   });
 });
