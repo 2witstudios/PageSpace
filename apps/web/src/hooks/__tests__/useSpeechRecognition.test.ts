@@ -30,14 +30,14 @@ describe('useSpeechRecognition', () => {
     mockRecognitionInstance = createMockSpeechRecognition();
 
     // Remove any previous SpeechRecognition from window
-    delete (window as Record<string, unknown>).SpeechRecognition;
-    delete (window as Record<string, unknown>).webkitSpeechRecognition;
+    delete (window as unknown as Record<string, unknown>).SpeechRecognition;
+    delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    delete (window as Record<string, unknown>).SpeechRecognition;
-    delete (window as Record<string, unknown>).webkitSpeechRecognition;
+    delete (window as unknown as Record<string, unknown>).SpeechRecognition;
+    delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
   });
 
   describe('isSupported', () => {
@@ -50,7 +50,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should report isSupported=true when SpeechRecognition is available', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -60,7 +60,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should report isSupported=true when webkitSpeechRecognition is available', () => {
-      (window as Record<string, unknown>).webkitSpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).webkitSpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -72,7 +72,7 @@ describe('useSpeechRecognition', () => {
 
   describe('initial state', () => {
     it('should have isListening=false initially', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -92,7 +92,7 @@ describe('useSpeechRecognition', () => {
 
   describe('toggleListening', () => {
     it('should start listening when not currently listening', async () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       // Mock getUserMedia
       Object.defineProperty(navigator, 'mediaDevices', {
@@ -117,7 +117,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should stop listening when currently listening', async () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       Object.defineProperty(navigator, 'mediaDevices', {
         value: {
@@ -156,7 +156,7 @@ describe('useSpeechRecognition', () => {
 
   describe('error messages mapping', () => {
     it('should set error for not-allowed speech recognition error', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -170,7 +170,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should set error for audio-capture speech recognition error', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -184,7 +184,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should set error for network speech recognition error', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -198,7 +198,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should set error for no-speech error', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -212,7 +212,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should set generic error for unknown error type', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -226,7 +226,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should auto-clear error after 6 seconds', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -248,7 +248,7 @@ describe('useSpeechRecognition', () => {
 
   describe('clearError', () => {
     it('should clear error when called', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -270,7 +270,7 @@ describe('useSpeechRecognition', () => {
 
   describe('stopListening', () => {
     it('should call recognition.stop', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const { result } = renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -286,7 +286,7 @@ describe('useSpeechRecognition', () => {
 
   describe('onresult handling', () => {
     it('should call onTranscript with final transcript text', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -309,7 +309,7 @@ describe('useSpeechRecognition', () => {
     });
 
     it('should not call onTranscript for interim results', () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       renderHook(() =>
         useSpeechRecognition({ onTranscript: mockOnTranscript })
@@ -334,7 +334,7 @@ describe('useSpeechRecognition', () => {
 
   describe('microphone permission error', () => {
     it('should set error when microphone access is denied', async () => {
-      (window as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
+      (window as unknown as Record<string, unknown>).SpeechRecognition = vi.fn(() => mockRecognitionInstance);
 
       const notAllowedError = new DOMException('Permission denied', 'NotAllowedError');
       Object.defineProperty(navigator, 'mediaDevices', {

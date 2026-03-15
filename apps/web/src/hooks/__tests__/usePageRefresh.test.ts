@@ -4,8 +4,8 @@ import { renderHook } from '@testing-library/react';
 const mockUseParams = vi.hoisted(() => vi.fn(() => ({})));
 const mockUsePathname = vi.hoisted(() => vi.fn(() => '/'));
 const mockMutate = vi.hoisted(() => vi.fn());
-const mockUsePageTree = vi.hoisted(() => vi.fn(() => ({ tree: [], mutate: mockMutate })));
-const mockFindNodeAndParent = vi.hoisted(() => vi.fn(() => null));
+const mockUsePageTree = vi.hoisted(() => vi.fn(() => ({ tree: [] as unknown[], mutate: mockMutate })));
+const mockFindNodeAndParent = vi.hoisted(() => vi.fn((): { node: unknown; parent: unknown } | null => null));
 
 vi.mock('next/navigation', () => ({
   useParams: mockUseParams,

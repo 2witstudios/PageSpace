@@ -3,7 +3,7 @@ import { renderHook } from '@testing-library/react';
 
 const mockUseCapacitor = vi.hoisted(() => vi.fn(() => ({
   isNative: false,
-  platform: 'web' as const,
+  platform: 'web' as 'web' | 'ios' | 'android',
   isIOS: false,
   isAndroid: false,
   isIPad: false,
@@ -55,7 +55,7 @@ describe('usePushNotifications', () => {
     vi.clearAllMocks();
     mockUseCapacitor.mockReturnValue({
       isNative: false,
-      platform: 'web' as const,
+      platform: 'web' as 'web' | 'ios' | 'android',
       isIOS: false,
       isAndroid: false,
       isIPad: false,
@@ -87,7 +87,7 @@ describe('usePushNotifications', () => {
     it('should report isSupported=false when native but not iOS', () => {
       mockUseCapacitor.mockReturnValue({
         isNative: true,
-        platform: 'android' as const,
+        platform: 'android',
         isIOS: false,
         isAndroid: true,
         isIPad: false,
@@ -104,7 +104,7 @@ describe('usePushNotifications', () => {
     it('should report isSupported=false when not ready', () => {
       mockUseCapacitor.mockReturnValue({
         isNative: true,
-        platform: 'ios' as const,
+        platform: 'ios',
         isIOS: true,
         isAndroid: false,
         isIPad: false,

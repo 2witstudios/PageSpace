@@ -63,7 +63,7 @@ describe('useTokenRefresh', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     // Clear desktop detection
-    delete (window as Record<string, unknown>).electron;
+    delete (window as unknown as Record<string, unknown>).electron;
 
     useTokenRefreshModule = await import('../useTokenRefresh');
   });
@@ -230,7 +230,7 @@ describe('useTokenRefresh', () => {
 
   describe('scheduleTokenRefresh', () => {
     it('should skip scheduled refresh for web (non-desktop)', async () => {
-      delete (window as Record<string, unknown>).electron;
+      delete (window as unknown as Record<string, unknown>).electron;
 
       const { result } = renderHook(() => useTokenRefreshModule.useTokenRefresh());
 
@@ -247,7 +247,7 @@ describe('useTokenRefresh', () => {
 
     it('should schedule refresh on desktop', async () => {
       // Set up desktop detection
-      (window as Record<string, unknown>).electron = { isDesktop: true };
+      (window as unknown as Record<string, unknown>).electron = { isDesktop: true };
 
       // Re-import to pick up module-level globals reset
       vi.resetModules();
@@ -276,7 +276,7 @@ describe('useTokenRefresh', () => {
 
   describe('startTokenRefresh / stopTokenRefresh', () => {
     it('should reset retry count when starting', async () => {
-      (window as Record<string, unknown>).electron = { isDesktop: true };
+      (window as unknown as Record<string, unknown>).electron = { isDesktop: true };
       vi.resetModules();
       useTokenRefreshModule = await import('../useTokenRefresh');
 
@@ -299,7 +299,7 @@ describe('useTokenRefresh', () => {
     });
 
     it('should clear all timeouts when stopTokenRefresh is called', async () => {
-      (window as Record<string, unknown>).electron = { isDesktop: true };
+      (window as unknown as Record<string, unknown>).electron = { isDesktop: true };
       vi.resetModules();
       useTokenRefreshModule = await import('../useTokenRefresh');
 
@@ -413,7 +413,7 @@ describe('useTokenRefresh', () => {
   describe('desktop logout', () => {
     it('should clear desktop auth and session cache when logging out on desktop', async () => {
       const mockClearAuth = vi.fn().mockResolvedValue(undefined);
-      (window as Record<string, unknown>).electron = {
+      (window as unknown as Record<string, unknown>).electron = {
         isDesktop: true,
         auth: { clearAuth: mockClearAuth },
       };
