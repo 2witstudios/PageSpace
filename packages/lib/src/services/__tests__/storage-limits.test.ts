@@ -22,7 +22,7 @@ vi.mock('@pagespace/db', () => ({
   inArray: vi.fn(),
 }));
 
-vi.mock('./subscription-utils', () => ({
+vi.mock('../subscription-utils', () => ({
   getStorageConfigFromSubscription: vi.fn((tier: string) => {
     if (tier === 'free') return { tier: 'free', quotaBytes: 500 * 1024 * 1024, maxFileSize: 20 * 1024 * 1024, maxConcurrentUploads: 2, maxFileCount: 100, features: [] };
     if (tier === 'pro') return { tier: 'pro', quotaBytes: 2 * 1024 * 1024 * 1024, maxFileSize: 50 * 1024 * 1024, maxConcurrentUploads: 3, maxFileCount: 500, features: [] };
