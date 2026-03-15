@@ -48,7 +48,15 @@ import { db } from '@pagespace/db';
 import { sendEmail } from '../email-service';
 import { sendNotificationEmail } from '../notification-email-service';
 
-const mockDb = vi.mocked(db);
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    users: { findFirst: MockFn };
+    emailNotificationPreferences: { findFirst: MockFn };
+  };
+  insert: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('notification-email-service @scaffold', () => {
   beforeEach(() => {

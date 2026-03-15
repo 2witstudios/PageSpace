@@ -58,7 +58,16 @@ import {
   listDriveMembers,
 } from '../drive-member-service';
 
-const mockDb = vi.mocked(db);
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: { drives: { findFirst: MockFn } };
+  select: MockFn;
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  execute: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('drive-member-service @scaffold', () => {
   beforeEach(() => {

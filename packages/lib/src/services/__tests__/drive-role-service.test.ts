@@ -52,7 +52,19 @@ import {
   validateRolePermissions,
 } from '../drive-role-service';
 
-const mockDb = vi.mocked(db);
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    driveRoles: { findMany: MockFn; findFirst: MockFn };
+    driveMembers: { findFirst: MockFn };
+  };
+  select: MockFn;
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  transaction: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('drive-role-service @scaffold', () => {
   beforeEach(() => {

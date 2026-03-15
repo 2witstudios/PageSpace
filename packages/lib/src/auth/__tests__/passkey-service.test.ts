@@ -82,7 +82,19 @@ import {
   verifySignupRegistration,
 } from '../passkey-service';
 
-const mockDb = vi.mocked(db);
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    users: { findFirst: MockFn };
+    passkeys: { findFirst: MockFn; findMany: MockFn };
+    verificationTokens: { findFirst: MockFn };
+  };
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  transaction: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('passkey-service @scaffold', () => {
   beforeEach(() => {
