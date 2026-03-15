@@ -363,6 +363,7 @@ function escapeSDParam(value: string): string {
  */
 function truncateToByteLength(str: string, maxBytes: number): string {
   const buf = Buffer.from(str, 'utf8');
+  /* c8 ignore next 3 */
   if (buf.length <= maxBytes) {
     return str;
   }

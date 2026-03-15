@@ -15,6 +15,7 @@ import {
   validatePageId,
   validateDriveId,
   validateConversationId,
+  validatePresencePagePayload,
   emitValidationError,
   type ValidationResult,
 } from '../validation';
@@ -243,6 +244,71 @@ describe('validateConversationId', () => {
 
       expect(result.ok).toBe(false);
     });
+  });
+});
+
+describe('validatePresencePagePayload', () => {
+  const VALID_PAGE_ID = 'athmieqpwr4ax1t2e0i4lmor';
+
+  it('given null input, should return failure with pageId required error', () => {
+    const result = validatePresencePagePayload(null);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('pageId required');
+    }
+  });
+
+  it('given non-object input (string), should return failure', () => {
+    const result = validatePresencePagePayload('just-a-string');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('pageId required');
+    }
+  });
+
+  it('given non-object input (number), should return failure', () => {
+    const result = validatePresencePagePayload(42);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('pageId required');
+    }
+  });
+
+  it('given object without pageId, should return failure', () => {
+    const result = validatePresencePagePayload({ otherField: 'value' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('pageId required');
+    }
+  });
+
+  it('given object with pageId as invalid string, should return failure from validatePageId', () => {
+    const result = validatePresencePagePayload({ pageId: 'not-valid!' });
+    expect(result.ok).toBe(false);
+  });
+
+  it('given object with valid pageId, should return success', () => {
+    const result = validatePresencePagePayload({ pageId: VALID_PAGE_ID });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(VALID_PAGE_ID);
+    }
+  });
+
+  it('given undefined input, should return failure', () => {
+    const result = validatePresencePagePayload(undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('pageId required');
+    }
+  });
+
+  it('given empty object, should return failure', () => {
+    const result = validatePresencePagePayload({});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('pageId required');
+    }
   });
 });
 

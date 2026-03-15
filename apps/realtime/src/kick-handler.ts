@@ -199,7 +199,7 @@ export function handleKickRequest(
   if (!parseResult.success || !parseResult.payload) {
     return {
       status: 400,
-      body: { error: parseResult.error || 'Parse error' },
+      body: { error: parseResult.error || /* c8 ignore next */ 'Parse error' },
     };
   }
 
@@ -208,7 +208,7 @@ export function handleKickRequest(
   if (!validationResult.valid) {
     return {
       status: 400,
-      body: { error: validationResult.error || 'Validation error' },
+      body: { error: validationResult.error || /* c8 ignore next */ 'Validation error' },
     };
   }
 

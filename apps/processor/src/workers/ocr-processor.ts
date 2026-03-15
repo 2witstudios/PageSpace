@@ -1,4 +1,6 @@
 import Tesseract from 'tesseract.js';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { contentStore } from '../server';
 import type { OCRJobData, OCRResult } from '../types';
 
@@ -26,11 +28,11 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
   console.log(`Processing OCR for ${contentHash} with ${provider}`);
 
   // Check if OCR result already cached
-  const cacheDir = require('path').dirname(await contentStore.getCachePath(contentHash, 'ocr'));
-  const ocrCachePath = require('path').join(cacheDir, 'ocr-text.txt');
-  
+  const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'ocr'));
+  const ocrCachePath = path.join(cacheDir, 'ocr-text.txt');
+
   try {
-    const cached = await require('fs').promises.readFile(ocrCachePath, 'utf-8');
+    const cached = await fs.readFile(ocrCachePath, 'utf-8');
     console.log(`OCR cache hit for ${contentHash}`);
     return {
       success: true,
@@ -61,8 +63,8 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
     }
 
     // Cache the OCR result
-    await require('fs').promises.mkdir(cacheDir, { recursive: true });
-    await require('fs').promises.writeFile(ocrCachePath, ocrText);
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(ocrCachePath, ocrText);
 
     console.log(`Successfully extracted ${ocrText.length} characters via OCR from ${contentHash}`);
 
