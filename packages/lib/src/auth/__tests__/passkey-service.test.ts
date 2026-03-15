@@ -1,3 +1,13 @@
+/**
+ * @scaffold - ORM chain mocks present (update().set().where().returning(),
+ * delete().where().returning(), insert().values()).
+ * Pending passkey-repository seam extraction for full rubric compliance.
+ *
+ * REVIEW: verifyAuthentication and verifyRegistration tests use
+ * mockDb.update.mockReturnValueOnce chains that encode internal update order
+ * (challenge mark-used first, then counter/passkey update). These are
+ * order-dependent mock ladders tied to implementation sequencing.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {
@@ -82,7 +92,19 @@ import {
   verifySignupRegistration,
 } from '../passkey-service';
 
-const mockDb = db as any;
+type MockFn = ReturnType<typeof vi.fn>;
+type MockDb = {
+  query: {
+    users: { findFirst: MockFn };
+    passkeys: { findFirst: MockFn; findMany: MockFn };
+    verificationTokens: { findFirst: MockFn };
+  };
+  insert: MockFn;
+  update: MockFn;
+  delete: MockFn;
+  transaction: MockFn;
+};
+const mockDb = db as unknown as MockDb;
 
 describe('passkey-service', () => {
   beforeEach(() => {

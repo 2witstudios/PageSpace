@@ -1,39 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      users: { findFirst: vi.fn() },
-      sessions: { findFirst: vi.fn() },
-    },
-    insert: vi.fn(() => ({ values: vi.fn() })),
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(() => ({
-          returning: vi.fn(),
-          catch: vi.fn(),
-        })),
-        catch: vi.fn(),
-      })),
-    })),
-    delete: vi.fn(() => ({
-      where: vi.fn(() => ({ rowCount: 5 })),
-    })),
+vi.mock('../session-repository', () => ({
+  sessionRepository: {
+    findUserById: vi.fn(),
+    findActiveSession: vi.fn(),
+    insertSession: vi.fn(),
+    touchSession: vi.fn(),
+    revokeByHash: vi.fn(),
+    revokeAllForUser: vi.fn(),
+    deleteExpired: vi.fn(),
   },
-  sessions: {
-    tokenHash: 'tokenHash',
-    userId: 'userId',
-    revokedAt: 'revokedAt',
-    expiresAt: 'expiresAt',
-    lastUsedAt: 'lastUsedAt',
-    id: 'id',
-  },
-  users: { id: 'id' },
-  eq: vi.fn(),
-  and: vi.fn(),
-  isNull: vi.fn(),
-  gt: vi.fn(),
-  lt: vi.fn(),
 }));
 
 vi.mock('../opaque-tokens', () => ({
@@ -54,8 +30,9 @@ vi.mock('../constants', () => ({
 }));
 
 import { SessionService } from '../session-service';
-import { db } from '@pagespace/db';
+import { sessionRepository } from '../session-repository';
 import { isValidTokenFormat } from '../opaque-tokens';
+import { generateOpaqueToken } from '../opaque-tokens';
 
 describe('SessionService', () => {
   let service: SessionService;
@@ -66,16 +43,11 @@ describe('SessionService', () => {
   });
 
   describe('createSession', () => {
-    it('should create a session for a valid user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
-        id: 'user-1',
-        tokenVersion: 1,
-        role: 'user',
-        adminRoleVersion: 0,
-      } as never);
-
-      const mockValues = vi.fn();
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
+    it('createSession_withValidUser_returnsTokenAndInsertsSession', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
+        id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
       const token = await service.createSession({
         userId: 'user-1',
@@ -85,11 +57,21 @@ describe('SessionService', () => {
       });
 
       expect(token).toBe('ps_sess_testtoken123456789012345678901234567890a');
-      expect(db.insert).toHaveBeenCalled();
+      expect(sessionRepository.insertSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tokenHash: 'hashed_token',
+          tokenPrefix: 'ps_sess_test',
+          userId: 'user-1',
+          type: 'user',
+          scopes: ['read', 'write'],
+          tokenVersion: 1,
+          adminRoleVersion: 0,
+        }),
+      );
     });
 
-    it('should throw when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    it('createSession_withNonexistentUser_throwsUserNotFound', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue(undefined);
 
       await expect(
         service.createSession({
@@ -97,146 +79,138 @@ describe('SessionService', () => {
           type: 'user',
           scopes: [],
           expiresInMs: 60000,
-        })
+        }),
       ).rejects.toThrow('User not found');
+      expect(sessionRepository.insertSession).not.toHaveBeenCalled();
     });
 
-    it('should use correct token type for service sessions', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('createSession_withServiceType_generatesTokenWithSvcPrefix', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
         id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
-      } as never);
-      const mockValues = vi.fn();
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-
-      const { generateOpaqueToken } = await import('../opaque-tokens');
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
       await service.createSession({
         userId: 'user-1', type: 'service', scopes: ['read'], expiresInMs: 60000,
       });
+
       expect(generateOpaqueToken).toHaveBeenCalledWith('svc');
     });
 
-    it('should use correct token type for mcp sessions', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('createSession_withMcpType_generatesTokenWithMcpPrefix', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
         id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
-      } as never);
-      const mockValues = vi.fn();
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-
-      const { generateOpaqueToken } = await import('../opaque-tokens');
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
       await service.createSession({
         userId: 'user-1', type: 'mcp', scopes: ['read'], expiresInMs: 60000,
       });
+
       expect(generateOpaqueToken).toHaveBeenCalledWith('mcp');
     });
 
-    it('should use correct token type for device sessions', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('createSession_withDeviceType_generatesTokenWithDevPrefix', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
         id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
-      } as never);
-      const mockValues = vi.fn();
-      vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-
-      const { generateOpaqueToken } = await import('../opaque-tokens');
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
       await service.createSession({
         userId: 'user-1', type: 'device', scopes: ['read'], expiresInMs: 60000,
       });
+
       expect(generateOpaqueToken).toHaveBeenCalledWith('dev');
     });
   });
 
   describe('validateSession', () => {
-    it('should return null for invalid token format', async () => {
+    it('validateSession_withInvalidTokenFormat_returnsNull', async () => {
       vi.mocked(isValidTokenFormat).mockReturnValue(false);
+
       const result = await service.validateSession('bad-token');
+
       expect(result).toBeNull();
+      expect(sessionRepository.findActiveSession).not.toHaveBeenCalled();
     });
 
-    it('should return null when session not found', async () => {
+    it('validateSession_withSessionNotFound_returnsNull', async () => {
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
-      vi.mocked(db.query.sessions.findFirst).mockResolvedValue(undefined as never);
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue(undefined);
 
       const result = await service.validateSession('ps_sess_valid');
+
       expect(result).toBeNull();
     });
 
-    it('should return null when session has no user', async () => {
+    it('validateSession_withNoUserOnSession_returnsNull', async () => {
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
-      vi.mocked(db.query.sessions.findFirst).mockResolvedValue({
-        id: 'sess-1', user: null,
-      } as never);
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'user', scopes: ['read'],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null,
+        resourceType: null, resourceId: null, driveId: null,
+        user: null,
+      });
 
       const result = await service.validateSession('ps_sess_valid');
+
       expect(result).toBeNull();
     });
 
-    it('should revoke session and return null when user is suspended', async () => {
+    it('validateSession_withSuspendedUser_revokesAndReturnsNull', async () => {
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
-      vi.mocked(db.query.sessions.findFirst).mockResolvedValue({
-        id: 'sess-1',
-        userId: 'user-1',
-        tokenVersion: 1,
-        adminRoleVersion: 0,
-        type: 'user',
-        scopes: ['read'],
-        expiresAt: new Date(Date.now() + 60000),
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'user', scopes: ['read'],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null,
+        resourceType: null, resourceId: null, driveId: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: new Date() },
-      } as never);
-
-      const mockSet = vi.fn(() => ({ where: vi.fn() }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+      });
+      vi.mocked(sessionRepository.revokeByHash).mockResolvedValue(undefined);
 
       const result = await service.validateSession('ps_sess_valid');
+
       expect(result).toBeNull();
-      expect(db.update).toHaveBeenCalled();
+      expect(sessionRepository.revokeByHash).toHaveBeenCalledWith(
+        'hashed_ps_sess_valid',
+        'user_suspended',
+      );
     });
 
-    it('should revoke session when token version mismatches', async () => {
+    it('validateSession_withTokenVersionMismatch_revokesAndReturnsNull', async () => {
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
-      vi.mocked(db.query.sessions.findFirst).mockResolvedValue({
-        id: 'sess-1',
-        userId: 'user-1',
-        tokenVersion: 1,
-        adminRoleVersion: 0,
-        type: 'user',
-        scopes: ['read'],
-        expiresAt: new Date(Date.now() + 60000),
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'user', scopes: ['read'],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null,
+        resourceType: null, resourceId: null, driveId: null,
         user: { id: 'user-1', tokenVersion: 2, role: 'user', adminRoleVersion: 0, suspendedAt: null },
-      } as never);
-
-      const mockSet = vi.fn(() => ({ where: vi.fn() }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+      });
+      vi.mocked(sessionRepository.revokeByHash).mockResolvedValue(undefined);
 
       const result = await service.validateSession('ps_sess_valid');
+
       expect(result).toBeNull();
+      expect(sessionRepository.revokeByHash).toHaveBeenCalledWith(
+        'hashed_ps_sess_valid',
+        'token_version_mismatch',
+      );
     });
 
-    it('should return claims for valid session', async () => {
+    it('validateSession_withValidSession_returnsClaimsAndTouchesSession', async () => {
       vi.mocked(isValidTokenFormat).mockReturnValue(true);
       const expiresAt = new Date(Date.now() + 60000);
-      vi.mocked(db.query.sessions.findFirst).mockResolvedValue({
-        id: 'sess-1',
-        userId: 'user-1',
-        tokenVersion: 1,
-        adminRoleVersion: 0,
-        type: 'user',
-        scopes: ['read', 'write'],
-        expiresAt,
-        resourceType: null,
-        resourceId: null,
-        driveId: null,
-        lastUsedAt: null,
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'user', scopes: ['read', 'write'],
+        expiresAt, lastUsedAt: null,
+        resourceType: null, resourceId: null, driveId: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'admin', adminRoleVersion: 0, suspendedAt: null },
-      } as never);
-
-      const mockCatch = vi.fn();
-      const mockWhere = vi.fn(() => ({ catch: mockCatch }));
-      const mockSet = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+      });
 
       const result = await service.validateSession('ps_sess_valid');
+
       expect(result).toEqual({
         sessionId: 'sess-1',
         userId: 'user-1',
@@ -250,57 +224,57 @@ describe('SessionService', () => {
         resourceId: undefined,
         driveId: undefined,
       });
+      expect(sessionRepository.touchSession).toHaveBeenCalledWith('hashed_ps_sess_valid');
     });
   });
 
   describe('revokeSession', () => {
-    it('should update session with revoked reason', async () => {
-      const mockWhere = vi.fn();
-      const mockSet = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+    it('revokeSession_withTokenAndReason_delegatesToRepositoryWithHashedToken', async () => {
+      vi.mocked(sessionRepository.revokeByHash).mockResolvedValue(undefined);
 
       await service.revokeSession('ps_sess_token', 'user_logout');
-      expect(db.update).toHaveBeenCalled();
-      expect(mockSet).toHaveBeenCalledWith(
-        expect.objectContaining({ revokedReason: 'user_logout' })
+
+      expect(sessionRepository.revokeByHash).toHaveBeenCalledWith(
+        'hashed_ps_sess_token',
+        'user_logout',
       );
     });
   });
 
   describe('revokeAllUserSessions', () => {
-    it('should revoke all active sessions for a user', async () => {
-      const mockWhere = vi.fn().mockResolvedValue({ rowCount: 3 });
-      const mockSet = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+    it('revokeAllUserSessions_withActiveSessionsExist_returnsRevokedCount', async () => {
+      vi.mocked(sessionRepository.revokeAllForUser).mockResolvedValue(3);
 
       const count = await service.revokeAllUserSessions('user-1', 'password_change');
+
       expect(count).toBe(3);
+      expect(sessionRepository.revokeAllForUser).toHaveBeenCalledWith('user-1', 'password_change');
     });
 
-    it('should return 0 when rowCount is null', async () => {
-      const mockWhere = vi.fn().mockResolvedValue({ rowCount: null });
-      const mockSet = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+    it('revokeAllUserSessions_withNoActiveSessions_returnsZero', async () => {
+      vi.mocked(sessionRepository.revokeAllForUser).mockResolvedValue(0);
 
       const count = await service.revokeAllUserSessions('user-1', 'test');
+
       expect(count).toBe(0);
     });
   });
 
   describe('cleanupExpiredSessions', () => {
-    it('should delete expired sessions and return count', async () => {
-      const mockWhere = vi.fn().mockResolvedValue({ rowCount: 5 });
-      vi.mocked(db.delete).mockReturnValue({ where: mockWhere } as never);
+    it('cleanupExpiredSessions_withExpiredSessions_returnsDeletedCount', async () => {
+      vi.mocked(sessionRepository.deleteExpired).mockResolvedValue(5);
 
       const count = await service.cleanupExpiredSessions();
+
       expect(count).toBe(5);
+      expect(sessionRepository.deleteExpired).toHaveBeenCalledWith(7 * 24 * 60 * 60 * 1000);
     });
 
-    it('should return 0 when rowCount is null', async () => {
-      const mockWhere = vi.fn().mockResolvedValue({ rowCount: null });
-      vi.mocked(db.delete).mockReturnValue({ where: mockWhere } as never);
+    it('cleanupExpiredSessions_withNoExpiredSessions_returnsZero', async () => {
+      vi.mocked(sessionRepository.deleteExpired).mockResolvedValue(0);
 
       const count = await service.cleanupExpiredSessions();
+
       expect(count).toBe(0);
     });
   });

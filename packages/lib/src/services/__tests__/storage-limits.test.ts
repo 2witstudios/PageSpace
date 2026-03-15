@@ -1,25 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db', () => ({
-  db: {
-    query: {
-      users: { findFirst: vi.fn() },
-      drives: { findMany: vi.fn() },
-    },
-    select: vi.fn(),
-    update: vi.fn(),
-    insert: vi.fn(),
-    transaction: vi.fn(),
+vi.mock('../storage-repository', () => ({
+  storageRepository: {
+    findUserForStorage: vi.fn(),
+    findUserForUploads: vi.fn(),
+    findUserDriveIds: vi.fn(),
+    sumFileSize: vi.fn(),
+    countFiles: vi.fn(),
+    updateActiveUploads: vi.fn(),
+    updateStorageInTx: vi.fn(),
+    insertStorageEvent: vi.fn(),
+    setUserStorageInTx: vi.fn(),
+    runTransaction: vi.fn(),
   },
-  users: { id: 'id', storageUsedBytes: 'storageUsedBytes', activeUploads: 'activeUploads', subscriptionTier: 'subscriptionTier', lastStorageCalculated: 'lastStorageCalculated' },
-  pages: { driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', fileSize: 'fileSize' },
-  drives: { ownerId: 'ownerId', id: 'id' },
-  storageEvents: {},
-  eq: vi.fn(),
-  sql: vi.fn(),
-  and: vi.fn(),
-  isNull: vi.fn(),
-  inArray: vi.fn(),
 }));
 
 vi.mock('../subscription-utils', () => ({
@@ -47,7 +40,7 @@ import {
   changeUserTier,
   updateStorageTierFromSubscription,
 } from '../storage-limits';
-import { db } from '@pagespace/db';
+import { storageRepository } from '../storage-repository';
 
 describe('storage-limits', () => {
   beforeEach(() => {
@@ -55,285 +48,342 @@ describe('storage-limits', () => {
   });
 
   describe('mapSubscriptionToStorageTier', () => {
-    it('should map subscription tiers correctly', () => {
+    it('mapSubscriptionToStorageTier_withFreeTier_returnsFree', () => {
       expect(mapSubscriptionToStorageTier('free')).toBe('free');
+    });
+
+    it('mapSubscriptionToStorageTier_withProTier_returnsPro', () => {
       expect(mapSubscriptionToStorageTier('pro')).toBe('pro');
+    });
+
+    it('mapSubscriptionToStorageTier_withBusinessTier_returnsBusiness', () => {
       expect(mapSubscriptionToStorageTier('business')).toBe('business');
     });
   });
 
   describe('STORAGE_TIERS', () => {
-    it('should define all tiers', () => {
+    it('STORAGE_TIERS_allTiers_areDefined', () => {
       expect(STORAGE_TIERS.free).toBeDefined();
       expect(STORAGE_TIERS.pro).toBeDefined();
       expect(STORAGE_TIERS.founder).toBeDefined();
       expect(STORAGE_TIERS.business).toBeDefined();
     });
+
+    it('STORAGE_TIERS_freeTier_hasExpectedQuota', () => {
+      expect(STORAGE_TIERS.free.quotaBytes).toBe(500 * 1024 * 1024);
+      expect(STORAGE_TIERS.free.maxFileSize).toBe(20 * 1024 * 1024);
+      expect(STORAGE_TIERS.free.maxConcurrentUploads).toBe(2);
+      expect(STORAGE_TIERS.free.maxFileCount).toBe(100);
+    });
   });
 
   describe('getUserStorageQuota', () => {
-    it('should return null when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    it('getUserStorageQuota_withNonexistentUser_returnsNull', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
+
       const result = await getUserStorageQuota('nonexistent');
+
       expect(result).toBeNull();
+      expect(storageRepository.findUserForStorage).toHaveBeenCalledWith('nonexistent');
     });
 
-    it('should return quota for existing user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('getUserStorageQuota_withExistingFreeUser_returnsQuotaWithCorrectAvailableBytes', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1',
-        storageUsedBytes: 100 * 1024 * 1024, // 100MB
+        storageUsedBytes: 100 * 1024 * 1024,
         subscriptionTier: 'free',
-      } as never);
+      });
 
       const result = await getUserStorageQuota('user-1');
+
       expect(result).not.toBeNull();
       expect(result!.tier).toBe('free');
       expect(result!.usedBytes).toBe(100 * 1024 * 1024);
       expect(result!.availableBytes).toBe(400 * 1024 * 1024);
+      expect(result!.warningLevel).toBe('none');
     });
 
-    it('should handle null subscription tier', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('getUserStorageQuota_withNullSubscriptionTier_defaultsToFree', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1',
         storageUsedBytes: 0,
         subscriptionTier: null,
-      } as never);
+      });
 
       const result = await getUserStorageQuota('user-1');
+
       expect(result).not.toBeNull();
+      expect(result!.tier).toBe('free');
     });
 
-    it('should return critical warning level when usage >= 95%', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('getUserStorageQuota_withUsageAt95Percent_returnsCriticalWarning', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1',
-        storageUsedBytes: 490 * 1024 * 1024, // 490MB out of 500MB
+        storageUsedBytes: 490 * 1024 * 1024,
         subscriptionTier: 'free',
-      } as never);
+      });
 
       const result = await getUserStorageQuota('user-1');
+
       expect(result!.warningLevel).toBe('critical');
+      expect(result!.utilizationPercent).toBeGreaterThanOrEqual(95);
     });
 
-    it('should return warning level when usage >= 80%', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('getUserStorageQuota_withUsageAt80Percent_returnsWarning', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1',
-        storageUsedBytes: 420 * 1024 * 1024, // 420MB out of 500MB
+        storageUsedBytes: 420 * 1024 * 1024,
         subscriptionTier: 'free',
-      } as never);
+      });
 
       const result = await getUserStorageQuota('user-1');
+
       expect(result!.warningLevel).toBe('warning');
     });
   });
 
   describe('checkStorageQuota', () => {
-    it('should return not allowed when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    it('checkStorageQuota_withNonexistentUser_returnsNotAllowed', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
+
       const result = await checkStorageQuota('nonexistent', 1024);
+
       expect(result.allowed).toBe(false);
       expect(result.reason).toBe('User not found');
     });
 
-    it('should reject file exceeding tier size limit', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('checkStorageQuota_withFileExceedingTierLimit_rejectsWithReason', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
-      } as never);
+      });
 
-      const result = await checkStorageQuota('user-1', 25 * 1024 * 1024); // 25MB > 20MB free limit
+      const result = await checkStorageQuota('user-1', 25 * 1024 * 1024);
+
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('exceeds');
+      expect(result.requiredBytes).toBe(25 * 1024 * 1024);
     });
 
-    it('should reject when insufficient storage available', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('checkStorageQuota_withInsufficientStorage_rejectsWithReason', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 499 * 1024 * 1024, subscriptionTier: 'free',
-      } as never);
+      });
 
-      const result = await checkStorageQuota('user-1', 10 * 1024 * 1024); // 10MB but only 1MB available
+      const result = await checkStorageQuota('user-1', 10 * 1024 * 1024);
+
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('Insufficient storage');
     });
 
-    it('should allow valid upload', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('checkStorageQuota_withValidUpload_returnsAllowed', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
-      } as never);
-      vi.mocked(db.query.drives.findMany).mockResolvedValue([{ id: 'drive-1' }] as never);
-      const mockWhere = vi.fn().mockResolvedValue([{ count: 5 }]);
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
+      });
+      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue(['drive-1']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(5);
 
       const result = await checkStorageQuota('user-1', 1024);
+
       expect(result.allowed).toBe(true);
+      expect(result.quota).toBeDefined();
+    });
+
+    it('checkStorageQuota_withFileCountAtLimit_rejectsWithReason', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue(['drive-1']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(100);
+
+      const result = await checkStorageQuota('user-1', 1024);
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('File count limit');
     });
   });
 
   describe('checkConcurrentUploads', () => {
-    it('should return false when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const result = await checkConcurrentUploads('nonexistent');
-      expect(result).toBe(false);
+    it('checkConcurrentUploads_withNonexistentUser_returnsFalse', async () => {
+      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue(undefined);
+
+      expect(await checkConcurrentUploads('nonexistent')).toBe(false);
     });
 
-    it('should return true when under concurrent limit', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('checkConcurrentUploads_withUploadsUnderLimit_returnsTrue', async () => {
+      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
         activeUploads: 0, subscriptionTier: 'free',
-      } as never);
-      const result = await checkConcurrentUploads('user-1');
-      expect(result).toBe(true);
+      });
+
+      expect(await checkConcurrentUploads('user-1')).toBe(true);
     });
 
-    it('should return false when at concurrent limit', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+    it('checkConcurrentUploads_withUploadsAtLimit_returnsFalse', async () => {
+      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
         activeUploads: 2, subscriptionTier: 'free',
-      } as never);
-      const result = await checkConcurrentUploads('user-1');
-      expect(result).toBe(false);
+      });
+
+      expect(await checkConcurrentUploads('user-1')).toBe(false);
     });
   });
 
   describe('updateStorageUsage', () => {
-    it('should update storage within a new transaction', async () => {
-      const mockTx = {
-        update: vi.fn(() => ({
-          set: vi.fn(() => ({
-            where: vi.fn(() => ({
-              returning: vi.fn().mockResolvedValue([{ newUsage: 1024 }]),
-            })),
-          })),
-        })),
-        insert: vi.fn(() => ({ values: vi.fn() })),
-      };
-      vi.mocked(db.transaction).mockImplementation(async (fn) => {
-        await fn(mockTx as never);
+    it('updateStorageUsage_withNoExistingTx_createsNewTransaction', async () => {
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => {
+        const mockTx = {} as never;
+        return fn(mockTx);
       });
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1024 });
+      vi.mocked(storageRepository.insertStorageEvent).mockResolvedValue(undefined);
 
       await updateStorageUsage('user-1', 1024, { eventType: 'upload', pageId: 'page-1' });
-      expect(db.transaction).toHaveBeenCalled();
+
+      const txCallback = vi.mocked(storageRepository.runTransaction).mock.calls[0][0];
+      expect(typeof txCallback).toBe('function');
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(
+        {}, 'user-1', 1024,
+      );
+      expect(storageRepository.insertStorageEvent).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({
+          userId: 'user-1',
+          eventType: 'upload',
+          pageId: 'page-1',
+          sizeDelta: 1024,
+          totalSizeAfter: 1024,
+        }),
+      );
     });
 
-    it('should use existing transaction when provided', async () => {
-      const mockTx = {
-        update: vi.fn(() => ({
-          set: vi.fn(() => ({
-            where: vi.fn(() => ({
-              returning: vi.fn().mockResolvedValue([{ newUsage: 1024 }]),
-            })),
-          })),
-        })),
-        insert: vi.fn(() => ({ values: vi.fn() })),
-      };
+    it('updateStorageUsage_withExistingTx_usesProvidedTransaction', async () => {
+      const existingTx = {} as never;
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1024 });
+      vi.mocked(storageRepository.insertStorageEvent).mockResolvedValue(undefined);
 
-      await updateStorageUsage('user-1', 1024, { eventType: 'upload' }, mockTx as never);
-      expect(db.transaction).not.toHaveBeenCalled();
-      expect(mockTx.update).toHaveBeenCalled();
+      await updateStorageUsage('user-1', 1024, { eventType: 'upload' }, existingTx);
+
+      expect(storageRepository.runTransaction).not.toHaveBeenCalled();
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(
+        existingTx, 'user-1', 1024,
+      );
+    });
+
+    it('updateStorageUsage_withNoContext_skipsStorageEvent', async () => {
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => {
+        return fn({} as never);
+      });
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 0 });
+
+      await updateStorageUsage('user-1', -500);
+
+      expect(storageRepository.insertStorageEvent).not.toHaveBeenCalled();
     });
   });
 
   describe('updateActiveUploads', () => {
-    it('should update active uploads count', async () => {
-      const mockWhere = vi.fn();
-      const mockSet = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+    it('updateActiveUploads_withDelta_delegatesToRepository', async () => {
+      vi.mocked(storageRepository.updateActiveUploads).mockResolvedValue(undefined);
 
       await updateActiveUploads('user-1', 1);
-      expect(db.update).toHaveBeenCalled();
+
+      expect(storageRepository.updateActiveUploads).toHaveBeenCalledWith('user-1', 1);
     });
   });
 
   describe('calculateActualStorageUsage', () => {
-    it('should return 0 when user has no drives', async () => {
-      vi.mocked(db.query.drives.findMany).mockResolvedValue([] as never);
+    it('calculateActualStorageUsage_withNoDrives_returnsZero', async () => {
+      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue([]);
+
       const result = await calculateActualStorageUsage('user-1');
+
       expect(result).toBe(0);
+      expect(storageRepository.sumFileSize).not.toHaveBeenCalled();
     });
 
-    it('should calculate total file size across drives', async () => {
-      vi.mocked(db.query.drives.findMany).mockResolvedValue([{ id: 'drive-1' }] as never);
-      const mockWhere = vi.fn().mockResolvedValue([{ totalSize: 1024 }]);
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
+    it('calculateActualStorageUsage_withDrives_returnsTotalFileSize', async () => {
+      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue(['drive-1']);
+      vi.mocked(storageRepository.sumFileSize).mockResolvedValue(1024);
 
       const result = await calculateActualStorageUsage('user-1');
+
       expect(result).toBe(1024);
+      expect(storageRepository.sumFileSize).toHaveBeenCalledWith(['drive-1']);
     });
   });
 
   describe('getUserFileCount', () => {
-    it('should return 0 when user has no drives', async () => {
-      vi.mocked(db.query.drives.findMany).mockResolvedValue([] as never);
-      const result = await getUserFileCount('user-1');
-      expect(result).toBe(0);
+    it('getUserFileCount_withNoDrives_returnsZero', async () => {
+      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue([]);
+
+      expect(await getUserFileCount('user-1')).toBe(0);
     });
 
-    it('should return count from database', async () => {
-      vi.mocked(db.query.drives.findMany).mockResolvedValue([{ id: 'drive-1' }] as never);
-      const mockWhere = vi.fn().mockResolvedValue([{ count: 42 }]);
-      const mockFrom = vi.fn(() => ({ where: mockWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
+    it('getUserFileCount_withDrives_returnsCountFromRepository', async () => {
+      vi.mocked(storageRepository.findUserDriveIds).mockResolvedValue(['drive-1']);
+      vi.mocked(storageRepository.countFiles).mockResolvedValue(42);
 
-      const result = await getUserFileCount('user-1');
-      expect(result).toBe(42);
+      expect(await getUserFileCount('user-1')).toBe(42);
+      expect(storageRepository.countFiles).toHaveBeenCalledWith(['drive-1']);
     });
   });
 
   describe('reconcileStorageUsage', () => {
-    it('should throw when user not found', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+    it('reconcileStorageUsage_withNonexistentUser_throwsUserNotFound', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
+
       await expect(reconcileStorageUsage('nonexistent')).rejects.toThrow('User not found');
     });
   });
 
   describe('formatBytes', () => {
-    it('should format 0 bytes', () => {
+    it('formatBytes_withZero_returnsZeroB', () => {
       expect(formatBytes(0)).toBe('0 B');
     });
 
-    it('should format KB', () => {
+    it('formatBytes_with1024_returns1KB', () => {
       expect(formatBytes(1024)).toBe('1 KB');
     });
 
-    it('should format MB', () => {
+    it('formatBytes_withOneMB_returns1MB', () => {
       expect(formatBytes(1024 * 1024)).toBe('1 MB');
     });
 
-    it('should format GB', () => {
+    it('formatBytes_withOneGB_returns1GB', () => {
       expect(formatBytes(1024 * 1024 * 1024)).toBe('1 GB');
     });
   });
 
   describe('parseBytes', () => {
-    it('should parse bytes', () => {
+    it('parseBytes_withBytesString_returnsBytes', () => {
       expect(parseBytes('500B')).toBe(500);
     });
 
-    it('should parse KB', () => {
+    it('parseBytes_withKB_returnsCorrectBytes', () => {
       expect(parseBytes('1KB')).toBe(1024);
     });
 
-    it('should parse MB', () => {
+    it('parseBytes_withMB_returnsCorrectBytes', () => {
       expect(parseBytes('10MB')).toBe(10 * 1024 * 1024);
     });
 
-    it('should parse GB', () => {
+    it('parseBytes_withGB_returnsCorrectBytes', () => {
       expect(parseBytes('1GB')).toBe(1024 * 1024 * 1024);
     });
 
-    it('should throw for invalid format', () => {
+    it('parseBytes_withInvalidFormat_throwsError', () => {
       expect(() => parseBytes('invalid')).toThrow('Invalid size format');
     });
 
-    it('should throw for null/undefined input', () => {
+    it('parseBytes_withNullInput_throwsError', () => {
       expect(() => parseBytes(null as unknown as string)).toThrow('Invalid size parameter');
     });
   });
 
   describe('deprecated functions', () => {
-    it('changeUserTier should throw', async () => {
+    it('changeUserTier_whenCalled_throwsRemovedError', async () => {
       await expect(changeUserTier()).rejects.toThrow('changeUserTier has been removed');
     });
 
-    it('updateStorageTierFromSubscription should throw', async () => {
+    it('updateStorageTierFromSubscription_whenCalled_throwsRemovedError', async () => {
       await expect(updateStorageTierFromSubscription()).rejects.toThrow('updateStorageTierFromSubscription has been removed');
     });
   });

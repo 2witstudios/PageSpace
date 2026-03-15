@@ -29,7 +29,7 @@ vi.mock('../../logging/logger-config', () => ({
 }));
 
 describe('upload-semaphore', () => {
-  let uploadSemaphore: any;
+  let uploadSemaphore: Awaited<typeof import('../upload-semaphore')>['uploadSemaphore'];
 
   beforeEach(async () => {
     vi.useFakeTimers();
