@@ -530,4 +530,73 @@ describe('page-type-validators', () => {
       expect(result).toHaveProperty('valid')
     })
   })
+
+  describe('isValidSheetContent edge cases', () => {
+    it('rejects SHEET with whitespace-only content (line 21)', () => {
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: '   '
+      })
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Invalid sheet content')
+    })
+
+    it('accepts SHEET with valid JSON object that has sheet data (lines 43-44)', () => {
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: JSON.stringify({ rowCount: 10, columnCount: 5, cells: { A1: 'test' } })
+      })
+      expect(result.valid).toBe(true)
+    })
+
+    it('accepts SHEET with empty JSON object (lines 43-44 true branch)', () => {
+      // Empty JSON object {} will produce default empty sheet from parseSheetContent
+      // Then isDefaultEmptySheet=true, trimmed !== '' is true, doesn't start with #%PAGESPACE
+      // Falls to try { JSON.parse } → json={}, typeof==='object' → return true (line 44)
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: '{}'
+      })
+      expect(result.valid).toBe(true)
+    })
+
+    it('rejects SHEET with JSON null value (line 43 false)', () => {
+      // JSON.parse("null") returns null, which fails the `json && typeof json === 'object'` check
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: 'null'
+      })
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Invalid sheet content')
+    })
+
+    it('rejects SHEET with JSON primitive number (lines 43-45 false)', () => {
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: '42'
+      })
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Invalid sheet content')
+    })
+
+    it('handles SHEET with JSON parse error (lines 46-48)', () => {
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: 'not-json-not-sheetdoc'
+      })
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Invalid sheet content')
+    })
+
+    it('rejects SHEET with JSON string value (line 51 return false)', () => {
+      // JSON.parse('"hello"') returns a string, typeof === "string" not "object"
+      // So json && typeof json === 'object' is false, falls through to return false (line 51)
+      const result = validatePageCreation(PageType.SHEET, {
+        title: 'Sheet',
+        content: '"hello"'
+      })
+      expect(result.valid).toBe(false)
+      expect(result.errors).toContain('Invalid sheet content')
+    })
+  })
 })

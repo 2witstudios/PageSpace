@@ -572,4 +572,66 @@ describe('tree-utils', () => {
       expect(result.map(n => n.id).sort()).toEqual(['2', '3', '4'])
     })
   })
+
+  describe('formatTreeAsMarkdown - depth truncation branch (line 132)', () => {
+    it('should skip nodes past safe depth limit', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      // Create a tree with 3 levels: root -> child -> grandchild
+      const tree: TreeNode[] = [
+        {
+          id: '1', title: 'Root', type: 'FOLDER',
+          children: [
+            {
+              id: '2', title: 'Child', type: 'DOCUMENT',
+              children: [
+                { id: '3', title: 'Grandchild', type: 'DOCUMENT', children: [] },
+              ],
+            },
+          ],
+        },
+      ]
+
+      // maxNodes=2 allows root + child, grandchild is beyond safe depth
+      const result = formatTreeAsMarkdown(tree, { maxNodes: 2 })
+
+      expect(result).toContain('Root')
+      expect(result).toContain('Child')
+      // Grandchild should be skipped and mentioned in hidden count
+      expect(result).not.toContain('Grandchild (id: 3)')
+      expect(result).toContain('hidden')
+    })
+
+    it('should use non-last connector prefix for children', () => {
+      type TreeNode = { id: string; title: string; type: string; children: TreeNode[] }
+      // Multiple children at same level exercises isLast=false branch of prefix
+      const tree: TreeNode[] = [
+        {
+          id: '1', title: 'Root', type: 'FOLDER',
+          children: [
+            {
+              id: '2', title: 'First Child', type: 'DOCUMENT',
+              children: [
+                { id: '4', title: 'Sub', type: 'DOCUMENT', children: [] },
+              ],
+            },
+            {
+              id: '3', title: 'Last Child', type: 'DOCUMENT',
+              children: [
+                { id: '5', title: 'Sub2', type: 'DOCUMENT', children: [] },
+              ],
+            },
+          ],
+        },
+      ]
+
+      const result = formatTreeAsMarkdown(tree, { maxNodes: 100 })
+
+      // First child is not last, so its sub gets '│   ' prefix
+      expect(result).toContain('│   ')
+      // Last child IS last, so its sub gets '    ' prefix
+      expect(result).toContain('    ')
+      expect(result).toContain('Sub')
+      expect(result).toContain('Sub2')
+    })
+  })
 })
