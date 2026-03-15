@@ -43,6 +43,12 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock('marked', () => ({
+  marked: {
+    parse: vi.fn(() => Promise.resolve('<h1>Hello World</h1>')),
+  },
+}));
+
 import { db } from '@pagespace/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/server';
@@ -188,6 +194,22 @@ describe('GET /api/pages/[pageId]/export/docx', () => {
 
       expect(response.headers.get('Content-Disposition')).toContain('attachment');
       expect(response.headers.get('Content-Disposition')).toContain('.docx');
+    });
+
+    it('converts markdown content to HTML before generating DOCX', async () => {
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+        ...mockPage(),
+        contentMode: 'markdown',
+        content: '# Hello World',
+      } as never);
+
+      await GET(createRequest(), { params: mockParams });
+
+      // generateDOCX should receive HTML converted from markdown, not the raw markdown
+      expect(generateDOCX).toHaveBeenCalledWith(
+        expect.not.stringContaining('# Hello World'),
+        'Test Document'
+      );
     });
 
     it('uses default content when page has no content', async () => {

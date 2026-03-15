@@ -118,6 +118,10 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
+vi.mock('@/lib/auth/google-avatar', () => ({
+  resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
+}));
+
 import { db, users } from '@pagespace/db';
 import { sessionService, generateCSRFToken } from '@pagespace/lib/auth';
 import { validateOrCreateDeviceToken, logAuthEvent } from '@pagespace/lib/server';
@@ -125,6 +129,7 @@ import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace
 import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
 import { trackAuthEvent } from '@pagespace/lib/activity-tracker';
 import { getClientIP } from '@/lib/auth';
+import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const mockNewUser = {
   id: 'user-123',
@@ -224,6 +229,9 @@ describe('POST /api/auth/google/native', () => {
 
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
+
+    // Default avatar resolution
+    vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
     vi.mocked(db.query.users.findFirst).mockResolvedValue(null as never);
@@ -635,6 +643,71 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
+      expect(db.update).toHaveBeenCalled();
+    });
+
+    it('given existing user without name, should set name from Google payload', async () => {
+      const userWithoutName = { ...mockExistingUser, googleId: null, name: null };
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(userWithoutName as never)
+        .mockResolvedValueOnce({ ...userWithoutName, name: 'Test User', googleId: 'google-id-123' } as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(db.update).toHaveBeenCalled();
+    });
+
+    it('given existing user with different avatar, should update image', async () => {
+      const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
+      vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(userWithOldAvatar as never)
+        .mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(db.update).toHaveBeenCalled();
+    });
+
+    it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
+      const userUnverified = { ...mockExistingUser, emailVerified: null };
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(userUnverified as never)
+        .mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(db.update).toHaveBeenCalled();
+    });
+
+    it('given existing user where no updates needed, should NOT call db.update', async () => {
+      // User has all fields set correctly
+      const fullyUpdatedUser = {
+        ...mockExistingUser,
+        googleId: 'google-id-123',
+        name: 'Existing User',
+        image: null, // resolveGoogleAvatarImage returns null by default
+        emailVerified: new Date(),
+      };
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(fullyUpdatedUser as never);
+
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(db.update).not.toHaveBeenCalled();
+    });
+
+    it('given new user where resolvedImage differs from initial null, should update avatar', async () => {
+      vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/processed-avatar.jpg');
+
+      const request = createNativeRequest(validNativePayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // db.update should be called to set the resolved image
       expect(db.update).toHaveBeenCalled();
     });
 
