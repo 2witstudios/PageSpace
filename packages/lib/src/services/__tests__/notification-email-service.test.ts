@@ -1,3 +1,7 @@
+/**
+ * @scaffold - ORM query mocks present (db.query.users.findFirst, db.insert).
+ * Pending notification-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {

@@ -1,11 +1,13 @@
+/**
+ * @scaffold - ORM chain mocks present. Pending drive-repository seam extraction
+ * to replace select().from().where() chains with a mockable repository interface.
+ *
+ * REVIEW: listAccessibleDrives.setupMocks uses mockResolvedValueOnce chains that
+ * encode internal query order (owned drives first, then shared drives). This is
+ * an order-dependent mock ladder — it will break if the implementation reorders
+ * its DB calls even though the observable contract (returned drives) is unchanged.
+ */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-// ============================================================================
-//
-// These tests verify the business logic of the drive service functions.
-// We mock the database layer to isolate the service logic.
-// ORM chain mocks present — needs repository seam for full rubric compliance.
-// ============================================================================
 
 // Mock the db module
 vi.mock('@pagespace/db', () => ({

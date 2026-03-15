@@ -1,3 +1,8 @@
+/**
+ * @scaffold - ORM chain mocks present (insert().values().returning(),
+ * update().set().where(), update().set().where().returning()).
+ * Pending device-token-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {

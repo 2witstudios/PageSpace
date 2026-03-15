@@ -1,3 +1,8 @@
+/**
+ * @scaffold - ORM chain mocks present (insert().values(), delete().where(),
+ * update().set().where(), select().from().where().limit()).
+ * Pending verification-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock @pagespace/db

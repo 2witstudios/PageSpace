@@ -1,3 +1,8 @@
+/**
+ * @scaffold - ORM chain mocks present. Pending drive-role-repository seam
+ * extraction to replace select().from().where() and update/insert chains
+ * with a mockable repository interface.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => {

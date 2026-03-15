@@ -1,3 +1,7 @@
+/**
+ * @scaffold - ORM chain mocks present (transaction mock with select().from().where()).
+ * Pending search-repository seam extraction for full rubric compliance.
+ */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockTransaction = vi.hoisted(() => vi.fn());

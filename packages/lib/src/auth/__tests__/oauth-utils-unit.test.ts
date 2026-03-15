@@ -1,3 +1,11 @@
+/**
+ * @scaffold - ORM chain mocks present in createOrLinkOAuthUser tests
+ * (insert().values().returning(), update().set().where(), select().from().where()).
+ * Pending oauth-repository seam extraction for full rubric compliance.
+ *
+ * REVIEW: createOrLinkOAuthUser tests use mockReturnValueOnce chains
+ * (db.query.users.findFirst called twice) that encode internal query order.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('google-auth-library', () => ({

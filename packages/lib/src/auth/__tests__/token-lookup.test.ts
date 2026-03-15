@@ -1,3 +1,7 @@
+/**
+ * @scaffold - ORM query mock present (db.query.mcpTokens.findFirst).
+ * Pending token-repository seam extraction for full rubric compliance.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db', () => ({
