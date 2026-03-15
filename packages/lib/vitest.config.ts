@@ -8,9 +8,13 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
     fileParallelism: false,
+    // Use forks pool for process-level module isolation between test files.
+    // This prevents vi.mock() in unit tests from contaminating integration
+    // tests that use real database connections.
+    pool: 'forks',
     poolOptions: {
-      threads: {
-        singleThread: true,
+      forks: {
+        singleFork: true,
       },
     },
     coverage: {
