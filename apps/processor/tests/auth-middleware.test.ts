@@ -153,7 +153,7 @@ describe('authenticateService middleware', () => {
 
     await authenticateService(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect(req.auth).toBeDefined();
     expect(req.auth?.userId).toBe('user-123');
   });
@@ -180,7 +180,7 @@ describe('authenticateService middleware', () => {
     await authenticateService(req, res, next);
 
     // Authentication passes - scope checking is separate
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect(req.auth).toBeDefined();
   });
 });
@@ -241,7 +241,7 @@ describe('requireScope middleware', () => {
 
     middleware(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200); // Not modified
   });
 
@@ -258,7 +258,7 @@ describe('requireScope middleware', () => {
 
     middleware(req, res, next);
 
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -310,7 +310,7 @@ describe('security: no URL-based scope bypass', () => {
 
     // authenticateService passes - it only validates the token
     // The route handler or catch-all will handle the 404
-    expect(next).toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('requireScope explicitly rejects tokens without the declared scope', () => {
